@@ -64,7 +64,8 @@ body.reduce-motion .list-row,body.reduce-motion .row-arrow{transition:none}body.
 /* A decorative country map, printed into the company masthead. */
 .company-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:34px;align-items:center;min-height:255px;padding:14px 0 23px;border-bottom:0}
 .company-hero-copy{position:relative;z-index:1;min-width:0}.company-hero .detail-heading{align-items:center;gap:12px}.company-hero .detail-heading h1{overflow-wrap:anywhere}
-.company-hero .mark{width:16px;height:16px;font-size:16px}
+.company-subtitle{display:flex;align-items:center;gap:9px}
+.company-hero .company-subtitle .mark{width:16px;height:16px;font-size:16px}
 .company-map{height:245px;min-width:0;overflow:hidden;background-image:radial-gradient(#11100e20 .65px,transparent .85px);background-size:7px 7px;pointer-events:none}
 .company-map svg{display:block;width:100%;height:100%;transform:none}
 .map-country{fill:var(--cream);fill-opacity:.7;stroke:var(--paper);stroke-width:1;vector-effect:non-scaling-stroke}
