@@ -29,6 +29,7 @@ The following are the product requirements from the brief:
 - The model generates the active-criteria description and search tab title.
 - Results are always ordered by recency, newest first.
 - On submission, an inexpensive model translates the request into filters using user metadata as context.
+- The existing JEV narrowing capability is retained in the backend. The interpretation model can configure it when structured filters cannot fully express the user's requirements.
 - Later requests use the current selection and new instruction to generate a configuration diff.
 - Anonymous access is limited, with the latest results hidden.
 - New users receive one free week, followed by a small recurring fee. $3/week and $10/month are pricing hypotheses for a later financial model.
@@ -57,7 +58,7 @@ A visitor enters: “Senior backend roles in Zurich, or remote from Switzerland.
 On Enter:
 
 1. Preserve the submitted text and show a brief interpretation state.
-2. Translate it into a validated search configuration.
+2. Translate it into a validated search configuration, including optional backend JEV narrowing when structured filters are insufficient.
 3. Display the model-generated criteria description: senior backend; Zurich **or** remote eligible from Switzerland; Go preferred. Generate a concise search tab title, such as “Senior backend · Switzerland,” in the same response.
 4. Fetch matching results and show the appropriate access state.
 
@@ -95,6 +96,18 @@ Users correct or change criteria through the search bar. For example, “Remove 
 
 Candidate criteria include role, seniority, location, remote eligibility, employment type, compensation, skills, language, and company inclusion or exclusion. Each criterion should distinguish a requirement from a preference where relevant. Supported filters depend on trustworthy extracted data; the UI must not offer capabilities that the data cannot support.
 
+### Backend JEV narrowing
+
+Retain the existing JEV filter as an additional backend narrowing stage. The inexpensive interpretation model configures the structured filters first and can add a JEV request for requirements those filters cannot adequately express. For example, “backend roles working on software for industrial robots” may use role and location filters to select candidates, then JEV to evaluate the requested work context against posting evidence.
+
+JEV decides which candidates satisfy the additional request. It can only narrow the eligible candidate set; it cannot relax structured requirements, bypass freshness or access restrictions, or change the newest-first order. This is part of the same search experience, without a separate JEV control or filter editor. The generated criteria description explains the additional requirement in ordinary language.
+
+The search configuration includes the optional JEV request. Refinement diffs can add, change, or remove it while preserving unaffected structured filters. Subsequent refinements receive the complete current configuration, including JEV criteria. Undo restores both parts along with the corresponding title and description. Candidate decisions must remain associated with the criteria and posting evidence they evaluated; they must not carry over to a changed request as if still valid.
+
+Posting evidence used for backend evaluation does not become full posting text in the UI. JEV makes no unsupported employer facts certain. If a requirement cannot be evaluated from the available evidence, do not describe it as verified.
+
+JEV evaluation adds candidate-processing time and cost beyond the submit-time interpretation call. Define evaluation limits, reuse of valid decisions, progress states, and cost budgets before launch. While evaluation is incomplete or unavailable, distinguish pending work or failure from a true zero-result search. Do not silently show candidates that have not passed the configured narrowing as matching results. Newly collected candidates must pass the same narrowing before joining the search results.
+
 ### User metadata
 
 Proposed optional profile fields are preferred locations, work eligibility, remote preferences, desired roles, seniority, skills, salary expectations, and language preferences. Ask for missing context when it improves a real search rather than requiring a complete profile up front. Resume upload is outside the initial scope.
@@ -105,20 +118,20 @@ Country, language, or browsing location must not be used to invent citizenship, 
 
 ### Interpretation rules
 
-The model returns structured criteria or an allowlisted configuration diff, together with the search title and criteria description. The application validates fields, values, relationships, and the revision being changed before applying it. Generated text must stay consistent with the accepted criteria. The model cannot change account access, pricing, freshness rules, or the fixed recency order.
+The model returns structured criteria and an optional JEV request, or an allowlisted diff to that configuration, together with the search title and criteria description. The application validates fields, values, relationships, and the revision being changed before applying it. Generated text must stay consistent with the accepted criteria, including any JEV narrowing. The model cannot change account access, pricing, freshness rules, or the fixed recency order.
 
 Key behavior:
 
 - Preserve untouched criteria during refinement.
 - Separate exclusions, hard constraints, and soft preferences.
-- Explain unsupported requests instead of pretending they were applied.
+- Use backend JEV narrowing when structured filters are insufficient; explain requirements unsupported by either mechanism instead of pretending they were applied.
 - Ask for clarification when ambiguity would materially change results.
 - Never invent employer facts or automatically loosen requirements to fill the page.
 - Treat user text, profile text, and job content as data, including text that resembles instructions to the system.
 
 If a refinement targets an older revision, it must not overwrite a newer edit. If the model times out or fails validation, preserve the last valid configuration, title, description, and results; keep the submitted instruction available and offer retry.
 
-Use one inexpensive interpretation request per submission where possible, returning the criteria or diff, description, and title together. Search execution, paging, tab switching, and undo should not require a model call. Model selection, rate limits, and latency targets follow measured quality and cost tests.
+Use one inexpensive interpretation request per submission where possible, returning the configuration or diff, description, and title together. Paging, tab switching, and undo should not require another interpretation call. JEV may separately evaluate unevaluated candidates in the backend when narrowing is configured. Interpretation model selection, rate limits, and latency targets follow measured quality and cost tests.
 
 ## 5. Freshness and direct sources
 
@@ -202,7 +215,7 @@ The working offers are **$3 per week** or **$10 per month**. These are hypothese
 
 Proposed payment behavior is an explicit subscription purchase after or during the free period, with no automatic charge from the cardless free period. The purchase screen states billing interval, renewal terms, and next charge. Cancellation is self-service; access continues through the paid period. Define failed-payment and refund behavior before taking payments.
 
-No financial viability claim is made here. The later model should account for collection and extraction costs, interpretation requests and retries, hosting/search, payment fees, free and anonymous usage, abuse, support, taxes, acquisition, retention, and plan mix. Weekly and monthly billing must be assessed separately. Summary generation would be an additional budget line.
+No financial viability claim is made here. The later model should account for collection and extraction costs, interpretation requests and retries, JEV candidate evaluations and reevaluations, hosting/search, payment fees, free and anonymous usage, abuse, support, taxes, acquisition, retention, and plan mix. Weekly and monthly billing must be assessed separately. Summary generation would be an additional budget line.
 
 ## 8. Empty, loading, and failure states
 
@@ -215,6 +228,7 @@ No financial viability claim is made here. The later model should account for co
 | Matches exist but access hides them | Explain the access boundary separately from a true zero-result search. |
 | Unsupported request | State what could not be applied and let the user revise. |
 | Model unavailable | Preserve the valid search, title, description, and results; keep the submitted instruction available and offer retry. |
+| JEV narrowing pending or unavailable | Show evaluation progress or an error separately from zero matches; do not substitute unfiltered candidates for narrowed results. |
 | Search service unavailable | Show an error and retry; do not report zero jobs. |
 | Source outage | Explain coverage limitations where material and withhold listings beyond the verification threshold. |
 | Free period expires during use | Preserve searches and apply the new access state consistently. |
@@ -227,15 +241,15 @@ Send only the metadata needed for interpretation to the model. Do not send accou
 
 Raw searches may contain personal information. Analytics should prefer outcome events and coarse dimensions over unrestricted prompt logs. Separate necessary debugging retention from long-term product measurement and decide retention before launch.
 
-The UI repository owns the new experience and its access presentation. The product requires a service boundary supplying eligible structured listings, deterministic search behavior, and authoritative entitlements. The old UI and application structure do not define that contract. Backend retention is separate from website availability.
+The UI repository owns the new experience and its access presentation. The product requires a service boundary supplying eligible structured listings, structured search and optional backend JEV narrowing, fixed recency ordering, and authoritative entitlements. Retaining JEV's narrowing capability does not require carrying over the old UI, plan structure, or application architecture. Backend retention is separate from website availability.
 
-This draft intentionally leaves application framework, authentication provider, model vendor, deployment platform, and payment provider undecided. Select them after the product behaviors and data contract are agreed.
+This draft intentionally leaves application framework, authentication provider, interpretation model vendor, deployment platform, and payment provider undecided. JEV is retained for backend narrowing; its integration contract needs to be defined for the new service. Select the remaining technologies after the product behaviors and data contract are agreed.
 
 ## 10. Scope of the first release
 
 The first release must cover the complete value path: visitor search → understandable criteria → useful preview → sign-in → full fresh results → original company posting → return to saved searches → explicit paid continuation.
 
-Include the search workspace and tabs, model-generated search titles and criteria descriptions, optional metadata, natural-language interpretation and diffs, corrections through the search bar, undo, structured results always ordered newest first, strict freshness rules, source links, access gating, free-period eligibility, subscription lifecycle, and measurement of the journey.
+Include the search workspace and tabs, model-generated search titles and criteria descriptions, optional metadata, natural-language interpretation and diffs, model-configured backend JEV narrowing, corrections through the search bar, undo, structured results always ordered newest first, strict freshness rules, source links, access gating, free-period eligibility, subscription lifecycle, and measurement of the journey.
 
 Proposed additions to defer include email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries, and an internal application tracker. Saving and hiding can be removed from the first release if they delay validating the search-to-source path.
 
@@ -271,6 +285,7 @@ Before building the whole experience, validate the fresh inventory available in 
 | Legacy eligibility | Verify ownership; one calendar month from activation, replacing the standard week. Define cutoff and redemption rules. |
 | Price and billing | Model $3/week and $10/month before selecting final prices and payment mechanics. |
 | Filters and missing data | Expose only supported fields; make inclusion of unknown values an explicit choice. |
+| JEV evaluation contract | Define candidate evidence, evaluation limits, reuse of valid decisions, progress behavior, quality targets, and a cost budget. |
 | Tab limits and saving/hiding | Set limits from usability and cost; keep convenience features secondary to the core flow. |
 | Launch targets | Define minimum coverage, relevance, latency, cost, and funnel thresholds before launch. |
 
