@@ -105,7 +105,7 @@ body.reduce-motion .list-row,body.reduce-motion .row-arrow{transition:none}body.
 .followed-check{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border:1px solid var(--ink);font-size:11px;color:transparent}
 .followed-only[aria-pressed=true]{background:var(--ink);color:var(--cream)}
 .followed-only[aria-pressed=true] .followed-check{color:var(--cream);border-color:var(--cream)}
-.followed-only:hover{text-decoration:none;background:var(--cream);color:var(--ink)}
+.followed-only:hover:not(:disabled){text-decoration:none;background:var(--cream);color:var(--ink)}
 .followed-only[aria-pressed=true]:hover .followed-check{color:var(--ink);border-color:var(--ink)}
 @media(max-width:720px){.company-info>.company-follow{margin-left:29px}.company-follow{min-width:94px}}
 
