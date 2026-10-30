@@ -38,6 +38,7 @@ The following are the product requirements from the brief:
 - Existing Jobseek users receive their first month free.
 - Results show extracted structured values, without full posting text. Summaries may come later if their cost is justified.
 - Result cards do not expand. Users open the original company posting for further details.
+- Opening a position's company posting marks that position as viewed for the user. Viewed state persists across searches, tabs, and sessions.
 
 Everything below that resolves an unspecified detail is a proposal, not a settled requirement. The final section gathers decisions to review before implementation.
 
@@ -170,7 +171,19 @@ Each compact row or card shows title, company, location/remote eligibility, publ
 
 The primary action is “View on company site,” linking directly to the original posting for further details and application. Keep enough search context and scroll position for the user to return and continue.
 
-Rules for presentation and matching:
+### Viewed positions
+
+When a user activates the link to a position's full description on the company site, mark the position as viewed and show a clear, restrained “Viewed” indicator on its result card. This includes keyboard activation and opening the link in a new tab. Merely displaying a result does not mark it as viewed. The state records that the user opened the link; it does not claim they read the description or applied.
+
+Viewed state belongs to the user and the position, not to an individual search or tab. Store it against the stable posting identity with a first-viewed timestamp. The same position remains viewed when it appears in another search, after a search edit, or after a reload. Duplicate URLs for the same posting share the state; genuinely distinct postings have separate states. Repeated clicks do not create duplicate viewed records.
+
+For signed-in users, persist viewed state in the backend so it follows the account across sessions and devices. For visitors, the proposed behavior is to persist it locally in that browser and merge those observations into the account on sign-in. Account-specific state must not remain visible to another user on a shared browser.
+
+Viewed positions remain in their normal newest-first location; viewing does not reorder or automatically hide them. Preserve viewed state if a posting expires or closes, while still removing the posting from the website under the freshness rules. Keeping that state does not create a browsable archive of expired positions.
+
+Record the viewed action without delaying navigation to the company site. If persistence fails, retain the local viewed state and retry synchronization; returning to the search should still show the clicked position as viewed.
+
+### Presentation and matching rules
 
 - No full description, copied paragraphs, or generated summary in the initial product.
 - Show extracted facts only when supported by the posting. Unknown is distinct from “No.”
@@ -228,6 +241,7 @@ No financial viability claim is made here. The later model should account for co
 | Model unavailable | Preserve the applied configuration, title, description, and results; retain the user's edited search text and offer retry. |
 | JEV narrowing pending or unavailable | Show evaluation progress or an error separately from zero matches; do not substitute unfiltered candidates for narrowed results. |
 | Search service unavailable | Show an error and retry; do not report zero jobs. |
+| Viewed-state synchronization fails | Open the company posting normally, preserve the viewed state locally, and retry synchronization. |
 | Source outage | Explain coverage limitations where material and withhold listings beyond the verification threshold. |
 | Free period expires during use | Preserve searches and apply the new access state consistently. |
 
@@ -239,6 +253,8 @@ Send only the metadata needed for interpretation to the model. Do not send accou
 
 Raw searches may contain personal information. Analytics should prefer outcome events and coarse dimensions over unrestricted prompt logs. Separate necessary debugging retention from long-term product measurement and decide retention before launch.
 
+Viewed-position history is private account state. It is not public activity or a required input to the interpretation model. Include it in account data deletion and define its retention policy before launch.
+
 The UI repository owns the new experience and its access presentation. The product requires a service boundary supplying eligible structured listings, structured search and optional backend JEV narrowing, fixed recency ordering, and authoritative entitlements. Retaining JEV's narrowing capability does not require carrying over the old UI, plan structure, or application architecture. Backend retention is separate from website availability.
 
 This draft intentionally leaves application framework, authentication provider, interpretation model vendor, deployment platform, and payment provider undecided. JEV is retained for backend narrowing; its integration contract needs to be defined for the new service. Select the remaining technologies after the product behaviors and data contract are agreed.
@@ -247,7 +263,7 @@ This draft intentionally leaves application framework, authentication provider, 
 
 The first release must cover the complete value path: visitor search → understandable criteria → useful preview → sign-in → full fresh results → original company posting → return to saved searches → explicit paid continuation.
 
-Include the search workspace and tabs, persistent editable user search text, model-generated search titles and criteria descriptions, optional metadata, natural-language interpretation and diffs from text edits, model-configured backend JEV narrowing, undo, structured results always ordered newest first, strict freshness rules, source links, access gating, free-period eligibility, subscription lifecycle, and measurement of the journey.
+Include the search workspace and tabs, persistent editable user search text, model-generated search titles and criteria descriptions, optional metadata, natural-language interpretation and diffs from text edits, model-configured backend JEV narrowing, undo, structured results always ordered newest first, persistent viewed-position state, strict freshness rules, source links, access gating, free-period eligibility, subscription lifecycle, and measurement of the journey.
 
 Proposed additions to defer include email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries, and an internal application tracker. Saving and hiding can be removed from the first release if they delay validating the search-to-source path.
 
@@ -266,7 +282,7 @@ Instrument the journey with distinct definitions:
 - **Retention:** return use during the free period, weekly return use, paid renewal, and cancellation.
 - **Trust and operations:** expired listings exposed, known-closed results, duplicate exposure, source-check lag, latency, and cost per submitted search and active user.
 
-A company-link click records an outbound visit, not a completed application or hire. Avoid presenting it as either.
+A company-link click records an outbound visit and marks the position as viewed for that user. It is not a completed application or hire. Repeated clicks may be separate analytics events but must not inflate the count of distinct viewed positions.
 
 Before building the whole experience, validate the fresh inventory available in candidate launch segments and test interpretation on representative searches, including exclusions, alternatives, currencies, and refinements. Then test whether people understand the hidden latest results and free-period offer. Set numerical success thresholds before running the launch experiment, using baseline evidence rather than invented targets.
 
