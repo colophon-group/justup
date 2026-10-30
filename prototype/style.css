@@ -12,3 +12,30 @@
 html{overflow-anchor:none}
 
 .job{transition:color 160ms ease-out}@media(prefers-reduced-motion:reduce){.job{transition:none}}body.reduce-motion .job{transition:none}
+
+/* Shared row affordance: one source link stretches across the row. */
+.company-row{position:relative}
+.company-name::after{content:"";position:absolute;inset:0;z-index:1}
+.company-priority,.company-open{position:relative;z-index:2}
+.company-row:has(.company-name:focus-visible){outline:2px solid var(--ink);outline-offset:4px}
+.company-name:focus-visible{outline:0}
+.job,.company-row{transition:background-color 120ms ease-out,color 160ms ease-out}
+.job:has(a:active),.company-row:has(a:active){background-color:#f6aa8b}
+.job:has(a:focus-visible),.company-row:has(a:focus-visible){background-color:#f6aa8b}
+@media(hover:hover) and (pointer:fine){
+ .job:has(a:hover),.company-row:has(a:hover){background-color:#f6aa8b}
+ .job:has(a:hover) .open-posting,.company-row:has(a:hover) .company-open{transform:translate(2px,-2px)}
+}
+.open-posting,.company-open{transition:transform 120ms ease-out}
+#company-list{overflow-anchor:none}
+#company-tail{min-height:125px;display:flex;align-items:center;justify-content:center;border-top:1px solid var(--rule);text-align:center;padding:25px 0}
+#company-scroll-status{font:600 12px/1.7 var(--sans)}
+@media(prefers-reduced-motion:reduce){.job,.company-row,.open-posting,.company-open{transition:none}.job .open-posting,.company-row .company-open{transform:none!important}}
+body.reduce-motion .job,body.reduce-motion .company-row,body.reduce-motion .open-posting,body.reduce-motion .company-open{transition:none}
+body.reduce-motion .job .open-posting,body.reduce-motion .company-row .company-open{transform:none!important}
+
+.company-priority{display:inline-flex;align-items:center;justify-content:center;gap:6px;margin:10px 0 0 13px;border:1px solid var(--ink);padding:5px 9px;font:700 10px/1.5 var(--sans);white-space:nowrap;text-decoration:none;min-height:28px;background:transparent}
+.company-priority:hover{background:var(--ink);color:var(--white);text-decoration:none}
+.company-priority[aria-pressed=true]{background:var(--cream);color:var(--ink)}
+.coverage.catalogue-bottom{border-top:3px solid var(--ink);padding:31px 0;align-items:center;font-size:inherit;font-weight:inherit}
+@media(max-width:720px){.company-priority{font-size:10px;padding:5px 8px}.coverage.catalogue-bottom{align-items:flex-start;padding:27px 0;gap:23px}}

@@ -101,3 +101,5 @@ Announce incoming batches through one polite status region, such as “2 new mat
 - Accessibility and layout: verify keyboard operation, announcements, contrast, long titles, and small screens in the real application viewport.
 
 The inline motion study demonstrates the arrival treatment, a cropped reading viewport, and the viewed transition. Its hidden “above viewport” region is illustrative; production insertion and scroll anchoring require end-to-end verification in the application.
+
+The company catalogue uses the same individual-row cadence and viewport gate as the job feed. Company rows open their profiles, with priority requests as an independent button. Clickable rows have a coral hover wash, a keyboard focus outline, and pressed feedback. Keep the job-feed Open Coverage panel hidden until all results are exhausted and the reader reaches the end. The catalogue ends with the same prominent company-request treatment.
