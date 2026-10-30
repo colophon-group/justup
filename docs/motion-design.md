@@ -21,7 +21,7 @@ The entrance ends; the marker remains. Do not remove New merely because the anim
 | Interaction | Starting motion | Persistent result |
 | --- | --- | --- |
 | A visible new position | Content settles downward by 4 px over 220 ms, with opacity resolving to 1. Use `cubic-bezier(.2,.7,.3,1)`. The leading edge reveals over 180 ms. | New label and edge stay visible. |
-| An older match during infinite scroll | Reveal the row downward as one printed block over a proposed 650 ms cycle. Complete this cycle before beginning the next job, including when the next match is already buffered. | Continuous job-by-job disclosure without visible backend page boundaries. |
+| An older match during infinite scroll | Use a proposed 450 ms cycle per job. Motion treatment is under review: Dock, Glide, or Ink. Complete the cycle before beginning the next job, including when the next match is already buffered. | Continuous job-by-job disclosure without visible backend page boundaries. |
 | Arrival above the reader | Insert automatically above the viewport and compensate scroll position in the same rendering transaction. Animate no existing row. Update the small “N new ↑” navigation cue without rolling digits or pulsing. | The same position, text selection, and keyboard target remain in place. |
 | Opening a company posting | Change text to the muted brand color over 160 ms; reveal the eye indicator over 120 ms. | Viewed remains muted at the same font weight, size, line wrapping, and row height. |
 | Live connection | Only the small live dot breathes between 0.6 and 1 opacity on a 2.8 s cycle. An optional faint halo expands from the dot. | “Live edition” text stays steady. |
@@ -35,7 +35,15 @@ Motion is local and functional. Use no springs, bounce, confetti, full-page fade
 
 The interface reveals individual jobs continuously. Backend collection pages, candidate scan batches, and matching batches never appear as UI pages. A matched page arriving does not dump all its jobs onto the screen. A small ordered queue smooths irregular background loading.
 
-The animation itself imposes a deliberate consumption interval, including when data is already ready. The proposed starting cycle is **650 ms per job**, with 450 ms and 900 ms variants in the motion study. Each job appears promptly at the start of its cycle and is revealed downward as one block, using `cubic-bezier(.2,.7,.3,1)`. The next job cannot begin until the current cycle completes and another ordered match is ready. This is purposeful browsing cadence, rather than an animation applied after a whole page was already disclosed.
+The animation itself imposes a deliberate consumption interval, including when data is already ready. The current proposed cycle is **450 ms per job**, with 350 ms and 550 ms comparisons available. The next job cannot begin until the current cycle completes and another ordered match is ready. This is purposeful browsing cadence, rather than an animation applied after a whole page was already disclosed.
+
+Three whole-row treatments are under review:
+
+- **Dock:** open only the newly appended slot during the first 44% of the cycle. After that space is open, introduce the complete job block with a 6 px settle, reaching its final appearance by 88%. Existing rows above stay still.
+- **Glide:** introduce the complete row from 14 px to the left, resolving position and opacity by 85% of the cycle.
+- **Ink:** keep text immediately readable and stationary. Draw its separator while a soft coral tint settles to the page color over the cycle.
+
+Dock and Glide use `cubic-bezier(.18,.8,.25,1)` for their settling movement. None scans a mask through individual lines of text. Each treatment has the same consumption deadline, ordering, matching states, and reduced-motion pacing.
 
 Fetching and JEV evaluation run alongside the reveal. They can take longer than a cycle: the UI waits for the next real match rather than inventing a position or resetting its animation. Older matches disclosed through scrolling do not receive the live-arrival New label.
 
