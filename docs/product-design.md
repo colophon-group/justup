@@ -8,7 +8,7 @@ Brand: undecided; `fresh-jobs-ui` is a repository working name
 
 ## 1. Product intent
 
-Help people find relevant, recently published opportunities on company career pages and get to the original application quickly.
+Help people find relevant opportunities recently discovered by the backend on company career pages and get to the original application quickly.
 
 The current service has no conversions. That establishes the need to revisit the offer, but does not establish which parts of acquisition, relevance, trust, or payment are failing. This design defines a new experience and the evidence needed to assess it.
 
@@ -23,6 +23,7 @@ The initial audience hypothesis is people actively searching now, who return fre
 The following are the product requirements from the brief:
 
 - Listings come directly from company career pages.
+- Publication time is when the backend first observed the posting.
 - Listings older than two weeks disappear from the website, while remaining in the backend.
 - One search workspace contains tabs for separate searches.
 - One search bar is the input for creating and refining searches; there is no filter editor.
@@ -65,7 +66,7 @@ On Enter:
 
 The description should explain what the system searched for. “Preferred” records a nonbinding preference; it does not exclude roles missing Go or change their order. The description must make that distinction clear. The user can refine the search to require Go. “Remote from Switzerland” must retain geographic eligibility, not become worldwide remote.
 
-Result order is fixed: newest eligible listing first, using the same age basis as the freshness rule. Relevance, preferences, personalization, and model output cannot override recency. There is no alternative sort mode.
+Result order is fixed: newest eligible listing first, ordered by publication time—the backend's first observation of the posting. This is the same timestamp used for the freshness rule. Relevance, preferences, personalization, and model output cannot override recency. There is no alternative sort mode.
 
 The interpretation must support alternatives such as “Zurich on-site OR Switzerland-eligible remote.” A flat set of unrelated fields must not accidentally turn this into “Zurich AND remote.”
 
@@ -136,29 +137,23 @@ Use one inexpensive interpretation request per submission where possible, return
 
 ## 5. Freshness and direct sources
 
-Two weeks is a hard eligibility boundary, not merely a sorting preference. A result is eligible only while its age is less than 14 days, it is not known to be closed, and it has sufficient freshness and source evidence. At the boundary it disappears from public search and public listing surfaces.
+Two weeks is a hard eligibility boundary, not merely a sorting preference. A result is eligible only while less than 14 days have elapsed since the backend first observed it, it is not known to be closed, and its company source meets the availability rules below. At the boundary it disappears from public search and public listing surfaces.
 
 The backend retains the record and its history. Retention must not accidentally make expired listings accessible through a public detail URL, an old cursor, a shared search, or a saved result. An old link may show a minimal unavailable state without exposing the archived posting.
 
-### Define the age honestly
+### Publication time and age
 
-Proposed freshness policy:
+Publication time is defined as the timestamp when the backend first observed the posting: `publication_time = first_observed_at`. The 14-day window, newest-first ordering, displayed publication age, and latest-results access cutoff all use this timestamp.
 
-| Source evidence | Treatment |
-| --- | --- |
-| Reliable original publication time from the company source | Use that time for the 14-day window. |
-| Publication date absent, but a newly appearing listing is established through prior monitoring | Use its first observed appearance; label it “First seen,” not “Posted.” |
-| Newly imported listing with unknown original age, or uncertain observation history | Retain it in the backend; exclude it from the fresh public inventory until eligibility is established. |
-| Source edit, recrawl, URL change, or duplicate of an existing role | Preserve the original age; do not restart the window. |
-| Claimed repost or reopened role | Require a defined, evidence-based repost policy before assigning a new window. |
+The company's own publication date does not determine eligibility or ordering. A posting first observed today starts its 14-day window today, regardless of the date shown by the company. Product copy should explain that publication time means first observed by our backend.
 
-This age policy needs agreement before implementation. “Observed recently” and “published recently” must not be interchangeable marketing claims. A date-only source value also needs a documented conservative boundary so precision is not invented.
+Recrawling, source edits, URL changes, duplicate records, and reopening the same posting do not reset its first-observed timestamp. A genuinely distinct posting has its own first observation. Deduplication must preserve the earliest backend observation for the same posting.
 
-The imported collection's timestamps must retain their original meaning. Moving a record into the new product cannot make it new.
+Imported records retain when the collection backend originally first observed them. Moving a record into the new product does not restart the clock. If that timestamp is unavailable, resolve it from observation history before publishing the record; do not substitute the import time or company publication date.
 
 ### Company provenance and availability
 
-Every result links to the original company posting or an applicant-tracking system linked from the company's careers site. Display the company, source link, age basis, and a source-check timestamp. Aggregator copies do not qualify as direct sources.
+Every result links to the original company posting or an applicant-tracking system linked from the company's careers site. Display the company, source link, publication age based on first observation, and a source-check timestamp. Aggregator copies do not qualify as direct sources.
 
 Deduplicate the same opportunity across URLs and locations when appropriate. Merge duplicates without resetting age, and preserve distinct roles when the source identifies them separately.
 
@@ -170,7 +165,7 @@ Say when a listing was checked. Do not promise that an external vacancy is guara
 
 A result should let someone make a quick decision about opening the original posting.
 
-The collapsed row or card shows title, company, location/remote eligibility, posting or first-seen age, and a small set of available decision fields. Salary, seniority, employment type, and key skills are candidates. An expandable structured view can show further extracted values such as language, sponsorship, experience requirements, or benefits when supported.
+The collapsed row or card shows title, company, location/remote eligibility, publication age based on the backend's first observation, and a small set of available decision fields. Salary, seniority, employment type, and key skills are candidates. An expandable structured view can show further extracted values such as language, sponsorship, experience requirements, or benefits when supported.
 
 The primary action is “View on company site.” Make clear that the application happens externally. Keep enough search context and scroll position for the user to return and continue.
 
@@ -200,7 +195,7 @@ When a result expires while the user is viewing it, remove its active content an
 | Signed in, free period ended without subscription | Searches remain saved; return to limited preview access with an upgrade action. |
 | Cancelled subscription with time remaining | Full access until the paid-through time. |
 
-Public preview must still contain only jobs under 14 days old. The proposed latest-results cutoff is the most recent 48 hours; it is an experiment to validate, not a decided requirement. Sparse markets may have no unlocked matches. Show that honestly rather than weakening the freshness promise.
+Public preview must still contain only jobs first observed by the backend less than 14 days ago. The proposed latest-results cutoff hides postings first observed within the most recent 48 hours; it is an experiment to validate, not a decided requirement. Sparse markets may have no unlocked matches. Show that honestly rather than weakening the freshness promise.
 
 Use one aggregate message where recent matches are withheld, for example “Sign in to see the latest matches.” Show counts only if they are accurate and safe to expose. Do not return hidden listing data to the browser and merely blur it. Apply access rules to result queries and individual listing URLs alike.
 
@@ -280,8 +275,7 @@ Before building the whole experience, validate the fresh inventory available in 
 | --- | --- |
 | Name and brand | Keep the repository name provisional; choose a distinct identity separately. |
 | Initial audience | Select occupation/geography using actual fresh inventory and user research. |
-| Definition of age | Reliable publication time, or explicitly labelled first observed appearance with evidence of newness; otherwise withhold. |
-| Closure verification and reposts | Set a maximum verification age and an evidence-based policy for genuine reposts. |
+| Closure verification and posting identity | Set a maximum verification age and define how to distinguish genuinely new postings from duplicates or reopened records. The first-observed timestamp of the same posting never resets. |
 | Latest-results gate | Start by evaluating a 48-hour cutoff; validate preview usefulness in sparse searches. |
 | Free-period start and card requirement | Activation of verified full access; cardless free period. |
 | Legacy eligibility | Verify ownership; one calendar month from activation, replacing the standard week. Define cutoff and redemption rules. |
