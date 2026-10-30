@@ -210,3 +210,8 @@ form label,.settings-label,.plan-options legend{font-family:var(--sans);font-siz
 .account,.status,.status-note,.job-source,.last-check,.feed-order,.job-salary{font-family:var(--mono);letter-spacing:0}
 .topbar nav,.header-sign-in,.button,.text-link,.back,.search-submit,.status-filters button,.company-follow,.followed-only,.add-search,.search-tab button[role=tab],form label,.settings-label,.plan-options legend{font-family:var(--mono);font-weight:600;letter-spacing:0}
 .job-salary,.last-check{font-variant-numeric:tabular-nums}
+
+/* All compact UI labels share the typewriter role, including workflow steps. */
+button:not(.job-company),label,legend,select,.request-steps,.coverage-proof,.settings-section select,.demo-options select{font-family:var(--mono)}
+.request-steps{font-weight:600;line-height:1.6;letter-spacing:0}
+.request-steps li.active{font-weight:700}
