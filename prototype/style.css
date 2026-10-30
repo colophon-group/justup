@@ -90,6 +90,7 @@ body.reduce-motion .list-row,body.reduce-motion .row-arrow{transition:none}body.
 .company-map{height:280px;display:flex;align-items:center;justify-content:center;background:none;pointer-events:auto;overflow:visible;cursor:grab;touch-action:pan-y pinch-zoom}
 .company-map.is-dragging{cursor:grabbing}
 .company-map svg{display:block;flex:none;width:280px;max-width:100%;height:auto;aspect-ratio:1;transform:none;overflow:visible;touch-action:pan-y pinch-zoom}
+.company-map svg:focus:not(:focus-visible){outline:none}
 .company-map svg:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 .company-map .map-country{stroke-width:.55}
 @media(max-width:720px){.company-map{height:230px}.company-map svg{width:230px}}
