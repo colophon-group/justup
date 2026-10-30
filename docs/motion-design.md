@@ -4,7 +4,7 @@ Status: proposed motion specification for the accepted **Extra Orange** visual d
 
 ## Visual baseline
 
-Use orange coral `#F28A60`, black and white ink, a condensed masthead, readable sans-serif job text, square controls, and small company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible. Keep “Last 14 days” explicit. The search is a pale, visibly editable field with a Search action. Search tabs include “+ New search.”
+Use orange coral `#F28A60`, black and white ink, a condensed masthead, headlines in the same condensed face as the wordmark and readable typewriter copy, square controls, and small company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible. Keep “Last 14 days” explicit. The search is a pale, visibly editable field with a Search action. Search tabs include “+ New search.”
 
 Result lists have no footer or appended coverage panel, so reaching an end does not introduce a new layout block. Keep **Request a company** available in the catalogue header. Do not show an idle “Up to date” label.
 
@@ -29,7 +29,7 @@ The entrance ends; the marker remains. Do not remove New merely because the anim
 
 Reserve a small indicator slot for the eye and New label so changing their visibility does not reflow company names or headings. Muting must preserve readable contrast; do not lower the opacity of the entire row. Company-mark opacity can soften while text uses an explicit muted color.
 
-Motion is local and functional. Use no springs, bounce, confetti, full-page fades, flashing rows, or repeated entrance effects on already shown positions. Fresh live arrivals are one update; any visible entrances share a short time window. Infinite scrolling uses its own deliberately paced, job-by-job reveal, described below. The live dot is the sole repeating ambient motion and must remain subtle; a functional looking indicator runs only while matching work is active.
+Motion is local and functional. Use no springs, bounce, confetti, full-page fades, flashing rows, or repeated entrance effects on already shown positions. Fresh live arrivals are one update; any visible entrances share a short time window. Infinite scrolling uses its own deliberately paced, job-by-job reveal, described below. Keep the live-dot pulse subtle. The Hiring Wire is the additional continuous motion: a fixed-height text tape moving at roughly 27 px/s, carrying only selected WoW listing signals. A functional looking indicator runs only while matching work is active.
 
 ## Infinite scroll: the reveal is the pacing mechanism
 
@@ -53,7 +53,7 @@ Fetching and JEV evaluation run alongside the reveal. They can take longer than 
 | --- | --- | --- |
 | Revealing | At least one match is ready in chronological order. | Reveal one row per cycle. Existing rows keep their position, identity, and focus. |
 | Looking | The matched queue is empty, but candidates remain, a continuation is active, or JEV decisions are pending. | Hold a stable continuation area with **Looking for more matches…** and a quiet indeterminate ink rule. Show no percentage or made-up remaining count. |
-| End | No candidates remain in the eligible range, every pending evaluation has resolved, the matched queue is drained, and the last reveal has completed. | Stop the looking indicator and show **No more matches in the last 14 days.** State that coverage is the companies we monitor; keep live updates on. Keep the company-request action available through the catalogue header. |
+| End | No candidates remain in the eligible range, every pending evaluation has resolved, the matched queue is drained, and the last reveal has completed. | Stop the looking indicator and show **You’ve reached the back page.** Follow it with **No more matches in the last 14 days. Live updates stay on.** Coverage remains limited to the companies we monitor. Keep the company-request action available through the catalogue header. |
 
 An empty filtered backend page is a Looking state, not an End state. Neither a timeout, failed JEV evaluation, scan budget pause, nor disconnection proves exhaustion. If work has stopped, show a truthful paused or retry state with a next action, rather than animating “Looking” indefinitely. A real account access limit requires its explicit access message.
 
@@ -111,3 +111,7 @@ For clickable rows, the surface highlight, arrow motion and focus outline provid
 The globe responds directly to wheel, drag and keyboard input, without a reveal sequence, automatic spin or inertial tail. Scrolling over the sphere rotates longitude; its scale remains fixed. Wheel input outside the sphere scrolls the page normally. Horizontal touch dragging rotates while vertical touch gestures scroll the page. Arrow keys rotate and Home restores the initial view. Rendering uses a single animation-frame update per frame, with no movement while idle.
 
 The first-search screen has no result reveal or live insertion until submission. Deleting the last search invalidates queued or pending results before showing that screen; a late response must not repopulate it. Example buttons prefill the input without starting a search.
+
+## Hiring Wire
+
+Keep a fixed-height strip under the masthead, with continuously moving company links, short headlines, percentages and small sparklines. The underlying comparison is WoW, with no visible title, WoW label or contextual panel. A visual duplicate enables seamless looping; it is hidden from assistive technology and excluded from keyboard order. Use no pause controls. Hold motion on hover/focus, while a dialog is open, and while the document is hidden. Keyboard navigation switches to a static, horizontally scrollable view so every focused link stays visible. Reduced motion freezes the tape and permits manual horizontal scrolling, without losing any stories. Avoid aria-live announcements of the repeating text.
