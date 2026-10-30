@@ -6,7 +6,7 @@ Status: proposed motion specification for the accepted **Extra Orange** visual d
 
 Use orange coral `#F28A60`, black and white ink, a condensed masthead, readable sans-serif job text, square controls, and small company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible. Keep “Last 14 days” explicit. The search is a pale, visibly editable field with a Search action. Search tabs include “+ New search.”
 
-The coverage footer says “See who we monitor. Tell us who’s missing.” Its primary action is **Request a company**, with **Company catalogue** as the secondary action. Do not show an idle “Up to date” label.
+Result lists have no footer or appended coverage panel, so reaching an end does not introduce a new layout block. Keep **Request a company** available in the catalogue header. Do not show an idle “Up to date” label.
 
 ## Marking new positions
 
@@ -53,7 +53,7 @@ Fetching and JEV evaluation run alongside the reveal. They can take longer than 
 | --- | --- | --- |
 | Revealing | At least one match is ready in chronological order. | Reveal one row per cycle. Existing rows keep their position, identity, and focus. |
 | Looking | The matched queue is empty, but candidates remain, a continuation is active, or JEV decisions are pending. | Hold a stable continuation area with **Looking for more matches…** and a quiet indeterminate ink rule. Show no percentage or made-up remaining count. |
-| End | No candidates remain in the eligible range, every pending evaluation has resolved, the matched queue is drained, and the last reveal has completed. | Stop the looking indicator and show **No more matches in the last 14 days.** State that coverage is the companies we monitor; keep live updates on. Bring forward Request a company and the catalogue link. |
+| End | No candidates remain in the eligible range, every pending evaluation has resolved, the matched queue is drained, and the last reveal has completed. | Stop the looking indicator and show **No more matches in the last 14 days.** State that coverage is the companies we monitor; keep live updates on. Keep the company-request action available through the catalogue header. |
 
 An empty filtered backend page is a Looking state, not an End state. Neither a timeout, failed JEV evaluation, scan budget pause, nor disconnection proves exhaustion. If work has stopped, show a truthful paused or retry state with a next action, rather than animating “Looking” indefinitely. A real account access limit requires its explicit access message.
 
@@ -65,7 +65,7 @@ Work refills the buffer according to actual consumption and proximity to the loa
 
 JEV may complete out of order. Emit matches only when all more-recent candidates have been resolved, keeping a stable first-observed timestamp and posting-identity ordering. Buffer later accepted candidates behind that decision boundary. This preserves newest-first order without inserting a late decision into the middle of rows someone is reading.
 
-Retain existing rows as new rows are appended below them. Do not animate the height of the existing list, apply scroll resistance, or hijack wheel and touch input. If a user focuses a partly revealed row, complete its visual reveal immediately so the target is visible; the cadence deadline for disclosing the next job remains in force. Do not let the pagination loader or footer become a scroll anchor that pulls the reader downward.
+Retain existing rows as new rows are appended below them. Do not animate the height of the existing list, apply scroll resistance, or hijack wheel and touch input. If a user focuses a partly revealed row, complete its visual reveal immediately so the target is visible; the cadence deadline for disclosing the next job remains in force. Do not let the pagination loader become a scroll anchor that pulls the reader downward.
 
 ### Reduced motion keeps the same cadence
 
@@ -102,4 +102,4 @@ Announce incoming batches through one polite status region, such as “2 new mat
 
 The inline motion study demonstrates the arrival treatment, a cropped reading viewport, and the viewed transition. Its hidden “above viewport” region is illustrative; production insertion and scroll anchoring require end-to-end verification in the application.
 
-The company catalogue uses the same individual-row cadence and viewport gate as the job feed. Company rows open their profiles, with priority requests as an independent button. Clickable rows have a coral hover wash, a keyboard focus outline, and pressed feedback. Keep the job-feed Open Coverage panel hidden until all results are exhausted and the reader reaches the end. The catalogue ends with the same prominent company-request treatment.
+The company catalogue uses the same individual-row cadence and viewport gate as the job feed. Company rows open their profiles, with priority requests as an independent button. Clickable rows have a coral hover wash, a keyboard focus outline, and pressed feedback. Do not append footer panels at the end of either list. Reserve enough space for looking and end statuses to change without shifting the document. A fixed back-to-top button appears after scrolling and respects reduced motion; it restores focus to the top navigation. Requests use the same row interactions with whitespace instead of row separators.
