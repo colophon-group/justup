@@ -21,6 +21,7 @@ The entrance ends; the marker remains. Do not remove New merely because the anim
 | Interaction | Starting motion | Persistent result |
 | --- | --- | --- |
 | A visible new position | Content settles downward by 4 px over 220 ms, with opacity resolving to 1. Use `cubic-bezier(.2,.7,.3,1)`. The leading edge reveals over 180 ms. | New label and edge stay visible. |
+| An older match during infinite scroll | Reveal the row downward as one printed block over a proposed 650 ms cycle. Complete this cycle before beginning the next job, including when the next match is already buffered. | Continuous job-by-job disclosure without visible backend page boundaries. |
 | Arrival above the reader | Insert automatically above the viewport and compensate scroll position in the same rendering transaction. Animate no existing row. Update the small “N new ↑” navigation cue without rolling digits or pulsing. | The same position, text selection, and keyboard target remain in place. |
 | Opening a company posting | Change text to the muted brand color over 160 ms; reveal the eye indicator over 120 ms. | Viewed remains muted at the same font weight, size, line wrapping, and row height. |
 | Live connection | Only the small live dot breathes between 0.6 and 1 opacity on a 2.8 s cycle. An optional faint halo expands from the dot. | “Live edition” text stays steady. |
@@ -28,7 +29,41 @@ The entrance ends; the marker remains. Do not remove New merely because the anim
 
 Reserve a small indicator slot for the eye and New label so changing their visibility does not reflow company names or headings. Muting must preserve readable contrast; do not lower the opacity of the entire row. Company-mark opacity can soften while text uses an explicit muted color.
 
-Motion is local and functional. Use no springs, bounce, confetti, full-page fades, flashing rows, repeated entrance effects, or staggered cascades across a batch. A batch is one update; any visible entrances share a short time window. The live dot is the sole repeating ambient motion and must remain subtle.
+Motion is local and functional. Use no springs, bounce, confetti, full-page fades, flashing rows, or repeated entrance effects on already shown positions. Fresh live arrivals are one update; any visible entrances share a short time window. Infinite scrolling uses its own deliberately paced, job-by-job reveal, described below. The live dot is the sole repeating ambient motion and must remain subtle; a functional looking indicator runs only while matching work is active.
+
+## Infinite scroll: the reveal is the pacing mechanism
+
+The interface reveals individual jobs continuously. Backend collection pages, candidate scan batches, and matching batches never appear as UI pages. A matched page arriving does not dump all its jobs onto the screen. A small ordered queue smooths irregular background loading.
+
+The animation itself imposes a deliberate consumption interval, including when data is already ready. The proposed starting cycle is **650 ms per job**, with 450 ms and 900 ms variants in the motion study. Each job appears promptly at the start of its cycle and is revealed downward as one block, using `cubic-bezier(.2,.7,.3,1)`. The next job cannot begin until the current cycle completes and another ordered match is ready. This is purposeful browsing cadence, rather than an animation applied after a whole page was already disclosed.
+
+Fetching and JEV evaluation run alongside the reveal. They can take longer than a cycle: the UI waits for the next real match rather than inventing a position or resetting its animation. Older matches disclosed through scrolling do not receive the live-arrival New label.
+
+### Three continuation states
+
+| State | Meaning | Visible behavior |
+| --- | --- | --- |
+| Revealing | At least one match is ready in chronological order. | Reveal one row per cycle. Existing rows keep their position, identity, and focus. |
+| Looking | The matched queue is empty, but candidates remain, a continuation is active, or JEV decisions are pending. | Hold a stable continuation area with **Looking for more matches…** and a quiet indeterminate ink rule. Show no percentage or made-up remaining count. |
+| End | No candidates remain in the eligible range, every pending evaluation has resolved, the matched queue is drained, and the last reveal has completed. | Stop the looking indicator and show **No more matches in the last 14 days.** State that coverage is the companies we monitor; keep live updates on. Bring forward Request a company and the catalogue link. |
+
+An empty filtered backend page is a Looking state, not an End state. Neither a timeout, failed JEV evaluation, scan budget pause, nor disconnection proves exhaustion. If work has stopped, show a truthful paused or retry state with a next action, rather than animating “Looking” indefinitely. A real account access limit requires its explicit access message.
+
+### Buffering, work limits, and ordering
+
+Proposed initial limits are a small queue of up to six ready matches, a refill trigger around two remaining matches, and at most one continuation request in flight for the current search revision. Final values require latency and cost measurement. Do not preload the whole search. A bounded candidate scan can yield its cursor when matching is expensive; resuming does not restart the scan or re-evaluate completed candidates.
+
+Work refills the buffer according to actual consumption and proximity to the loaded end. Stop consuming new rows and refilling when the user leaves that area, changes the search, or backgrounds the tab. Finish the current visible row so no half-revealed text remains. Do not turn the loader's animation loop into repeated requests. Each continuation has a backend work budget as well as the deliberate frontend reveal cadence.
+
+JEV may complete out of order. Emit matches only when all more-recent candidates have been resolved, keeping a stable first-observed timestamp and posting-identity ordering. Buffer later accepted candidates behind that decision boundary. This preserves newest-first order without inserting a late decision into the middle of rows someone is reading.
+
+Retain existing rows as new rows are appended below them. Do not animate the height of the existing list, apply scroll resistance, or hijack wheel and touch input. If a user focuses a partly revealed row, complete its visual reveal immediately so the target is visible; the cadence deadline for disclosing the next job remains in force. Do not let the pagination loader or footer become a scroll anchor that pulls the reader downward.
+
+### Reduced motion keeps the same cadence
+
+With reduced motion, a ready job appears without a wipe, translation, or fade, and the next job still waits for the same per-job cycle deadline. The looking indicator is static with the same status text. Reduced motion changes the visual treatment, while preserving the designed consumption pacing and backend work limits.
+
+The infinite-scroll study simulates continued proximity to the loaded end. Its three scenarios show buffered matching jobs, a zero-yield candidate batch followed by more JEV matches, and confirmed exhaustion. It does not make real requests.
 
 ## Protecting reading and interaction
 
@@ -44,7 +79,7 @@ Search submission keeps the user’s complete text in place. Do not fade away th
 
 ## Reduced motion and announcements
 
-Honor the operating system’s reduced-motion preference. Remove translations, edge animation, color transitions, and the repeating live pulse. All updates are immediate, with the same New labels, eye indicator, counts, newest-first order, and reading-position protection.
+Honor the operating system’s reduced-motion preference. Remove translations, edge animation, color transitions, and the repeating live pulse. State changes are immediate, with the same New labels, eye indicator, counts, newest-first order, and reading-position protection. Infinite scrolling retains its per-job cadence deadline as specified above.
 
 Announce incoming batches through one polite status region, such as “2 new matching positions added.” Do not make the entire feed a live region or announce every frame. Eye and outbound-link icons have accessible labels. Neither color nor motion is the only way to identify a new or viewed position.
 
