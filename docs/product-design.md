@@ -380,3 +380,5 @@ Before building the whole experience, validate the fresh inventory available in 
 | Launch targets | Define minimum coverage, relevance, latency, cost, and funnel thresholds before launch. |
 
 Review these product decisions first. The next artifacts are the main-screen wireframe, the search-configuration contract, and the financial model; implementation should follow their agreement.
+
+Company profiles link to the main search for their positions; do not repeat a “Latest from…” job list inside the profile. A stylized country map can provide visual character with the brand palette. Keep it decorative, without a legend or explanatory note. Use plain product language such as “Being added” and “First seen on Justup”; implementation terms such as backend, crawler and configuration belong in technical documentation. This does not change technical terms in actual job titles or the user’s own search text.
