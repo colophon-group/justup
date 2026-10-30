@@ -62,11 +62,11 @@ body.reduce-motion .list-row,body.reduce-motion .row-arrow{transition:none}body.
 @media(max-width:720px){.back-to-top{width:44px;height:44px;right:max(18px,env(safe-area-inset-right));bottom:max(18px,env(safe-area-inset-bottom))}.dialog-actions{justify-content:flex-start}}
 
 /* A decorative country map, printed into the company masthead. */
-.company-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:34px;align-items:center;min-height:255px;padding:14px 0 23px;border-bottom:3px solid var(--ink)}
+.company-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:34px;align-items:center;min-height:255px;padding:14px 0 23px;border-bottom:0}
 .company-hero-copy{position:relative;z-index:1;min-width:0}.company-hero .detail-heading{align-items:center;gap:12px}.company-hero .detail-heading h1{overflow-wrap:anywhere}
 .company-hero .mark{width:16px;height:16px;font-size:16px}
-.company-map{height:245px;min-width:0;overflow:hidden;background-image:radial-gradient(#11100e20 .65px,transparent .85px);background-size:7px 7px;clip-path:polygon(1% 9%,96% 0,100% 90%,5% 100%);pointer-events:none}
-.company-map svg{display:block;width:100%;height:100%;transform:rotate(-6deg) scale(1.09)}
+.company-map{height:245px;min-width:0;overflow:hidden;background-image:radial-gradient(#11100e20 .65px,transparent .85px);background-size:7px 7px;pointer-events:none}
+.company-map svg{display:block;width:100%;height:100%;transform:none}
 .map-country{fill:var(--cream);fill-opacity:.7;stroke:var(--paper);stroke-width:1;vector-effect:non-scaling-stroke}
 .map-country.is-hiring{fill:var(--ink);fill-opacity:1}
 @media(max-width:720px){.company-hero{grid-template-columns:1fr;gap:20px;padding:3px 0 21px}.company-map{height:195px}.company-hero .detail-heading h1{font-size:43px}}
@@ -80,3 +80,8 @@ body.reduce-motion .list-row,body.reduce-motion .row-arrow{transition:none}body.
 /* Row feedback is provided by the surface and focus ring, not text underlines. */
 .list-row a:hover,.list-row button:hover{text-decoration:none}
 @media(hover:hover) and (pointer:fine){.list-row:has(.job-company:hover){background-color:#f6aa8b}}
+
+.career-links a{display:inline-flex;align-items:baseline;gap:5px;max-width:100%;min-width:0;white-space:normal;text-decoration:none}
+.career-links a:hover{text-decoration:none}
+.career-url{min-width:0;overflow-wrap:anywhere;text-decoration:underline;text-underline-offset:4px}
+.career-arrow{flex:none;text-decoration:none}

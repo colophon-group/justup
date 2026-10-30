@@ -384,3 +384,5 @@ Review these product decisions first. The next artifacts are the main-screen wir
 Company profiles link to the main search for their positions; do not repeat a “Latest from…” job list inside the profile. A stylized country map can provide visual character with the brand palette. Keep it decorative, without a legend or explanatory note. Use plain product language such as “Being added” and “First seen on Justup”; implementation terms such as backend, crawler and configuration belong in technical documentation. This does not change technical terms in actual job titles or the user’s own search text.
 
 Keep company-profile source information compact beneath the company name: last check and a link to each tracked career page. Do not show a status table, scope table, or repeated position counts in that area. Companies with no career pages added yet show “Not checked yet” without invented links.
+
+Keep the decorative company map level, with a rectangular crop. Do not separate the description with a horizontal rule. Display tracked career-page addresses as the link text; the design must not depend on human-readable board labels being available.
