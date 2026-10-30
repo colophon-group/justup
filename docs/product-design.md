@@ -1,10 +1,10 @@
-# Product design: fresh jobs, one search workspace
+# Product design: Justup — fresh jobs, one search workspace
 
 Status: first draft for discussion
 
 Date: 30 October 2026
 
-Working brand direction: Nowlisted; proposed domain `nowlisted.work`. The repository retains its working name `fresh-jobs-ui`.
+Brand: **Justup**. Intended domain: `justup.work`. The repository retains its working name `fresh-jobs-ui`.
 
 ## 1. Product intent
 
@@ -16,7 +16,7 @@ The starting asset is the job collection. The new service has a new brand, repos
 
 The central promise is: **Describe the work you want. Find fresh opportunities directly from employers.**
 
-**Transparency is a core brand value.** Nowlisted makes its actual company coverage visible and lets users request companies they need. We do not claim to cover the entire job market. A user should be able to tell whether a company is monitored, which career pages or regions are covered, whether collection is working, and what is happening with their request.
+**Transparency is a core brand value.** Justup makes its actual company coverage visible and lets users request companies they need. We do not claim to cover the entire job market. A user should be able to tell whether a company is monitored, which career pages or regions are covered, whether collection is working, and what is happening with their request.
 
 The brand promise includes: **See what we cover. Ask for what you need.** Explain limits in ordinary language: publication time means first observed by our backend, missing information remains unknown, and catalogue presence is distinct from working job monitoring. A requested company appears in the catalogue as soon as the requester accepts its discovered identity; monitoring follows a separate crawler-configuration step. Premium users receive priority handling for company requests; this benefit is stated openly.
 
@@ -339,7 +339,7 @@ The first release includes live result delivery over SSE, the compact company ca
 
 Proposed additions to defer include email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries, and an internal application tracker. Saving and hiding can be removed from the first release if they delay validating the search-to-source path.
 
-The working brand direction is Nowlisted at `nowlisted.work`. Visual identity and final copy still need agreement. Transparency must appear in product behavior as well as messaging: visible company coverage, clear publication-age meaning, readable search interpretation, and honest request progress. Use a compact hierarchy, readable typography, and restrained decoration.
+The chosen brand is Justup, with intended domain `justup.work`. Visual identity and final copy still need agreement. Transparency must appear in product behavior as well as messaging: visible company coverage, clear publication-age meaning, readable search interpretation, and honest request progress. Use a compact hierarchy, readable typography, and restrained decoration.
 
 ## 11. Validation and success measures
 
@@ -363,7 +363,7 @@ Before building the whole experience, validate the fresh inventory available in 
 
 | Decision | Proposed starting point |
 | --- | --- |
-| Brand identity | Develop the Nowlisted direction and proposed domain; transparency is a core value. Visual identity and final copy remain open. |
+| Visual identity and copy | The name Justup is settled, with intended domain `justup.work`; transparency is a core value. Define the visual identity and final copy. |
 | Initial audience | Select occupation/geography using actual fresh inventory and user research. |
 | Closure verification and posting identity | Set a maximum verification age and define how to distinguish genuinely new postings from duplicates or reopened records. The first-observed timestamp of the same posting never resets. |
 | Latest-results gate | Start by evaluating a 48-hour cutoff; validate preview usefulness in sparse searches. |
