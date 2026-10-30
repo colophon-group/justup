@@ -98,15 +98,27 @@ body.reduce-motion .list-row,body.reduce-motion .row-arrow{transition:none}body.
 
 /* Following uses the same compact control in catalogue rows and company profiles. */
 .company-follow{position:relative;z-index:2;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:100px;min-height:32px;padding:6px 10px;border:1px solid var(--ink);font:650 11px/1.4 var(--sans);white-space:nowrap}
-.company-info>.company-follow{margin:12px 0 0 29px}
 .company-follow[aria-pressed=true]{background:var(--cream)}
-.company-follow:hover{background:var(--ink);color:var(--white);text-decoration:none}
+.company-follow:hover:not(:disabled){background:var(--ink);color:var(--white);text-decoration:none}
 .followed-only{display:inline-flex;align-items:center;gap:7px;margin-top:12px;padding:7px 10px;border:1px solid var(--ink);font:650 11px/1.4 var(--sans);min-height:34px}
 .followed-check{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border:1px solid var(--ink);font-size:11px;color:transparent}
 .followed-only[aria-pressed=true]{background:var(--ink);color:var(--cream)}
 .followed-only[aria-pressed=true] .followed-check{color:var(--cream);border-color:var(--cream)}
 .followed-only:hover:not(:disabled){text-decoration:none;background:var(--cream);color:var(--ink)}
 .followed-only[aria-pressed=true]:hover .followed-check{color:var(--ink);border-color:var(--ink)}
-@media(max-width:720px){.company-info>.company-follow{margin-left:29px}.company-follow{min-width:94px}}
+@media(max-width:720px){.company-follow{min-width:94px}}
 
-@media(max-width:370px){.company-info>.company-follow{margin-left:0;min-width:90px}}
+
+
+/* Company identity and actions have separate, stable columns. */
+.company-row{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 165px 150px;grid-template-areas:'name industry status actions';min-height:104px}
+.company-row .company-info{grid-area:name}
+.company-row .company-industry{grid-area:industry}
+.company-row .company-state{grid-area:status}
+.company-actions{grid-area:actions;display:flex;align-items:center;justify-content:flex-end;gap:18px;min-width:0}
+.company-actions .company-open{grid-area:auto;flex:none}
+@media(max-width:1000px){.company-row{grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr) 145px 142px;gap:18px}.company-actions{gap:10px}}
+@media(max-width:720px){.company-row{grid-template-columns:minmax(0,1fr) 140px;grid-template-areas:'name status' 'industry actions';gap:12px;align-items:center;min-height:126px}.company-actions{justify-content:flex-start;gap:10px}.company-row .company-industry{margin-left:27px}.company-row .company-name{align-items:baseline}}
+@media(max-width:370px){.company-row{grid-template-columns:minmax(0,1fr) 136px;gap:10px}.company-actions{gap:10px}}
+
+.status-filters button:hover:not(:disabled){background:var(--cream);text-decoration:none}
