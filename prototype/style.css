@@ -159,3 +159,9 @@ body.reduce-motion .list-row,body.reduce-motion .row-arrow{transition:none}body.
 @media(max-width:1000px){.is-first-search .search-main{gap:35px}.is-first-search .search-intro h1{font-size:clamp(60px,8vw,76px)}.landing-overview{gap:24px;grid-template-columns:1fr}.landing-overview-lead h2{font-size:36px}.landing-overview-lead h2 br{display:none}.landing-features{gap:24px}}
 @media(max-width:720px){.is-first-search .search-workspace{padding:3px 0 30px;margin:0}.is-first-search .search-main{display:block}.is-first-search .search-intro{margin-bottom:29px}.is-first-search .search-intro h1{font-size:64px;letter-spacing:-1px;margin:14px 0 18px}.is-first-search .search-intro p{font-size:15px;max-width:340px}.is-first-search #job-search>label{font-size:15px}.is-first-search .query-field textarea{min-height:85px;font-size:16px}.is-first-search .search-examples{margin-top:17px}.landing-overview{grid-template-columns:1fr;gap:24px;padding:23px 0 36px}.landing-overview-lead h2{font-size:32px;margin-top:10px}.landing-overview-lead h2 br{display:none}.landing-features{grid-template-columns:1fr;gap:23px}.landing-feature h3{font-size:17px;margin-bottom:5px}.landing-feature p{max-width:none;font-size:12px}.landing-feature{gap:14px}}
 @media(max-width:370px){.is-first-search .search-intro h1{font-size:56px}.is-first-search .search-intro p{font-size:14px}.landing-overview-lead h2{font-size:29px}}
+
+/* Lead with the result policy and make coverage directly inspectable. */
+.is-first-search .search-intro h1 span{display:inline-block;font-size:.66em;line-height:1.1;letter-spacing:-.8px}
+.coverage-proof{display:inline-flex;align-items:center;gap:7px;margin-top:11px;font:700 11px/1.6 var(--sans);text-decoration:none}
+.coverage-proof:hover{text-decoration:none}
+.coverage-proof .coverage-label{text-decoration:underline;text-underline-offset:4px}

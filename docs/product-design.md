@@ -14,7 +14,7 @@ The current service has no conversions. That establishes the need to revisit the
 
 The starting asset is the job collection. The new service has a new brand, repository, interface, and product contract. Existing page structure, technology choices, account flows, and ranking behavior impose no requirements on it.
 
-The central promise is: **Describe the work you want. Find fresh opportunities directly from employers.**
+The central promise is: **Fresh jobs. No paid placement.** Listings come directly from company career pages, matching results stay newest first, and users can inspect exactly which companies and career pages are monitored. Describe the work you want to narrow that collection.
 
 **Transparency is a core brand value.** Justup makes its actual company coverage visible and lets users request companies they need. We do not claim to cover the entire job market. A user should be able to tell whether a company is monitored, which career pages or regions are covered, whether collection is working, and what is happening with their request.
 
@@ -33,7 +33,7 @@ The following are the product requirements from the brief:
 - One search bar is the input for creating and refining searches; there is no filter editor.
 - The search bar retains the user's search text. Users edit that text and resubmit it to change the search.
 - The model generates the active-criteria description and search tab title.
-- Results are always ordered by recency, newest first.
+- Results are always ordered by recency, newest first. Employers cannot buy promoted placement or sponsored listings.
 - Live results use Server-Sent Events (SSE) to deliver newly available matching postings while the workspace is open.
 - On submission, an inexpensive model translates the request into filters using user metadata as context.
 - The existing JEV narrowing capability is retained in the backend. The interpretation model can configure it when structured filters cannot fully express the user's requirements.
@@ -68,7 +68,7 @@ Account and billing controls remain secondary. A small “Companies” entry ope
 
 ### First search
 
-A first visit opens a compact editorial landing page with the same working search field used afterward. Pair the “Good work. Just up.” introduction with the search form, then give a short overview of four product principles: last 14 days, direct company sources, plain-language searches, and transparent company coverage with follows and requests. Keep the Extra Orange masthead, motto and Live edition indicator. On mobile, stack the introduction and form, followed by the feature overview. Do not create starter tabs or load a broad default job feed. Show three concrete role-and-location examples that prefill the field for editing; selecting an example does not submit it. The search remains the primary action; feature explanations do not start a feed or add extra onboarding steps. Preserve an unsubmitted first-search draft across navigation and reloads.
+A first visit opens a compact editorial landing page with the same working search field used afterward. Pair “Fresh jobs. No paid placement.” with the search form, then explain four product principles: no sponsored listings, the last 14 days, inspectable company coverage, and opening the original employer posting. Link the coverage explanation directly to the company catalogue. Plain-language search is demonstrated by the field and editable examples. Keep the Extra Orange masthead, motto and Live edition indicator. On mobile, stack the introduction and form, followed by the feature overview. Do not create starter tabs or load a broad default job feed. Show three concrete role-and-location examples that prefill the field for editing; selecting an example does not submit it. The search remains the primary action; feature explanations do not start a feed or add extra onboarding steps. Preserve an unsubmitted first-search draft across navigation and reloads.
 
 Submission creates the first tab, its generated title and criteria description, and matching results. Until a search is submitted, do not fetch result continuations or display live arrivals. Returning users restore their last active search. A broad all-jobs search remains available through an explicit user request.
 
@@ -86,6 +86,16 @@ The description should explain what the system searched for. “Preferred” rec
 Result order is fixed: newest eligible listing first, ordered by publication time—the backend's first observation of the posting. This is the same timestamp used for the freshness rule. Relevance, preferences, personalization, and model output cannot override recency. There is no alternative sort mode.
 
 The interpretation must support alternatives such as “Zurich on-site OR Switzerland-eligible remote.” A flat set of unrelated fields must not accidentally turn this into “Zurich AND remote.”
+
+#### Landing positioning and search discoverability
+
+Lead with concrete product policies rather than a generic convenience or AI claim. The visible promise is fresh jobs without paid placement. Explain that freshness means when Justup first found the role, with removal after 14 days; it does not change the employer’s original publication date. Let visitors verify coverage through the catalogue, company check information and tracked career pages. Requesting a company and premium setup priority never buy job-result rank.
+
+Use these topic phrases naturally in useful copy: fresh jobs, company career pages, no sponsored listings, newest-first job search, and monitored companies. These are language and intent candidates, without measured search-volume claims. Keep role/location examples concrete rather than adding keyword lists. The proposed landing title is “Justup — Fresh Jobs, No Sponsored Listings”; its description summarizes direct sources, visible coverage and newest-first order.
+
+Google recommends [descriptive, concise titles](https://developers.google.com/search/docs/appearance/title-link), [relevant page descriptions](https://developers.google.com/search/docs/appearance/snippet), and [helpful content for people](https://developers.google.com/search/docs/fundamentals/creating-helpful-content). Before production, give the public landing page and catalogue stable, crawlable URLs and render their public content independently of saved search state. The current private, hash-routed mockup validates copy and interaction rather than production indexing. See [Google’s JavaScript guidance](https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics).
+
+The paid-placement distinction is supported by competitors’ own descriptions: [LinkedIn says promoted jobs may appear higher](https://www.linkedin.com/help/linkedin/answer/a512429/promoted-jobs-in-your-job-search-results), and [Indeed describes prominent placement for Sponsored Jobs](https://www.indeed.com/hire/resources/howtohub/faq?co=US). The landing page states Justup’s policies directly, without broad claims about competitors’ job quality or completeness.
 
 ### Refinement
 
