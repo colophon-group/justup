@@ -218,7 +218,7 @@ else if(mode==='end')el.innerHTML=`<span class="end-mark" aria-hidden="true">—
 else el.innerHTML='';
 }
 function renderCompanies(){const q=$('#company-query').value.toLowerCase();const result=companies.filter(c=>(companyFilter==='all'||companyFilter==='followed'&&followedCompanies.has(c.id)||companyFilter==='requested'&&requests.some(r=>r.company===c.id))&&`${c.name} ${c.domain} ${c.industry}`.toLowerCase().includes(q));$('#company-count').textContent=`${result.length} ${result.length===1?'company':'companies'}`;
-$('#coverage-stats').innerHTML=[['monitoring','monitoring'],['configuring','being added'],['attention','need attention']].map(([s,label])=>`<div class="stat"><b>${companies.filter(c=>c.status===s).length}</b><span>${label}</span></div>`).join('');
+$('#coverage-stats').innerHTML=[['monitoring','monitoring']].map(([s,label])=>`<div class="stat"><b>${companies.filter(c=>c.status===s).length}</b><span>${label}</span></div>`).join('');
 const key=JSON.stringify([q,companyFilter,result.map(c=>c.id)]);
 if(companyFeed.key===key){for(const row of $$('#company-list [data-company-row]')){const button=$('[data-priority]',row);if(button){const following=requests.some(r=>r.company===row.dataset.companyRow);button.textContent=following?'Requested ✓':'Prioritize ↑';button.setAttribute('aria-pressed',String(following));button.setAttribute('aria-label',(following?'Priority already requested for ':'Request higher priority for ')+companyFor(row.dataset.companyRow).name);}}nearCompanyTail();return;}
 Object.assign(companyFeed,{generation:companyFeed.generation+1,items:result,cursor:Math.min(12,result.length),queue:[],fetching:false,complete:result.length<=12,running:false,near:false,key});
