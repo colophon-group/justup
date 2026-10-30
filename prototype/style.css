@@ -205,7 +205,8 @@ form label,.settings-label,.plan-options legend{font-family:var(--sans);font-siz
 .icon-close:hover:not(:disabled){text-decoration:none}
 @media(max-width:720px){:root{--text-control:11px;--text-row:20px;--text-subheading:24px}.company-row .company-name,.job-title{font-size:var(--text-row)}.section-heading .button{font-size:var(--text-control)}.job-salary,.status-note,.status{font-size:10px}}
 
-/* Reading text uses one face, including the motto: consistent lowercase letterforms. */
-.motto{font-family:var(--sans);font-weight:700;letter-spacing:0}
-.account,.status,.status-note,.job-source,.last-check,.feed-order,.job-salary{font-family:var(--sans);letter-spacing:0}
+/* The typewriter face is the edition's secondary voice: motto, controls and metadata. */
+.motto{font-family:var(--mono);font-weight:600;letter-spacing:0}
+.account,.status,.status-note,.job-source,.last-check,.feed-order,.job-salary{font-family:var(--mono);letter-spacing:0}
+.topbar nav,.header-sign-in,.button,.text-link,.back,.search-submit,.status-filters button,.company-follow,.followed-only,.add-search,.search-tab button[role=tab],form label,.settings-label,.plan-options legend{font-family:var(--mono);font-weight:600;letter-spacing:0}
 .job-salary,.last-check{font-variant-numeric:tabular-nums}
