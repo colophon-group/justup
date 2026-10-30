@@ -68,7 +68,7 @@ Account and billing controls remain secondary. A small “Companies” entry ope
 
 ### First search
 
-A first visit opens a focused “Your first search” screen with the same editable search field used afterward. Do not create starter tabs or load a broad default job feed. Show three concrete role-and-location examples that prefill the field for editing; selecting an example does not submit it. Keep this entry centered on writing the search, without a secondary company-onboarding path. Preserve an unsubmitted first-search draft across navigation and reloads.
+A first visit opens a compact editorial landing page with the same working search field used afterward. Pair the “Good work. Just up.” introduction with the search form, then give a short overview of four product principles: last 14 days, direct company sources, plain-language searches, and transparent company coverage with follows and requests. Keep the Extra Orange masthead, motto and Live edition indicator. On mobile, stack the introduction and form, followed by the feature overview. Do not create starter tabs or load a broad default job feed. Show three concrete role-and-location examples that prefill the field for editing; selecting an example does not submit it. The search remains the primary action; feature explanations do not start a feed or add extra onboarding steps. Preserve an unsubmitted first-search draft across navigation and reloads.
 
 Submission creates the first tab, its generated title and criteria description, and matching results. Until a search is submitted, do not fetch result continuations or display live arrivals. Returning users restore their last active search. A broad all-jobs search remains available through an explicit user request.
 
@@ -101,7 +101,7 @@ Editing the field does not change the applied search until submission. Each subm
 
 Each tab owns its user-authored search text, any unsubmitted text edits, model-generated title and criteria description, criteria, result position, and undo history. Users can create, duplicate, reorder, and close tabs. Switching tabs restores that tab's field text and results without invoking the model again. Paging also requires no interpretation call. Undo restores the submitted search text, configuration, description, and title together.
 
-Every tab can be deleted, including the last one, after confirmation. Deleting the last search returns to the first-search screen, clears the old results and continuation state, and focuses the field. Persist the empty search list so reload does not recreate starter searches. Keep followed companies, viewed positions and company requests. Cancel or Escape leaves the search and its unsent draft intact.
+Every tab can be deleted, including the last one, after confirmation. Deleting the last search returns to the mini landing page, clears the old results and continuation state, and focuses the field. Persist the empty search list so reload does not recreate starter searches. Keep followed companies, viewed positions and company requests. Cancel or Escape leaves the search and its unsent draft intact.
 
 Tabs persist across reloads locally for visitors and across sessions for accounts. Preserve a visitor's search when they sign in. No search should overwrite another tab's state.
 
