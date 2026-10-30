@@ -77,3 +77,6 @@ body.reduce-motion .list-row,body.reduce-motion .row-arrow{transition:none}body.
 .career-links a{font-size:12px;font-weight:700;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
 .company-about{padding:30px 0 45px}.company-about .detail-description{max-width:730px}
 @media(max-width:720px){.profile-sources{margin-top:20px}.company-about{padding:24px 0 35px}}
+/* Row feedback is provided by the surface and focus ring, not text underlines. */
+.list-row a:hover,.list-row button:hover{text-decoration:none}
+@media(hover:hover) and (pointer:fine){.list-row:has(.job-company:hover){background-color:#f6aa8b}}
