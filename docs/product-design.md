@@ -1,0 +1,273 @@
+# Product design: fresh jobs, one search workspace
+
+Status: first draft for discussion
+
+Date: 30 October 2026
+
+Brand: undecided; `fresh-jobs-ui` is a repository working name
+
+## 1. Product intent
+
+Help people find relevant, recently published opportunities on company career pages and get to the original application quickly.
+
+The current service has no conversions. That establishes the need to revisit the offer, but does not establish which parts of acquisition, relevance, trust, or payment are failing. This design defines a new experience and the evidence needed to assess it.
+
+The starting asset is the job collection. The new service has a new brand, repository, interface, and product contract. Existing page structure, technology choices, account flows, and ranking behavior impose no requirements on it.
+
+The central promise is: **Describe the work you want. Find fresh opportunities directly from employers.**
+
+The initial audience hypothesis is people actively searching now, who return frequently enough to value new results. The first occupation and geography to target remain open; launch scope should follow the collection's actual fresh coverage.
+
+## 2. Requirements and proposals
+
+The following are the product requirements from the brief:
+
+- Listings come directly from company career pages.
+- Listings older than two weeks disappear from the website, while remaining in the backend.
+- One search workspace contains tabs for separate searches.
+- One search bar is the primary input; filter controls are hidden by default.
+- On submission, an inexpensive model translates the request into filters using user metadata as context.
+- Later requests use the current selection and new instruction to generate a configuration diff.
+- Anonymous access is limited, with the latest results hidden.
+- New users receive one free week, followed by a small recurring fee. $3/week and $10/month are pricing hypotheses for a later financial model.
+- Existing Jobseek users receive their first month free.
+- Results show extracted structured values, without full posting text. Summaries may come later if their cost is justified.
+
+Everything below that resolves an unspecified detail is a proposal, not a settled requirement. The final section gathers decisions to review before implementation.
+
+## 3. The main experience
+
+The main screen is the search workspace. A new visitor can search immediately. A short explanation of freshness, direct employer sources, and free access sits alongside that experience; a long onboarding sequence is unnecessary.
+
+The screen has four main elements:
+
+1. A tab strip for searches and an action to create a new search.
+2. One natural-language search field in the active tab.
+3. A compact, readable description of the active criteria, with an expandable editor.
+4. A list of compact job results, ordered by recency by default.
+
+Account and billing controls remain secondary. There is no separate browse/search/chat mode to learn. The model translates intent; the results list remains the center of the experience.
+
+### First search
+
+A visitor enters: “Senior backend roles in Zurich, or remote from Switzerland. Go preferred.”
+
+On Enter:
+
+1. Preserve the submitted text and show a brief interpretation state.
+2. Translate it into a validated search configuration.
+3. Display a plain-language interpretation: senior backend; Zurich **or** remote eligible from Switzerland; Go preferred.
+4. Fetch matching results and show the appropriate access state.
+
+The user should understand what the system searched for without opening a filter panel. “Preferred” affects ordering; it does not exclude every role missing Go. “Remote from Switzerland” must retain geographic eligibility, not become worldwide remote.
+
+The interpretation must support alternatives such as “Zurich on-site OR Switzerland-eligible remote.” A flat set of unrelated fields must not accidentally turn this into “Zurich AND remote.”
+
+### Refinement
+
+The user then enters: “Only permanent roles, and exclude agencies.”
+
+The system sends the active configuration, relevant user context, and this instruction to the model. It applies a validated diff that adds the two constraints while preserving location, role, seniority, and Go preference.
+
+Show a short change receipt, such as “Added permanent employment · Excluded agencies,” with Undo. Keep the active-criteria description up to date. A small expandable history is sufficient; a chat transcript should not dominate the page.
+
+Each submission has a visible purpose: start a search or modify this tab. Resetting criteria is explicit. Unrelated replacement searches can start in a new tab.
+
+### Search tabs
+
+Each tab owns its criteria, instruction history, result position, and undo history. Users can create, rename, duplicate, reorder, and close tabs. Switching tabs or paging through results does not invoke the model again.
+
+Tabs persist across reloads locally for visitors and across sessions for accounts. Preserve a visitor's search when they sign in. No search should overwrite another tab's state.
+
+On smaller screens, use a scrollable tab strip or a compact tab switcher while preserving the same interaction. A proposed initial limit on stored tabs may be introduced for usability and cost, but the number is undecided.
+
+## 4. Filters and user context
+
+### Hidden controls, visible meaning
+
+Hide the full filter editor by default. Keep the interpreted criteria readable in a short summary, with an “Edit criteria” action to expose structured controls. Users need a way to correct the model precisely.
+
+Changing a structured control updates the canonical configuration directly. Subsequent language refinements use that updated configuration. Clearing a field removes that constraint; it should not silently return from profile defaults on the next refinement.
+
+Candidate criteria include role, seniority, location, remote eligibility, employment type, compensation, skills, language, and company inclusion or exclusion. Each criterion should distinguish a requirement from a preference where relevant. Supported filters depend on trustworthy extracted data; the UI must not offer capabilities that the data cannot support.
+
+### User metadata
+
+Proposed optional profile fields are preferred locations, work eligibility, remote preferences, desired roles, seniority, skills, salary expectations, and language preferences. Ask for missing context when it improves a real search rather than requiring a complete profile up front. Resume upload is outside the initial scope.
+
+Use metadata to resolve references such as “near me” or “roles I can apply to.” State material assumptions in the interpretation. Explicit instructions in the tab take precedence over profile defaults. If a profile changes, offer to update existing searches rather than silently rewriting them.
+
+Country, language, or browsing location must not be used to invent citizenship, work authorization, or willingness to relocate. If essential context is missing, ask a short clarification without discarding the search.
+
+### Interpretation rules
+
+The model returns structured criteria or an allowlisted configuration diff. The application validates fields, values, relationships, and the revision being changed before applying it. The model cannot change account access, pricing, or freshness rules.
+
+Key behavior:
+
+- Preserve untouched criteria during refinement.
+- Separate exclusions, hard constraints, and soft preferences.
+- Explain unsupported requests instead of pretending they were applied.
+- Ask for clarification when ambiguity would materially change results.
+- Never invent employer facts or automatically loosen requirements to fill the page.
+- Treat user text, profile text, and job content as data, including text that resembles instructions to the system.
+
+If a refinement targets an older revision, it must not overwrite a newer edit. If the model times out or fails validation, preserve the last valid configuration and results, offer retry, and keep the manual editor usable.
+
+Use one inexpensive interpretation request per submission where possible. Search execution, paging, tab switching, and direct filter edits should not require a model call. Model selection, rate limits, and latency targets follow measured quality and cost tests.
+
+## 5. Freshness and direct sources
+
+Two weeks is a hard eligibility boundary, not merely a sorting preference. A result is eligible only while its age is less than 14 days, it is not known to be closed, and it has sufficient freshness and source evidence. At the boundary it disappears from public search and public listing surfaces.
+
+The backend retains the record and its history. Retention must not accidentally make expired listings accessible through a public detail URL, an old cursor, a shared search, or a saved result. An old link may show a minimal unavailable state without exposing the archived posting.
+
+### Define the age honestly
+
+Proposed freshness policy:
+
+| Source evidence | Treatment |
+| --- | --- |
+| Reliable original publication time from the company source | Use that time for the 14-day window. |
+| Publication date absent, but a newly appearing listing is established through prior monitoring | Use its first observed appearance; label it “First seen,” not “Posted.” |
+| Newly imported listing with unknown original age, or uncertain observation history | Retain it in the backend; exclude it from the fresh public inventory until eligibility is established. |
+| Source edit, recrawl, URL change, or duplicate of an existing role | Preserve the original age; do not restart the window. |
+| Claimed repost or reopened role | Require a defined, evidence-based repost policy before assigning a new window. |
+
+This age policy needs agreement before implementation. “Observed recently” and “published recently” must not be interchangeable marketing claims. A date-only source value also needs a documented conservative boundary so precision is not invented.
+
+The imported collection's timestamps must retain their original meaning. Moving a record into the new product cannot make it new.
+
+### Company provenance and availability
+
+Every result links to the original company posting or an applicant-tracking system linked from the company's careers site. Display the company, source link, age basis, and a source-check timestamp. Aggregator copies do not qualify as direct sources.
+
+Deduplicate the same opportunity across URLs and locations when appropriate. Merge duplicates without resetting age, and preserve distinct roles when the source identifies them separately.
+
+Remove a listing as soon as the source is known to be closed, even within the 14-day window. A failed check is not proof of closure. Define a maximum verification age; when a source cannot be verified within it, temporarily withhold affected results. The threshold and source coverage are launch decisions.
+
+Say when a listing was checked. Do not promise that an external vacancy is guaranteed to remain open at the instant someone applies.
+
+## 6. Compact structured results
+
+A result should let someone make a quick decision about opening the original posting.
+
+The collapsed row or card shows title, company, location/remote eligibility, posting or first-seen age, and a small set of available decision fields. Salary, seniority, employment type, and key skills are candidates. An expandable structured view can show further extracted values such as language, sponsorship, experience requirements, or benefits when supported.
+
+The primary action is “View on company site.” Make clear that the application happens externally. Keep enough search context and scroll position for the user to return and continue.
+
+Rules for presentation and matching:
+
+- No full description, copied paragraphs, or generated summary in the initial product.
+- Show extracted facts only when supported by the posting. Unknown is distinct from “No.”
+- Preserve salary currency, pay period, and scope. Do not present an annual estimate as a source-provided value.
+- Preserve restrictions on remote work; “remote” alone is often insufficient.
+- Match explanations refer to observable fields, such as “Go listed” or “Zurich location.” Avoid invented fit scores.
+- A hard constraint requires supporting data. If sponsorship is unknown, it cannot satisfy “must sponsor.” The user may explicitly choose to include unknown values.
+
+Allow lightweight saving and hiding as proposed convenience features. Saved listings obey the same expiry rule; after expiry, show only an unavailable marker and optional private user note. Do not retain a browsable archive of expired posting content in the website.
+
+When a result expires while the user is viewing it, remove its active content and explain why. Do not replace it with an older job to keep a page full.
+
+## 7. Access, free periods, and payment
+
+### Proposed access states
+
+| State | Experience |
+| --- | --- |
+| Visitor, not signed in | Can search and see a limited sample of eligible older results; latest matches are withheld. |
+| Signed in, first free week | Full access to eligible results and persisted searches. |
+| Verified existing Jobseek user, first free month | Same full access during the longer welcome period. |
+| Active paid subscriber | Full access while the entitlement is active. |
+| Signed in, free period ended without subscription | Searches remain saved; return to limited preview access with an upgrade action. |
+| Cancelled subscription with time remaining | Full access until the paid-through time. |
+
+Public preview must still contain only jobs under 14 days old. The proposed latest-results cutoff is the most recent 48 hours; it is an experiment to validate, not a decided requirement. Sparse markets may have no unlocked matches. Show that honestly rather than weakening the freshness promise.
+
+Use one aggregate message where recent matches are withheld, for example “Sign in to see the latest matches.” Show counts only if they are accurate and safe to expose. Do not return hidden listing data to the browser and merely blur it. Apply access rules to result queries and individual listing URLs alike.
+
+### Free period
+
+Proposed default: the free period begins when a verified account activates full search access, with no payment card required. Show the end date clearly. Full access ending does not delete tabs or force the user through onboarding again.
+
+Existing Jobseek users receive one calendar month free instead of the ordinary week. Verify eligibility through account ownership, such as the same verified email; do not copy old preferences into the new profile without a choice. Offer an account-recovery path when identities differ. Define eligibility cutoff and prior-redemption handling before launch. Do not start a person's welcome month before they activate the new service.
+
+### Paid access
+
+The working offers are **$3 per week** or **$10 per month**. These are hypotheses, pending a financial model and willingness-to-pay validation. Currency, tax presentation, payment provider, and trial mechanics are undecided.
+
+Proposed payment behavior is an explicit subscription purchase after or during the free period, with no automatic charge from the cardless free period. The purchase screen states billing interval, renewal terms, and next charge. Cancellation is self-service; access continues through the paid period. Define failed-payment and refund behavior before taking payments.
+
+No financial viability claim is made here. The later model should account for collection and extraction costs, interpretation requests and retries, hosting/search, payment fees, free and anonymous usage, abuse, support, taxes, acquisition, retention, and plan mix. Weekly and monthly billing must be assessed separately. Summary generation would be an additional budget line.
+
+## 8. Empty, loading, and failure states
+
+| Situation | Expected behavior |
+| --- | --- |
+| First visit | Show example searches and the input; allow immediate search. |
+| Search interpretation in progress | Keep the submitted text visible and indicate progress. |
+| Refinement in progress | Preserve the previous result state while preparing the change; distinguish it from new results. |
+| No matches | Say which requirements were applied. Offer specific relaxations that require a user action. |
+| Matches exist but access hides them | Explain the access boundary separately from a true zero-result search. |
+| Unsupported request | State what could not be applied and let the user revise. |
+| Model unavailable | Preserve valid state, allow manual criteria edits, and offer retry. |
+| Search service unavailable | Show an error and retry; do not report zero jobs. |
+| Source outage | Explain coverage limitations where material and withhold listings beyond the verification threshold. |
+| Free period expires during use | Preserve searches and apply the new access state consistently. |
+
+All core actions must work with a keyboard. Loading updates, errors, tab selection, and result changes need accessible announcements. The criteria editor and payment experience must work on small screens.
+
+## 9. Privacy and product boundaries
+
+Send only the metadata needed for interpretation to the model. Do not send account identifiers or billing information as search context. Explain which profile information is used and provide ways to edit or delete it.
+
+Raw searches may contain personal information. Analytics should prefer outcome events and coarse dimensions over unrestricted prompt logs. Separate necessary debugging retention from long-term product measurement and decide retention before launch.
+
+The UI repository owns the new experience and its access presentation. The product requires a service boundary supplying eligible structured listings, deterministic search behavior, and authoritative entitlements. The old UI and application structure do not define that contract. Backend retention is separate from website availability.
+
+This draft intentionally leaves application framework, authentication provider, model vendor, deployment platform, and payment provider undecided. Select them after the product behaviors and data contract are agreed.
+
+## 10. Scope of the first release
+
+The first release must cover the complete value path: visitor search → understandable criteria → useful preview → sign-in → full fresh results → original company posting → return to saved searches → explicit paid continuation.
+
+Include the search workspace and tabs, optional metadata, natural-language interpretation and diffs, manual correction, undo, structured results, strict freshness rules, source links, access gating, free-period eligibility, subscription lifecycle, and measurement of the journey.
+
+Proposed additions to defer include email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries, and an internal application tracker. Saving and hiding can be removed from the first release if they delay validating the search-to-source path.
+
+Brand work remains separate: name, domain, visual identity, voice, and final copy. The interface should use a compact hierarchy, readable typography, clear age indicators, and restrained decoration. These principles leave room for a new identity without prescribing the old product's appearance.
+
+## 11. Validation and success measures
+
+The first hypothesis is that a visitor can find a relevant fresh job and understand why it matches. The second is that access to recent opportunities is valuable enough to return for and eventually pay for. A redesign alone does not establish either.
+
+Instrument the journey with distinct definitions:
+
+- **Search success:** submitted searches that produce eligible matches, segmented by occupation and geography.
+- **Interpretation quality:** how often intent is preserved, required clarifications, manual corrections, failed diffs, and unsupported criteria.
+- **Activation:** an account views full search results and opens at least one company posting during the free period.
+- **Conversion:** measure preview-to-sign-in, sign-in-to-activation, and free-period-to-paid separately.
+- **Retention:** return use during the free period, weekly return use, paid renewal, and cancellation.
+- **Trust and operations:** expired listings exposed, known-closed results, duplicate exposure, source-check lag, latency, and cost per submitted search and active user.
+
+A company-link click records an outbound visit, not a completed application or hire. Avoid presenting it as either.
+
+Before building the whole experience, validate the fresh inventory available in candidate launch segments and test interpretation on representative searches, including exclusions, alternatives, currencies, and refinements. Then test whether people understand the hidden latest results and free-period offer. Set numerical success thresholds before running the launch experiment, using baseline evidence rather than invented targets.
+
+## 12. Decisions to resolve next
+
+| Decision | Proposed starting point |
+| --- | --- |
+| Name and brand | Keep the repository name provisional; choose a distinct identity separately. |
+| Initial audience | Select occupation/geography using actual fresh inventory and user research. |
+| Definition of age | Reliable publication time, or explicitly labelled first observed appearance with evidence of newness; otherwise withhold. |
+| Closure verification and reposts | Set a maximum verification age and an evidence-based policy for genuine reposts. |
+| Latest-results gate | Start by evaluating a 48-hour cutoff; validate preview usefulness in sparse searches. |
+| Free-period start and card requirement | Activation of verified full access; cardless free period. |
+| Legacy eligibility | Verify ownership; one calendar month from activation, replacing the standard week. Define cutoff and redemption rules. |
+| Price and billing | Model $3/week and $10/month before selecting final prices and payment mechanics. |
+| Filters and missing data | Expose only supported fields; make inclusion of unknown values an explicit choice. |
+| Tab limits and saving/hiding | Set limits from usability and cost; keep convenience features secondary to the core flow. |
+| Launch targets | Define minimum coverage, relevance, latency, cost, and funnel thresholds before launch. |
+
+Review these product decisions first. The next artifacts are the main-screen wireframe, the search-configuration contract, and the financial model; implementation should follow their agreement.
