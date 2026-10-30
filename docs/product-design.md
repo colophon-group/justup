@@ -106,7 +106,7 @@ While the workspace is open, deliver matching postings through a persistent SSE 
 
 Use one connection per open workspace to carry updates for its search tabs, rather than one connection per search. New postings use the stored search configuration without another interpretation request. Events belong to a particular search revision; updates for a previous revision cannot enter the newly edited search.
 
-Keep cards ordered by first-observed publication time, even if JEV decisions arrive out of order. When the user is at the top, show new results there. When they are further down, preserve their reading position and show a “New positions available” indicator that takes them to the newest results. New postings begin unviewed; receiving an update does not mark them as viewed.
+Keep cards ordered by first-observed publication time, even if JEV decisions arrive out of order. Insert new results automatically. When the user is further down, add them above the viewport, preserve the currently read row's position, and show a small “N new ↑” navigation cue. This cue takes the user to results already inserted; it does not gate their insertion. Preserve focus, selection, and existing row nodes. Do not auto-scroll or show an idle “Up to date” label. New postings begin unviewed; receiving an update does not mark them as viewed. See the proposed [motion language](motion-design.md) for persistent New markers and arrival behavior.
 
 The connection must enforce the same account access rules as ordinary result retrieval. It cannot reveal latest postings to visitors who are not entitled to see them. When a posting becomes eligible for a visitor's preview after the latest-results cutoff, it can then appear. Expired or closed postings must disappear, and changes to access must take effect during the connection.
 
@@ -236,7 +236,7 @@ The primary action is “View on company site,” linking directly to the origin
 
 ### Viewed positions
 
-When a user activates the link to a position's full description on the company site, mark the position as viewed and show a clear, restrained “Viewed” indicator on its result card. This includes keyboard activation and opening the link in a new tab. Merely displaying a result does not mark it as viewed. The state records that the user opened the link; it does not claim they read the description or applied.
+When a user activates the link to a position's full description on the company site, mark the position as viewed, mute its text color, and show an eye indicator with the accessible label “Viewed.” Preserve readable contrast, font weight, row dimensions, and focus. This includes keyboard activation and opening the link in a new tab. Merely displaying a result does not mark it as viewed. The state records that the user opened the link; it does not claim they read the description or applied.
 
 Viewed state belongs to the user and the position, not to an individual search or tab. Store it against the stable posting identity with a first-viewed timestamp. The same position remains viewed when it appears in another search, after a search edit, or after a reload. Duplicate URLs for the same posting share the state; genuinely distinct postings have separate states. Repeated clicks do not create duplicate viewed records.
 
@@ -339,7 +339,7 @@ The first release includes live result delivery over SSE, the compact company ca
 
 Proposed additions to defer include email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries, and an internal application tracker. Saving and hiding can be removed from the first release if they delay validating the search-to-source path.
 
-The chosen brand is Justup, with intended domain `justup.work`. Visual identity and final copy still need agreement. Transparency must appear in product behavior as well as messaging: visible company coverage, clear publication-age meaning, readable search interpretation, and honest request progress. Use a compact hierarchy, readable typography, and restrained decoration.
+The chosen brand is Justup, with intended domain `justup.work`. The accepted visual baseline is **Extra Orange**: orange coral `#F28A60`, a condensed black-and-white masthead, strong readable sans-serif text, square controls, and company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible, with a subtle pulse on the live dot. The search field is pale and visibly editable; tabs include “+ New search.” Keep “Last 14 days” explicit. The sources footer says “See who we monitor. Tell us who’s missing,” with Request a company as the main action and Company catalogue as the secondary action. The proposed [motion language](motion-design.md) defines arrivals and Viewed transitions for review. Transparency must appear in product behavior as well as messaging: visible company coverage, clear publication-age meaning, readable search interpretation, and honest request progress.
 
 ## 11. Validation and success measures
 
@@ -363,7 +363,7 @@ Before building the whole experience, validate the fresh inventory available in 
 
 | Decision | Proposed starting point |
 | --- | --- |
-| Visual identity and copy | The name Justup is settled, with intended domain `justup.work`; transparency is a core value. Define the visual identity and final copy. |
+| Visual identity and copy | Extra Orange is the accepted visual baseline. Review the proposed motion language, remaining states, and final copy. |
 | Initial audience | Select occupation/geography using actual fresh inventory and user research. |
 | Closure verification and posting identity | Set a maximum verification age and define how to distinguish genuinely new postings from duplicates or reopened records. The first-observed timestamp of the same posting never resets. |
 | Latest-results gate | Start by evaluating a 48-hour cutoff; validate preview usefulness in sparse searches. |
