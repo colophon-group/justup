@@ -68,6 +68,10 @@ Account and billing controls remain secondary. A small “Companies” entry ope
 
 ### First search
 
+A first visit opens a focused “Your first search” screen with the same editable search field used afterward. Do not create starter tabs or load a broad default job feed. Show three concrete role-and-location examples that prefill the field for editing; selecting an example does not submit it. Keep this entry centered on writing the search, without a secondary company-onboarding path. Preserve an unsubmitted first-search draft across navigation and reloads.
+
+Submission creates the first tab, its generated title and criteria description, and matching results. Until a search is submitted, do not fetch result continuations or display live arrivals. Returning users restore their last active search. A broad all-jobs search remains available through an explicit user request.
+
 A visitor enters: “Senior backend roles in Zurich, or remote from Switzerland. Go preferred.”
 
 On Enter:
@@ -96,6 +100,8 @@ Editing the field does not change the applied search until submission. Each subm
 ### Search tabs
 
 Each tab owns its user-authored search text, any unsubmitted text edits, model-generated title and criteria description, criteria, result position, and undo history. Users can create, duplicate, reorder, and close tabs. Switching tabs restores that tab's field text and results without invoking the model again. Paging also requires no interpretation call. Undo restores the submitted search text, configuration, description, and title together.
+
+Every tab can be deleted, including the last one, after confirmation. Deleting the last search returns to the first-search screen, clears the old results and continuation state, and focuses the field. Persist the empty search list so reload does not recreate starter searches. Keep followed companies, viewed positions and company requests. Cancel or Escape leaves the search and its unsent draft intact.
 
 Tabs persist across reloads locally for visitors and across sessions for accounts. Preserve a visitor's search when they sign in. No search should overwrite another tab's state.
 
@@ -202,11 +208,11 @@ Company search and job-search empty states should provide a “Request a company
 
 ### Followed companies
 
-Users can follow or unfollow any company from catalogue search results and company profiles. Keep this action independent of opening the whole row. Show a compact Follow / Following control with a plus or check mark, using the same component wherever a company appears. In company rows, place Follow beside the profile arrow in a dedicated action area on the right. Omit website subtitles from catalogue and request rows; career-page addresses remain available in company profiles. The catalogue has a Followed filter alongside its coverage filters. Combine it with the company search text, update the list immediately on unfollow, and offer a route back to all companies when the followed view is empty.
+Users can follow or unfollow any company from catalogue search results and company profiles. Keep this action independent of opening the whole row. Show a compact Follow / Following control with a plus or check mark, using the same component wherever a company appears. In company rows, place Follow beside the profile arrow in a dedicated action area on the right. Omit website subtitles from catalogue and request rows; career-page addresses remain available in company profiles. The catalogue has exactly three filters: All companies, Followed and Requested. Keep coverage status on individual rows, without separate Monitoring, Being added or Needs attention filters. Requested replaces the standalone Requests navigation tab and uses the shared company rows to show request date, priority and setup status. Combine it with the company search text, update the list immediately on unfollow, and offer a route back to all companies when the followed view is empty.
 
 Each search tab has an “Only followed companies” toggle beneath its query and generated description. It intersects the followed-company set with that tab’s search criteria, freshness window and access rules. It never changes recency ordering. Save this scope per search; following a company is shared across the user’s searches. Editing the query preserves the toggle, and toggling preserves any unsent query draft. Subsequent results and live arrivals obey the same company scope.
 
-When no companies are followed, show a link to browse the catalogue. When followed companies yield no matching positions, explain that the user can change the query or turn off the limit. Companies still being added can be followed before jobs become available. Following and requesting setup priority are separate actions; unfollowing does not cancel a company request.
+When no companies are followed, show a link to browse the catalogue. When followed companies yield no matching positions, explain that the user can change the query or turn off the limit. Companies still being added can be followed before jobs become available. Submitting a new company request automatically follows that company. The user can unfollow it while its request remains visible under Requested. Reloading or revisiting an existing request must preserve an explicit unfollow choice. A manual follow does not itself request setup priority.
 
 Persist follows with the account in the service. The interactive prototype saves them locally in the browser alongside searches and viewed positions.
 
@@ -216,7 +222,7 @@ The user searches by company name or website, with an optional careers-page link
 
 When the intended company is not found, send a discovery request to the backend. Return a candidate showing its name, official website, brand assets, description, and available supporting metadata. The user chooses “Accept company” or “Not this company.” Acceptance confirms the intended identity, publishes or reuses its catalogue entry, and queues crawler configuration. Rejection keeps the original request available for correction and another discovery attempt; it does not queue configuration for that candidate or remove a company already accepted by another user.
 
-Proposed account behavior: anyone can browse coverage and prepare a request; sign-in is required to submit and track it, preserving the entered details through sign-in. Both free and premium accounts can submit requests. Show confirmation and a persistent request status after submission.
+Proposed account behavior: anyone can browse coverage and prepare a request; sign-in is required to submit and track it, preserving the entered details through sign-in. Both free and premium accounts can submit requests. Show confirmation and a persistent request status after submission under Companies → Requested. Link the request confirmation directly to that filtered catalogue view.
 
 The workflow has two independently completed steps:
 
@@ -352,7 +358,7 @@ The first release includes live result delivery over SSE, the compact company ca
 
 Proposed additions to defer include email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries, and an internal application tracker. Saving and hiding can be removed from the first release if they delay validating the search-to-source path.
 
-The chosen brand is Justup, with intended domain `justup.work`. The whole job row opens the company posting; the company identity remains a separate link into the catalogue. The accepted visual baseline is **Extra Orange**: orange coral `#F28A60`, a condensed black-and-white masthead, strong readable sans-serif text, square controls, and company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible, with a subtle pulse on the live dot. The search field is pale and visibly editable; tabs include “+ New search.” Keep “Last 14 days” explicit. Remove footers and bottom coverage panels to keep scrolling stable. Keep Request a company prominent in the catalogue header. Search deletion requires a dialog naming the search, with explicit delete and keep actions. A floating back-to-top button appears after scrolling. Requests use the same clickable company-row component as the catalogue: logos, names, details, status, single separators and consistent arrows, with Follow beside the arrow and no website subtitle. The proposed [motion language](motion-design.md) defines arrivals and Viewed transitions for review. Transparency must appear in product behavior as well as messaging: visible company coverage, clear publication-age meaning, readable search interpretation, and honest request progress.
+The chosen brand is Justup, with intended domain `justup.work`. The whole job row opens the company posting; the company identity remains a separate link into the catalogue. The accepted visual baseline is **Extra Orange**: orange coral `#F28A60`, a condensed black-and-white masthead, strong readable sans-serif text, square controls, and company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible, with a subtle pulse on the live dot. The search field is pale and visibly editable; tabs include “+ New search.” Keep “Last 14 days” explicit. Remove footers and bottom coverage panels to keep scrolling stable. Keep Request a company prominent in the catalogue header. Search deletion requires a dialog naming the search, with explicit delete and keep actions. A floating back-to-top button appears after scrolling. The Requested filter uses the same clickable company-row component as the catalogue: logos, names, details, status, single separators and consistent arrows, with Follow beside the arrow and no website subtitle. The proposed [motion language](motion-design.md) defines arrivals and Viewed transitions for review. Transparency must appear in product behavior as well as messaging: visible company coverage, clear publication-age meaning, readable search interpretation, and honest request progress.
 
 ## 11. Validation and success measures
 
