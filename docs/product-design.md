@@ -26,7 +26,7 @@ The initial audience hypothesis is people actively searching now, who return fre
 
 The following are the product requirements from the brief:
 
-- Listings come directly from company career pages.
+- Listings come directly from employers’ own career pages. Exclude recruitment agency listings and reposts sourced from job aggregators or social media.
 - Publication time is when the backend first observed the posting.
 - Listings older than two weeks disappear from the website, while remaining in the backend.
 - One search workspace contains tabs for separate searches.
@@ -68,7 +68,7 @@ Account and billing controls remain secondary. A small “Companies” entry ope
 
 ### First search
 
-A first visit opens a compact editorial landing page with the same working search field used afterward. Pair “Fresh jobs. No paid placement.” with the search form, then explain four product principles: no sponsored listings, the last 14 days, inspectable company coverage, and opening the original employer posting. Link the coverage explanation directly to the company catalogue. Plain-language search is demonstrated by the field and editable examples. Keep the Extra Orange masthead, motto and Live edition indicator. On mobile, stack the introduction and form, followed by the feature overview. Do not create starter tabs or load a broad default job feed. Show three concrete role-and-location examples that prefill the field for editing; selecting an example does not submit it. The search remains the primary action; feature explanations do not start a feed or add extra onboarding steps. Preserve an unsubmitted first-search draft across navigation and reloads.
+A first visit opens a compact editorial landing page with the same working search field used afterward. Pair “Fresh jobs. No paid placement.” with the search form, then explain four product principles: no sponsored listings, the last 14 days, inspectable company coverage, and excluding recruitment agencies and aggregator/social-media reposts. Link the coverage explanation directly to the company catalogue. Plain-language search is demonstrated by the field and editable examples. Keep the Extra Orange masthead, motto and Live edition indicator. On mobile, stack the introduction and form, followed by the feature overview. Do not create starter tabs or load a broad default job feed. Show three concrete role-and-location examples that prefill the field for editing; selecting an example does not submit it. The search remains the primary action; feature explanations do not start a feed or add extra onboarding steps. Preserve an unsubmitted first-search draft across navigation and reloads.
 
 Submission creates the first tab, its generated title and criteria description, and matching results. Until a search is submitted, do not fetch result continuations or display live arrivals. Returning users restore their last active search. A broad all-jobs search remains available through an explicit user request.
 
