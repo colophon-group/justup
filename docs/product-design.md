@@ -18,7 +18,7 @@ The central promise is: **Describe the work you want. Find fresh opportunities d
 
 **Transparency is a core brand value.** Nowlisted makes its actual company coverage visible and lets users request companies they need. We do not claim to cover the entire job market. A user should be able to tell whether a company is monitored, which career pages or regions are covered, whether collection is working, and what is happening with their request.
 
-The brand promise includes: **See what we cover. Ask for what you need.** Explain limits in ordinary language: publication time means first observed by our backend, missing information remains unknown, and catalogue presence is distinct from working job monitoring. A requested company appears in the catalogue as soon as discovery establishes its identity and metadata; monitoring follows a separate crawler-configuration step. Premium users receive priority handling for company requests; this benefit is stated openly.
+The brand promise includes: **See what we cover. Ask for what you need.** Explain limits in ordinary language: publication time means first observed by our backend, missing information remains unknown, and catalogue presence is distinct from working job monitoring. A requested company appears in the catalogue as soon as the requester accepts its discovered identity; monitoring follows a separate crawler-configuration step. Premium users receive priority handling for company requests; this benefit is stated openly.
 
 The initial audience hypothesis is people actively searching now, who return frequently enough to value new results. The first occupation and geography to target remain open; launch scope should follow the collection's actual fresh coverage.
 
@@ -46,7 +46,8 @@ The following are the product requirements from the brief:
 - Opening a position's company posting marks that position as viewed for the user. Viewed state persists across searches, tabs, and sessions.
 - A compact company catalogue shows discovered companies and their monitoring status, including those whose crawler setup is still pending.
 - Users can request a new company and track its progress. Premium users receive priority on their company requests.
-- Company setup has two steps: discover the company with brand assets, description, and other metadata, then configure its crawler. Publish the catalogue entry promptly after discovery, without waiting for crawler configuration.
+- Company setup has two steps: discover the company with brand assets, description, and other metadata, then configure its crawler. The backend runs discovery through a Codex-powered Luna agent at low reasoning, returning the found company for the user to accept or reject. On acceptance, publish the catalogue entry promptly without waiting for crawler configuration.
+- Company lookup surfaces matching companies already being configured before offering new discovery. Users can request higher priority for an existing setup task.
 - Coverage, request status, and known collection limitations are communicated transparently.
 
 Everything below that resolves an unspecified detail is a proposal, not a settled requirement. The final section gathers decisions to review before implementation.
@@ -188,7 +189,7 @@ Say when a listing was checked. Do not promise that an external vacancy is guara
 
 ### Company browser and visible coverage
 
-Provide a small, searchable catalogue of discovered companies. Show company name, brand assets, a concise description, website, and relevant available metadata. Keep coverage visible alongside that identity: monitored career-page links and regions, monitoring status, last successful check when available, and the number of currently eligible positions where that count can be exposed under the access rules. Publish a requested company as soon as the discovery step produces its catalogue record; crawler setup must not hold up that publication. A company remains in the catalogue when it has no fresh positions; the catalogue does not expose archived postings.
+Provide a small, searchable catalogue of discovered companies. Show company name, brand assets, a concise description, website, and relevant available metadata. Keep coverage visible alongside that identity: monitored career-page links and regions, monitoring status, last successful check when available, and the number of currently eligible positions where that count can be exposed under the access rules. Publish a requested company as soon as the requester accepts the discovery result; crawler setup must not hold up that publication. A company remains in the catalogue when it has no fresh positions; the catalogue does not expose archived postings.
 
 Use clear statuses such as “Monitoring setup pending,” “Setting up monitoring,” “Monitoring,” and “Collection interrupted.” When only some regions or career pages are covered, show that scope. Until collection has been verified, show that positions are not available yet rather than claiming zero vacancies. A successful check with no fresh positions is different from an interrupted collection or a company we do not yet monitor. Report catalogued and actively monitored company counts separately; pending requests without discovered identities do not inflate either count.
 
@@ -198,7 +199,9 @@ Company search and job-search empty states should provide a “Request a company
 
 ### Request a company
 
-The request flow collects the company name and website, with an optional careers-page link and any requested region or subsidiary. Check for an existing company or pending request first. If it is already catalogued, link to that entry and its monitoring status. If monitoring already covers the requested scope, the request is already satisfied. If the request concerns a missing region or career page of an existing company, reuse its discovered identity and keep the additional scope explicit.
+The user searches by company name or website, with an optional careers-page link and any requested region or subsidiary. First show matching catalogue entries, including companies whose crawler configuration is pending or in progress. These are real company search results with an explicit setup status, not missing companies or placeholder job listings. If monitoring already covers the requested scope, link to its positions. If setup is pending or in progress, offer “Request higher priority” on the existing entry. If the request concerns a missing region or career page of an existing company, reuse its discovered identity and keep the additional scope explicit.
+
+When the intended company is not found, send a discovery request to the backend. Return a candidate showing its name, official website, brand assets, description, and available supporting metadata. The user chooses “Accept company” or “Not this company.” Acceptance confirms the intended identity, publishes or reuses its catalogue entry, and queues crawler configuration. Rejection keeps the original request available for correction and another discovery attempt; it does not queue configuration for that candidate or remove a company already accepted by another user.
 
 Proposed account behavior: anyone can browse coverage and prepare a request; sign-in is required to submit and track it, preserving the entered details through sign-in. Both free and premium accounts can submit requests. Show confirmation and a persistent request status after submission.
 
@@ -206,16 +209,20 @@ The workflow has two independently completed steps:
 
 | Step | Work | Completion and visible result |
 | --- | --- | --- |
-| 1. Company discovery | Resolve the company identity and official website; gather brand assets, a factual description, and other supported metadata such as industry, locations, and available official links. | Persist the company record and publish it in the catalogue immediately, with “Monitoring setup pending.” |
+| 1. Company discovery | The backend runs a Codex-powered Luna agent at low reasoning to resolve identity and official website and gather brand assets, a factual description, and other supported metadata. Return the candidate promptly for user acceptance or rejection. | After acceptance, persist or reuse the company record and publish it in the catalogue immediately, with “Monitoring setup pending.” |
 | 2. Crawler configuration | Use that company record to identify the requested career-page scope, configure collection, and verify that it works. | Mark the verified scope as “Monitoring”; eligible collected positions can enter search. |
 
-Step 1 must run promptly and independently of the slower crawler-configuration queue. Missing optional assets or metadata can be filled in later with appropriate placeholders; they must not block a valid company identity from appearing in the catalogue. Unknown values remain unknown. The catalogue record and discovery work are durable even if step 2 is queued, blocked, or fails. Retrying crawler configuration reuses the company record instead of restarting discovery or creating another entry.
+Step 1 is an interactive backend request optimized for a fast response, independent of the slower crawler-configuration queue. Use Codex subscription execution with the selected Luna agent at low reasoning. The browser calls our backend, which owns agent execution and returns the candidate; model/runtime configuration stays in the backend. No crawler setup is required to return the discovery result. Missing optional assets or metadata can be filled in later with appropriate placeholders; they must not delay confirmation of a valid company identity. Unknown values remain unknown.
 
-The requester sees: submitted → discovering company → listed in catalogue / monitoring setup pending → setting up monitoring → monitoring. Show the catalogue link as soon as step 1 completes. If either step needs more information or is blocked, show which step, the reason, and any available next action. Catalogue publication is the first completion milestone; the full request is complete once the requested scope is successfully monitored. That does not require the company to have a fresh vacancy at that moment. Once monitoring is active, normal collection and matching rules apply, including live SSE delivery.
+Acceptance must be tied to the exact candidate shown to the user. If another request has already created that company, reuse the existing record and setup task. The accepted catalogue record and discovery work are durable even if step 2 is queued, blocked, or fails. Retrying crawler configuration reuses the company record instead of restarting discovery or creating another entry.
+
+The requester sees: discovering company → confirm found company → listed in catalogue / monitoring setup pending → setting up monitoring → monitoring. Rejection returns to company lookup with the user's text preserved. Show the catalogue link immediately after acceptance. If either step needs more information or is blocked, show which step, the reason, and any available next action. Catalogue publication is the first completion milestone; the full request is complete once the requested scope is successfully monitored. That does not require the company to have a fresh vacancy at that moment. Once monitoring is active, normal collection and matching rules apply, including live SSE delivery.
 
 **Premium users receive priority handling for their company requests in both steps.** Show the priority on the request and describe it in the subscription offer. Keep discovery quick for all users while prioritizing premium work within each step's queue. Priority affects processing order; it does not mean guaranteed immediate completion. Publish a turnaround estimate only when operational evidence supports it. Free requests remain accepted and visible in the queue.
 
-Duplicate requests share the same company record and setup work while each requester can follow progress. When a premium user requests a company already in the queue, give its pending setup work premium priority. The catalogue entry is public after discovery, and working monitoring later joins the service's common coverage; ordinary job-access rules apply to every user. Priority never changes job-result ordering or freshness.
+Duplicate requests share the same company record and setup work while each requester can follow progress. When a premium user requests a company already in the queue, give its pending setup work premium priority. The catalogue entry is public after acceptance of the discovered company, and working monitoring later joins the service's common coverage; ordinary job-access rules apply to every user. Priority never changes job-result ordering or freshness.
+
+“Request higher priority” attaches the user to the existing setup request and records their demand for that company. Both free and premium users can request a priority increase; premium requests receive preferential handling. Show that the priority request was recorded and the current setup status. Repeated clicks by the same user must not create additional tasks or repeatedly increase priority. If configuration is already running, retain that work and record the user's interest without restarting it. Exact ordering among requests remains an operational decision.
 
 Let requesters see progress in the product and provide separate in-product updates when the company is catalogued and when monitoring becomes active. The first links to the catalogue entry; the second also links to its job search. Proposed request limits, queue ordering within each priority, and handling of subscription expiry while a request is pending must be defined before launch.
 
@@ -304,6 +311,7 @@ No financial viability claim is made here. The later model should account for co
 | Company absent from coverage | Explain that it is not monitored and offer the company request flow. |
 | Company discovered, crawler setup pending or blocked | Show the catalogue entry with its assets and metadata, the monitoring status, and the request's next step. Do not present unavailable collection as zero vacancies. |
 | Company request blocked or needs information | Show the actual status, reason, and available next action. |
+| Company discovery returns the wrong company | Let the user reject it, preserve their lookup text, and retry with corrected details; do not start crawler configuration. |
 | Source outage | Explain coverage limitations where material and withhold listings beyond the verification threshold. |
 | Free period expires during use | Preserve searches and apply the new access state consistently. |
 
@@ -327,7 +335,7 @@ The first release must cover the complete value path: visitor search → underst
 
 Include the search workspace and tabs, persistent editable user search text, model-generated search titles and criteria descriptions, optional metadata, natural-language interpretation and diffs from text edits, model-configured backend JEV narrowing, undo, structured results always ordered newest first, persistent viewed-position state, strict freshness rules, source links, access gating, free-period eligibility, subscription lifecycle, and measurement of the journey.
 
-The first release includes live result delivery over SSE, the compact company catalogue, and two-step company requests with premium priority and visible progress. Discovery publishes the catalogue entry before crawler configuration completes. Hosting, reconnect recovery, and the delivery budget still need to be defined and validated.
+The first release includes live result delivery over SSE, the compact company catalogue, and two-step company requests with premium priority and visible progress. Interactive Luna discovery at low reasoning returns a company for user acceptance; acceptance publishes the catalogue entry before crawler configuration completes. In-progress companies appear in company search with an action to request higher priority. Hosting, reconnect recovery, and the delivery budget still need to be defined and validated.
 
 Proposed additions to defer include email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries, and an internal application tracker. Saving and hiding can be removed from the first release if they delay validating the search-to-source path.
 
@@ -345,7 +353,7 @@ Instrument the journey with distinct definitions:
 - **Conversion:** measure preview-to-sign-in, sign-in-to-activation, and free-period-to-paid separately.
 - **Retention:** return use during the free period, weekly return use, paid renewal, and cancellation.
 - **Trust and operations:** expired listings exposed, known-closed results, duplicate exposure, source-check lag, latency, and cost per submitted search and active user.
-- **Coverage and requests:** catalogued companies separately from monitored company scopes, interrupted collections, request-to-catalogue time and request-to-monitoring time by priority, blocked requests by setup step, and time pending for free requests as well as premium requests.
+- **Coverage and requests:** catalogued companies separately from monitored company scopes, discovery response time, candidate acceptance and rejection rates, time from acceptance to catalogue publication and to monitoring by priority, priority-increase requests, blocked requests by setup step, and time pending for free requests as well as premium requests.
 
 A company-link click records an outbound visit and marks the position as viewed for that user. It is not a completed application or hire. Repeated clicks may be separate analytics events but must not inflate the count of distinct viewed positions.
 
@@ -365,7 +373,7 @@ Before building the whole experience, validate the fresh inventory available in 
 | Filters and missing data | Expose only supported fields; make inclusion of unknown values an explicit choice. |
 | JEV evaluation contract | Define candidate evidence, evaluation limits, reuse of valid decisions, progress behavior, quality targets, and a cost budget. |
 | SSE operations | Define persistent-connection hosting, reconnect recovery, delivery latency targets, and connection cost budgets. The transport choice is settled. |
-| Company-request operations | Define request limits, ordering within each step's priority queues, separate discovery and crawler-configuration turnaround targets, and priority handling after subscription expiry. Two-step setup and premium request priority are settled; priority during free periods remains open. |
+| Company-request operations | Define request limits, ordering within each step's priority queues, the effect of distinct users' priority-increase requests, discovery response and crawler-configuration turnaround targets, and priority handling after subscription expiry. Luna discovery at low reasoning, user acceptance, two-step setup, and premium request priority are settled; priority during free periods remains open. |
 | Tab limits and saving/hiding | Set limits from usability and cost; keep convenience features secondary to the core flow. |
 | Launch targets | Define minimum coverage, relevance, latency, cost, and funnel thresholds before launch. |
 
