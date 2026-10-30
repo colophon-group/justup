@@ -90,6 +90,20 @@ Tabs persist across reloads locally for visitors and across sessions for account
 
 On smaller screens, use a scrollable tab strip or a compact tab switcher while preserving the same interaction. A proposed initial limit on stored tabs may be introduced for usability and cost, but the number is undecided.
 
+### Live results — proposal
+
+While the workspace is open, deliver matching postings through a persistent server-to-browser connection as soon as they are ready for that user. The flow is: backend discovers a posting → required extraction completes → structured filters match → JEV accepts it if narrowing is configured → access rules permit it → browser receives the update. This reduces delivery delay after processing; it does not make the crawler discover postings immediately after companies publish them.
+
+Use one connection per open workspace to carry updates for its search tabs, rather than one connection per search. New postings use the stored search configuration without another interpretation request. Events belong to a particular search revision; updates for a previous revision cannot enter the newly edited search.
+
+Keep cards ordered by first-observed publication time, even if JEV decisions arrive out of order. When the user is at the top, show new results there. When they are further down, preserve their reading position and show a “New positions available” indicator that takes them to the newest results. New postings begin unviewed; receiving an update does not mark them as viewed.
+
+The connection must enforce the same account access rules as ordinary result retrieval. It cannot reveal latest postings to visitors who are not entitled to see them. When a posting becomes eligible for a visitor's preview after the latest-results cutoff, it can then appear. Expired or closed postings must disappear, and changes to access must take effect during the connection.
+
+On disconnection, show that live updates are interrupted and reconnect. Resume missed events or refresh the authoritative result state, deduplicate by posting identity, and reconcile closures and expirations. Streaming is a delivery mechanism; it does not replace durable search and viewed-position state. Updates while the website is closed would require a separate notification feature.
+
+The transport remains a design choice. **Server-Sent Events (SSE) is the proposed starting point** for this server-to-browser flow; search edits and viewed actions can remain ordinary requests. The [HTML standard](https://html.spec.whatwg.org/dev/server-sent-events.html) defines EventSource streams, automatic reconnection, and last-event identifiers. WebSockets remain an option if later requirements need bidirectional streaming. Hosting must support persistent connections, and reconnect recovery, delivery latency, and connection costs need validation before selection.
+
 ## 4. Filters and user context
 
 ### Generated description and title
@@ -241,6 +255,7 @@ No financial viability claim is made here. The later model should account for co
 | Model unavailable | Preserve the applied configuration, title, description, and results; retain the user's edited search text and offer retry. |
 | JEV narrowing pending or unavailable | Show evaluation progress or an error separately from zero matches; do not substitute unfiltered candidates for narrowed results. |
 | Search service unavailable | Show an error and retry; do not report zero jobs. |
+| Live connection interrupted | Preserve the loaded results while still enforcing expiry and access rules; show connection status and reconcile missed changes after reconnecting. |
 | Viewed-state synchronization fails | Open the company posting normally, preserve the viewed state locally, and retry synchronization. |
 | Source outage | Explain coverage limitations where material and withhold listings beyond the verification threshold. |
 | Free period expires during use | Preserve searches and apply the new access state consistently. |
@@ -264,6 +279,8 @@ This draft intentionally leaves application framework, authentication provider, 
 The first release must cover the complete value path: visitor search → understandable criteria → useful preview → sign-in → full fresh results → original company posting → return to saved searches → explicit paid continuation.
 
 Include the search workspace and tabs, persistent editable user search text, model-generated search titles and criteria descriptions, optional metadata, natural-language interpretation and diffs from text edits, model-configured backend JEV narrowing, undo, structured results always ordered newest first, persistent viewed-position state, strict freshness rules, source links, access gating, free-period eligibility, subscription lifecycle, and measurement of the journey.
+
+Live result delivery is proposed for the first release, subject to agreeing the transport, hosting, and delivery budget described above.
 
 Proposed additions to defer include email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries, and an internal application tracker. Saving and hiding can be removed from the first release if they delay validating the search-to-source path.
 
@@ -299,6 +316,7 @@ Before building the whole experience, validate the fresh inventory available in 
 | Price and billing | Model $3/week and $10/month before selecting final prices and payment mechanics. |
 | Filters and missing data | Expose only supported fields; make inclusion of unknown values an explicit choice. |
 | JEV evaluation contract | Define candidate evidence, evaluation limits, reuse of valid decisions, progress behavior, quality targets, and a cost budget. |
+| Live result delivery | Evaluate SSE first; confirm persistent-connection hosting, reconnect recovery, latency, and costs. Use WebSockets if bidirectional streaming becomes necessary. |
 | Tab limits and saving/hiding | Set limits from usability and cost; keep convenience features secondary to the core flow. |
 | Launch targets | Define minimum coverage, relevance, latency, cost, and funnel thresholds before launch. |
 
