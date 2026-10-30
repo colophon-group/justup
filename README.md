@@ -6,6 +6,8 @@ The working brand direction is Nowlisted, with the proposed domain `nowlisted.wo
 
 Transparency is a core value: show which companies are monitored, make coverage limits clear, and let users request companies with visible progress. Premium users receive priority on their company requests.
 
+Company setup has two steps: discovery publishes the company in the catalogue with its brand assets and metadata, then crawler configuration establishes job monitoring. Catalogue publication does not wait for crawler setup.
+
 Start with the [product design document](docs/product-design.md). It distinguishes agreed requirements from proposed behavior and decisions still to validate.
 
 This repository currently contains product documentation. UI implementation follows design review.
