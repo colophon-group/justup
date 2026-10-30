@@ -33,7 +33,7 @@ Motion is local and functional. Use no springs, bounce, confetti, full-page fade
 
 ## Infinite scroll: the reveal is the pacing mechanism
 
-The interface reveals individual jobs continuously. Backend collection pages, candidate scan batches, and matching batches never appear as UI pages. A matched page arriving does not dump all its jobs onto the screen. A small ordered queue smooths irregular background loading.
+The interface reveals individual jobs as the user scrolls down to them. Start a reveal only when the new row’s slot reaches the visible viewport; never consume or animate queued jobs below the screen. Background fetching may prepare matches without revealing them. Backend collection pages, candidate scan batches, and matching batches never appear as UI pages. A matched page arriving does not dump all its jobs onto the screen. A small ordered queue smooths irregular background loading.
 
 The animation itself imposes a deliberate consumption interval, including when data is already ready. The current proposed cycle is **450 ms per job**, with 350 ms and 550 ms comparisons available. The next job cannot begin until the current cycle completes and another ordered match is ready. This is purposeful browsing cadence, rather than an animation applied after a whole page was already disclosed.
 

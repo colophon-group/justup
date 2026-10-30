@@ -12,4 +12,4 @@ Start with the [product design document](docs/product-design.md). It distinguish
 
 The proposed [motion language](docs/motion-design.md) covers New markers, automatic arrivals, reading-position protection, Viewed transitions, and the live-dot pulse.
 
-This repository currently contains product documentation. UI implementation follows design review.
+A [complete interactive prototype](prototype/README.md) includes the scrollable job feed, company catalogue and two-step company requests. It runs as static HTML/CSS/JavaScript with fictional data; it does not select the production application stack.
