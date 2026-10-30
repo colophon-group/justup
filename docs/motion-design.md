@@ -105,3 +105,7 @@ The inline motion study demonstrates the arrival treatment, a cropped reading vi
 The company catalogue uses the same individual-row cadence and viewport gate as the job feed. Company rows open their profiles, with priority requests as an independent button. Clickable rows have a coral hover wash, a keyboard focus outline, and pressed feedback. Do not append footer panels at the end of either list. Reserve enough space for looking and end statuses to change without shifting the document. A fixed back-to-top button appears after scrolling and respects reduced motion; it restores focus to the top navigation. Requests reuse the company-row component, including logos, source identity, details, status, single row separators and the shared arrow.
 
 For clickable rows, the surface highlight, arrow motion and focus outline provide interaction feedback. Do not additionally underline row logos, titles or arrows on hover. Keep ordinary standalone text links identifiable.
+
+## Company globe
+
+The globe responds directly to wheel, drag and keyboard input, without a reveal sequence, automatic spin or inertial tail. Scrolling over the sphere rotates longitude; its scale remains fixed. Wheel input outside the sphere scrolls the page normally. Horizontal touch dragging rotates while vertical touch gestures scroll the page. Arrow keys rotate and Home restores the initial view. Rendering uses a single animation-frame update per frame, with no movement while idle.
