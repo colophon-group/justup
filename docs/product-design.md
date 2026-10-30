@@ -386,3 +386,5 @@ Company profiles link to the main search for their positions; do not repeat a �
 Keep company-profile source information compact beneath the company name: last check and a link to each tracked career page. Do not show a status table, scope table, or repeated position counts in that area. Companies with no career pages added yet show “Not checked yet” without invented links.
 
 Keep the decorative company map level, with a rectangular crop. Do not separate the description with a horizontal rule. Display tracked career-page addresses as the link text; the design must not depend on human-readable board labels being available.
+
+Company maps must support worldwide hiring. Fit the view to each company’s hiring countries, retain a world view for broad or unknown footprints, and never fix the renderer to Europe. The prototype uses distinct sample footprints across the Americas, Africa, Asia, Oceania and Europe.

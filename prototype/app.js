@@ -8,12 +8,12 @@ let saved={}; try { saved=JSON.parse(localStorage.getItem(STORAGE)||'{}'); } cat
 const baseCompanies=[
 ['northline','Northline','northline.example','Robotics & automation','Zurich, Switzerland','Autonomous systems for a world that keeps moving.','N','monitoring',true],
 ['formwork','Formwork','formwork.example','Developer tools','Zurich, Switzerland','Tools that make building software feel straightforward.','ƒ','monitoring',false],
-['orbit','Orbit','orbit.example','Cloud infrastructure','Remote, Europe','Reliable infrastructure for ambitious engineering teams.','O','monitoring',true],
-['fieldwork','Fieldwork','fieldwork.example','Climate technology','Basel, Switzerland','Software and sensors for healthier land and better harvests.','F','monitoring',false],
-['parcel','Parcel','parcel.example','Commerce & logistics','Lausanne, Switzerland','Making the movement of goods simpler and more sustainable.','P','monitoring',true],
-['goodlight','Goodlight','goodlight.example','Energy','Bern, Switzerland','Building an energy system that works for everyone.','g','monitoring',false],
+['orbit','Orbit','orbit.example','Cloud infrastructure','San Francisco, United States','Reliable infrastructure for ambitious engineering teams.','O','monitoring',true],
+['fieldwork','Fieldwork','fieldwork.example','Climate technology','São Paulo, Brazil','Software and sensors for healthier land and better harvests.','F','monitoring',false],
+['parcel','Parcel','parcel.example','Commerce & logistics','Singapore','Making the movement of goods simpler and more sustainable.','P','monitoring',true],
+['goodlight','Goodlight','goodlight.example','Energy','Cape Town, South Africa','Building an energy system that works for everyone.','g','monitoring',false],
 ['relay','Relay','relay.example','Financial technology','Zurich, Switzerland','The financial layer for businesses with global ambitions.','R','monitoring',true],
-['still','Still','still.example','Health technology','Remote, Europe','Better digital tools for the people delivering care.','s','monitoring',false],
+['still','Still','still.example','Health technology','Sydney, Australia','Better digital tools for the people delivering care.','s','monitoring',false],
 ['atelier','Atelier','atelier.example','Design & collaboration','Copenhagen, Denmark','A shared workspace for people who make things.','A','monitoring',true],
 ['latitude','Latitude','latitude.example','Travel technology','Amsterdam, Netherlands','Helping people find their way to somewhere new.','L','monitoring',false],
 ['common','Common','common.example','Developer tools','Berlin, Germany','Useful infrastructure, built around the people using it.','c','monitoring',true],
@@ -26,7 +26,7 @@ const baseCompanies=[
 ['clearwater','Clearwater','clearwater.example','Health technology','Basel, Switzerland','Connecting research teams to better clinical insights.','C','configuring',false],
 ['folio','Folio','folio.example','Design & collaboration','Paris, France','A home for creative work and the people behind it.','f','attention',true],
 ['openwater','Openwater','openwater.example','Energy','Oslo, Norway','Technology for cleaner seas and coastal energy.','o','attention',false]
-].map(([id,name,domain,industry,location,description,mark,status,light],i)=>({id,name,domain,industry,location,description,mark,status,light,careerPages:status==='configuring'?[]:i%3===0?[{url:'https://'+domain+'/careers'}]:[{url:'https://'+domain+'/careers/europe'},{url:'https://'+domain+'/careers/remote'}],scope: i%3===0?'Global career page':'European career pages',check:status==='attention'?'7 h ago':`${3+i%9} min ago`,issue:status==='attention'?'This company’s career page has changed. We’re working on getting job updates back.':null}));
+].map(([id,name,domain,industry,location,description,mark,status,light],i)=>({id,name,domain,industry,location,description,mark,status,light,careerPages:status==='configuring'?[]:i%3===0?[{url:'https://'+domain+'/careers'}]:[{url:'https://'+domain+'/careers/locations'},{url:'https://'+domain+'/careers/remote'}],scope: i%3===0?'Global career page':'European career pages',check:status==='attention'?'7 h ago':`${3+i%9} min ago`,issue:status==='attention'?'This company’s career page has changed. We’re working on getting job updates back.':null}));
 let companies=[...baseCompanies,...(saved.addedCompanies||[])];
 companies=companies.map(c=>c.demo?{...c,description:`${c.name} is a sample company in this demo.`,scope:'Career pages not confirmed yet'}:c);
 let requests=(saved.requests||[]).map(r=>r.priority==='Standard queue'?{...r,priority:'Standard request'}:r);
@@ -66,11 +66,51 @@ const roles=[
 ['Research Engineer, Manipulation','robotics','Python · Robot learning','Munich, Germany','On-site','€85–115k','mid'],
 ['Senior Backend Engineer, API','engineering','Go · PostgreSQL','Remote, Switzerland','Remote','CHF 135–170k','senior']
 ];
-const jobs=Array.from({length:252},(_,i)=>{
-const role=roles[i%roles.length];const [title,category,skills,location,workplace,salary,level]=role;
+const countryData={
+CHE:{name:'Switzerland',city:'Zurich',region:'Europe',salary:'CHF 135–165k'},
+DEU:{name:'Germany',city:'Berlin',region:'Europe',salary:'€95–125k'},
+AUT:{name:'Austria',city:'Vienna',region:'Europe',salary:'€85–110k'},
+USA:{name:'United States',city:'New York',region:'North America',salary:'$140–180k'},
+CAN:{name:'Canada',city:'Toronto',region:'North America',salary:'C$120–160k'},
+GBR:{name:'United Kingdom',city:'London',region:'Europe',salary:'£85–110k'},
+JPN:{name:'Japan',city:'Tokyo',region:'Asia',salary:'¥10–15m'},
+AUS:{name:'Australia',city:'Sydney',region:'Oceania',salary:'A$130–175k'},
+BRA:{name:'Brazil',city:'São Paulo',region:'South America',salary:'R$180–260k'},
+ZAF:{name:'South Africa',city:'Cape Town',region:'Africa',salary:'R800k–1.1m'},
+MEX:{name:'Mexico',city:'Mexico City',region:'North America',salary:'MX$900k–1.3m'},
+CHL:{name:'Chile',city:'Santiago',region:'South America',salary:'CLP 36–52m'},
+ARG:{name:'Argentina',city:'Buenos Aires',region:'South America',salary:'Salary not listed'},
+SGP:{name:'Singapore',city:'Singapore',region:'Asia',salary:'S$120–165k'},
+IND:{name:'India',city:'Bengaluru',region:'Asia',salary:'₹28–42L'},
+IDN:{name:'Indonesia',city:'Jakarta',region:'Asia',salary:'Rp360–540m'},
+KEN:{name:'Kenya',city:'Nairobi',region:'Africa',salary:'KSh3–4.5m'},
+NGA:{name:'Nigeria',city:'Lagos',region:'Africa',salary:'₦18–28m'},
+EGY:{name:'Egypt',city:'Cairo',region:'Africa',salary:'E£480–720k'},
+NZL:{name:'New Zealand',city:'Auckland',region:'Oceania',salary:'NZ$120–155k'},
+DNK:{name:'Denmark',city:'Copenhagen',region:'Europe',salary:'DKK650–850k'},
+SWE:{name:'Sweden',city:'Stockholm',region:'Europe',salary:'SEK650–850k'},
+FRA:{name:'France',city:'Paris',region:'Europe',salary:'€80–110k'},
+NLD:{name:'Netherlands',city:'Amsterdam',region:'Europe',salary:'€85–110k'},
+NOR:{name:'Norway',city:'Oslo',region:'Europe',salary:'NOK850k–1.1m'},
+FIN:{name:'Finland',city:'Helsinki',region:'Europe',salary:'€75–100k'}
+};
+// Distinct fictional hiring footprints exercise regional and worldwide map views.
+const hiringFootprints={
+northline:['CHE','CHE','CHE','DEU','AUT'],formwork:['USA','CAN','GBR','DEU','JPN','AUS','BRA','ZAF'],
+orbit:['USA','CAN'],fieldwork:['BRA','MEX','CHL','ARG'],parcel:['SGP','JPN','IND','IDN'],
+goodlight:['ZAF','KEN','NGA','EGY'],relay:['CHE','CHE','USA','GBR'],still:['AUS','NZL'],
+atelier:['DNK','SWE','FRA'],latitude:['NLD','SGP','AUS','JPN'],common:['DEU','FRA','GBR'],
+kinetic:['DEU','DEU','CHE','AUT'],arc:['GBR','USA','CAN'],sprout:['SWE','NOR','FIN','DNK'],weave:['CHE','CHE','SGP','USA']
+};
+const companyJobCounts={};
+const jobs=Array.from({length:480},(_,i)=>{
+const [title,category,skills,,workplace,,level]=roles[i%roles.length];
 const eligible=baseCompanies.filter(c=>c.status==='monitoring');
 const company=eligible[(i*7+Math.floor(i/roles.length))%eligible.length];
-return{id:`job-${i}`,title,category,skills,location,workplace,salary,level,company:company.id,type:i%29===0?'Contract':'Permanent',firstObserved:now-(120000+i*76*60000),isNew:false};
+const sequence=companyJobCounts[company.id]||0;companyJobCounts[company.id]=sequence+1;
+const footprint=hiringFootprints[company.id];const country=footprint[sequence%footprint.length];const place=countryData[country];
+const location=workplace==='Remote'?`Remote, ${place.name}`:`${place.city}, ${place.name}`;
+return{id:`job-${i}`,title,category,skills,location,country,workplace,salary:place.salary,level,company:company.id,type:i%29===0?'Contract':'Permanent',firstObserved:now-(120000+i*40*60000),isNew:false};
 });
 // The prototype uses no APIs. Matching, discovery, continuations and live events are local simulations.
 function persist(){try{localStorage.setItem(STORAGE,JSON.stringify({searches,activeSearch,viewed:[...viewed],requests,addedCompanies:companies.filter(c=>!baseCompanies.some(b=>b.id===c.id)),premium,motion}));}catch{}}
@@ -84,17 +124,18 @@ function postingURL(job){const c=companyFor(job.company);return 'sample-posting.
 const eye='<svg class="viewed-icon" viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.5" role="img" aria-label="Viewed"><path d="M1 7s3-5 9-5 9 5 9 5-3 5-9 5-9-5-9-5Z"/><circle cx="10" cy="7" r="2.2"/></svg>';
 function jobHTML(job){const c=companyFor(job.company);return `<article class="job list-row ${viewed.has(job.id)?'viewed':''} ${job.isNew?'is-new':''}" data-job="${job.id}"><div class="job-age"><span class="new-badge" ${job.isNew?'':'hidden'}>New</span><time datetime="${new Date(job.firstObserved).toISOString()}" title="${fullTime(job)}" aria-label="${fullTime(job)}">${age(job)}</time>${eye}</div><div class="job-story"><h2 class="job-title"><a class="row-link" data-posting="${job.id}" href="${escapeHTML(postingURL(job))}" target="_blank" rel="noopener">${escapeHTML(job.title)}</a></h2><div class="job-facts"><span>${escapeHTML(job.location)}</span><span>${job.workplace}</span><span>${job.type}</span></div><span class="job-salary">${job.salary} <span aria-hidden="true">·</span> ${escapeHTML(job.skills)}</span></div><div class="job-employer"><button class="job-company" data-company="${c.id}">${mark(c)}${escapeHTML(c.name)}</button><p class="job-source">Company career page</p></div><a class="open-posting row-arrow" data-posting="${job.id}" href="${escapeHTML(postingURL(job))}" target="_blank" rel="noopener" aria-label="Open ${escapeHTML(job.title)} at ${escapeHTML(c.name)} — sample company posting in a new tab">↗</a></article>`;}
 function interpret(query){const q=query.toLowerCase();let title='Your search',parts=[];
-if(/all fresh|everything|all jobs|all positions|^\s*$/.test(q))return{title:'Everything fresh',criteria:'All roles · All locations · First seen in the last 14 days'};
+if(!q||/^(?:all fresh positions|everything|all jobs|all positions)[.!]?$/.test(q))return{title:'Everything fresh',criteria:'All roles · All locations · First seen in the last 14 days'};
 const topics=[[/robot|autonom|perception|control engineer/,'Robotics'],[/backend|back.end/,'Backend'],[/design/,'Design'],[/frontend|front.end/,'Frontend'],[/data|machine learning/,'Data & ML'],[/marketing|growth/,'Marketing'],[/product manager|product roles/,'Product'],[/platform|infrastructure|software|engineer/,'Engineering']];
 const topic=topics.find(([re])=>re.test(q));if(topic){title=topic[1];parts.push(topic[1]);}
 if(/senior/.test(q))parts.unshift('Senior');
 let place=/zurich|zürich|switzerland|swiss/.test(q)?'Switzerland':/berlin|germany|munich/.test(q)?'Germany':/london|united kingdom/.test(q)?'United Kingdom':/europe/.test(q)?'Europe':null;
+if(!place){place=Object.values(countryData).find(country=>q.includes(country.name.toLowerCase()))?.name||[...new Set(Object.values(countryData).map(country=>country.region))].find(region=>q.includes(region.toLowerCase()));}
 if(place){title+=` · ${place}`;parts.push(place==='Switzerland'&&/remote/.test(q)?'Zurich or remote from Switzerland':place);}
 if(/remote/.test(q)&&place!=='Switzerland')parts.push('Remote');if(/\bgo\b/.test(q))parts.push('Go required');
 const c=companies.find(c=>q.includes(c.name.toLowerCase()));if(c){title=c.name;parts.push(c.name);}
 return{title:title==='Your search'?query.trim().slice(0,28)||'New search':title,criteria:parts.length?parts.join(' · '):'Keyword match · All locations · Last 14 days'};
 }
-function matches(job,query){const q=query.toLowerCase().trim();if(!q||/all fresh|everything|all jobs|all positions/.test(q))return true;
+function matches(job,query){const q=query.toLowerCase().trim();if(!q||/^(?:all fresh positions|everything|all jobs|all positions)[.!]?$/.test(q))return true;
 const hay=`${job.title} ${job.category} ${job.skills} ${job.location} ${job.workplace} ${companyFor(job.company).name}`.toLowerCase();
 if(/senior/.test(q)&&!['senior','staff','manager'].includes(job.level))return false;
 if(/backend|back.end/.test(q)&&!/backend|platform|infrastructure/.test(job.title.toLowerCase()))return false;
@@ -109,10 +150,12 @@ if(/\bgo\b/.test(q)&&!job.skills.includes('Go'))return false;
 if(/zurich|zürich|switzerland|swiss/.test(q)&&!job.location.includes('Switzerland'))return false;
 if(/berlin|germany|munich/.test(q)&&!job.location.includes('Germany'))return false;
 if(/london|united kingdom/.test(q)&&!job.location.includes('United Kingdom'))return false;
+const namedRegion=[...new Set(Object.values(countryData).map(place=>place.region))].find(region=>q.includes(region.toLowerCase()));if(namedRegion&&countryData[job.country]?.region!==namedRegion)return false;
 if(/remote/.test(q)&&!/zurich|zürich| or |hybrid/.test(q)&&job.workplace!=='Remote')return false;
 const c=companies.find(c=>q.includes(c.name.toLowerCase()));if(c&&job.company!==c.id)return false;
+const namedCountry=Object.entries(countryData).find(([,place])=>q.includes(place.name.toLowerCase()));if(namedCountry&&job.country!==namedCountry[0])return false;
 const known=/backend|back.end|senior|robot|autonom|perception|control engineer|design|frontend|front.end|machine learning|data|marketing|growth|product manager|product roles|\bgo\b|zurich|zürich|switzerland|swiss|berlin|germany|munich|london|united kingdom|remote|europe|platform|engineer/;
-if(!known.test(q)&&!c){const words=q.replace(/[^\w\s]/g,'').split(/\s+/).filter(w=>w.length>2&&!['roles','jobs','work','want','with','and','the','for','please','find'].includes(w));return !words.length||words.some(w=>hay.includes(w));}
+if(!known.test(q)&&!c&&!namedCountry&&!namedRegion){const words=q.replace(/[^\w\s]/g,'').split(/\s+/).filter(w=>w.length>2&&!['roles','jobs','work','want','with','and','the','for','please','find'].includes(w));return !words.length||words.some(w=>hay.includes(w));}
 return true;}
 function tabs(){const root=$('#search-tabs');root.innerHTML=searches.map(s=>`<div class="search-tab"><button role="tab" id="tab-${s.id}" aria-selected="${s.id===activeSearch}" aria-controls="jobs-page" data-tab="${s.id}">${escapeHTML(s.title)}</button>${searches.length>1?`<button class="tab-remove" data-remove-tab="${s.id}" aria-label="Remove ${escapeHTML(s.title)} search">×</button>`:''}</div>`).join('');}
 function current(){return searches.find(s=>s.id===activeSearch);}
@@ -190,10 +233,16 @@ let countryMapSource;
 async function paintCompanyMap(c){const host=$('[data-map-company]');if(!host)return;
 if(!countryMapSource)countryMapSource=fetch('assets/world-map.svg').then(response=>{if(!response.ok)throw new Error('Map unavailable');return response.text();}).catch(()=>{countryMapSource=null;return '';});
 const source=await countryMapSource;if(!source||!host.isConnected||host.dataset.mapCompany!==c.id)return;
-host.innerHTML=source;
-const countryNames=[['Switzerland','CHE'],['Germany','DEU'],['United Kingdom','GBR'],['Netherlands','NLD'],['Denmark','DNK'],['France','FRA'],['Norway','NOR'],['Sweden','SWE']];
-const locations=jobs.filter(job=>job.company===c.id&&job.firstObserved>=Date.now()-14*86400000).map(job=>job.location);
-for(const [name,code]of countryNames)if(locations.some(location=>location.includes(name))){const path=$(`[data-country="${code}"]`,host);if(path)path.classList.add('is-hiring');}}
+host.innerHTML=source;const svg=$('svg',host);
+const eligibleJobs=jobs.filter(job=>job.company===c.id&&job.firstObserved>=Date.now()-14*86400000);
+const countries=new Set(eligibleJobs.map(job=>job.country).filter(Boolean));
+const selected=[];for(const country of countries){const path=$(`[data-country="${country}"]`,host);if(path){path.classList.add('is-hiring');selected.push(path);}}
+// Fit actual country shapes, retaining a world view for empty or widely spread footprints.
+let view=[0,0,1000,460];
+if(selected.length){const boxes=selected.map(path=>{const values=path.dataset.focusBounds?.split(',').map(Number);return values?.length===4&&values.every(Number.isFinite)?{x:values[0],y:values[1],width:values[2],height:values[3]}:path.getBBox();});const minX=Math.min(...boxes.map(b=>b.x)),minY=Math.min(...boxes.map(b=>b.y));const maxX=Math.max(...boxes.map(b=>b.x+b.width)),maxY=Math.max(...boxes.map(b=>b.y+b.height));
+const regions=new Set([...countries].map(code=>countryData[code]?.region).filter(Boolean));
+if(maxX-minX<670&&regions.size<3){let width=Math.max(155,(maxX-minX)*1.55),height=Math.max(95,(maxY-minY)*1.55);const aspect=host.clientWidth/host.clientHeight;if(width/height<aspect)width=height*aspect;else height=width/aspect;if(width<=1000&&height<=460){const x=Math.max(0,Math.min(1000-width,(minX+maxX-width)/2));const y=Math.max(0,Math.min(460-height,(minY+maxY-height)/2));view=[x,y,width,height];}}}
+svg.setAttribute('viewBox',view.map(value=>value.toFixed(2)).join(' '));host.dataset.mapView=selected.length?'hiring':'world';}
 function careerLinksHTML(c){const pages=c.careerPages||[];return `<div class="profile-sources"><span class="last-check">${c.status==='configuring'?'Not checked yet':`Last checked ${escapeHTML(c.check)}`}</span>${pages.length?`<nav class="career-links" aria-label="Career pages">${pages.map(page=>{const address=page.url||'https://'+c.domain+(page.path||'');const display=address.replace(/^https?:\/\//,'').replace(/\/$/,'');return `<a href="sample-careers.html?${escapeHTML(new URLSearchParams({company:c.name,page:'Careers',source:address}).toString())}" target="_blank" rel="noopener" title="${escapeHTML(address)}"><span class="career-url">${escapeHTML(display)}</span><span class="career-arrow" aria-hidden="true">↗</span></a>`;}).join('')}</nav>`:''}</div>`;}
 function renderCompany(id){const c=companyFor(id);if(!c){location.hash='companies';return;}const count=jobs.filter(j=>j.company===c.id).length;$('#company-page').innerHTML=`<a class="back" href="#companies">← Company catalogue</a><div class="company-hero"><div class="company-hero-copy"><div class="detail-heading">${mark(c)}<h1>${escapeHTML(c.name)}</h1></div><span class="eyebrow">${escapeHTML(c.industry)} · ${escapeHTML(c.location)}</span>${careerLinksHTML(c)}</div><div class="company-map" data-map-company="${c.id}" aria-hidden="true"></div></div><div class="company-about"><p class="detail-description">${escapeHTML(c.description)}</p><div class="detail-actions">${c.status==='monitoring'?`<button class="button dark" data-search-company="${c.id}">See ${count} positions ↗</button>`:`<button class="button dark" data-priority="${c.id}">${requests.some(r=>r.company===c.id)?'Following this company ✓':'Request higher priority ↑'}</button>`}<a class="text-link" href="#request">Request another company +</a></div></div>`;paintCompanyMap(c);}
 function requestForm(value=''){requestGeneration++;$('#request-content').innerHTML=`<form class="request-form" id="discover-form"><label for="request-company">Company name or website</label><input id="request-company" type="text" required maxlength="120" autocomplete="organization" placeholder="e.g. Meridian or meridian.example" value="${escapeHTML(value)}"><p class="helper">We’ll find the company first. You confirm it before we add it.</p><button class="button dark" type="submit">Find company <span>↗</span></button><p class="small-print">Try it with any company name. This demo won’t send a real request.</p></form>`;step('find');}
