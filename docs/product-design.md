@@ -37,6 +37,7 @@ The following are the product requirements from the brief:
 - New users receive one free week, followed by a small recurring fee. $3/week and $10/month are pricing hypotheses for a later financial model.
 - Existing Jobseek users receive their first month free.
 - Results show extracted structured values, without full posting text. Summaries may come later if their cost is justified.
+- Result cards do not expand. Users open the original company posting for further details.
 
 Everything below that resolves an unspecified detail is a proposal, not a settled requirement. The final section gathers decisions to review before implementation.
 
@@ -139,7 +140,7 @@ Use one inexpensive interpretation request per submission where possible, return
 
 Two weeks is a hard eligibility boundary, not merely a sorting preference. A result is eligible only while less than 14 days have elapsed since the backend first observed it, it is not known to be closed, and its company source meets the availability rules below. At the boundary it disappears from public search and public listing surfaces.
 
-The backend retains the record and its history. Retention must not accidentally make expired listings accessible through a public detail URL, an old cursor, a shared search, or a saved result. An old link may show a minimal unavailable state without exposing the archived posting.
+The backend retains the record and its history. Retention must not accidentally make expired listings accessible through a result API, an old cursor, a shared search, or a saved result. A stale reference may show a minimal unavailable state without exposing the archived posting.
 
 ### Publication time and age
 
@@ -165,9 +166,9 @@ Say when a listing was checked. Do not promise that an external vacancy is guara
 
 A result should let someone make a quick decision about opening the original posting.
 
-The collapsed row or card shows title, company, location/remote eligibility, publication age based on the backend's first observation, and a small set of available decision fields. Salary, seniority, employment type, and key skills are candidates. An expandable structured view can show further extracted values such as language, sponsorship, experience requirements, or benefits when supported.
+Each compact row or card shows title, company, location/remote eligibility, publication age based on the backend's first observation, and a small set of available decision fields. Salary, seniority, employment type, and key skills are candidates. Cards have a single compact presentation, with no expansion or internal posting detail view. Further extracted values can support search matching without needing to appear on the card.
 
-The primary action is “View on company site.” Make clear that the application happens externally. Keep enough search context and scroll position for the user to return and continue.
+The primary action is “View on company site,” linking directly to the original posting for further details and application. Keep enough search context and scroll position for the user to return and continue.
 
 Rules for presentation and matching:
 
@@ -197,7 +198,7 @@ When a result expires while the user is viewing it, remove its active content an
 
 Public preview must still contain only jobs first observed by the backend less than 14 days ago. The proposed latest-results cutoff hides postings first observed within the most recent 48 hours; it is an experiment to validate, not a decided requirement. Sparse markets may have no unlocked matches. Show that honestly rather than weakening the freshness promise.
 
-Use one aggregate message where recent matches are withheld, for example “Sign in to see the latest matches.” Show counts only if they are accurate and safe to expose. Do not return hidden listing data to the browser and merely blur it. Apply access rules to result queries and individual listing URLs alike.
+Use one aggregate message where recent matches are withheld, for example “Sign in to see the latest matches.” Show counts only if they are accurate and safe to expose. Do not return hidden listing data to the browser and merely blur it. Apply access rules to result queries and any individual listing retrieval alike.
 
 ### Free period
 
