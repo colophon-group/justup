@@ -327,7 +327,7 @@ Define WoW as a rolling seven-day window compared with the immediately preceding
 
 The prototype uses fictional weekly snapshots, independent of the sample search fixtures. The global prototype banner identifies the fictional content; the strip itself runs without explanatory context. Real signals should update when new observations materially change the WoW comparison, using verified history rather than arbitrary rotating announcements. No external news service or live analytics is connected.
 
-The strip moves continuously at a calm, constant speed in a fixed-height area. No pause controls. Hover/focus and open dialogs hold it for reading; keyboard access reveals each company link without moving focus unexpectedly. Reduced motion freezes the strip and leaves manual horizontal scrolling available. Hide the visual duplicate from assistive technology and keyboard navigation. The strip scrolls away with the header and does not become a sticky obstacle or a jittering footer.
+The strip moves continuously at a calm, constant speed in a fixed-height area. No pause controls. Pointer hover and clicks keep it running. Open dialogs hold it for reading; keyboard access reveals each company link without moving focus unexpectedly. Reduced motion freezes the strip and leaves manual horizontal scrolling available. Hide the visual duplicate from assistive technology and keyboard navigation. The strip scrolls away with the header and does not become a sticky obstacle or a jittering footer.
 
 ### Free period
 
