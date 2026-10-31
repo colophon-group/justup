@@ -33,15 +33,19 @@ def load(name):
 host, artifact, launcher, recovery, http = [load(name) for name in
     ('preview-host', 'preview-artifact', 'preview-run', 'preview-recovery', 'preview-verify')]
 queue = load('preview-queue-run')
+CODEX_FIXTURES = {name: ('fixture native distribution ' + name).encode() for name in artifact.CODEX_FILES}
 
 
 def payload():
     files = {'runtime/bin/node': b'fixture runtime', 'runtime/LICENSE': b'fixture license',
              'app/server/main.mjs': b'export const ready = true;'}
     files.update({'app/server/' + name + '.mjs': b'export {};' for name in ('auth', 'http', 'store', 'feed', 'tasks')})
-    manifest = {'formatVersion': 1, 'sourceCommit': 'a' * 40, 'sourceTree': 'b' * 40,
+    files.update(CODEX_FIXTURES)
+    manifest = {'formatVersion': 2, 'sourceCommit': 'a' * 40, 'sourceTree': 'b' * 40,
                 'schemaVersion': 1, 'nodeVersion': '24.22.2', 'platform': 'linux-arm64',
                 'nodeArchiveSha256': artifact.NODE_ARCHIVE_SHA256, 'entrypoint': 'app/server/main.mjs',
+                'codexVersion': artifact.CODEX_VERSION, 'codexTarget': artifact.CODEX_TARGET,
+                'codexArchiveSha256': artifact.CODEX_ARCHIVE_SHA256, 'codexEntrypoint': artifact.CODEX_ENTRYPOINT,
                 'files': {name: artifact.sha(data) for name, data in files.items()}}
     manifest['buildIdentity'] = artifact.identity(manifest)
     return manifest, files
@@ -62,9 +66,17 @@ def bundle(path, manifest=None, files=None, extra=None):
 
 
 class ArtifactContracts(unittest.TestCase):
+    def setUp(self):
+        # Substitute a small trusted distribution in offline fixture bundles.
+        # Production pins are exercised against the real archive separately.
+        pins = patch.dict(artifact.CODEX_FILES, {name: artifact.sha(data) for name, data in CODEX_FIXTURES.items()})
+        pins.start()
+        self.addCleanup(pins.stop)
+
     def test_backend_inventory_excludes_browser_sources_build_tools_and_dependencies(self):
         for path in ('app/web/dist/index.html', 'app/web/src/app.tsx', 'app/prototype/app.mjs',
-                     'app/package.json', 'app/node_modules/react/index.js', 'app/scripts/frontend-prepare.mjs'):
+                     'app/package.json', 'app/node_modules/react/index.js', 'app/scripts/frontend-prepare.mjs',
+                     'runtime/codex/bin/codex-code-mode-host', 'runtime/codex/codex-path/rg', 'runtime/codex/codex-resources/zsh/bin/zsh'):
             with self.subTest(path=path):
                 self.assertFalse(artifact.allowed(path))
     def test_inventory_accepts_exact_bytes_and_rejects_changed_payload(self):
@@ -102,12 +114,32 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_runtime_source_and_manifest_identity_are_mandatory(self):
         original, _ = payload()
-        for key, value in [('sourceCommit', 'dev'), ('nodeVersion', '22'), ('platform', 'linux-x64'), ('buildIdentity', '0' * 64)]:
+        for key, value in [('sourceCommit', 'dev'), ('nodeVersion', '22'), ('platform', 'linux-x64'), ('buildIdentity', '0' * 64),
+                           ('codexVersion', '0.159.2'), ('codexTarget', 'x86_64-unknown-linux-musl'),
+                           ('codexArchiveSha256', 'f' * 64), ('codexEntrypoint', 'runtime/bin/arbitrary')]:
             with self.subTest(key=key):
                 candidate = deepcopy(original)
                 candidate[key] = value
                 with self.assertRaises(ValueError):
                     artifact.validate_manifest(candidate)
+
+    def test_streamed_staging_preserves_exact_native_bytes_and_executable_modes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'releases').mkdir()
+            bundle_path = root / 'candidate.tar'
+            checksum = bundle(bundle_path)
+            with patch.object(host, 'BASE', root), patch.object(host, 'require_operator'), patch.object(host, 'artifact_module', return_value=artifact):
+                result = host.stage(bundle_path, checksum)
+            release = root / 'releases' / result['staged']
+            self.assertFalse(result['activated'])
+            self.assertFalse((root / 'current').exists())
+            for name, data in CODEX_FIXTURES.items():
+                self.assertEqual((release / name).read_bytes(), data)
+                self.assertEqual((release / name).stat().st_mode & 0o777, 0o555 if name in artifact.EXECUTABLES else 0o444)
+            self.assertEqual(artifact.verify_directory(release)['buildIdentity'], result['staged'])
+            _, retained = artifact.read_bundle(bundle_path, checksum, retain_files=False)
+            self.assertEqual(retained, {})
 
     def test_deployed_inventory_is_readonly_complete_and_not_a_moving_link(self):
         manifest, files = payload()
@@ -118,7 +150,7 @@ class ArtifactContracts(unittest.TestCase):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(value)
-                path.chmod(0o444)
+                path.chmod(0o555 if name in artifact.EXECUTABLES else 0o444)
             self.assertEqual(artifact.verify_directory(root)['buildIdentity'], manifest['buildIdentity'])
             (root / 'app/server/main.mjs').chmod(0o644)
             with self.assertRaisesRegex(ValueError, 'read-only'):
@@ -196,6 +228,21 @@ class BoundaryContracts(unittest.TestCase):
         model = load('preview-model-run')
         with patch.object(model.os, 'getuid', return_value=1234), patch.dict(os.environ, {'LISTEN_PID': 'wrong', 'LISTEN_FDS': '1'}), patch.object(Path, 'read_text', side_effect=AssertionError('must not read credentials')):
             self.assertEqual(model.main(), 1)
+
+    def test_model_configuration_cannot_choose_another_root_executable_or_private_path(self):
+        model = load('preview-model-run')
+        manifest, _ = payload()
+        release = Path('/srv/justup_preview/releases') / manifest['buildIdentity']
+        config = {'enabled': True, 'cliVersion': '0.143.0', 'codexPath': str(release / artifact.CODEX_ENTRYPOINT),
+                  'protectedAuthHome': '/srv/justup_preview/model/credentials',
+                  'invocationRoot': '/srv/justup_preview/model/invocations', 'taskCwd': '/srv/justup_preview/model/task-cwd'}
+        self.assertEqual(model.validate_configuration(config, release, manifest), config)
+        for change in ({'codexPath': '/usr/local/bin/codex'}, {'cliVersion': '0.159.2'},
+                       {'protectedAuthHome': '/root/.codex'}, {'taskCwd': '/srv/justup_preview/state'}, {'command': 'sh'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                model.validate_configuration({**config, **change}, release, manifest)
+        with self.assertRaises(ValueError):
+            model.validate_attestation({'approved': True})
 
     def test_api_environment_excludes_operator_credentials_and_fixes_storage(self):
         manifest, _ = payload()

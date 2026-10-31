@@ -71,12 +71,13 @@ Check the installed units with target-host `systemd-analyze verify` and inspect 
 
 ## Build and stage fixed bytes
 
-Download the official Node archive off-host from the URL in [runtime.json](../deploy/justup-preview/runtime.json). The builder rejects a different SHA256; it does not compile Node or install packages. Build from a full commit OID containing the complete API/auth modules:
+Download the official Node archive and exact npm native Codex 0.143.0 Linux ARM64 archive off-host from the URLs in [runtime.json](../deploy/justup-preview/runtime.json). The builder checks their SHA256 pins and Codex's registry SHA512 integrity; it does not compile Node/Codex or install packages. Build from a full commit OID containing the complete backend modules and checked-in official Codex license:
 
 ```sh
 python3 scripts/preview-artifact.py build \
   --source-root /candidate/checkout --commit "$JUSTUP_PREVIEW_COMMIT" \
   --node-archive /private/artifacts/node-v24.22.2-linux-arm64.tar.xz \
+  --codex-archive /private/artifacts/codex-0.143.0-linux-arm64.tgz \
   --output /private/artifacts/justup-preview.tar
 ```
 
@@ -89,9 +90,9 @@ systemd-run --unit=justup-preview-stage --collect --wait --pipe \
   --bundle /private/staging/justup-preview.tar --sha256 "$JUSTUP_PREVIEW_BUNDLE_SHA"
 ```
 
-Staging verifies the bundle digest, safe regular-file inventory, exact Node version/platform and all file hashes. It creates a root-owned read-only `releases/<buildIdentity>` directory without starting it. Keep at most two release directories. It refuses another candidate if those slots or quota headroom are unavailable; review cleanup of a specifically identified inactive build instead of deleting broadly.
+Staging streams the uncompressed bundle and individual file hashes with bounded buffers, verifying the complete inventory and exact Node/Codex version/platform/pins. It does not load the large native executable or whole bundle into host memory. It creates a root-owned read-only `releases/<buildIdentity>` directory without starting it. Keep at most two release directories. It refuses another candidate if those slots or quota headroom are unavailable; review cleanup of a specifically identified inactive build instead of deleting broadly.
 
-This is a backend artifact only: server modules, their checked-in model schemas, the public-data importer and Node. It rejects frontend source, built assets, package manifests, `node_modules` and frontend build tools. The frontend owner separately builds the exact same commit's `web/` React application using `scripts/frontend-prepare.mjs` in an unprivileged, credential-free builder, retaining `assets/`, `worker.mjs` and `release.json`. Deploy those bytes through the frontend tool; do not run npm, TypeScript, Vite or browser tests on the capped host. Save both manifests together. The HTTP preview verifier requires the retained frontend's source/tree to match the backend, then checks `/__preview/version` for its compiled asset/worker/artifact identities. The frontend's own smoke suite additionally verifies every deployed asset byte.
+This is a backend artifact only: server modules, their checked-in model schemas, the public-data importer, Node and the pinned native Codex distribution. It rejects frontend source, built assets, application package manifests, `node_modules` and frontend build tools. The frontend owner separately builds the exact same commit's `web/` React application using `scripts/frontend-prepare.mjs` in an unprivileged, credential-free builder, retaining `assets/`, `worker.mjs` and `release.json`. Deploy those bytes through the frontend tool; do not run npm, TypeScript, Vite or browser tests on the capped host. Save both manifests together. The HTTP preview verifier requires the retained frontend's source/tree to match the backend, then checks `/__preview/version` for its compiled asset/worker/artifact identities. The frontend's own smoke suite additionally verifies every deployed asset byte.
 
 ## Deliver scoped API configuration
 
@@ -114,7 +115,7 @@ The package prepares disabled `justup-preview-runner.service`, `justup-preview-m
 
 A root-owned read-only `model/config/broker.json` selects the reviewed immutable broker/Codex program and fixed configuration. `model/config/isolation-reviewed.json` is deliberately absent; its actual UID/tool/filesystem/credential/trace-retention attestation must be reviewed with the broker code before socket activation. A sanitized matching copy at `broker/isolation-reviewed.json` is root-owned, read-only and readable only by the queue client group. The installer seeds no model auth and starts no socket/service. The queue uses the bounded JSON-only protocol (intent/company schema, at most 24 KiB prompt, at most 60 seconds, one invocation globally), without forwarding raw provider traces. Its binaries, auth state, logs, work and tunnel must fit inside the same disk and aggregate slice ceilings. At most one model task may run. Subscription auth provisioning waits for actual host isolation proof, then uses the dedicated model UID's fresh device-auth flow. Do not run the agent as the API UID or root.
 
-The native Linux ARM64 Codex 0.143.0 executable is not included or checksum-pinned by this package yet. An exact official source, archive/executable digest, immutable installation path and actual strict-config/tool-catalogue/retention proof remain activation gates. No on-host npm install or operator-auth copy is a substitute.
+The artifact pins the official npm Linux ARM64 Codex 0.143.0 archive, its SHA512 registry integrity and each selected file digest. It retains the ELF64 little-endian AArch64 `bin/codex`, sandbox helper `codex-resources/bwrap`, native/package metadata and the exact official Apache license. The helper keeps its upstream relative layout. Disabled code-mode host, ripgrep and bundled zsh are omitted. Only `releases/<buildIdentity>/runtime/codex/bin/codex` may be selected by `broker.json`; the launcher rejects another root-owned executable or alternate auth/invocation/task directory. Full inventory hashing verifies its pinned bytes before startup. Actual credential-free Linux `--version`/`exec --help`, omitted-helper compatibility, strict-config/tool-catalogue, kernel/network and retention proofs remain activation gates. No on-host npm install, binary upgrade or operator-auth copy is a substitute.
 
 ## Configure the queue and cumulative matching allowance
 
@@ -219,4 +220,4 @@ For teardown, remove the frontend candidate route with its owner, remove Justup'
 
 No service in this package sends production mail, accepts billing, starts crawler onboarding or changes production schedules. Keep the complete runtime-to-`main` block until the real fixed frontend/API/runner release gate passes.
 
-References: [systemd aggregate resource controls](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html), [systemd execution sandbox](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html), [official pinned Node checksums](https://nodejs.org/download/release/v24.22.2/SHASUMS256.txt).
+References: [systemd aggregate resource controls](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html), [systemd execution sandbox](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html), [official pinned Node checksums](https://nodejs.org/download/release/v24.22.2/SHASUMS256.txt), [OpenAI CLI installation guide](https://learn.chatgpt.com/docs/codex/cli), [pinned official Codex license](https://github.com/openai/codex/blob/rust-v0.143.0/LICENSE).

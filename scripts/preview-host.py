@@ -60,6 +60,8 @@ def plan(root, host_fingerprint=None):
         raise ValueError('Supply the reviewed host machine-id SHA256; never infer a new allocation target.')
     root = Path(root)
     files = {f'deploy/justup-preview/{name}': digest(root / 'deploy/justup-preview' / name) for name in UNITS}
+    for name in ('runtime.json', 'codex-LICENSE'):
+        files[f'deploy/justup-preview/{name}'] = digest(root / 'deploy/justup-preview' / name)
     for path in sorted((root / 'scripts').glob('preview-*.py')):
         if not path.name.endswith('.test.py'):
             files[f'scripts/{path.name}'] = digest(path)
@@ -80,7 +82,7 @@ def plan(root, host_fingerprint=None):
             'startAutomatically': False,
             'blocked': ['runner tool/credential isolation review', 'approved policy URLs/version',
                         'scoped runtime credential provisioning', 'confirmed account pricing and prepared cumulative ledger',
-                        'pinned native ARM64 Codex executable', 'frontend/tunnel fixed candidate route']}
+                        'native Codex version/help and tool/retention proof', 'frontend/tunnel fixed candidate route']}
     body['planSha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return body
 
@@ -321,27 +323,27 @@ def require_operator(cleanup=False):
 def stage(bundle, expected):
     require_operator()
     artifact = artifact_module()
-    manifest, files = artifact.read_bundle(bundle, expected)
+    manifest, _ = artifact.read_bundle(bundle, expected, retain_files=False)
     release = BASE / 'releases' / manifest['buildIdentity']
     if release.exists() or release.is_symlink():
         raise ValueError('Build directory already exists; verify it instead of changing immutable bytes.')
     retained = list((BASE / 'releases').iterdir())
     if len(retained) >= 2 or any(path.is_symlink() or not path.is_dir() for path in retained):
         raise ValueError('Retain at most two reviewed release directories; review cleanup before staging another.')
-    required = sum(map(len, files.values())) + 64 * MIB
+    # The uncompressed tar is at least as large as its payload. Verification and
+    # extraction stream one member at a time inside the aggregate memory limit.
+    required = Path(bundle).stat().st_size + 64 * MIB
     if shutil.disk_usage(BASE).free < required:
         raise ValueError('Insufficient preview quota headroom for this candidate.')
     release.mkdir(mode=0o755)
-    for name, data in files.items():
-        path = release / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('xb') as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        path.chmod(0o555 if name == 'runtime/bin/node' else 0o444)
+    copied, _ = artifact.read_bundle(bundle, expected, retain_files=False, output_directory=release)
+    if copied != manifest:
+        raise ValueError('Bundle identity changed while staging.')
     manifest_path = release / 'manifest.json'
-    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + '\n')
+    with manifest_path.open('x') as stream:
+        stream.write(json.dumps(manifest, sort_keys=True) + '\n')
+        stream.flush()
+        os.fsync(stream.fileno())
     manifest_path.chmod(0o444)
     for folder in sorted(release.rglob('*'), reverse=True):
         if folder.is_dir():

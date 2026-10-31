@@ -11,8 +11,30 @@ import json
 import os
 from pathlib import Path
 import stat
+import re
 
 BASE = Path('/srv/justup_preview')
+
+
+def validate_configuration(config, release, manifest):
+    expected = {'enabled': True, 'cliVersion': '0.143.0',
+                'codexPath': str(Path(release) / manifest['codexEntrypoint']),
+                'protectedAuthHome': str(BASE / 'model/credentials'),
+                'invocationRoot': str(BASE / 'model/invocations'),
+                'taskCwd': str(BASE / 'model/task-cwd')}
+    if not isinstance(config, dict) or config != expected or config.get('enabled') is not True:
+        raise ValueError('Broker configuration differs from the fixed native executable and private paths.')
+    return config
+
+
+def validate_attestation(report):
+    expected = {'approved': True, 'cliVersion': '0.143.0', 'model': 'gpt-6-luna',
+                'executorBoundary': 'dedicated_uid_broker', 'socketPath': str(BASE / 'broker/model.sock'),
+                'deniedPathsVerified': True, 'retentionVerified': True}
+    if (not isinstance(report, dict) or any(type(report.get(key)) is not type(value) or report.get(key) != value for key, value in expected.items())
+            or not isinstance(report.get('toolCatalogSha256'), str)
+            or not re.fullmatch('[a-f0-9]{64}', report['toolCatalogSha256'])):
+        raise ValueError('Broker isolation evidence is unavailable or does not match the pinned boundary.')
 
 
 def main():
@@ -33,8 +55,13 @@ def main():
         config = BASE / 'model/config/broker.json'
         reviewed = BASE / 'model/config/isolation-reviewed.json'
         for path in (config, reviewed):
-            if path.is_symlink() or not path.is_file() or path.stat().st_uid != 0 or path.stat().st_mode & 0o022:
+            if path.is_symlink() or not path.is_file() or path.stat().st_uid != 0 or path.stat().st_mode & 0o022 or path.stat().st_size > 16_384:
                 raise ValueError('Broker configuration and isolation evidence must be root-owned and read-only.')
+        configured = validate_configuration(json.loads(config.read_text()), release, manifest)
+        validate_attestation(json.loads(reviewed.read_text()))
+        executable = Path(configured['codexPath'])
+        if executable.resolve(strict=True) != executable or executable.stat().st_uid != 0 or executable.stat().st_mode & 0o022:
+            raise ValueError('Broker native executable must remain immutable and root-owned.')
         # Python is replaced, so LISTEN_PID remains the PID which Node sees. The
         # child model CLI never inherits fd3; the broker closes extra descriptors.
         environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'HOME': '/nonexistent',

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import io
 import json
@@ -15,6 +16,19 @@ import tarfile
 
 NODE_VERSION = '24.22.2'
 NODE_ARCHIVE_SHA256 = 'eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8'
+CODEX_VERSION = '0.143.0'
+CODEX_TARGET = 'aarch64-unknown-linux-musl'
+CODEX_ARCHIVE_SHA256 = '2f030c213f48545198e1268b00bad60a8f33c511bc26ea4a11f10266819e79bf'
+CODEX_ARCHIVE_INTEGRITY = 'sha512-1TMx1a/YBEY0SBhPGn8z9HjOpaDssw+WJiIi/+r0CB5uZf6qnALN02TrZTZl2PSUI8olnBf/VccjnwVCrzR38w=='
+CODEX_ENTRYPOINT = 'runtime/codex/bin/codex'
+CODEX_FILES = {
+    CODEX_ENTRYPOINT: '4a993c6bf8202ebca2272ec49b51947aab23941f763e7697ba2a5addc5948ad3',
+    'runtime/codex/codex-resources/bwrap': 'c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4',
+    'runtime/codex/codex-package.json': 'eb21843e9ad49ea809f9aa9250051ba8c8b14551513d2578c8ac5a4458fe97b9',
+    'runtime/codex/package.json': 'aebf98ce680bd723a8fb01286a25caa10c6604adf088ff7239eb4da1d482ecd4',
+    'runtime/codex/LICENSE': 'd17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc',
+}
+EXECUTABLES = {'runtime/bin/node', CODEX_ENTRYPOINT, 'runtime/codex/codex-resources/bwrap'}
 MAX_BYTES = 384 * 1024 ** 2
 SHA = re.compile(r'^[a-f0-9]{64}$')
 OID = re.compile(r'^[a-f0-9]{40}$')
@@ -24,6 +38,14 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def file_sha(path):
+    value = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 ** 2), b''):
+            value.update(block)
+    return value.hexdigest()
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
@@ -31,7 +53,7 @@ def canonical(value):
 def allowed(path):
     parts = PurePosixPath(path).parts
     return (not path.startswith('/') and '..' not in parts and '\\' not in path
-            and (path in {'runtime/bin/node', 'runtime/LICENSE'} or
+            and (path in {'runtime/bin/node', 'runtime/LICENSE'} or path in CODEX_FILES or
                  (path.startswith('app/server/') and path.endswith('.mjs') and not path.endswith('.test.mjs')) or
                  path in {'app/scripts/import-demo-jobs.py', 'app/server/model-schemas/intent.schema.json', 'app/server/model-schemas/company.schema.json'}))
 
@@ -41,7 +63,7 @@ def identity(manifest):
 
 
 def validate_manifest(manifest):
-    if manifest.get('formatVersion') != 1 or manifest.get('nodeVersion') != NODE_VERSION or manifest.get('platform') != 'linux-arm64':
+    if manifest.get('formatVersion') != 2 or manifest.get('nodeVersion') != NODE_VERSION or manifest.get('platform') != 'linux-arm64':
         raise ValueError('Unsupported artifact format or runtime.')
     if not OID.fullmatch(manifest.get('sourceCommit', '')) or not OID.fullmatch(manifest.get('sourceTree', '')):
         raise ValueError('Artifact source must use exact Git commit and tree identities.')
@@ -51,6 +73,11 @@ def validate_manifest(manifest):
     required = {'runtime/bin/node', 'runtime/LICENSE'} | {'app/server/' + name + '.mjs' for name in ('main', 'auth', 'http', 'store', 'feed', 'tasks')}
     if not isinstance(files, dict) or not required <= files.keys():
         raise ValueError('Artifact is missing required runtime/application bytes.')
+    if (manifest.get('codexVersion') != CODEX_VERSION or manifest.get('codexTarget') != CODEX_TARGET
+            or manifest.get('codexArchiveSha256') != CODEX_ARCHIVE_SHA256
+            or manifest.get('codexEntrypoint') != CODEX_ENTRYPOINT
+            or any(files.get(name) != checksum for name, checksum in CODEX_FILES.items())):
+        raise ValueError('Artifact does not contain the pinned native Codex distribution.')
     for module, schema in [('intent.mjs', 'intent.schema.json'), ('companies.mjs', 'company.schema.json')]:
         if 'app/server/' + module in files and 'app/server/model-schemas/' + schema not in files:
             raise ValueError('Runtime module is missing its immutable model schema asset.')
@@ -61,27 +88,51 @@ def validate_manifest(manifest):
     return manifest
 
 
-def read_bundle(bundle, expected_sha):
+def read_bundle(bundle, expected_sha, *, retain_files=True, output_directory=None):
     if not SHA.fullmatch(expected_sha or '') or Path(bundle).stat().st_size > MAX_BYTES:
         raise ValueError('A bounded bundle with an exact expected SHA256 is required.')
-    data = Path(bundle).read_bytes()
-    if sha(data) != expected_sha:
+    if file_sha(bundle) != expected_sha:
         raise ValueError('Bundle SHA256 mismatch.')
-    files = {}
+    files, members = {}, {}
     total = 0
-    with tarfile.open(fileobj=io.BytesIO(data), mode='r:') as archive:
+    with tarfile.open(bundle, mode='r:') as archive:
         for member in archive:
-            if not member.isfile() or member.name in files or member.size > MAX_BYTES or not (allowed(member.name) or member.name == 'manifest.json'):
+            if not member.isfile() or member.name in members or len(members) >= 256 or not 0 <= member.size <= MAX_BYTES or not (allowed(member.name) or member.name == 'manifest.json'):
                 raise ValueError('Bundle contains an unsafe, repeated or unexpected member.')
             total += member.size
             if total > MAX_BYTES:
                 raise ValueError('Unpacked bundle exceeds its ceiling.')
-            files[member.name] = archive.extractfile(member).read()
-    if 'manifest.json' not in files or len(files['manifest.json']) > 64 * 1024:
-        raise ValueError('Bundle manifest is missing or oversized.')
-    manifest = validate_manifest(json.loads(files.pop('manifest.json')))
-    if files.keys() != manifest['files'].keys() or any(sha(value) != manifest['files'][name] for name, value in files.items()):
-        raise ValueError('Bundle bytes differ from the complete manifest inventory.')
+            members[member.name] = member
+        if 'manifest.json' not in members or members['manifest.json'].size > 64 * 1024:
+            raise ValueError('Bundle manifest is missing or oversized.')
+        manifest = validate_manifest(json.loads(archive.extractfile(members.pop('manifest.json')).read()))
+        if members.keys() != manifest['files'].keys():
+            raise ValueError('Bundle bytes differ from the complete manifest inventory.')
+        for name, member in members.items():
+            digest, data, output = hashlib.sha256(), bytearray() if retain_files else None, None
+            try:
+                if output_directory is not None:
+                    path = Path(output_directory) / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    output = path.open('xb')
+                with archive.extractfile(member) as source:
+                    for block in iter(lambda: source.read(1024 ** 2), b''):
+                        digest.update(block)
+                        if data is not None:
+                            data.extend(block)
+                        if output is not None:
+                            output.write(block)
+                if digest.hexdigest() != manifest['files'][name]:
+                    raise ValueError('Bundle bytes differ from the complete manifest inventory.')
+                if output is not None:
+                    output.flush()
+                    os.fsync(output.fileno())
+                    path.chmod(0o555 if name in EXECUTABLES else 0o444)
+                if data is not None:
+                    files[name] = bytes(data)
+            finally:
+                if output is not None:
+                    output.close()
     return manifest, files
 
 
@@ -99,14 +150,14 @@ def verify_directory(folder):
             actual.add(relative)
             if path.stat().st_mode & 0o222:
                 raise ValueError('Release bytes must be read-only.')
-            if relative != 'manifest.json' and sha(path.read_bytes()) != manifest['files'].get(relative):
+            if relative != 'manifest.json' and file_sha(path) != manifest['files'].get(relative):
                 raise ValueError('Deployed file digest mismatch.')
     if actual != set(manifest['files']) | {'manifest.json'}:
         raise ValueError('Deployed directory contains missing or additional files.')
     return manifest
 
 
-def build(root, commit, node_archive, output):
+def build(root, commit, node_archive, codex_archive, output):
     if not OID.fullmatch(commit):
         raise ValueError('Build an exact source commit, not a moving branch.')
     root, output = Path(root), Path(output)
@@ -121,9 +172,32 @@ def build(root, commit, node_archive, output):
             if not member.isfile() or member.size > MAX_BYTES:
                 raise ValueError('Invalid runtime archive member.')
             files[target] = archive.extractfile(member).read()
+    if Path(codex_archive).stat().st_size > 128 * 1024 ** 2:
+        raise ValueError('Codex archive exceeds the off-host input ceiling.')
+    native = Path(codex_archive).read_bytes()
+    if (len(native) > 128 * 1024 ** 2 or sha(native) != CODEX_ARCHIVE_SHA256
+            or 'sha512-' + base64.b64encode(hashlib.sha512(native).digest()).decode() != CODEX_ARCHIVE_INTEGRITY):
+        raise ValueError('Codex archive differs from its pinned npm distribution integrity.')
+    prefix = f'package/vendor/{CODEX_TARGET}/'
+    with tarfile.open(fileobj=io.BytesIO(native), mode='r:gz') as archive:
+        for name, target in [(prefix + 'bin/codex', CODEX_ENTRYPOINT),
+                             (prefix + 'codex-resources/bwrap', 'runtime/codex/codex-resources/bwrap'),
+                             (prefix + 'codex-package.json', 'runtime/codex/codex-package.json'),
+                             ('package/package.json', 'runtime/codex/package.json')]:
+            member = archive.getmember(name)
+            if not member.isfile() or member.size > MAX_BYTES:
+                raise ValueError('Invalid Codex archive member.')
+            files[target] = archive.extractfile(member).read()
+            if sha(files[target]) != CODEX_FILES[target]:
+                raise ValueError('Codex native executable or metadata digest differs.')
+            if target in EXECUTABLES and (files[target][:6] != b'\x7fELF\x02\x01' or files[target][18:20] != b'\xb7\x00'):
+                raise ValueError('Codex executable is not Linux ELF64 little-endian AArch64.')
     def git(*args):
         return subprocess.check_output(['git', '-C', str(root), *args])
     tree = git('rev-parse', commit + '^{tree}').decode().strip()
+    files['runtime/codex/LICENSE'] = git('show', f'{commit}:deploy/justup-preview/codex-LICENSE')
+    if sha(files['runtime/codex/LICENSE']) != CODEX_FILES['runtime/codex/LICENSE']:
+        raise ValueError('Codex license differs from the pinned official source.')
     entries = git('ls-tree', '-r', commit, '--', 'server', 'scripts/import-demo-jobs.py').decode().splitlines()
     for entry in entries:
         meta, path = entry.split('\t', 1)
@@ -133,9 +207,11 @@ def build(root, commit, node_archive, output):
         if meta.split()[0] not in {'100644', '100755'}:
             raise ValueError('Application source must contain regular files only.')
         files[target] = git('show', f'{commit}:{path}')
-    manifest = {'formatVersion': 1, 'sourceCommit': commit, 'sourceTree': tree,
+    manifest = {'formatVersion': 2, 'sourceCommit': commit, 'sourceTree': tree,
                 'schemaVersion': 1, 'nodeVersion': NODE_VERSION, 'platform': 'linux-arm64',
                 'nodeArchiveSha256': NODE_ARCHIVE_SHA256, 'entrypoint': 'app/server/main.mjs',
+                'codexVersion': CODEX_VERSION, 'codexTarget': CODEX_TARGET,
+                'codexArchiveSha256': CODEX_ARCHIVE_SHA256, 'codexEntrypoint': CODEX_ENTRYPOINT,
                 'files': {name: sha(data) for name, data in sorted(files.items())}}
     manifest['buildIdentity'] = identity(manifest)
     validate_manifest(manifest)
@@ -146,9 +222,9 @@ def build(root, commit, node_archive, output):
         for name, data in sorted(files.items()):
             info = tarfile.TarInfo(name)
             info.size, info.mtime, info.uid, info.gid = len(data), 0, 0, 0
-            info.mode = 0o555 if name == 'runtime/bin/node' else 0o444
+            info.mode = 0o555 if name in EXECUTABLES else 0o444
             archive.addfile(info, io.BytesIO(data))
-    return {'bundleSha256': sha(output.read_bytes()), 'buildIdentity': manifest['buildIdentity'],
+    return {'bundleSha256': file_sha(output), 'buildIdentity': manifest['buildIdentity'],
             'sourceCommit': commit, 'sourceTree': tree, 'bytes': output.stat().st_size}
 
 
@@ -159,6 +235,7 @@ def main():
     make.add_argument('--source-root', type=Path, required=True)
     make.add_argument('--commit', required=True)
     make.add_argument('--node-archive', type=Path, required=True)
+    make.add_argument('--codex-archive', type=Path, required=True)
     make.add_argument('--output', type=Path, required=True)
     verify = commands.add_parser('verify')
     verify.add_argument('--bundle', type=Path, required=True)
@@ -168,9 +245,9 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == 'build':
-            result = build(args.source_root, args.commit, args.node_archive, args.output)
+            result = build(args.source_root, args.commit, args.node_archive, args.codex_archive, args.output)
         elif args.command == 'verify':
-            result = read_bundle(args.bundle, args.sha256)[0]
+            result = read_bundle(args.bundle, args.sha256, retain_files=False)[0]
         else:
             result = verify_directory(args.directory)
         print(json.dumps(result, sort_keys=True))
