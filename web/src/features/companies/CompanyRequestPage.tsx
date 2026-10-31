@@ -1,20 +1,46 @@
 // A request records a supported identity, never an invented company or crawler start.
 import { useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import type { ApiClient } from '../../api/client';
-import type { Session } from '../../api/types';
+import type { CompanyRequestPrefill, Session } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
 import { coverageLabel, safeSourceUrl } from './presentation';
 import { useCompanyRequest } from './useCompanyRequest';
 
-export interface CompanyRequestPageProps { client: ApiClient; session: Session | null; active: boolean; onSignIn: (reason?: string) => void; accountEpoch: number }
-export function CompanyRequestPage({ client, session, active, onSignIn, accountEpoch }: CompanyRequestPageProps) {
+export interface CompanyRequestPageProps {
+  client: ApiClient;
+  session: Session | null;
+  active: boolean;
+  onSignIn: (reason?: string) => void;
+  accountEpoch: number;
+  prefill: CompanyRequestPrefill | null;
+  onPrefillConsumed: () => void;
+}
+export function CompanyRequestPage({ client, session, active, onSignIn, accountEpoch, prefill, onPrefillConsumed }: CompanyRequestPageProps) {
   const [input, setInput] = useState('');
+  const [scope, setScope] = useState('');
   const [clarification, setClarification] = useState('');
   const previousUser = useRef(session?.user?.id ?? null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const focusPrefill = useRef(false);
   const flow = useCompanyRequest(client, active, accountEpoch);
   useLayoutEffect(() => {
+    if (!prefill) return;
+    focusPrefill.current = true;
+    flow.reset();
+    setInput(prefill.input);
+    setScope(prefill.scope ?? '');
+    setClarification('');
+    onPrefillConsumed();
+  }, [prefill, onPrefillConsumed, flow.reset]);
+  useLayoutEffect(() => {
+    if (focusPrefill.current && active && !flow.request && !flow.busy && inputRef.current) {
+      focusPrefill.current = false;
+      inputRef.current.focus();
+    }
+  }, [active, flow.request, flow.busy, prefill]);
+  useLayoutEffect(() => {
     const user = session?.user?.id ?? null;
-    if (previousUser.current && previousUser.current !== user) { setInput(''); setClarification(''); }
+    if (previousUser.current && previousUser.current !== user) { setInput(''); setScope(''); setClarification(''); }
     previousUser.current = user;
   }, [session?.user?.id, accountEpoch]);
   const request = flow.request;
@@ -22,12 +48,12 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!session?.user) { onSignIn('Sign in to request a company. Your lead stays here.'); return; }
-    if (canSubmit && !flow.busy) void flow.resolveLookup(input.trim());
+    if (canSubmit && !flow.busy) void flow.resolveLookup(input.trim(), scope.trim() || null);
   }
   function submitClarification(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!request || !clarification.trim() || flow.busy) return;
-    const next = `${request.input} — ${clarification.trim()}`; setClarification(''); void flow.resolveLookup(next);
+    const next = `${request.input} — ${clarification.trim()}`; setClarification(''); void flow.resolveLookup(next, scope.trim() || null);
   }
   const stage = request?.status === 'accepted' ? 'recorded' : request?.status === 'candidate' ? 'confirm' : 'find';
   const candidate = request?.candidate;
@@ -44,7 +70,13 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
       <div id="request-content" aria-busy={flow.busy}>
         {!request ? <>
           <form id="request-form" className="request-form" onSubmit={submit}>
-            <label htmlFor="request-query">Company name or website</label><div className="query-field"><input id="request-query" type="text" required disabled={flow.busy} maxLength={500} autoComplete="organization" placeholder="A name. We’ll check the facts." value={input} onChange={event => setInput(event.target.value)} /></div>
+            <label htmlFor="request-query">Company name or website</label><div className="query-field"><input ref={inputRef} id="request-query" type="text" required disabled={flow.busy} maxLength={500} autoComplete="organization" placeholder="A name. We’ll check the facts." value={input} onChange={event => setInput(event.target.value)} /></div>
+            <label htmlFor="request-scope">What to include <span className="small-print">(optional)</span></label>
+            <div className="query-field">
+              <input id="request-scope" type="text" disabled={flow.busy} maxLength={500}
+                value={scope} onChange={event => setScope(event.target.value)}
+                placeholder="A particular division or career page" />
+            </div>
             <p className="helper">Give us a lead. You’ll confirm the company before it joins the catalogue.</p>
             <button className="button dark" type="submit" disabled={flow.busy || !canSubmit}>Find company ↗</button>
           </form>
