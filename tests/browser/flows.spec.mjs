@@ -84,7 +84,7 @@ test('request clarification and acceptance bind the exact preview revision', asy
 test('password-confirmed deletion sends no request before confirmation and clears private state', async ({ page }) => {
   let deleted = false; const calls = await mockApi(page, { ...saved, 'GET /session': () => session({ user: deleted ? null : { id: 'reader', username: 'tester' } }), 'DELETE /account': call => { expect(call.body.password).toBe('test-only-password'); deleted = true; return {}; } }); await page.goto('/'); await expect(page.locator('[data-job]')).toHaveCount(1);
   await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByRole('button', { name: 'Delete account', exact: true }).click(); expect(calls.some(call => call.key === 'DELETE /account')).toBe(false);
-  await page.locator('#delete-password').fill('test-only-password'); await page.locator('#confirm-delete-account').click(); await expect(page.locator('[data-job]')).toHaveCount(0); await expect(page.locator('#header-sign-in')).toBeVisible();
+  await page.locator('#delete-password').fill('test-only-password'); await page.locator('#confirm-delete-account').click(); await expect(page.locator('[data-job]')).toHaveCount(0); await expect(page.locator('#header-sign-in')).toBeVisible(); await expect(page.locator('#settings-content')).toBeEmpty();
 });
 
 test('401 expiry clears private state and rejects a late request preview from the prior session', async ({ page }) => {

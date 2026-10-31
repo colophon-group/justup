@@ -26,7 +26,8 @@ function clearProtectedState() {
   stopLive(); clearTimeout(requestTimer);
   searchMutation = null; discoveryMutation = null; searchProposal = null; searchSubmitOwner = null;
   session = null; JustupApi.setSession(null); accountId = 'visitor'; searches = []; selectedId = null; draft.query = ''; postingLanguages = new Set(); followedOnly = false; requestState = null; feedState = null; catalogueState = null;
-  $('#feed').replaceChildren(); $('#company-list').replaceChildren(); $('#company-page').replaceChildren(); $('#request-content').replaceChildren(); $('#search-tabs').replaceChildren(); $('#query').value = ''; $('#access-notice').replaceChildren(); $('#access-notice').hidden = true; $('#search-accounting').replaceChildren();
+  $('#feed').replaceChildren(); $('#company-list').replaceChildren(); $('#company-page').replaceChildren(); $('#request-content').replaceChildren(); $('#search-tabs').replaceChildren(); $('#query').value = ''; $('#access-notice').replaceChildren(); $('#access-notice').hidden = true; $('#search-accounting').replaceChildren(); $('#settings-content').replaceChildren(); $('#sign-in-form').reset(); $('#delete-password').value = ''; $('#auth-status').textContent = ''; $('#search-status').textContent = ''; $('#live-status').textContent = '';
+  postingLanguageUI.draft.clear(); $('#posting-language-chips').replaceChildren(); $('#posting-language-choices').replaceChildren();
 }
 async function bootstrap() {
   const generation = ++sessionGeneration;
