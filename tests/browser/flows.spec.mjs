@@ -1,57 +1,103 @@
 import { expect, test } from '@playwright/test';
+import { mockApi, search, job, session, company, completed } from './api-fixture.mjs';
+const submit = async (page, query = 'Remote library jobs') => { await page.locator('#query').fill(query); await page.locator('#job-search button[type=submit]').click(); };
+const saved = { 'GET /searches': { items: [search()] }, 'GET /searches/search-1/results': completed() };
+test.beforeEach(async ({ page }) => { await page.setViewportSize({ width: 1280, height: 1100 }); });
 
-test('a search filters positions and survives a reload', async ({ page }) => {
-  await page.goto('/');
-  await page.getByRole('textbox', { name: 'What work are you looking for?' }).fill('Remote jobs');
-  await page.locator('#job-search').getByRole('button', { name: /Search/ }).click();
-
-  await expect(page.getByRole('heading', { name: 'Just in.' })).toBeVisible();
-  const firstPosition = page.locator('#feed article[data-job]').first();
-  await expect(firstPosition).toBeVisible();
-  await expect(firstPosition).toContainText('Remote');
-
-  await page.reload();
-  await expect(page.locator('#query')).toHaveValue('Remote jobs');
-  await expect(page.locator('#feed article[data-job]').first()).toBeVisible();
+test('accepted server searches show actual source links and warnings without a generated summary', async ({ page }) => {
+  const calls = await mockApi(page, saved); await page.goto('/');
+  await expect(page.locator('#query')).toHaveValue('Remote library jobs'); await expect(page.locator('[data-job]')).toHaveCount(1);
+  await expect(page.locator('#search-accounting')).toContainText('Salary evidence'); await expect(page.locator('body')).not.toContainText('Metadata only');
+  await expect(page.locator('.posting-link')).toHaveAttribute('href', 'https://employer.test/careers/1');
+  await page.locator('.job-company').click(); await expect(page.getByRole('heading', { name: 'Test Library', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: '← Back to search' })).toBeVisible(); expect(calls.some(call => call.key.includes('/viewed/'))).toBe(false);
+  expect(await page.evaluate(() => Object.keys(localStorage))).toEqual([]);
 });
 
-test('a requested company remains in the catalogue after a reload', async ({ page }) => {
-  await page.goto('/#companies');
-  await page.getByRole('link', { name: 'Request a company +' }).click();
-  await page.getByRole('textbox', { name: 'Company name or website' }).fill('Asterfield');
-  await page.getByRole('button', { name: /Find company/ }).click();
-  await expect(page.getByRole('heading', { name: 'Asterfield' })).toBeVisible();
-  await page.getByRole('button', { name: /Yes, that’s the one/ }).click();
-
-  const signIn = page.getByRole('dialog', { name: 'Your edition awaits.' });
-  await expect(signIn).toBeVisible();
-  await signIn.getByRole('textbox', { name: 'Email address' }).fill('reader@example.com');
-  await signIn.getByRole('button', { name: /Continue/ }).click();
-  await expect(page.getByText('Asterfield is in the catalogue.')).toBeVisible();
-
-  await page.reload();
-  await page.getByRole('link', { name: 'Companies', exact: true }).click();
-  await page.getByRole('button', { name: /Requested/ }).click();
-  await expect(page.getByRole('link', { name: 'Asterfield', exact: true })).toBeVisible();
+test('202 task success accepts one revision; failed edits preserve accepted rows and the unsent query', async ({ page }) => {
+  const calls = await mockApi(page, { 'POST /searches': { httpStatus: 202, body: { search: { id: 'search-1' }, task: { id: 'task-1', status: 'pending' } } }, 'GET /tasks/task-1': { id: 'task-1', status: 'succeeded', result: { search: search() } }, 'PATCH /searches/search-1': { status: 422, body: { error: { code: 'unsupported_requirement', message: 'This requirement cannot be checked.' } } }, 'GET /searches/search-1/results': completed() });
+  await page.goto('/'); await submit(page); await expect(page.locator('[data-job]')).toHaveCount(1);
+  await submit(page, 'Remote library jobs, predict my future manager'); await expect(page.locator('#search-status')).toContainText('last accepted revision');
+  await expect(page.locator('#query')).toHaveValue('Remote library jobs, predict my future manager'); await expect(page.locator('#feed')).toContainText('Librarian 1');
+  const create = calls.find(call => call.key === 'POST /searches'); expect(create.headers['x-csrf-token']).toBe('test-only-csrf'); expect(create.body.requestKey).toBeTruthy();
+  expect(calls.find(call => call.key.startsWith('PATCH /searches')).body.expectedRevision).toBe(1);
 });
 
-test('account access changes which recent positions are visible', async ({ page }) => {
-  await page.goto('/');
-  await page.getByRole('textbox', { name: 'What work are you looking for?' }).fill('All jobs');
-  await page.locator('#job-search').getByRole('button', { name: /Search/ }).click();
+test('unavailable API produces an explicit failure and no sample fallback', async ({ page }) => {
+  await mockApi(page, { 'GET /session': { status: 503, body: { error: { code: 'unavailable', message: 'Search service unavailable.' } } } }); await page.goto('/');
+  await expect(page.locator('#service-notice')).toContainText('Search service unavailable.'); await expect(page.locator('#job-search button[type=submit]')).toBeDisabled(); await expect(page.locator('[data-job]')).toHaveCount(0);
+});
 
-  await expect(page.locator('#access-notice')).toContainText(/recent matches hidden/);
-  const firstVisibleAsGuest = await page.locator('#feed article[data-job] time').first().getAttribute('datetime');
-  expect(firstVisibleAsGuest).toBeTruthy();
+test('visitor search prompts real credentials without creating an anonymous model request', async ({ page }) => {
+  const calls = await mockApi(page, { 'GET /session': session({ user: null, access: { kind: 'guest', fullAccess: false } }) }); await page.goto('/'); await submit(page, 'Part-time museum work');
+  await expect(page.locator('#sign-in-dialog')).toBeVisible(); await expect(page.locator('#query')).toHaveValue('Part-time museum work');
+  expect(calls.some(call => call.key === 'POST /searches' || call.key === 'GET /searches')).toBe(false);
+  await expect(page.locator('#sign-in-dialog a[href="/privacy.html"]')).toBeVisible();
+});
 
-  await page.getByRole('button', { name: 'Settings' }).click();
-  await page.getByRole('combobox', { name: 'Preview accounts' }).selectOption('plus');
-  await page.getByRole('button', { name: 'Close settings' }).click();
+test('credentials are policy-gated; rejected login preserves the visitor draft and clears password/invite', async ({ page }) => {
+  const calls = await mockApi(page, { 'GET /session': session({ user: null }), 'POST /auth/login': { status: 401, body: { error: { code: 'invalid_credentials', message: 'Username or password is incorrect.' } } } }); await page.goto('/'); await submit(page, 'Garden jobs');
+  await page.locator('#auth-username').fill('reader'); await page.locator('#auth-password').fill('test-only-password'); await page.locator('#auth-submit').click();
+  await expect(page.locator('#auth-status')).toContainText('incorrect'); await expect(page.locator('#auth-password')).toHaveValue(''); await expect(page.locator('#query')).toHaveValue('Garden jobs');
+  expect(calls.find(call => call.key === 'POST /auth/login').body).toEqual({ username: 'reader', password: 'test-only-password' }); expect(await page.evaluate(() => Object.keys(localStorage))).toEqual([]);
+});
 
-  await expect(page.getByRole('textbox', { name: 'What work are you looking for?' })).toHaveValue('');
-  await page.getByRole('textbox', { name: 'What work are you looking for?' }).fill('All jobs');
-  await page.locator('#job-search').getByRole('button', { name: /Search/ }).click();
-  await expect(page.locator('#access-notice')).toBeHidden();
-  const firstVisibleWithPlus = await page.locator('#feed article[data-job] time').first().getAttribute('datetime');
-  expect(Date.parse(firstVisibleWithPlus)).toBeGreaterThan(Date.parse(firstVisibleAsGuest));
+test('unreviewed static policies keep registration and login disabled', async ({ page }) => {
+  await mockApi(page, { 'GET /session': session({ user: null, policies: { reviewed: false, version: 'demo-draft-1' } }) }); await page.goto('/'); await page.locator('#header-sign-in').click();
+  await expect(page.locator('#sign-in-unavailable')).toContainText('being reviewed'); await expect(page.locator('#sign-in-form')).toBeHidden();
+});
+
+test('unfinished zero-yield pages continue, while failed matching never becomes a clean empty search', async ({ page }) => {
+  let batches = 0;
+  await mockApi(page, { ...saved, 'GET /searches/search-1/results': () => ++batches === 1 ? { revision: 1, items: [], continuation: { state: 'pending', cursor: 'next', retryAfterMs: 450 }, ai: { status: 'pending' } } : { revision: 1, items: [], continuation: { state: 'failed', cursor: 'resume' }, ai: { status: 'failed' } } }); await page.goto('/');
+  await expect(page.locator('#feed-status')).toContainText('Still checking'); await page.locator('#feed-tail').scrollIntoViewIfNeeded();
+  await expect(page.locator('#feed-status')).toContainText('Requirement checks failed'); await expect(page.locator('#feed-status')).not.toContainText('No matching positions');
+});
+
+test('offscreen rows remain buffered until scrolling, then reveal individually at 450ms pacing', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 550 }); await mockApi(page, { ...saved, 'GET /searches/search-1/results': completed(Array.from({ length: 16 }, (_, index) => job(index))) }); await page.goto('/');
+  await expect(page.locator('#search-results')).toBeVisible(); await page.waitForTimeout(800); expect(await page.locator('[data-job]').count()).toBe(0);
+  await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect.poll(() => page.locator('[data-job]').count()).toBeGreaterThan(0);
+  await page.evaluate(() => scrollTo(0, 0)); await page.waitForTimeout(550); const stopped = await page.locator('[data-job]').count(); await page.waitForTimeout(700); expect(await page.locator('[data-job]').count()).toBe(stopped); expect(stopped).toBeLessThan(16);
+});
+
+test('stale result requests cannot overwrite a newer accepted revision', async ({ page }) => {
+  let release; const wait = new Promise(resolve => { release = resolve; });
+  await mockApi(page, { ...saved, 'PATCH /searches/search-1': { search: search(2, 'Garden jobs') }, 'GET /searches/search-1/results': async call => { if (call.url.searchParams.get('revision') === '1') { await wait; return completed([job(1)]); } return completed([{ ...job(2), title: 'Gardener' }], 2); } }); await page.goto('/'); await expect(page.locator('#query')).toHaveValue('Remote library jobs'); await submit(page, 'Garden jobs'); await expect(page.locator('#feed')).toContainText('Gardener'); release(); await expect(page.locator('#feed')).not.toContainText('Librarian 1');
+});
+
+test('a warned proposal keeps old results until its exact limitations are explicitly confirmed', async ({ page }) => {
+  const calls = await mockApi(page, { ...saved, 'PATCH /searches/search-1': { search: { id: 'search-1' }, task: { id: 'warning-task', status: 'pending' } }, 'GET /tasks/warning-task': { status: 'warning', result: { proposal: { proposalId: 'proposal-1', expectedRevision: 1, message: 'Visa support cannot be verified.', warnings: ['Visa requirement would remain unverified.'] } } }, 'POST /searches/search-1/confirm': { search: search(2, 'Library jobs, visa support preferred') }, 'GET /searches/search-1/results': call => completed([job(1)], Number(call.url.searchParams.get('revision'))) });
+  await page.goto('/'); await expect(page.locator('[data-job]')).toHaveCount(1); await submit(page, 'Library jobs with visa support');
+  await expect(page.locator('#search-status')).toContainText('needs your decision'); expect(calls.some(call => call.key.endsWith('/confirm'))).toBe(false); await expect(page.locator('#feed')).toContainText('Librarian 1');
+  await page.locator('#confirm-search-proposal').click(); await expect(page.locator('#search-status')).toContainText('confirmed limitations'); expect(calls.find(call => call.key.endsWith('/confirm')).body).toEqual({ proposalId: 'proposal-1', expectedRevision: 1 });
+});
+
+test('request clarification and acceptance bind the exact preview revision', async ({ page }) => {
+  let attempts = 0;
+  const calls = await mockApi(page, { 'POST /company-requests': () => ({ request: ++attempts === 1 ? { id: 'request-1', input: 'Library', status: 'clarification', question: 'Which library?' } : { id: 'request-2', input: 'Library, London', status: 'candidate', previewRevision: 4, candidate: company } }), 'POST /company-requests/request-2/accept': { request: { id: 'request-2', status: 'accepted', company } } }); await page.goto('/#request'); await page.locator('#request-query').fill('Library'); await page.getByRole('button', { name: 'Find company' }).click();
+  await expect(page.getByText('Which library?', { exact: true })).toBeVisible(); await page.locator('#company-clarification').fill('London'); await page.getByRole('button', { name: 'Continue ↗' }).click();
+  await page.getByRole('button', { name: 'Yes, that’s the one ↗' }).click(); await expect(page.getByRole('heading', { name: 'On the record.' })).toBeVisible();
+  const accept = calls.find(call => call.key.endsWith('/accept')); expect(accept.body).toEqual({ candidateId: 'library', previewRevision: 4 }); expect(accept.headers['idempotency-key']).toBeTruthy(); expect(calls.find(call => call.key === 'POST /company-requests').body.input).toBe('Library');
+});
+
+test('password-confirmed deletion sends no request before confirmation and clears private state', async ({ page }) => {
+  let deleted = false; const calls = await mockApi(page, { ...saved, 'GET /session': () => session({ user: deleted ? null : { id: 'reader', username: 'tester' } }), 'DELETE /account': call => { expect(call.body.password).toBe('test-only-password'); deleted = true; return {}; } }); await page.goto('/'); await expect(page.locator('[data-job]')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByRole('button', { name: 'Delete account', exact: true }).click(); expect(calls.some(call => call.key === 'DELETE /account')).toBe(false);
+  await page.locator('#delete-password').fill('test-only-password'); await page.locator('#confirm-delete-account').click(); await expect(page.locator('[data-job]')).toHaveCount(0); await expect(page.locator('#header-sign-in')).toBeVisible();
+});
+
+test('401 expiry clears private state and rejects a late request preview from the prior session', async ({ page }) => {
+  let release; const pending = new Promise(resolve => { release = resolve; });
+  await mockApi(page, { ...saved, 'POST /company-requests': async () => { await pending; return { request: { id: 'old', status: 'candidate', candidate: { ...company, name: 'Private old preview' }, previewRevision: 1 } }; }, 'POST /session/logout': { status: 401, body: { error: { code: 'session_expired', message: 'Your session expired.' } } } }); await page.goto('/'); await expect(page.locator('[data-job]')).toHaveCount(1);
+  await page.goto('/#request'); await page.locator('#request-query').fill('Old lead'); await page.getByRole('button', { name: 'Find company' }).click(); await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await expect(page.locator('#sign-in-dialog')).toBeVisible(); release(); await page.waitForTimeout(100); await expect(page.locator('body')).not.toContainText('Private old preview'); await expect(page.locator('[data-job]')).toHaveCount(0); await expect(page.locator('#search-tabs [role=tab]')).toHaveCount(0);
+});
+
+test('inactive deletion and tab changes preserve per-search drafts without reloading active results', async ({ page }) => {
+  const other = { ...search(), id: 'search-2', title: 'Garden desk', query: 'Garden jobs' }; const calls = await mockApi(page, { ...saved, 'GET /searches': { items: [search(), other] }, 'GET /searches/search-2/results': completed([job(2)]), 'DELETE /searches/search-2': {} }); await page.goto('/'); await page.locator('#query').fill('Unsent library draft'); await page.getByRole('tab', { name: 'Garden desk' }).click(); await page.locator('#query').fill('Unsent garden draft'); await page.getByRole('tab', { name: 'Library desk' }).click(); await expect(page.locator('#query')).toHaveValue('Unsent library draft'); const before = calls.filter(call => call.key === 'GET /searches/search-1/results').length;
+  await page.getByRole('button', { name: 'Delete Garden desk' }).click(); await page.locator('#confirm-delete-search').click(); await expect(page.getByRole('tab', { name: 'Garden desk' })).toHaveCount(0); await expect(page.locator('#query')).toHaveValue('Unsent library draft'); expect(calls.filter(call => call.key === 'GET /searches/search-1/results').length).toBe(before);
+});
+
+test('unsafe source URLs cause an explicit contract error and optional surfaces stay unavailable', async ({ page }) => {
+  await mockApi(page, { ...saved, 'GET /searches/search-1/results': completed([{ ...job(1), sourceUrl: 'javascript:alert(1)' }]) }); await page.goto('/'); await expect(page.locator('#feed-status')).toContainText('invalid posting'); await expect(page.locator('[data-job]')).toHaveCount(0); await expect(page.locator('#followed-only')).toBeHidden(); await expect(page.locator('.search-config [data-posting-languages]')).toBeHidden(); await expect(page.locator('#hiring-wire')).toBeHidden();
 });
