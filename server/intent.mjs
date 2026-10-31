@@ -63,7 +63,18 @@ export function intentCapabilities(jobs, aiAvailable = false) {
     aiAvailable, unknownEvidence:'Unknown never proves a requirement; location labels do not prove cross-border remote eligibility.' };
 }
 
-export function compileIntent(raw, capabilities) {
+function companyPrefill(r,caps,query){
+  const ref=r.companyReference;if(!ref||r.handling!=='unsatisfied')return null;
+  const name=words(ref.input),request=typeof query==='string'?query:r.text;
+  const unsafe=/[\u0000-\u001f\u007f<>]|https?:\/\/|www\.|\b[a-z\d][a-z\d.-]*\.[a-z]{2,}(?:\/|\s|$)/iu;
+  if(name.length<2||unsafe.test(ref.input)||!words(r.text).includes(name)||!words(request).includes(name)||normalizeValue(caps,'companyInclude',ref.input).code!=='unknown_value')return null;
+  const clauses=request.split(/[.;!?\n]/u).filter(s=>words(s).includes(name));
+  const negative=/\b(not|no|exclude|excluding|except|avoid|without|prefer|preferably|ideally|optional|mention|example|nicht|ohne|sans)\b|(?:^|\s)-\s*\p{L}/iu;
+  if(!clauses.length||negative.test(r.text)||clauses.some(s=>negative.test(s)))return null;
+  const scope=typeof ref.scope==='string'&&!unsafe.test(ref.scope)&&words(ref.scope).length>1&&words(request).includes(words(ref.scope))?ref.scope.trim():null;
+  return {input:ref.input.trim(),scope};
+}
+export function compileIntent(raw, capabilities,{query}={}) {
   const diagnostics = validateModelData(raw, schema);
   if(diagnostics.length) return {ok:false,diagnostics};
   const data = structuredClone(raw), f=data.configuration.filters;
@@ -94,12 +105,12 @@ export function compileIntent(raw, capabilities) {
     if(residual.requirementIds.some(id=>!data.requirements.some(r=>r.id===id&&r.handling==='ai'))) diagnostics.push({path:'$.configuration.residualAi.requirementIds',code:'unknown_ai_requirement'});
   }
   if(diagnostics.length) return {ok:false,diagnostics};
-  const warnings=data.requirements.filter(r=>r.handling==='unsatisfied').map(r=>({code:'unsupported_requirement',message:r.reason,requirementIds:[r.id]}));
+  const warnings=data.requirements.filter(r=>r.handling==='unsatisfied').map(r=>{const prefill=companyPrefill(r,capabilities,query);return {code:prefill?'company_not_found':'unsupported_requirement',message:r.reason,requirementIds:[r.id],...(prefill?{companyRequestPrefill:prefill}:{})};});
   const labels={companyInclude:'Companies',companyExclude:'Exclude companies',titleAny:'Title contains any',bodyAll:'Body contains all',bodyNone:'Body excludes',locations:'Location labels',workplaces:'Workplace',employmentTypes:'Employment',postingLanguages:'Posting languages',seniority:'Seniority'};
   // Description is derived from the normalized configuration, never trusted model prose.
   const parts=Object.entries(f).map(([k,v])=>`${labels[k]}: ${v.join(', ')}.`);
   if(residual) parts.push(`Additional evidence required: ${residual.condition}`);
-  return {ok:true,value:{title:data.title,configuration:data.configuration,requirements:data.requirements.map(({bindings,...r})=>r),warnings,description:parts.join(' ')||'All eligible imported jobs.'}};
+  return {ok:true,value:{title:data.title,configuration:data.configuration,requirements:data.requirements.map(({bindings,companyReference,...r})=>r),warnings,description:parts.join(' ')||'All eligible imported jobs.'}};
 }
 
 export function primaryMatches(job, {filters:f}) {
@@ -124,7 +135,8 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     CREATE INDEX IF NOT EXISTS demo_searches_owner ON demo_searches(owner_id);
     CREATE TABLE IF NOT EXISTS demo_search_submissions(owner_id TEXT NOT NULL,request_key TEXT NOT NULL,search_id TEXT NOT NULL,input_hash TEXT NOT NULL,task_id TEXT NOT NULL,PRIMARY KEY(owner_id,request_key)) STRICT;
     CREATE TABLE IF NOT EXISTS demo_search_proposals(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,expected_revision INTEGER NOT NULL,task_id TEXT NOT NULL,proposal_json TEXT NOT NULL) STRICT;
-    CREATE TABLE IF NOT EXISTS demo_search_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,position INTEGER NOT NULL,created_at INTEGER NOT NULL) STRICT;`);
+    CREATE TABLE IF NOT EXISTS demo_search_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,position INTEGER NOT NULL,created_at INTEGER NOT NULL) STRICT;
+    CREATE TABLE IF NOT EXISTS demo_search_delegate_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,delegate_cursor TEXT,created_at INTEGER NOT NULL) STRICT;`);
   const row=(owner,id)=>db.prepare('SELECT * FROM demo_searches WHERE owner_id=? AND id=?').get(owner,id);
   const executionAvailable=()=>typeof model?.interpretIntent==='function'&&(typeof model.available!=='function'||model.available('search_intent'));
   const available=()=>typeof availability==='function'?availability()===true:executionAvailable();
@@ -135,7 +147,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
   }
   function purgeSearch(owner,id) {
     for(const s of db.prepare('SELECT task_id FROM demo_search_submissions WHERE owner_id=? AND search_id=?').all(owner,id)) tasks.delete(owner,s.task_id);
-    for(const table of ['demo_search_proposals','demo_search_cursors','demo_search_submissions']) db.prepare(`DELETE FROM ${table} WHERE owner_id=? AND search_id=?`).run(owner,id);
+    for(const table of ['demo_search_proposals','demo_search_cursors','demo_search_delegate_cursors','demo_search_submissions']) db.prepare(`DELETE FROM ${table} WHERE owner_id=? AND search_id=?`).run(owner,id);
     db.prepare('DELETE FROM demo_searches WHERE owner_id=? AND id=?').run(owner,id);
     matching?.deleteSearchData?.(owner,id);
   }
@@ -154,6 +166,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(task.kind!=='search_intent') throw new TypeError('Wrong task kind.');
     const r=row(task.ownerId,task.payload.searchId);
     if(!r||r.task_id!==task.id||r.revision!==task.payload.expectedRevision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
+    const source=feed.coverage();if(source.stale||!source.verifiedAt)return {status:'failed',errorCode:'dependency_unavailable'};
     if(!executionAvailable()) return {status:'failed',errorCode:'dependency_unavailable'};
     const accepted=r.accepted_json?JSON.parse(r.accepted_json):null;
     const caps=intentCapabilities(feed.eligibleJobs({viewer:{account:{id:task.ownerId}}}),Boolean(matching?.available?.()??config.aiMatchingAvailable));
@@ -163,7 +176,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       let raw;
       try {raw=await model.interpretIntent(intentModelInput({query:task.payload.query,prior:accepted,capabilities:caps,...(attempt?{repair:{diagnostics:result.diagnostics,previous}}:{})}),{signal}); }
       catch { return {status:'failed',errorCode:signal?.aborted?'task_timeout':'provider_unavailable'}; }
-      result=compileIntent(raw,caps);
+      result=compileIntent(raw,caps,{query:task.payload.query});
       if(result.ok) break;
       // Invalid JSON/schema data is never echoed into a repair. Valid bounded
       // model data can accompany field diagnostics in the one new invocation.
@@ -192,27 +205,37 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     const search=JSON.parse(r.accepted_json), limit=Number(ctx.url.searchParams.get('limit')??12), cursor=ctx.url.searchParams.get('cursor');
     if(!Number.isInteger(limit)||limit<1||limit>50) throw err('invalid_limit');
     const generation=feed.generation?.()??null,accessHash=hash({accountId:ctx.accountId,access:ctx.viewer?.access??null});
-    const jobs=feed.eligibleJobs({viewer:ctx.viewer}).filter(j=>primaryMatches(j,search.configuration));
-    const coverage=feed.coverage();
-    if(search.configuration.residualAi&&matching?.page) return {searchId:r.id,revision:r.revision,asOf:new Date(now()).toISOString(),coverage,...await matching.page({ownerId:ctx.accountId,searchId:r.id,revision:r.revision,configuration:search.configuration,jobs,viewer:ctx.viewer,cursor,limit,coverage,generation,now})};
-    db.prepare('DELETE FROM demo_search_cursors WHERE created_at<=?').run(now()-600_000);
-    let position=0;
-    if(cursor) {
-      if(cursor.length>128) throw err('invalid_cursor');
-      const c=db.prepare('SELECT * FROM demo_search_cursors WHERE id=? AND owner_id=? AND search_id=?').get(cursor,ctx.accountId,r.id);
-      if(!c||c.revision!==r.revision||c.generation!==generation||c.access_hash!==accessHash||c.created_at>now()) throw err('stale_cursor',409,'This search changed. Reload it and try again.');
-      position=c.position;
+    const residual=Boolean(search.configuration.residualAi),coverage=feed.coverage();
+    const table=residual?'demo_search_delegate_cursors':'demo_search_cursors';
+    for(const name of ['demo_search_cursors','demo_search_delegate_cursors'])db.prepare(`DELETE FROM ${name} WHERE created_at<=?`).run(now()-600_000);
+    let position=0,delegateCursor=null;
+    if(cursor){
+      if(cursor.length>128)throw err('invalid_cursor');
+      const c=db.prepare(`SELECT * FROM ${table} WHERE id=? AND owner_id=? AND search_id=?`).get(cursor,ctx.accountId,r.id);
+      if(!c||c.revision!==r.revision||c.generation!==generation||c.access_hash!==accessHash||c.created_at>now())throw err('stale_cursor',409,'This search changed. Reload it and try again.');
+      if(residual)delegateCursor=c.delegate_cursor;else position=c.position;
     }
-    if(search.configuration.residualAi) {
-      const id=cursor??randomUUID();
-      if(!cursor) db.prepare('INSERT INTO demo_search_cursors VALUES(?,?,?,?,?,?,?,?)').run(id,ctx.accountId,r.id,r.revision,generation,accessHash,position,now());
-      return {searchId:r.id,revision:r.revision,asOf:new Date(now()).toISOString(),items:[],continuation:{cursor:id,state:'paused',retryAfterMs:5000},ai:{status:'dependency_unavailable'},coverage};
+    function continuationToken(value){const id=randomUUID();db.prepare(`INSERT INTO ${table} VALUES(?,?,?,?,?,?,?,?)`).run(id,ctx.accountId,r.id,r.revision,generation,accessHash,value,now());return id;}
+    const base={searchId:r.id,revision:r.revision,asOf:new Date(now()).toISOString(),coverage};
+    if(coverage.stale||!coverage.verifiedAt){
+      const id=cursor??continuationToken(residual?delegateCursor:position);
+      return {...base,items:[],continuation:{cursor:id,state:'paused',retryAfterMs:5000},ai:{status:residual?'dependency_unavailable':'not_required'},coverage:{...coverage,stale:true,state:'import_unavailable',description:'Imported listings need verification.'}};
+    }
+    const jobs=feed.eligibleJobs({viewer:ctx.viewer}).filter(j=>primaryMatches(j,search.configuration));
+    if(residual&&matching?.page){
+      const page=await matching.page({ownerId:ctx.accountId,searchId:r.id,revision:r.revision,configuration:search.configuration,jobs,viewer:ctx.viewer,cursor:delegateCursor,limit,coverage,generation,now});
+      const next=page.continuation?.cursor;
+      if(next!=null&&(typeof next!=='string'||next.length>2048))throw err('invalid_output',503,'Matching is temporarily unavailable.');
+      return {...base,...page,continuation:{...page.continuation,cursor:next==null?null:continuationToken(next)}};
+    }
+    if(residual){
+      const id=cursor??continuationToken(delegateCursor);
+      return {...base,items:[],continuation:{cursor:id,state:'paused',retryAfterMs:5000},ai:{status:'dependency_unavailable'}};
     }
     const page=jobs.slice(position,position+limit),more=position+page.length<jobs.length;
-    let next=null;
-    if(more) { next=randomUUID(); db.prepare('INSERT INTO demo_search_cursors VALUES(?,?,?,?,?,?,?,?)').run(next,ctx.accountId,r.id,r.revision,generation,accessHash,position+page.length,now()); }
-    return {searchId:r.id,revision:r.revision,asOf:new Date(now()).toISOString(),items:page.map(j=>feed.publicJob(j)),continuation:{cursor:next,state:more?'open':'exhausted',retryAfterMs:null},ai:{status:'not_required'},coverage};
+    return {...base,items:page.map(j=>feed.publicJob(j)),continuation:{cursor:more?continuationToken(position+page.length):null,state:more?'open':'exhausted',retryAfterMs:null},ai:{status:'not_required'}};
   }
+
   async function route(ctx) {
     if(!/^\/searches(?:\/|$)/.test(ctx.path)) return null;
     if(!ctx.accountId||!ctx.viewer) throw err('unauthenticated',401,'Sign in to continue.');
