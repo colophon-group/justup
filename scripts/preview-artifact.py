@@ -23,6 +23,7 @@ CODEX_ARCHIVE_SHA256 = '1c4756c2f67f1310ffb03234d61d540ad85916cef5383e46e0e7851f
 CODEX_ARCHIVE_INTEGRITY = 'sha512-Pm0W2PnFeTEqPx+AOIwgOVB4dBtY24cuD0tx1hjCor60CbSAT7WBPZVNUINSrTCDrMndvQC67p71ZEz+gmPPkA=='
 MAX_CODEX_ARCHIVE_BYTES = 192 * 1024 ** 2  # Off-host input only; bundle/host ceilings stay unchanged.
 CODEX_ENTRYPOINT = 'runtime/codex/bin/codex'
+MODEL_CATALOGUE = 'app/server/model-catalogue.json'
 CODEX_FILES = {
     CODEX_ENTRYPOINT: '113aa5d5952a6fd3950a88323219747d0c91978ebee948509a540c8a460e59a3',
     'runtime/codex/codex-resources/bwrap': 'c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4',
@@ -54,6 +55,8 @@ def canonical(value):
 
 def read_host_plan(base):
     """Read non-secret root-owned installation identity; never take it from caller JSON."""
+    if os.path.lexists(Path(base) / '.preview-ops-upgrade.lock'):
+        raise ValueError('Operator scripts are being updated; runtime adoption is blocked.')
     path = Path(base) / '.preview-install.json'
     meta = path.lstat()
     if (path.resolve(strict=True) != path or not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0
@@ -69,11 +72,13 @@ def read_host_plan(base):
 
 def allowed(path):
     parts = PurePosixPath(path).parts
-    return (not path.startswith('/') and '..' not in parts and '\\' not in path
-            and (path in {'runtime/bin/node', 'runtime/LICENSE'} or path in CODEX_FILES or
-                 (path.startswith('app/server/') and path.endswith('.mjs') and not path.endswith('.test.mjs')) or
-                 path in {'app/scripts/import-demo-jobs.py', 'app/server/model-schemas/intent.schema.json',
-                          'app/server/model-schemas/company.schema.json', 'app/server/model-schemas/company-domain-proposal.schema.json'}))
+    if path.startswith('/') or '..' in parts or '\\' in path or PurePosixPath(path).as_posix() != path:
+        return False
+    return (path in {'runtime/bin/node', 'runtime/LICENSE', MODEL_CATALOGUE, 'app/scripts/import-demo-jobs.py',
+                     'app/server/model-schemas/intent.schema.json', 'app/server/model-schemas/company.schema.json',
+                     'app/server/model-schemas/company-domain-proposal.schema.json'} or path in CODEX_FILES or
+            (path.startswith('app/server/') and not path.startswith('app/server/evals/')
+             and path.endswith('.mjs') and not path.endswith('.test.mjs')))
 
 
 def identity(manifest):
@@ -100,6 +105,8 @@ def validate_manifest(manifest):
                           ('companies.mjs', 'company-domain-proposal.schema.json')]:
         if 'app/server/' + module in files and 'app/server/model-schemas/' + schema not in files:
             raise ValueError('Runtime module is missing its immutable model schema asset.')
+    if 'app/server/model-runner.mjs' in files and MODEL_CATALOGUE not in files:
+        raise ValueError('Model runtime is missing its immutable model catalogue asset.')
     if any(not allowed(path) or not isinstance(value, str) or not SHA.fullmatch(value) for path, value in files.items()):
         raise ValueError('Artifact file inventory is unsafe or incomplete.')
     if manifest.get('nodeArchiveSha256') != NODE_ARCHIVE_SHA256 or manifest.get('buildIdentity') != identity(manifest):
