@@ -7,6 +7,8 @@ read_when: Reviewing demo privacy, usage conditions, sign-in disclosure or polic
 
 The public `/privacy.html` and `/usage.html` pages are static, English web pages. They work without JavaScript, a session or any API. Their only asset is the local `policies.css`; they do not load identity providers, analytics or remote fonts. Serving these files can still produce hosting/access logs, which must be inventoried. The pages are marked `noindex,nofollow` for the temporary preview.
 
+These truthful draft pages may be integrated into `dev` as code preparation after normal review and checks. Code acceptance does not approve the notices, enable real registration/login, authorize deployment or public sharing, or complete `demo-privacy-usage`; the real inventory and operator review remain open acceptance work.
+
 The current revision is **`demo-draft-1`**, marked **draft — review incomplete** in visible copy, HTML metadata and body attributes. There is no effective date, approved operator identity, contact or implied legal approval. These pages deliberately describe missing facts rather than fill them with invented details. They must not be represented as a completed privacy notice or approved usage conditions.
 
 ## Sign-in and publication gate
