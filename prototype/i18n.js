@@ -9,6 +9,8 @@ const browserLanguage=()=>preferences().map(value=>value.toLowerCase().split('-'
 const language=()=>choice==='auto'?browserLanguage():choice;
 const locale=()=>choice==='auto'?(preferences().find(value=>value.toLowerCase().split('-')[0]===language())||'en-GB'):({en:'en-GB',de:'de-DE',fr:'fr-FR',es:'es-ES'}[language()]);
 const rows=[
+['Followed only','Nur gefolgte','Suivies seulement','Solo seguidas'],
+['Search options','Suchoptionen','Options de recherche','Opciones de búsqueda'],
 ["Posting languages", "Sprachen der Stellenanzeigen", "Langues des offres", "Idiomas de las ofertas"],
 ["Posting languages.", "Sprachen der Stellenanzeigen.", "Langues des offres.", "Idiomas de las ofertas."],
 ["Any language", "Alle Sprachen", "Toutes les langues", "Cualquier idioma"],
