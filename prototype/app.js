@@ -1,4 +1,6 @@
 'use strict';
+// Runs the browser-only prototype with fictional jobs, saved searches and page navigation.
+// Read when changing shared search or company behavior.
 const $ = (q, root=document) => root.querySelector(q);
 const $$ = (q, root=document) => [...root.querySelectorAll(q)];
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

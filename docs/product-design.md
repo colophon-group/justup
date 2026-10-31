@@ -1,6 +1,10 @@
-# Product design: Justup — fresh jobs, one search workspace
+---
+summary: Justup's planned user journeys, access rules and first-release choices.
+read_when: Designing search, accounts, company coverage or the first live release.
+status: Design reference; the live application is not implemented.
+---
 
-Status: design reference; the production application is not yet implemented.
+# Product design: Justup — fresh jobs, one search workspace
 
 Brand: **Justup**. Intended domain: `justup.work`.
 

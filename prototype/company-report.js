@@ -1,7 +1,7 @@
 'use strict';
 
-// Fictional report fixtures. Recent figures, listing rows and the wire share one
-// observation ledger. Older points illustrate retained historical aggregates.
+// Builds fictional company reports from listing history shared with the feed and news ribbon.
+// Read when changing report figures, salary summaries or charts.
 const companyReportHistory=new Map();
 const reportDAY=86400000;
 const reportRoleNames={engineering:'Engineering',robotics:'Robotics',design:'Design',data:'Data & AI',product:'Product',operations:'Operations',marketing:'Marketing'};

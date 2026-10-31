@@ -1,6 +1,7 @@
 
 'use strict';
-// Independent, fictional weekly snapshots. No live company analytics are implied.
+// Renders the moving weekly company-news ribbon (Hiring Wire) with fictional data.
+// Read when changing ribbon data, motion or keyboard navigation.
 const wireSnapshots=[
  {company:'goodlight',daily:[3,4,3,5,4,6,6],previous:23,headline:'Listing activity picks up'},
  {company:'fieldwork',daily:[4,3,3,2,2,2,2],previous:24,headline:'A quieter week at the source'},
