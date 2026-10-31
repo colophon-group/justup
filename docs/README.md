@@ -9,6 +9,8 @@ read_when: You need to find a policy or setup guide.
 | --- | --- |
 | Running or changing the current browser interface | [Browser run guide](../prototype/README.md) |
 | Understanding product behavior and open design choices | [Product guide](product-design.md) |
+| Designing user-facing backend boundaries and AI work | [Backend design](backend-design.md) |
+| Choosing deployment placement, preview isolation or recovery | [Deployment plan](deployment-plan.md) |
 | Changing result arrivals, scrolling or motion | [Motion guide](motion-design.md) |
 | Filing a discovery, changing code, reviewing a pull request, or planning a release | [Development and release guide](development-process.md) |
 | Setting up local credentials or changing service access | [Secrets and contributor setup](secrets.md) |
