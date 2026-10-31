@@ -1,18 +1,14 @@
 # Product design: Justup — fresh jobs, one search workspace
 
-Status: first draft for discussion
+Status: design reference; the production application is not yet implemented.
 
-Date: 30 October 2026
-
-Brand: **Justup**. Intended domain: `justup.work`. The repository retains its working name `fresh-jobs-ui`.
+Brand: **Justup**. Intended domain: `justup.work`.
 
 ## 1. Product intent
 
 Help people find relevant opportunities recently discovered by the backend on company career pages and get to the original application quickly.
 
-The current service has no conversions. That establishes the need to revisit the offer, but does not establish which parts of acquisition, relevance, trust, or payment are failing. This design defines a new experience and the evidence needed to assess it.
-
-The starting asset is the job collection. The new service has a new brand, repository, interface, and product contract. Existing page structure, technology choices, account flows, and ranking behavior impose no requirements on it.
+The existing job collection supplies listings. Justup defines its own interface, account flows and ranking behavior.
 
 The central promise is: **Fresh jobs. No paid placement.** Listings come directly from company career pages, matching results stay newest first, and users can inspect exactly which companies and career pages are monitored. Describe the work you want to narrow that collection.
 
@@ -24,7 +20,7 @@ The initial audience hypothesis is people actively searching now, who return fre
 
 ## 2. Requirements and proposals
 
-The following are the product requirements from the brief:
+Product requirements:
 
 - Listings come directly from employers’ own career pages. Exclude recruitment agency listings and reposts sourced from job aggregators or social media.
 - Publication time is when the backend first observed the posting.
@@ -51,7 +47,7 @@ The following are the product requirements from the brief:
 - Company lookup surfaces matching companies already being configured before offering new discovery. Users can request higher priority for an existing setup task.
 - Coverage, request status, and known collection limitations are communicated transparently.
 
-Everything below that resolves an unspecified detail is a proposal, not a settled requirement. The final section gathers decisions to review before implementation.
+The remaining sections distinguish proposed behavior from settled requirements. Open decisions are listed at the end.
 
 ## 3. The main experience
 
@@ -97,7 +93,7 @@ Lead with concrete product policies rather than a generic convenience or AI clai
 
 Use these topic phrases naturally in useful copy: fresh jobs, company career pages, no sponsored listings, newest-first job search, and monitored companies. These are language and intent candidates, without measured search-volume claims. Keep role/location examples concrete rather than adding keyword lists. The proposed landing title is “Justup — Fresh Jobs, No Sponsored Listings”; its description summarizes direct sources, visible coverage and newest-first order.
 
-Google recommends [descriptive, concise titles](https://developers.google.com/search/docs/appearance/title-link), [relevant page descriptions](https://developers.google.com/search/docs/appearance/snippet), and [helpful content for people](https://developers.google.com/search/docs/fundamentals/creating-helpful-content). Before production, give the public landing page and catalogue stable, crawlable URLs and render their public content independently of saved search state. The current private, hash-routed mockup validates copy and interaction rather than production indexing. See [Google’s JavaScript guidance](https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics).
+Google recommends [descriptive, concise titles](https://developers.google.com/search/docs/appearance/title-link), [relevant page descriptions](https://developers.google.com/search/docs/appearance/snippet), and [helpful content for people](https://developers.google.com/search/docs/fundamentals/creating-helpful-content). Before production, give the public landing page and catalogue stable, crawlable URLs and render their public content independently of saved search state. The current hash-routed prototype validates copy and interaction rather than production indexing. See [Google’s JavaScript guidance](https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics).
 
 The paid-placement distinction is supported by competitors’ own descriptions: [LinkedIn says promoted jobs may appear higher](https://www.linkedin.com/help/linkedin/answer/a512429/promoted-jobs-in-your-job-search-results), and [Indeed describes prominent placement for Sponsored Jobs](https://www.indeed.com/hire/resources/howtohub/faq?co=US). The landing page states Justup’s policies directly, without broad claims about competitors’ job quality or completeness.
 
@@ -222,7 +218,7 @@ Company search and job-search empty states should provide a “Request a company
 
 ### Followed companies
 
-Users can follow or unfollow any company from catalogue search results and company profiles. Keep this action independent of opening the whole row. Show a compact Follow / Following control with a plus or check mark, using the same component wherever a company appears. In company rows, place Follow beside the profile arrow in a dedicated action area on the right. Omit website subtitles from catalogue and request rows; career-page addresses remain available in company profiles. The catalogue has exactly three filters: All companies, Followed and Requested. Keep coverage status on individual rows, without separate Monitoring, Being added or Needs attention filters. Requested replaces the standalone Requests navigation tab and uses the shared company rows to show request date, priority and setup status. Combine it with the company search text, update the list immediately on unfollow, and offer a route back to all companies when the followed view is empty.
+Users can follow or unfollow any company from catalogue search results and company profiles. Keep this action independent of opening the whole row. Show a compact Follow / Following control with a plus or check mark, using the same component wherever a company appears. In company rows, place Follow beside the profile arrow in a dedicated action area on the right. Omit website subtitles from catalogue and request rows; career-page addresses remain available in company profiles. The catalogue has exactly three filters: All companies, Followed and Requested. Keep coverage status on individual rows, without separate Monitoring, Being added or Needs attention filters. Requested uses the shared company rows to show request date, priority and setup status. Combine it with the company search text, update the list immediately on unfollow, and offer a route back to all companies when the followed view is empty.
 
 Each search tab has an “Only followed companies” toggle beneath its query and generated description. It intersects the followed-company set with that tab’s search criteria, freshness window and access rules. It never changes recency ordering. Save this scope per search; following a company is shared across the user’s searches. Editing the query preserves the toggle, and toggling preserves any unsent query draft. Subsequent results and live arrivals obey the same company scope.
 
@@ -315,7 +311,7 @@ Show one aggregate notice with the number of recent matching postings withheld b
 
 Use the browser’s ordered language preferences to choose a supported interface language, falling back to English. Provide a saved override in the Settings overlay. The prototype supports English, German, French and Spanish; it sets the document language and formats dates for the selected locale. Employer job titles, company descriptions, URLs and user-entered searches retain their source language. Localizing the interface does not translate or rewrite a user’s query. The mock interpreter understands the translated example searches; production interpretation remains a model/backend responsibility.
 
-Use the same bold condensed display face as the Justup wordmark for large headlines and section/dialog headings. Keep the original typewriter face for body copy, inputs, job titles, company names, controls, steps, filters and metadata. The existing masthead and company logos remain brand marks. Use a shared size, weight and spacing scale within those roles. Use the same scale across search, company pages, request confirmations, dialogs, Settings and membership. Preserve readable weight in viewed rows; mute color instead.
+Use the same bold condensed display face as the Justup wordmark for large headlines and section/dialog headings. Use the typewriter face for body copy, inputs, job titles, company names, controls, steps, filters and metadata. The masthead and company logos remain brand marks. Use a shared size, weight and spacing scale within those roles. Use the same scale across search, company pages, request confirmations, dialogs, Settings and membership. Preserve readable weight in viewed rows; mute color instead.
 
 Use restrained newspaper references in suitable moments: “Every company we monitor. On the record.” in the catalogue, “Your edition awaits.” at sign-in, and “Keep your edition coming.” for membership. At true search exhaustion, “You’ve reached the back page.” is followed by the explicit 14-day limit and live-update status. Never show that ending while candidates or evaluations remain. Keep search instructions, access counts, coverage status and billing actions literal. Translate these editorial touches with the rest of the interface.
 
@@ -388,13 +384,13 @@ Include the search workspace and tabs, persistent editable user search text, mod
 
 The first release includes live result delivery over SSE, the compact company catalogue, and two-step company requests with premium priority and visible progress. Interactive Luna discovery at low reasoning returns a company for user acceptance; acceptance publishes the catalogue entry before crawler configuration completes. In-progress companies appear in company search with an action to request higher priority. Hosting, reconnect recovery, and the delivery budget still need to be defined and validated.
 
-Proposed additions to defer include email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries, and an internal application tracker. Saving and hiding can be removed from the first release if they delay validating the search-to-source path.
+The proposed first release excludes email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries and an internal application tracker. Saving and hiding remain optional if they delay validating the search-to-source path.
 
 The chosen brand is Justup, with intended domain `justup.work`. The whole job row opens the company posting; the company identity remains a separate link into the catalogue. The accepted visual baseline is **Extra Orange**: orange coral `#F28A60`, a condensed black-and-white masthead, readable typewriter interface text, square controls, and company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible, with a subtle pulse on the live dot. The search field is pale and visibly editable; tabs include “+ New search.” Keep “Last 14 days” explicit. Remove footers and bottom coverage panels to keep scrolling stable. Keep Request a company prominent in the catalogue header. Search deletion requires a dialog naming the search, with explicit delete and keep actions. A floating back-to-top button appears after scrolling. The Requested filter uses the same clickable company-row component as the catalogue: logos, names, details, status, single separators and consistent arrows, with Follow beside the arrow and no website subtitle. The proposed [motion language](motion-design.md) defines arrivals and Viewed transitions for review. Transparency must appear in product behavior as well as messaging: visible company coverage, clear publication-age meaning, readable search interpretation, and honest request progress.
 
 ## 11. Validation and success measures
 
-The first hypothesis is that a visitor can find a relevant fresh job and understand why it matches. The second is that access to recent opportunities is valuable enough to return for and eventually pay for. A redesign alone does not establish either.
+The first hypothesis is that a visitor can find a relevant fresh job and understand why it matches. The second is that access to recent opportunities is valuable enough to return for and eventually pay for.
 
 Instrument the journey with distinct definitions:
 
