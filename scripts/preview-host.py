@@ -41,6 +41,7 @@ MODEL_USER = 'justup-preview-model'
 STATE_GROUP = 'justup-preview-state'
 CLIENT_GROUP = 'justup-preview-model-client'
 OPERATOR_UID = 0
+EXT4_FORMAT_OPTIONS = 'nodiscard,lazy_itable_init=0,lazy_journal_init=0'
 
 
 def call(*args, capture=False):
@@ -69,6 +70,7 @@ def plan(root, host_fingerprint=None):
     body = {'formatVersion': 1, 'hostMachineSha256': host_fingerprint, 'files': files, 'mount': str(BASE), 'newImage': str(IMAGE),
             'imageBytes': DISK_LIMIT, 'minimumRootFreeBytesAfterAllocation': ROOT_FLOOR,
             'physicalPreallocationRequired': True, 'formatDiscardAllowed': False, 'automaticReallocation': False,
+            'formatOptions': EXT4_FORMAT_OPTIONS, 'synchronousInitializationRequired': True,
             'slice': {'cpuQuota': '50%', 'cpuWeight': 10, 'memoryHigh': 768 * MIB,
                       'memoryMax': GIB, 'memorySwapMax': 0, 'tasksMax': 96},
             'uids': {'api': USER, 'queue': RUNNER_USER, 'model': MODEL_USER},
@@ -151,8 +153,9 @@ def verify_image():
 
 
 def format_image():
-    # mkfs otherwise issues discard and punches out the prior fallocate.
-    call('mkfs.ext4', '-q', '-m', '0', '-E', 'nodiscard', '-F', str(IMAGE))
+    # Initialize inode tables/journal before mount, without discarding reserved
+    # extents or deferring zeroing through the loop device.
+    call('mkfs.ext4', '-q', '-m', '0', '-E', EXT4_FORMAT_OPTIONS, '-F', str(IMAGE))
     return verify_image()
 
 
