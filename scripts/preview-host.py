@@ -22,6 +22,7 @@ import tempfile
 import uuid
 import importlib.util
 import re
+import stat
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
@@ -42,6 +43,9 @@ STATE_GROUP = 'justup-preview-state'
 CLIENT_GROUP = 'justup-preview-model-client'
 OPERATOR_UID = 0
 EXT4_FORMAT_OPTIONS = 'nodiscard,lazy_itable_init=0,lazy_journal_init=0'
+UNIT_ROOT = Path('/etc/systemd/system')
+PROC_ROOT = Path('/proc')
+UPGRADE_LOCK = '.preview-ops-upgrade.lock'
 
 
 def call(*args, capture=False):
@@ -348,6 +352,8 @@ def artifact_module():
 def require_operator(cleanup=False):
     if os.geteuid() != 0:
         raise ValueError('Deployment and teardown require the dedicated root operator step.')
+    if os.path.lexists(BASE / UPGRADE_LOCK):
+        raise ValueError('An operator update is pending; reconcile it before another operation.')
     if cleanup:
         verify_caps()
         # Only teardown enters this branch after validating the operator-bound
@@ -355,6 +361,198 @@ def require_operator(cleanup=False):
         _verify_storage(check_reserve=False, require_preallocation=False)
     else:
         guard()
+
+
+def owned_path(path, *, directory=False):
+    """Never replace aliased, linked or contributor-writable operator inputs."""
+    path = Path(path)
+    meta = path.lstat()
+    if (path.resolve(strict=True) != path or meta.st_uid != OPERATOR_UID or meta.st_mode & 0o022
+            or not (stat.S_ISDIR(meta.st_mode) if directory else stat.S_ISREG(meta.st_mode))
+            or (not directory and (meta.st_nlink != 1 or meta.st_size > 2 * MIB))):
+        raise ValueError('Operator update paths must be canonical, root-owned and protected.')
+    return meta
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_update_file(path, data, mode=0o444):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, 'wb') as stream:
+        os.fchmod(stream.fileno(), mode)
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def publish_receipt(marker, temporary, data):
+    # The exclusive link exposes complete bytes, and the single-link requirement
+    # keeps launchers closed until the private staging name is unlinked.
+    write_update_file(temporary, data)
+    os.link(temporary, marker, follow_symlinks=False)
+    temporary.unlink()
+    sync_directory(temporary.parent)
+    sync_directory(marker.parent)
+
+
+def verify_operator_files(folder, scripts):
+    owned_path(folder, directory=True)
+    if {path.name for path in folder.iterdir()} != set(scripts):
+        raise ValueError('Installed operator inventory differs from the reviewed plan.')
+    for name, expected in scripts.items():
+        path = folder / name
+        owned_path(path)
+        if path.stat().st_mode & 0o222 or digest(path) != expected:
+            raise ValueError('Installed operator bytes or read-only modes differ from the reviewed plan.')
+
+
+def verify_operator_units(files):
+    for name in UNITS:
+        target = UNIT_ROOT / name
+        owned_path(target)
+        if digest(target) != files[f'deploy/justup-preview/{name}']:
+            raise ValueError('Installed unit bytes differ from the previous reviewed plan.')
+
+
+def require_idle_preview():
+    stop_preview()
+    for unit in ('justup-preview-guard.timer', 'justup-preview-guard.service'):
+        call('systemctl', 'stop', unit)
+        if call('systemctl', 'show', '--property=ActiveState', '--value', unit, capture=True) not in {'inactive', 'failed'}:
+            raise ValueError('A preview guard did not stop.')
+    uids = {pwd.getpwnam(name).pw_uid for name in (USER, RUNNER_USER, MODEL_USER)}
+    for path in PROC_ROOT.iterdir():
+        try:
+            if path.name.isdigit() and path.stat().st_uid in uids:
+                raise ValueError('Dedicated preview identities must have no running processes.')
+        except FileNotFoundError:
+            continue
+
+
+def upgrade_ops(root, previous_plan_path, previous_sha, expected, host_fingerprint):
+    """Swap only a complete stopped operator directory; retain all private state."""
+    reviewed(root, expected, host_fingerprint)
+    require_operator()
+    root = Path(root).absolute()
+    owned_path(root, directory=True)
+    owned_path(root / 'scripts', directory=True)
+    owned_path(UNIT_ROOT, directory=True)
+    previous_plan_path = Path(previous_plan_path).absolute()
+    owned_path(previous_plan_path)
+    previous = json.loads(previous_plan_path.read_text())
+    if (not isinstance(previous, dict) or not re.fullmatch(r'[a-f0-9]{64}', previous_sha or '')
+            or type(previous.get('formatVersion')) is not int or previous['formatVersion'] != 1
+            or not isinstance(previous.get('files'), dict)
+            or any(not isinstance(key, str) or not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value)
+                   for key, value in previous['files'].items())
+            or previous.get('planSha256') != previous_sha
+            or hashlib.sha256(json.dumps({key: value for key, value in previous.items() if key != 'planSha256'},
+                                        sort_keys=True, separators=(',', ':')).encode()).hexdigest() != previous_sha):
+        raise ValueError('Previous plan does not match its exact reviewed digest.')
+    candidate = plan(root, host_fingerprint)
+    unchanged = lambda value: {key: item for key, item in value.items() if key not in {'files', 'planSha256'}}
+    if (previous_sha == expected or unchanged(previous) != unchanged(candidate)
+            or previous.get('files', {}).keys() != candidate['files'].keys()):
+        raise ValueError('Operator updates cannot change the host, resource boundary or inventory paths.')
+    scripts = {Path(name).name: checksum for name, checksum in previous['files'].items() if name.startswith('scripts/')}
+    new_scripts = {Path(name).name: checksum for name, checksum in candidate['files'].items() if name.startswith('scripts/')}
+    for name, checksum in previous['files'].items():
+        if not name.startswith('scripts/') and candidate['files'][name] != checksum:
+            raise ValueError('Operator updates cannot change units, native runtime pins or licenses.')
+    verify_operator_units(previous['files'])
+    for name in new_scripts:
+        owned_path(root / 'scripts' / name)
+    owned_path(BASE, directory=True)
+    verify_operator_files(BASE / 'ops', scripts)
+    marker = BASE / '.preview-install.json'
+    marker_meta = owned_path(marker)
+    marker_data = marker.read_bytes()
+    marker_value = json.loads(marker_data)
+    if (marker_meta.st_size > 4096 or not isinstance(marker_value, dict)
+            or type(marker_value.get('formatVersion')) is not int
+            or marker_value != {'formatVersion': 1, 'planSha256': previous_sha}):
+        raise ValueError('Live receipt differs from the previous reviewed plan.')
+    history_root = BASE / '.preview-ops-updates'
+    if not history_root.exists():
+        history_root.mkdir(mode=0o700)
+    owned_path(history_root, directory=True)
+    if stat.S_IMODE(history_root.stat().st_mode) != 0o700:
+        raise ValueError('Operator history must remain private mode 0700.')
+    if history_root.stat().st_dev != BASE.stat().st_dev or (BASE / 'ops').stat().st_dev != BASE.stat().st_dev:
+        raise ValueError('Operator directories must remain inside the allocated filesystem.')
+    history = history_root / (previous_sha + '-' + expected)
+    lock = BASE / UPGRADE_LOCK
+    fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    lock_meta = os.fstat(fd)
+    os.fsync(fd)
+    os.close(fd)
+    sync_directory(BASE)
+    withdrawn = moved_old = moved_new = qualified = False
+    try:
+        history.mkdir(mode=0o700)
+        sync_directory(history_root)
+        new_ops = history / 'prepared-ops'
+        new_ops.mkdir(mode=0o755)
+        for name, checksum in new_scripts.items():
+            write_update_file(new_ops / name, (root / 'scripts' / name).read_bytes(), 0o555)
+        verify_operator_files(new_ops, new_scripts)
+        new_ops.chmod(0o755)
+        sync_directory(new_ops)
+        write_update_file(history / 'previous-plan.json', previous_plan_path.read_bytes())
+        write_update_file(history / 'new-plan.json', (json.dumps(candidate, sort_keys=True) + '\n').encode())
+        sync_directory(history)
+        require_idle_preview()
+        guard()
+        verify_operator_files(BASE / 'ops', scripts)
+        actual = owned_path(marker)
+        if (actual.st_dev, actual.st_ino) != (marker_meta.st_dev, marker_meta.st_ino) or marker.read_bytes() != marker_data:
+            raise ValueError('The live receipt changed during update preparation.')
+        marker.rename(history / 'previous-receipt.json')
+        withdrawn = True
+        sync_directory(history)
+        sync_directory(BASE)
+        (BASE / 'ops').rename(history / 'previous-ops')
+        moved_old = True
+        new_ops.rename(BASE / 'ops')
+        moved_new = True
+        sync_directory(history)
+        sync_directory(BASE)
+        verify_operator_files(BASE / 'ops', new_scripts)
+        verify_operator_units(candidate['files'])
+        guard()
+        publish_receipt(marker, history / 'new-receipt.tmp',
+                        (json.dumps({'formatVersion': 1, 'planSha256': expected}) + '\n').encode())
+        qualified = True
+        return {'previousPlanSha256': previous_sha, 'planSha256': expected, 'operatorFiles': len(new_scripts),
+                'privateStateTouched': False, 'activated': False}
+    except Exception:
+        if withdrawn:
+            # A missing receipt is the fail-closed state for a crash or a failed
+            # rollback. Never restore it over unknown or partly replaced bytes.
+            if os.path.lexists(marker):
+                raise ValueError('A receipt appeared during update publication; retain the pending lock for review.')
+            if moved_new:
+                (BASE / 'ops').rename(history / 'rejected-ops')
+            if moved_old:
+                (history / 'previous-ops').rename(BASE / 'ops')
+            sync_directory(history)
+            sync_directory(BASE)
+            verify_operator_files(BASE / 'ops', scripts)
+            verify_operator_units(previous['files'])
+            guard()
+            publish_receipt(marker, history / 'rollback-receipt.tmp', marker_data)
+        qualified = True
+        raise
+    finally:
+        if qualified and lock.exists() and (lock.lstat().st_dev, lock.lstat().st_ino) == (lock_meta.st_dev, lock_meta.st_ino):
+            lock.unlink()
+            sync_directory(BASE)
 
 
 def stage(bundle, expected):
@@ -463,10 +661,12 @@ def teardown(erase_data=False, expected_plan=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
+    parser.add_argument('--previous-plan', type=Path)
+    parser.add_argument('--previous-plan-sha')
     parser.add_argument('--stop-on-failure', action='store_true')
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--sha256')
@@ -480,6 +680,11 @@ def main():
             result = install_slice(args.source_root, args.reviewed_plan_sha, args.host_machine_sha)
         elif args.command == 'install':
             result = install(args.source_root, args.reviewed_plan_sha, args.host_machine_sha)
+        elif args.command == 'upgrade-ops':
+            if args.previous_plan is None:
+                raise ValueError('The exact previous reviewed plan file is required.')
+            result = upgrade_ops(args.source_root, args.previous_plan, args.previous_plan_sha,
+                                 args.reviewed_plan_sha, args.host_machine_sha)
         elif args.command == 'prove':
             result = proof()
         elif args.command == 'guard':

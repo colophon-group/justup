@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager, ExitStack
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -11,6 +12,8 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -184,6 +187,29 @@ class ArtifactContracts(unittest.TestCase):
         self.assertTrue(artifact.allowed(name))
         self.assertEqual(artifact.validate_manifest(manifest)['buildIdentity'], manifest['buildIdentity'])
 
+    def test_model_catalogue_is_required_packaged_and_digest_bound(self):
+        manifest, files = payload()
+        files['app/server/model-runner.mjs'] = b'export {};'
+        manifest['files'] = {name: artifact.sha(data) for name, data in files.items()}
+        manifest['buildIdentity'] = artifact.identity(manifest)
+        with self.assertRaisesRegex(ValueError, 'model catalogue'):
+            artifact.validate_manifest(manifest)
+        files[artifact.MODEL_CATALOGUE] = b'{"models": []}'
+        manifest['files'][artifact.MODEL_CATALOGUE] = artifact.sha(files[artifact.MODEL_CATALOGUE])
+        manifest['buildIdentity'] = artifact.identity(manifest)
+        self.assertTrue(artifact.allowed(artifact.MODEL_CATALOGUE))
+        self.assertFalse(artifact.allowed('app/server/caller-catalogue.json'))
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'candidate.tar'
+            checksum = bundle(path, manifest, files)
+            verified, retained = artifact.read_bundle(path, checksum)
+            self.assertEqual(verified['buildIdentity'], manifest['buildIdentity'])
+            self.assertEqual(retained[artifact.MODEL_CATALOGUE], files[artifact.MODEL_CATALOGUE])
+            files[artifact.MODEL_CATALOGUE] = b'{"models": ["changed"]}'
+            checksum = bundle(path, manifest, files)
+            with self.assertRaisesRegex(ValueError, 'complete manifest'):
+                artifact.read_bundle(path, checksum)
+
     def test_deployed_inventory_is_readonly_complete_and_not_a_moving_link(self):
         manifest, files = payload()
         with tempfile.TemporaryDirectory() as temp:
@@ -202,6 +228,208 @@ class ArtifactContracts(unittest.TestCase):
             link.symlink_to(root)
             with self.assertRaisesRegex(ValueError, 'moving symlink'):
                 artifact.verify_directory(link)
+
+
+class OperatorUpgradeContracts(unittest.TestCase):
+    @contextmanager
+    def installation(self):
+        with tempfile.TemporaryDirectory() as temp, ExitStack() as patches:
+            root = Path(temp).resolve()
+            old_source, new_source, base, units, proc = [root / name for name in ('old', 'new', 'mount', 'units', 'proc')]
+            (old_source / 'scripts').mkdir(parents=True)
+            shutil.copytree(HERE.parent / 'deploy/justup-preview', old_source / 'deploy/justup-preview')
+            for path in HERE.glob('preview-*.py'):
+                if not path.name.endswith('.test.py'):
+                    shutil.copyfile(path, old_source / 'scripts' / path.name)
+            shutil.copytree(old_source, new_source)
+            artifact_source = new_source / 'scripts/preview-artifact.py'
+            artifact_source.write_text(artifact_source.read_text() + '\n# fixture revised operator bytes\n')
+            base.mkdir()
+            units.mkdir()
+            proc.mkdir()
+            ops = base / 'ops'
+            ops.mkdir()
+            for path in (old_source / 'scripts').iterdir():
+                shutil.copyfile(path, ops / path.name)
+                (ops / path.name).chmod(0o555)
+            for name in host.UNITS:
+                shutil.copyfile(old_source / 'deploy/justup-preview' / name, units / name)
+            # Synthetic state is outside the update's only writable destinations.
+            state = {}
+            for name in ('model/credentials/auth.json', 'state/preview.sqlite', 'state/private-generation',
+                         'queue/budget/jev.jsonl', 'config/api.json'):
+                path = base / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(('private fixture ' + name).encode())
+                path.chmod(0o600)
+                state[name] = (path.read_bytes(), path.stat().st_ino)
+            (base / 'current').symlink_to('releases/prior-build')
+            current_inode = (base / 'current').lstat().st_ino
+            image = root / 'preview.disk'
+            image.write_bytes(b'physical boundary fixture')
+            image.chmod(0o600)
+            image_identity = (image.read_bytes(), image.stat().st_ino)
+            for key, value in [('BASE', base), ('IMAGE', image), ('UNIT_ROOT', units), ('PROC_ROOT', proc), ('OPERATOR_UID', os.getuid())]:
+                patches.enter_context(patch.object(host, key, value))
+            old_plan = host.plan(old_source, 'a' * 64)
+            new_plan = host.plan(new_source, 'a' * 64)
+            previous = root / 'previous-plan.json'
+            previous.write_text(json.dumps(old_plan))
+            marker = base / '.preview-install.json'
+            marker.write_text(json.dumps({'formatVersion': 1, 'planSha256': old_plan['planSha256']}))
+            marker.chmod(0o644)
+            commands = []
+            def command(*args, **kwargs):
+                commands.append(args)
+                return 'inactive' if kwargs.get('capture') else None
+            patches.enter_context(patch.object(host, 'reviewed'))
+            patches.enter_context(patch.object(host, 'require_operator'))
+            patches.enter_context(patch.object(host, 'guard', return_value={'verified': True}))
+            patches.enter_context(patch.object(host, 'stop_preview'))
+            patches.enter_context(patch.object(host, 'call', side_effect=command))
+            patches.enter_context(patch.object(host.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=os.getuid())))
+            yield SimpleNamespace(root=root, base=base, units=units, proc=proc, old=old_source, new=new_source,
+                                  before=old_plan, after=new_plan, previous=previous, marker=marker,
+                                  state=state, current_inode=current_inode, image=image,
+                                  image_identity=image_identity, commands=commands)
+
+    def upgrade(self, fixture, old_sha=None):
+        return host.upgrade_ops(fixture.new, fixture.previous,
+                                fixture.before['planSha256'] if old_sha is None else old_sha,
+                                fixture.after['planSha256'], 'a' * 64)
+
+    def assert_private_state_unchanged(self, fixture):
+        for name, expected in fixture.state.items():
+            path = fixture.base / name
+            self.assertEqual((path.read_bytes(), path.stat().st_ino), expected)
+        self.assertEqual((fixture.base / 'current').lstat().st_ino, fixture.current_inode)
+        self.assertEqual((fixture.image.read_bytes(), fixture.image.stat().st_ino), fixture.image_identity)
+        self.assertFalse(any(item[:2] == ('systemctl', 'start') for item in fixture.commands))
+
+    def test_scripts_only_upgrade_retains_state_receipt_history_and_caps(self):
+        with self.installation() as fixture:
+            result = self.upgrade(fixture)
+            self.assertFalse(result['activated'])
+            self.assertFalse(result['privateStateTouched'])
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.after['planSha256'])
+            self.assertEqual(fixture.marker.stat().st_mode & 0o777, 0o444)
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+            history = next((fixture.base / '.preview-ops-updates').iterdir())
+            self.assertEqual(json.loads((history / 'previous-receipt.json').read_text())['planSha256'], fixture.before['planSha256'])
+            self.assertEqual(host.digest(fixture.base / 'ops/preview-artifact.py'), fixture.after['files']['scripts/preview-artifact.py'])
+            self.assertEqual(host.digest(history / 'previous-ops/preview-artifact.py'), fixture.before['files']['scripts/preview-artifact.py'])
+            self.assert_private_state_unchanged(fixture)
+
+    def test_wrong_old_receipt_plan_or_tampered_operator_bytes_are_not_adopted(self):
+        for condition in ('wrong-plan', 'wrong-receipt', 'tampered-operator', 'changed-unit'):
+            with self.subTest(condition=condition), self.installation() as fixture:
+                old_sha = fixture.before['planSha256']
+                if condition == 'wrong-plan':
+                    old_sha = 'f' * 64
+                elif condition == 'wrong-receipt':
+                    fixture.marker.write_text(json.dumps({'formatVersion': 1, 'planSha256': 'f' * 64}))
+                elif condition == 'tampered-operator':
+                    target = fixture.base / 'ops/preview-artifact.py'
+                    target.chmod(0o755)
+                    target.write_bytes(b'tampered')
+                    target.chmod(0o555)
+                else:
+                    (fixture.units / host.UNITS[-1]).write_bytes(b'tampered unit')
+                with self.assertRaises(ValueError):
+                    self.upgrade(fixture, old_sha)
+                self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+                self.assert_private_state_unchanged(fixture)
+
+    def test_changed_resource_or_unit_definition_requires_another_workflow(self):
+        for condition in ('resource', 'unit'):
+            with self.subTest(condition=condition), self.installation() as fixture:
+                if condition == 'resource':
+                    fixture.before['imageBytes'] += 1
+                    body = {key: value for key, value in fixture.before.items() if key != 'planSha256'}
+                    fixture.before['planSha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                    fixture.previous.write_text(json.dumps(fixture.before))
+                else:
+                    (fixture.new / 'deploy/justup-preview' / host.UNITS[-1]).write_bytes(b'new unit')
+                    fixture.after = host.plan(fixture.new, 'a' * 64)
+                with self.assertRaises(ValueError):
+                    self.upgrade(fixture)
+                self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+                self.assert_private_state_unchanged(fixture)
+
+    def test_failed_directory_adoption_rolls_back_before_restoring_old_receipt(self):
+        with self.installation() as fixture:
+            rename = Path.rename
+            def fail_new(path, target):
+                if path.name == 'prepared-ops' and target == fixture.base / 'ops':
+                    self.assertFalse(fixture.marker.exists())
+                    raise OSError('simulated new directory failure')
+                return rename(path, target)
+            with patch.object(Path, 'rename', fail_new), self.assertRaises(OSError):
+                self.upgrade(fixture)
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
+            self.assertEqual(host.digest(fixture.base / 'ops/preview-artifact.py'), fixture.before['files']['scripts/preview-artifact.py'])
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+            self.assert_private_state_unchanged(fixture)
+
+    def test_crash_after_swap_keeps_receipt_absent_and_runtime_blocked(self):
+        class Crash(BaseException):
+            pass
+        with self.installation() as fixture:
+            rename = Path.rename
+            def crash(path, target):
+                result = rename(path, target)
+                if path.name == 'prepared-ops' and target == fixture.base / 'ops':
+                    raise Crash()
+                return result
+            with patch.object(Path, 'rename', crash), self.assertRaises(Crash):
+                self.upgrade(fixture)
+            self.assertFalse(fixture.marker.exists())
+            self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
+            with self.assertRaisesRegex(ValueError, 'adoption is blocked'):
+                artifact.read_host_plan(fixture.base)
+            self.assert_private_state_unchanged(fixture)
+
+    def test_receipt_publication_failure_restores_only_verified_old_directory(self):
+        with self.installation() as fixture:
+            publish = host.publish_receipt
+            attempts = 0
+            def fail_new(marker, temporary, data):
+                nonlocal attempts
+                attempts += 1
+                self.assertFalse(marker.exists())
+                if attempts == 1:
+                    raise OSError('simulated publication failure')
+                self.assertEqual(host.digest(fixture.base / 'ops/preview-artifact.py'), fixture.before['files']['scripts/preview-artifact.py'])
+                return publish(marker, temporary, data)
+            with patch.object(host, 'publish_receipt', fail_new), self.assertRaises(OSError):
+                self.upgrade(fixture)
+            self.assertEqual(attempts, 2)
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+            self.assert_private_state_unchanged(fixture)
+
+    def test_conflicting_receipt_is_not_removed_or_overwritten(self):
+        with self.installation() as fixture:
+            conflict = b'{"formatVersion":1,"planSha256":"another operator decision"}\n'
+            def conflicting(marker, temporary, data):
+                marker.write_bytes(conflict)
+                raise FileExistsError('another receipt exists')
+            with patch.object(host, 'publish_receipt', conflicting), self.assertRaisesRegex(ValueError, 'pending lock'):
+                self.upgrade(fixture)
+            self.assertEqual(fixture.marker.read_bytes(), conflict)
+            self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
+            with self.assertRaisesRegex(ValueError, 'adoption is blocked'):
+                artifact.read_host_plan(fixture.base)
+            self.assert_private_state_unchanged(fixture)
+
+    def test_active_dedicated_identity_blocks_replacement(self):
+        with self.installation() as fixture:
+            (fixture.proc / '123').mkdir()
+            with self.assertRaisesRegex(ValueError, 'no running processes'):
+                self.upgrade(fixture)
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
+            self.assertEqual(host.digest(fixture.base / 'ops/preview-artifact.py'), fixture.before['files']['scripts/preview-artifact.py'])
+            self.assert_private_state_unchanged(fixture)
 
 
 class BoundaryContracts(unittest.TestCase):
