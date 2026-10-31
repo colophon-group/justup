@@ -80,11 +80,10 @@ body.reduce-motion .list-row,body.reduce-motion .row-arrow{transition:none}body.
 /* Row feedback is provided by the surface and focus ring, not text underlines. */
 .list-row a:hover,.list-row button:hover{text-decoration:none}
 /* Employer links have their own target and feedback, independent of the posting. */
-.job-company{width:fit-content;max-width:calc(100% + 16px);padding:6px 8px;margin:-6px -8px;min-height:32px;transition:background-color 120ms ease-out,color 120ms ease-out,box-shadow 120ms ease-out}
-@media(hover:hover) and (pointer:fine){.job-company:hover{background:var(--ink);color:var(--cream)}.job-company:hover .mark{opacity:1}}
-.job-company:focus-visible{background:var(--cream);color:var(--ink);outline:2px solid var(--ink);outline-offset:2px}
-.job-company:active{background:var(--cream);color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
-.job-company:is(:focus-visible,:active) .mark{color:inherit;opacity:1}
+.job-company{width:fit-content;max-width:calc(100% + 16px);padding:6px 8px;margin:-6px -8px;min-height:32px;transition:box-shadow 120ms ease-out}
+@media(hover:hover) and (pointer:fine){.job-company:hover{box-shadow:inset 0 0 0 1px var(--ink)}}
+.job-company:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.job-company:active{box-shadow:inset 0 0 0 2px var(--ink)}
 @media(max-width:720px){.job-company{min-height:36px}}
 
 
