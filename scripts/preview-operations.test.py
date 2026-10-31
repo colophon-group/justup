@@ -186,11 +186,14 @@ class BoundaryContracts(unittest.TestCase):
             image = Path(temp) / 'preview.disk'
             image.write_bytes(b'x' * 8192)
             image.chmod(0o600)
+            deferred_initialization = False
             def formatter(*args, **kwargs):
+                nonlocal deferred_initialization
                 # Model the observed external utility: default discard releases
-                # allocated extents; nodiscard preserves them while writing metadata.
-                preserves_extents = '-E' in args and args[args.index('-E') + 1] == 'nodiscard'
-                if preserves_extents:
+                # extents immediately; lazy initialization can release them later.
+                options = set(args[args.index('-E') + 1].split(',')) if '-E' in args else set()
+                deferred_initialization = not {'lazy_itable_init=0', 'lazy_journal_init=0'} <= options
+                if 'nodiscard' in options:
                     with image.open('r+b') as stream:
                         stream.write(b'formatted')
                 else:
@@ -198,6 +201,10 @@ class BoundaryContracts(unittest.TestCase):
                         stream.truncate(8192)
             with patch.object(host, 'IMAGE', image), patch.object(host, 'DISK_LIMIT', 8192), patch.object(host, 'call', side_effect=formatter):
                 self.assertGreaterEqual(host.format_image().st_blocks * 512, 8192)
+                if deferred_initialization:
+                    with image.open('wb') as stream:
+                        stream.truncate(8192)
+                self.assertGreaterEqual(host.verify_image().st_blocks * 512, 8192)
                 # A later trim/hole punch keeps logical size but removes reservation.
                 with image.open('wb') as stream:
                     stream.truncate(8192)
