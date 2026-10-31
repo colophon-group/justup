@@ -71,6 +71,16 @@ test('warned company prefill survives explicit confirmation without creating a c
   assert.equal(done.task.status,'warning');assert.deepEqual(proposal.warnings[0].companyRequestPrefill,{input:'Newco',scope:null});assert.equal(f.records.size,1);
   const confirmed=await f.route('POST',`/searches/${created.body.search.id}/confirm`,{proposalId:proposal.proposalId,expectedRevision:0});assert.deepEqual(confirmed.body.search.warnings[0],proposal.warnings[0]);assert.equal(f.records.size,1);
 });
+test('known imported company without eligible jobs compiles to a fresh zero result and never a missing-company hint',async t=>{
+  let sent;const f=fixture({interpretIntent:async input=>{sent=input;return output({companyInclude:['known-old']});}});t.after(()=>f.db.close());
+  f.db.exec('CREATE TABLE demo_jobs(company_id TEXT,first_seen_at INTEGER,data_json TEXT)');
+  const metadata={companyId:'known-old',companyName:'Known Old',companySlug:'known-old',locations:[{name:'Zurich, Switzerland',workplace:'onsite'}],employmentTypes:['full_time'],locales:['en'],seniority:null,id:'must-not-enter-capabilities',title:'must-not-enter-capabilities',bodyText:'must-not-enter-capabilities'};
+  f.db.prepare('INSERT INTO demo_jobs VALUES(?,?,?)').run('known-old',at-20*86400000,JSON.stringify(metadata));f.feed.eligibleJobs=()=>[];
+  const caps=f.service.compilerCapabilities();assert.equal(caps.values.companies[0].id,'known-old');assert.equal(JSON.stringify(caps).includes('must-not-enter-capabilities'),false);
+  const reference=output({},[{id:'company',text:'Company known-old',handling:'unsatisfied',reason:'No current jobs.',bindings:[],companyReference:{input:'known-old',scope:null}}]);assert.equal(compileIntent(reference,caps,{query:'Jobs at known-old'}).value.warnings.some(w=>w.companyRequestPrefill),false);
+  const created=await f.route('POST','/searches',{query:'Jobs at known-old',requestKey:'known'}),done=await f.run(created.body.task.id);assert.equal(done.task.status,'succeeded');assert.equal(JSON.stringify(sent).includes('must-not-enter-capabilities'),false);
+  const page=(await f.route('GET',`/searches/${created.body.search.id}/results?revision=1`)).body;assert.deepEqual(page.items,[]);assert.equal(page.continuation.state,'exhausted');assert.equal(page.coverage.stale,false);
+});
 test('missing body/location/seniority evidence cannot satisfy required or excluded terms',()=>{
   for(const filters of [{bodyAll:['python']},{bodyNone:['agency']},{locations:['Zurich, Switzerland']},{workplaces:['remote']},{seniority:['senior']}]) assert.equal(primaryMatches(job('a',{bodyText:null,locations:[],seniority:null}),{filters}),false);
   assert.equal(primaryMatches(job('a'),{filters:{bodyAll:['PYTHON'],titleAny:['backend'],bodyNone:['agency']}}),true);
