@@ -166,3 +166,15 @@ test('initial fills measure wrapped row geometry instead of assuming a fixed row
     expect(tops.every(top => top < 1100)).toBe(true); expect(tops.length).toBeLessThan(12);
   }
 });
+
+test('logout and deletion mutations send the JSON object required by the HTTP boundary', async ({ page }) => {
+  let signedOut = false;
+  const calls = await mockApi(page, { ...saved, 'GET /session': () => session({ user: signedOut ? null : { id: 'reader', username: 'tester' } }), 'DELETE /searches/search-1': { deleted: true }, 'POST /company-requests': { request: { id: 'request-1', input: 'Library', status: 'candidate', candidate: company, previewRevision: 1 } }, 'DELETE /company-requests/request-1': { deleted: true }, 'POST /session/logout': () => { signedOut = true; return {}; } });
+  await page.goto('/'); await expect(page.getByRole('tab', { name: 'Library desk' })).toBeVisible();
+  await page.getByRole('button', { name: 'Delete Library desk' }).click(); await page.locator('#confirm-delete-search').click(); await expect(page.getByRole('tab', { name: 'Library desk' })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Companies', exact: true }).click(); await page.getByRole('link', { name: 'Request a company +' }).click(); await page.locator('#request-query').fill('Library'); await page.getByRole('button', { name: 'Find company' }).click(); await page.getByRole('button', { name: 'Not this company' }).click(); await expect(page.locator('#request-query')).toBeVisible();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await expect(page.locator('#header-sign-in')).toBeVisible();
+  for (const key of ['DELETE /searches/search-1', 'DELETE /company-requests/request-1', 'POST /session/logout']) {
+    const call = calls.find(item => item.key === key); expect(call, key).toBeTruthy(); expect(call.headers['content-type']).toBe('application/json'); expect(call.body).toEqual({}); expect(call.headers['x-csrf-token']).toBe('test-only-csrf');
+  }
+});

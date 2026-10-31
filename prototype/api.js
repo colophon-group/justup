@@ -16,13 +16,15 @@ window.JustupApi = (() => {
     if (!path.startsWith('/') || path.startsWith('//')) throw new Error('Invalid API path');
     const mutation = method !== 'GET';
     if (mutation && !csrfToken) throw new ApiError(403, { code: 'csrf_unavailable', message: 'Please refresh the page before trying again.' });
+    // Every mutation uses an object body, including logout and deletion routes.
+    const payload = mutation && body === undefined ? {} : body;
     const headers = { Accept: 'application/json' };
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (payload !== undefined) headers['Content-Type'] = 'application/json';
     if (mutation) headers['X-CSRF-Token'] = csrfToken;
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
     let response;
     try {
-      response = await fetch('/api/v1' + path, { method, credentials: 'same-origin', cache: 'no-store', headers, body: body === undefined ? undefined : JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000) });
+      response = await fetch('/api/v1' + path, { method, credentials: 'same-origin', cache: 'no-store', headers, body: payload === undefined ? undefined : JSON.stringify(payload), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000) });
     } catch (error) {
       if (signal?.aborted) throw error;
       throw new ApiError(0, { code: 'network_unavailable', message: 'The service is unavailable. Your last accepted search has been kept.' });
