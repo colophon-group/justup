@@ -1,7 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
 const deployed = process.env.JUSTUP_SMOKE_URL;
-const baseURL = deployed || 'http://127.0.0.1:4173';
+const port = Number(process.env.JUSTUP_TEST_PORT || '4183');
+if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Use an unprivileged JUSTUP_TEST_PORT.');
+const baseURL = deployed || `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: './tests/browser',
@@ -17,9 +19,9 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: deployed ? undefined : {
-    command: 'python3 -m http.server 4173 --bind 127.0.0.1 --directory prototype',
+    command: `node node_modules/vite/bin/vite.js preview --config vite.config.ts --host 127.0.0.1 --port ${port} --strictPort`,
     url: baseURL,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     stderr: 'ignore',
     timeout: 30_000,
   },
