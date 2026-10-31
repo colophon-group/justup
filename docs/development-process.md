@@ -18,7 +18,7 @@ A pull request (PR) is a proposed change reviewed before it joins a branch. The 
 
 ## 1. Branch and release requirements
 
-Application feature branches target `dev`, including work that began as a browser demonstration. A change cannot bypass tests or merge into `main` because its first version runs only in the browser. `main` receives release and urgent hotfix PRs; its full preview deployment gate must be implemented before a live release. Repository setup and policy changes may enter `main` through a reviewed PR with current checks while the first release is being prepared.
+Application feature branches target `dev`. Browser-only application code follows the same tests and review path; it cannot merge into `main` just because it has no server yet. `main` receives release and urgent hotfix PRs; its full preview deployment gate must be implemented before a live release. Repository setup and policy changes may enter `main` through a reviewed PR with current checks while the first release is being prepared.
 
 | Branch or ref | Purpose | Entry rule |
 | --- | --- | --- |
@@ -88,7 +88,7 @@ Write guides around the task a reader is trying to complete, with steps before d
 
 ## 4. Test creation, structure and maintenance
 
-Each PR also completes the four testing guidelines below. For a change with no affected behavior or tests, give a specific N/A reason; a behavior change without an automated test needs an explicit exception, manual evidence and reviewer acceptance. Browser-only application work does not qualify for an exception merely because it started as a demonstration. A passing test command alone does not explain whether the right behavior was tested.
+Each PR also completes the four testing guidelines below. For a change with no affected behavior or tests, give a specific N/A reason; a behavior change without an automated test needs an explicit exception, manual evidence and reviewer acceptance. Browser-only behavior does not qualify for an exception merely because no server code changed. A passing test command alone does not explain whether the right behavior was tested.
 
 | ID | Guideline | Required practice |
 | --- | --- | --- |
