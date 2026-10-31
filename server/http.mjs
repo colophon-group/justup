@@ -1,0 +1,205 @@
+// Same-origin demo HTTP boundary. All mutation, cookie, policy and private route
+// checks are centralized here before feature service code receives a request.
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { problem, boundedJson } from './store.mjs';
+
+const DISABLED = { sse: false, follows: false, viewed: false, preferences: false, hiddenMatchCounts: false, hiringWire: false };
+const GUEST_ACCESS = { kind: 'guest', fullAccess: false, legacy: false, billingEnabled: false, until: null };
+const SAFE_ERRORS = new Map([
+  ['invalid_input', 'Invalid request.'], ['invalid_credentials', 'Invalid username, password or invite code.'],
+  ['registration_closed', 'Demo registration is closed.'], ['account_limit', 'The demo account limit has been reached.'],
+  ['username_taken', 'That username is unavailable.'], ['unauthenticated', 'Sign in to continue.'],
+  ['policy_unavailable', 'Account access is unavailable until preview policies are approved.'],
+  ['deletion_unavailable', 'Account access is temporarily unavailable.'],
+  ['forbidden', 'This request is not allowed.'], ['invalid_json', 'Send a bounded JSON object.'],
+  ['not_found', 'Not found.'], ['rate_limit', 'Too many requests. Try again later.'],
+  ['task_limit', 'The demo task limit has been reached.'], ['idempotency_conflict', 'This request key was already used.'],
+  ['stale_cursor', 'This feed changed. Reload it and try again.'], ['invalid_cursor', 'Invalid cursor.'],
+  ['invalid_limit', 'Invalid page size.'], ['invalid_query', 'Invalid query.'],
+  ['dependency_unavailable', 'This feature is temporarily unavailable.'],
+  ['revision_conflict', 'This search changed. Reload it and try again.'],
+  ['preview_conflict', 'This preview changed. Reload it and try again.'],
+  ['unsupported_requirements', 'Some requirements are unsupported.'],
+]);
+function validPolicyUrl(value) {
+  try { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password; } catch { return false; }
+}
+export function policyState(config) {
+  const reviewed = config.policiesReviewed === true && validPolicyUrl(config.privacyUrl) && validPolicyUrl(config.usageUrl)
+    && typeof config.policyVersion === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(config.policyVersion);
+  return { privacyUrl: reviewed ? config.privacyUrl : null, usageUrl: reviewed ? config.usageUrl : null,
+    version: reviewed ? config.policyVersion : null, reviewed };
+}
+function decodePath(value) { try { return decodeURIComponent(value); } catch { throw problem('invalid_input'); } }
+function cookies(header) {
+  const result = {};
+  if (typeof header !== 'string' || header.length > 8192) return result;
+  for (const entry of header.split(';')) {
+    const [name, value, ...rest] = entry.trim().split('=');
+    if (!rest.length && /^[A-Za-z0-9_-]{43}$/.test(value ?? '') && !(name in result)) result[name] = value;
+  }
+  return result;
+}
+async function readBody(req, maxBytes) {
+  if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(req.headers['content-type'] ?? '')) throw problem('invalid_json');
+  if (Number(req.headers['content-length'] ?? 0) > maxBytes) throw problem('invalid_json');
+  const chunks = []; let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw problem('invalid_json');
+    chunks.push(chunk);
+  }
+  let body;
+  try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); } catch { throw problem('invalid_json'); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw problem('invalid_json');
+  return body;
+}
+export function createHandler({ auth, feed, tasks, db, services = [], config = {}, now = Date.now, logger = () => {} }) {
+  const origin = new URL(config.allowedOrigin ?? 'https://preview.justup.work');
+  const insecure = config.allowInsecureLocalhost === true && origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);
+  if (origin.origin !== (config.allowedOrigin ?? 'https://preview.justup.work') || (!insecure && origin.protocol !== 'https:')) throw new TypeError('Set one allowed HTTPS browser origin.');
+  const cookieName = insecure ? 'justup_demo_session' : '__Host-justup_demo_session';
+  const csrfCookie = insecure ? 'justup_demo_csrf' : '__Host-justup_demo_csrf';
+  const secret = config.csrfSecret ?? randomBytes(32);
+  if (Buffer.byteLength(secret) < 32) throw new TypeError('CSRF secret must contain at least 32 bytes.');
+  const maxBodyBytes = config.maxBodyBytes ?? 16_384;
+  if (!Number.isInteger(maxBodyBytes) || maxBodyBytes < 1 || maxBodyBytes > 65_536) throw new TypeError('Invalid body limit.');
+  const policies = policyState(config), buckets = new Map();
+  function authentication() {
+    const reason = !policies.reviewed ? 'policy_unavailable'
+      : config.deletionReady?.() === false ? 'deletion_unavailable'
+      : typeof auth.cleanup !== 'function' || config.authMaintenanceReady?.() === false ? 'dependency_unavailable' : null;
+    const invite = typeof config.inviteCode === 'string' && config.inviteCode.length > 0 && config.inviteCode.length <= 256;
+    const registration = typeof auth.registrationState === 'function' ? auth.registrationState() : { enabled: invite };
+    return { loginEnabled: reason == null, registrationEnabled: reason == null && invite && registration.enabled,
+      method: 'username_password', reason, registrationReason: reason ?? (!invite ? 'registration_closed' : registration.reason ?? null) };
+  }
+  const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
+  const digest = (value) => createHmac('sha256', secret).update(value).digest('base64url');
+  const csrf = (token, guestToken) => digest(token ? `session:${token}` : `guest:${guestToken}`);
+  const cookie = (name, value, expiresAt) => `${name}=${value}; Path=/; HttpOnly; SameSite=Lax${insecure ? '' : '; Secure'}; Max-Age=${Math.max(0, Math.floor((expiresAt - now()) / 1000))}`;
+  function limit(req, category) {
+    const at = now(), windowMs = 60_000;
+    // Use direct peer only. Reverse-proxy deployments must configure trusted
+    // ingress rate limits rather than trusting a client-controlled forwarding header.
+    const key = digest(`${category}:${req.socket.remoteAddress ?? 'unknown'}`);
+    if (buckets.size >= 10_000) for (const [k, v] of buckets) if (v.until <= at) buckets.delete(k);
+    let bucket = buckets.get(key);
+    if (!bucket || bucket.until <= at) {
+      if (!bucket && buckets.size >= 10_000) throw Object.assign(problem('rate_limit', 429), { retryAfter: 60 });
+      bucket = { count: 0, until: at + windowMs }; buckets.set(key, bucket);
+    }
+    const ceiling = config.rateLimits?.[category] ?? (category === 'auth' ? 6 : category === 'mutation' ? 30 : 120);
+    if (++bucket.count > ceiling) throw Object.assign(problem('rate_limit', 429), { retryAfter: Math.max(1, Math.ceil((bucket.until - at) / 1000)) });
+  }
+  function capabilities() {
+    const result = { search: false, aiMatching: false, companyRequests: false };
+    for (const service of services) Object.assign(result, typeof service.capabilities === 'function' ? service.capabilities() : service.capabilities);
+    return { ...result, ...DISABLED };
+  }
+  function sessionBody(viewer, token, guestToken) {
+    return { serverTime: new Date(now()).toISOString(), user: viewer?.account ?? null,
+      access: viewer?.access ?? GUEST_ACCESS, csrfToken: csrf(token, guestToken), capabilities: capabilities(),
+      policies, authentication: authentication(), coverage: feed.coverage() };
+  }
+  return async function handler(req, res) {
+    const requestId = randomUUID(), started = now(); let category = 'unknown';
+    res.setHeader('X-Request-ID', requestId);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    const send = (status, body) => {
+      const serialized = boundedJson(body, 1_048_576);
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serialized);
+    };
+    try {
+      const url = new URL(req.url, origin.origin);
+      if (!url.pathname.startsWith('/api/v1/')) throw problem('not_found', 404);
+      const path = url.pathname.slice('/api/v1'.length), method = req.method;
+      if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(method)) throw problem('not_found', 404);
+      const parsedCookies = cookies(req.headers.cookie);
+      const token = parsedCookies[cookieName] ?? null, viewer = token ? auth.session(token) : null;
+      const sessionToken = viewer ? token : null;
+      const guestToken = parsedCookies[csrfCookie] ?? randomBytes(32).toString('base64url');
+      const authRoute = method === 'POST' && ['/auth/register', '/auth/login'].includes(path);
+      const mutation = method !== 'GET';
+      category = authRoute ? 'auth' : mutation ? 'mutation' : path === '/health' || path === '/version' ? 'health' : 'read';
+      if (category !== 'health') limit(req, category);
+      let body;
+      if (mutation) {
+        if (req.headers.origin !== origin.origin) throw problem('forbidden', 403);
+        if (!authRoute && !viewer) throw problem('unauthenticated', 401);
+        const supplied = req.headers['x-csrf-token'], expected = csrf(sessionToken, guestToken);
+        if (typeof supplied !== 'string' || !tokenPattern.test(supplied)
+            || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected)) || (!viewer && !parsedCookies[csrfCookie])) throw problem('forbidden', 403);
+        if (authRoute) {
+          const state = authentication();
+          if (!state.loginEnabled) throw problem(state.reason, 503);
+          if (path === '/auth/register' && !state.registrationEnabled) throw problem(state.registrationReason ?? 'registration_closed', 403);
+        }
+        body = await readBody(req, maxBodyBytes);
+      }
+      if (method === 'GET' && path === '/session') {
+        if (!viewer) res.setHeader('Set-Cookie', cookie(csrfCookie, guestToken, now() + 3_600_000));
+        return send(200, sessionBody(viewer, sessionToken, guestToken));
+      }
+      if (authRoute) {
+        const result = path === '/auth/register' ? await auth.register(body) : await auth.login(body);
+        res.setHeader('Set-Cookie', [cookie(cookieName, result.token, result.expiresAt), cookie(csrfCookie, '', now())]);
+        return send(path === '/auth/register' ? 201 : 200, sessionBody(auth.session(result.token), result.token, guestToken));
+      }
+      if (method === 'POST' && path === '/session/logout') {
+        auth.logout(token); res.setHeader('Set-Cookie', cookie(cookieName, '', now()));
+        return send(200, { loggedOut: true });
+      }
+      if (method === 'DELETE' && path === '/account') {
+        const result = await auth.deleteAccount(token, body.password);
+        res.setHeader('Set-Cookie', cookie(cookieName, '', now())); return send(200, result);
+      }
+      if (method === 'GET' && path === '/jobs') {
+        const rawLimit = url.searchParams.get('limit');
+        const pageLimit = rawLimit == null ? 12 : /^\d{1,2}$/.test(rawLimit) ? Number(rawLimit) : NaN;
+        return send(200, feed.list({ viewer, cursor: url.searchParams.get('cursor'), limit: pageLimit }));
+      }
+      if (method === 'GET' && path === '/companies') return send(200, feed.companies({ q: url.searchParams.get('q') ?? '' }));
+      if (method === 'GET' && /^\/companies\/[^/]+$/.test(path)) return send(200, feed.company(decodePath(path.split('/')[2])));
+      if (method === 'GET' && path === '/health') {
+        const readiness = typeof config.readiness === 'function' ? config.readiness() : { ready: true, runner: { ready: false, identity: null } };
+        return send(readiness.ready ? 200 : 503, { ...readiness, coverage: feed.coverage() });
+      }
+      if (method === 'GET' && path === '/version') return send(200, {
+        sourceCommit: config.sourceCommit ?? null, schemaVersion: 1, buildIdentity: config.buildIdentity ?? null,
+        runner: (typeof config.readiness === 'function' ? config.readiness().runner : null) ?? { ready: false, identity: null },
+        importGeneration: feed.generation(),
+      });
+      if (!viewer) throw problem('unauthenticated', 401);
+      const ctx = { method, path, url, body, viewer, accountId: viewer.account.id, requestId, db };
+      if (method === 'GET' && /^\/tasks\/[^/]+$/.test(path)) {
+        const task = tasks.get(viewer.account.id, decodePath(path.split('/')[2]));
+        if (!task) throw problem('not_found', 404);
+        let output = null;
+        for (const service of services) if (service.taskResult) {
+          const candidate = await service.taskResult(task, ctx);
+          if (candidate !== undefined) { output = candidate; break; }
+        }
+        return send(200, tasks.publicView(task, output));
+      }
+      for (const service of services) {
+        const result = await service.route?.(ctx);
+        if (result != null) return send(result.status ?? 200, result.body);
+      }
+      throw problem('not_found', 404);
+    } catch (error) {
+      const known = SAFE_ERRORS.has(error.code), status = known && Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 500;
+      if (!res.headersSent) {
+        if (status === 429 || status === 503) res.setHeader('Retry-After', String(Number.isInteger(error.retryAfter) ? Math.min(3600, Math.max(1, error.retryAfter)) : 60));
+        send(status, { error: { code: known ? error.code : 'internal_error', message: known ? SAFE_ERRORS.get(error.code) : 'The request could not be completed.', requestId } });
+      } else res.destroy();
+    } finally {
+      // Only approved metadata reaches diagnostics; exceptions, URLs, bodies,
+      // tokens, usernames and IP addresses never reach this sink.
+      try { logger({ requestId, category, status: res.statusCode, durationMs: Math.max(0, now() - started) }); } catch { /* Logging cannot change request behavior. */ }
+    }
+  };
+}
