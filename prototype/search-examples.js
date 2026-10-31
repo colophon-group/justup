@@ -3,6 +3,17 @@
 // Short, detailed, editorial and playful searches are interleaved.
 const searchExamplePrompts=[
  "Remote jobs.",
+ "Bakery jobs in Bristol. Permanent contract, no split shifts.",
+ "Night receptionist jobs. I'm a night owl, not a volunteer.",
+ "Legal assistant roles in Leeds. Hybrid, training included, no unpaid trial days.",
+ "Sewing and alterations jobs. A permanent contract would suit me.",
+ "Museum education jobs in Glasgow. Part-time, paid preparation time.",
+ "Dental nurse roles in Dublin. Visa support, paid training, no weekends.",
+ "Local newspaper jobs. Proper reporting, not rewriting press releases.",
+ "Community arts roles. Four days a week, accessible workplace, published salary.",
+ "Chef jobs in Copenhagen. Proper breaks and overtime pay. No kitchen nightmares.",
+ "Train conductor jobs with paid training. Looking for a different line of work.",
+ "Veterinary receptionist roles in Cardiff. Part-time, no sales quotas.",
  "Library jobs. My indoor voice is finally a transferable skill.",
  "Nursing in Zurich. Day shifts, 80%, published pay. No rotating nights.",
  "Kitchen jobs. Less The Bear, more lunch breaks.",

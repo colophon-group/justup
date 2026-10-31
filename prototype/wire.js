@@ -1,14 +1,10 @@
-
 'use strict';
-// Renders the moving weekly company-news ribbon (Hiring Wire) with fictional data.
-// Read when changing ribbon data, motion or keyboard navigation.
-const wireSnapshots=[
- {company:'goodlight',daily:[3,4,3,5,4,6,6],previous:23,headline:'Listing activity picks up'},
- {company:'fieldwork',daily:[4,3,3,2,2,2,2],previous:24,headline:'A quieter week at the source'},
- {company:'orbit',daily:[4,5,6,5,7,7,8],previous:34,headline:'More roles on the board'},
- {company:'still',daily:[2,3,2,2,3,2,2],previous:16,headline:'New listings hold steady'},
- {company:'formwork',daily:[3,3,4,4,4,4,5],previous:21,headline:'A busier week for new roles'},
- {company:'northline',daily:[4,3,4,4,4,3,4],previous:25,headline:'Fresh listings edge upward'}
-];
-function wireItemHTML(snapshot){const c=companyFor(snapshot.company),data=companyReport(c),count=data.weekly,change=data.change||0,arrow=change>0?'↑':change<0?'↓':'→',number=change>0?'+'+change:change<0?'−'+Math.abs(change):'0',daily=data.daily.slice(-7),max=Math.max(...daily),min=Math.min(...daily),points=daily.map((n,i)=>`${2+i*5},${max===min?8:13-(n-min)/(max-min)*11}`).join(' ');return `<li class="wire-item"><a href="#company/${c.id}"><span class="wire-company" data-no-translate>${escapeHTML(c.name)}</span><span class="wire-headline">${snapshot.headline}</span><svg class="wire-spark" viewBox="0 0 34 16" aria-hidden="true"><polyline points="${points}"/></svg><span class="wire-change">${arrow} ${number}%</span></a></li>`;}
-function initHiringWire(){const host=$('#hiring-wire'),viewport=$('#wire-viewport'),track=$('#wire-track');const list=document.createElement('ul');list.className='wire-items';list.innerHTML=wireSnapshots.map(wireItemHTML).join('');const duplicate=list.cloneNode(true);duplicate.classList.add('wire-duplicate');duplicate.setAttribute('aria-hidden','true');for(const a of duplicate.querySelectorAll('a'))a.tabIndex=-1;track.append(list,duplicate);const measure=()=>{const width=list.getBoundingClientRect().width;track.style.setProperty('--wire-distance',-width+'px');track.style.setProperty('--wire-duration',Math.max(45,width/27)+'s');};new ResizeObserver(measure).observe(list);measure();let keyboard=false;document.addEventListener('keydown',event=>{if(event.key==='Tab')keyboard=true;});document.addEventListener('pointerdown',()=>{keyboard=false;});document.addEventListener('click',()=>{if(!keyboard&&host.classList.contains('wire-reading')){viewport.scrollLeft=0;host.classList.remove('wire-reading');}});host.addEventListener('focusin',event=>{if(keyboard&&event.target.closest('.wire-item')){host.classList.add('wire-reading');requestAnimationFrame(()=>event.target.scrollIntoView({block:'nearest',inline:'center',behavior:'instant'}));}});host.addEventListener('focusout',()=>queueMicrotask(()=>{if(!host.contains(document.activeElement)){viewport.scrollLeft=0;host.classList.remove('wire-reading');}}));duplicate.addEventListener('mousedown',event=>event.preventDefault());document.addEventListener('visibilitychange',()=>host.classList.toggle('wire-away',document.hidden));}
+// Only publisher-provided signals; no simulated hiring statistics.
+function renderHiringWire(signals = []) {
+  const items = signals.filter(item => typeof item.text === 'string' && item.text.trim());
+  $('#hiring-wire').hidden = !items.length;
+  $('#wire-track').replaceChildren();
+  if (!items.length) return;
+  const copy = items.map(item => `<span class="wire-item">${escapeHTML(item.text)}</span>`).join('<span aria-hidden="true"> · </span>');
+  $('#wire-track').innerHTML = `<div class="wire-group">${copy}</div><div class="wire-group" aria-hidden="true">${copy}</div>`;
+}

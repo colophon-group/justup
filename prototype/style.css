@@ -376,3 +376,37 @@ input[type=checkbox]:checked{background:var(--ink)}
 input[type=checkbox]:checked:after{content:'';width:4px;height:8px;border:solid var(--cream);border-width:0 1.5px 1.5px 0;transform:translateY(-1px) rotate(45deg)}
 input[type=radio]{border-radius:50%}
 input[type=radio]:checked{background:radial-gradient(circle,var(--ink) 0 4px,var(--cream) 4.5px)}
+
+/* Live interface states share the existing cream, coral and ink system. */
+.service-notice{padding:18px;border:1px solid;margin-bottom:24px;background:var(--cream);font:12px/1.7 var(--mono)}
+#search-status:empty,#live-status:empty{display:none}
+#search-accounting{font:11px/1.65 var(--mono);margin-top:12px}
+#search-accounting details{border-left:2px solid;padding-left:12px}
+#search-accounting summary{cursor:pointer;font-weight:700}
+.requirement-list{list-style:none;padding:0;display:grid;gap:8px}
+.requirement-state{font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid;padding:2px 4px}
+.model-warning{font-weight:700}
+.company-logo{object-fit:contain;letter-spacing:0}
+.clickable-row{cursor:pointer}
+.job-company{position:relative;z-index:2;width:fit-content;padding:6px;margin:-6px;border:1px solid transparent}
+.job-company:hover,.job-company:focus-visible{background:var(--cream);border-color:var(--ink);color:var(--ink);text-decoration:none;box-shadow:2px 2px 0 var(--ink)}
+.job:has(.job-company:hover){box-shadow:none;background:transparent}
+#access-notice{position:relative;isolation:isolate;overflow:hidden;display:grid;place-items:center;min-height:235px;text-align:center;border:1px solid var(--ink);background:var(--paper)}
+.access-gate-copy{position:relative;z-index:1;padding:24px;max-width:600px}
+.access-gate-copy h2{font:900 32px/1 var(--display);margin:0 0 12px}
+.access-gate-copy p{font-size:12px;line-height:1.7}
+.compressed-edition{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+.compressed-edition i{display:block;height:65px;margin:15px 20px;border-block:1px solid var(--ink);background:repeating-linear-gradient(0deg,transparent 0 17px,var(--ink) 18px 19px,transparent 20px 28px);filter:blur(3px);opacity:.13}
+.compressed-edition i:first-child{filter:blur(11px);transform:scaleY(.2);margin-top:-10px}
+.compressed-edition i:nth-child(2){filter:blur(7px);transform:scaleY(.55);margin-top:-15px}
+.policy-footer{min-height:105px;padding:32px 0 24px;display:flex;gap:24px;align-items:start;justify-content:space-between;font:10px/1.7 var(--mono)}
+.policy-footer p{margin:0;max-width:70ch}.policy-footer nav{display:flex;gap:18px}.policy-footer a,.small-print a{text-decoration:underline;text-underline-offset:3px}
+.settings-motion{margin:24px 0}.account-actions{display:flex;align-items:center;gap:24px}
+#sign-in-providers{display:grid;gap:12px}.report-subtitle{margin:22px 0}.report-subtitle .mark{width:24px;height:24px}
+.hiring-history{display:flex;align-items:end;gap:12px;height:210px;padding-top:20px}.hiring-history>div{display:flex;flex-direction:column;justify-content:end;align-items:center;flex:1;height:100%;gap:8px}.history-bar{display:block;min-height:2px;height:var(--height);width:100%;background:var(--ink)}.hiring-history small{font-size:9px;text-align:center}
+.tracked-sources{margin-top:35px;padding-top:25px;border-top:2px solid}.tracked-sources li{margin:12px 0}.tracked-sources a{text-decoration:underline;text-underline-offset:3px}
+#company-page section,#company-page .report-facts{margin-block:30px}
+@media(max-width:720px){.policy-footer{flex-direction:column;gap:12px}.access-gate-copy h2{font-size:28px}.hiring-history{gap:5px}}
+@media(prefers-reduced-motion:reduce){.wire-track{animation:none!important}.live i{animation:none!important}}
+#auth-invite,#delete-password{display:block;width:100%;background:transparent;border:1.5px solid var(--ink);padding:13px;font-size:16px;margin:10px 0 18px}
+#auth-invite-field{margin-top:18px}.follow-company{position:relative;z-index:2}
