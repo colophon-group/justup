@@ -7,7 +7,7 @@ read_when: You need to find a policy or setup guide.
 
 | If you are... | Read |
 | --- | --- |
-| Running or changing the current browser interface | [Browser run guide](../prototype/README.md) |
+| Running, building or changing the web application | [Web application guide](../web/README.md) |
 | Understanding product behavior and open design choices | [Product guide](product-design.md) |
 | Designing user-facing backend boundaries and AI work | [Backend design](backend-design.md) |
 | Choosing deployment placement, preview isolation or recovery | [Deployment plan](deployment-plan.md) |

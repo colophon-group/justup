@@ -5,7 +5,7 @@ read_when: Preparing an exact preview candidate, approving its owned hostname, o
 
 # Frontend preview delivery
 
-This is preparation for [demo-preview-hosting](https://github.com/colophon-group/justup/issues/27), supporting [demo-release-verification](https://github.com/colophon-group/justup/issues/36). No Cloudflare service, DNS record, certificate or deployment has been created by this implementation. The current prototype must first be integrated with the real API and reviewed policies. Packaging it does not make simulated data a live service.
+This is preparation for [demo-preview-hosting](https://github.com/colophon-group/justup/issues/27), supporting [demo-release-verification](https://github.com/colophon-group/justup/issues/36). No Cloudflare service, DNS record, certificate or deployment has been created by this implementation. The React/TypeScript web application builds with Vite. Its real API and reviewed policies must still be integrated and verified before deployment; a successful build does not establish a working service.
 
 ## Resolve these inputs before a deployment
 
@@ -25,7 +25,7 @@ Repository metadata records the intended domain and the Cloudflare plan only. It
 
 ## Prepare the retained artifact
 
-Run with Node 24 or later and Git, from the reviewed repository. Pass the exact 40-character commit ID, not a branch name. Output must be a new directory outside the checkout, so old verified bytes cannot be overwritten:
+Run in an unprivileged, credential-free build job with pinned Node 24.22.2, npm and Git, from the reviewed repository. Do not run candidate builds in an operator/admin session or a trusted deployment job. Pass the exact 40-character commit ID, not a branch name. Output must be a new directory under an existing parent outside the checkout, so old verified bytes cannot be overwritten:
 
 ```sh
 node --test deploy/frontend/*.test.mjs
@@ -33,17 +33,19 @@ node scripts/frontend-prepare.mjs <candidate-sha> /tmp/justup-preview-candidate
 node scripts/frontend-configure.mjs /tmp/justup-preview-candidate <approved-worker-name> https://<approved-preview-host> https://<approved-api-host>
 ```
 
-The preparer reads `prototype/` and the edge Worker from the committed Git tree. It ignores local dirty and untracked files, rejects symlinks and common secret/control files, and writes sorted per-asset SHA-256 hashes in `release.json`. The configurator verifies these bytes before writing a new `wrangler.json`. Secret detection is a boundary check, not a substitute for reviewing public assets.
+The preparer reads only committed package/lock/build configuration and `web/` source inputs into a new temporary directory, installs the locked public npm dependencies with install hooks disabled, and runs the production build there. The original checkout and any dirty/untracked files cannot supply build inputs. User/global npm configuration and arbitrary environment variables are excluded. A candidate containing the removed legacy runtime, symlink inputs, committed generated output or secret-looking public files fails closed. Only the resulting `web/dist` regular files and the exact committed edge Worker are retained. Source files, maps and README files cannot become public assets. Sorted per-asset SHA-256 hashes and source/tree identity are written to `release.json`; the configurator verifies the retained bytes before writing a new `wrangler.json`.
+
+A temporary directory and filtered environment are **not an operating-system sandbox**. Build configuration and npm build scripts execute candidate code. Run this phase only in the unprivileged build environment with no deployment tokens, private credentials or operator files available. A later trusted deployment job consumes the retained artifact without rebuilding or executing candidate scripts. Public-file checks supplement source review; they do not establish that arbitrary code is safe.
 
 The retained artifact consists of `assets/`, `worker.mjs`, `release.json` and runtime-only `wrangler.json`. Keep the directory private to the release process: its deployment configuration includes the API hostname, although it contains no authentication token. Do not put credentials, provider keys, database credentials or API tokens in any of these files. Cloudflare deployment credentials are provided separately by the trusted operator environment. No Git-integrated automatic deployment or credentialed PR workflow is installed.
 
-The generated config disables bundling and additional-module discovery: the dependency-free Worker is uploaded as the retained source bytes, without esbuild changing its hash. The official Wrangler CLI is the deployment tool rather than an application dependency; there is no package or lockfile change. Version `4.156.0` was selected from the official npm registry for a bounded packaging dry run. A trusted deployment job must pin its reviewed CLI version and use the retained artifact, rather than executing candidate scripts with deployment credentials.
+The generated config disables bundling and additional-module discovery: the dependency-free Worker is uploaded as the retained source bytes, without esbuild changing its hash. The official Wrangler CLI is a separate deployment tool; it is not bundled into the React application. Application dependencies remain pinned in the reviewed lockfile. Version `4.156.0` was selected from the official npm registry for a bounded packaging dry run. A trusted deployment job must pin its reviewed CLI version and use the retained artifact, rather than executing candidate scripts with deployment credentials.
 
 ## Routing and session contract
 
 The current demo uses invite-only username/password accounts, with no OAuth provider or email. External-provider routing below is a transport contract for future use, not an enabled demo capability. SSE is likewise supported by the edge transport but unavailable in the first backend demo; use capability-controlled polling until end-to-end streaming exists.
 
-One Cloudflare Worker serves the existing static interface through its `ASSETS` binding. `run_worker_first=true` gives **every** response the noindex and privacy headers. The root `/` explicitly serves `index.html`. Asset HTML handling is `none`, with no catch-all HTML fallback; `/privacy.html` and `/usage.html` remain independently fetchable without a session or API. `/robots.txt` disallows all crawling. Workers.dev and provider version preview URLs are disabled, and an unapproved request origin is rejected.
+One Cloudflare Worker serves the compiled application through its `ASSETS` binding. `run_worker_first=true` gives **every** response the noindex and privacy headers. The root `/` explicitly serves `index.html`. Asset HTML handling is `none`, with no catch-all HTML fallback; `/privacy.html` and `/usage.html` remain independently fetchable without a session or API. `/robots.txt` disallows all crawling. Workers.dev and provider version preview URLs are disabled, and an unapproved request origin is rejected.
 
 | Route | Behavior |
 | --- | --- |
@@ -88,4 +90,4 @@ Retain the previous complete artifact and its config, deployment ID and browser/
 
 ## Test ownership
 
-Frontend hosting owns `deploy/frontend/*.test.mjs`: edge routing/privacy/stream contracts plus exact-commit packaging and remote-byte verification. The suite uses Node's built-in test runner, temporary Git repositories and fake fetch responses; no provider, credential, DNS or real deployment is required. Expected runtime is under five seconds, in the deployment-contract CI group. The integrated CI registers `deploy/frontend/**` and `scripts/frontend-*.mjs` in the central selector, with broad checks for deployment-contract changes. The explicit deployed smoke belongs to the release-verification issue rather than ordinary PR CI.
+Frontend hosting owns `deploy/frontend/*.test.mjs`: edge routing/privacy/stream contracts plus exact-commit packaging and remote-byte verification. The suite uses Node's built-in test runner, temporary Git repositories with a dependency-free deterministic build command, and fake fetch responses; no provider, credential, DNS or real deployment is required. Expected contract-suite runtime is under thirty seconds, in the deployment-contract CI group. The required CI lane separately builds and tests the actual Vite application; a packaging fixture is not proof that the application compiles or behaves correctly. The integrated CI registers `deploy/frontend/**` and `scripts/frontend-*.mjs` in the central selector, with broad checks for deployment-contract changes. The explicit deployed smoke belongs to the release-verification issue rather than ordinary PR CI.
