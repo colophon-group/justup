@@ -9,12 +9,22 @@ import { createCodexModel } from './model-runner.mjs';
 import { createBrokerExecutor } from './model-broker.mjs';
 import { runnerStatusPath } from './demo-composition.mjs';
 
-export function readRunnerConfig(path=process.env.JUSTUP_DEMO_RUNNER_CONFIG){
-  if(!isAbsolute(path)||realpathSync(path)!==path)throw new Error('Runner configuration is unavailable.');
+export function runnerIdentity(env=process.env){
+  const sourceCommit=env.JUSTUP_DEMO_SOURCE_COMMIT,buildIdentity=env.JUSTUP_DEMO_BUILD_ID,hostPlanSha256=env.JUSTUP_DEMO_HOST_PLAN_SHA256;
+  if(!/^[a-f0-9]{40}$/.test(sourceCommit??'')||!/^[a-f0-9]{64}$/.test(buildIdentity??'')||!/^[a-f0-9]{64}$/.test(hostPlanSha256??''))throw new Error('Runner build identity is unavailable.');
+  return {sourceCommit,buildIdentity,hostPlanSha256};
+}
+export function bindRunnerConfig(config,env=process.env){
+  const identity=runnerIdentity(env);
+  if(!config||typeof config!=='object'||Array.isArray(config)||Object.keys(config).some(k=>!['dbPath','sharedState','runnerStatusPath','model','jev','matching','verificationTtlMs'].includes(k))||typeof config.dbPath!=='string'||!isAbsolute(config.dbPath)||!isAbsolute(runnerStatusPath(config))||config.model!=null&&(typeof config.model!=='object'||Array.isArray(config.model)||Object.hasOwn(config.model,'sourceCommit')||Object.hasOwn(config.model,'buildIdentity')||Object.hasOwn(config.model,'hostPlanSha256')))throw new Error('Runner configuration is unavailable.');
+  // Only the trusted launcher derives these from the verified artifact and
+  // installed host plan. Operator JSON cannot substitute a different proof.
+  return {...config,...identity,model:{...(config.model??{}),buildIdentity:identity.buildIdentity,hostPlanSha256:identity.hostPlanSha256}};
+}
+export function readRunnerConfig(path=process.env.JUSTUP_DEMO_RUNNER_CONFIG,env=process.env){
+  if(typeof path!=='string'||!isAbsolute(path)||realpathSync(path)!==path)throw new Error('Runner configuration is unavailable.');
   const meta=lstatSync(path);if(!meta.isFile()||meta.uid!==0||(meta.mode&0o027)!==0||meta.size>32_768)throw new Error('Runner configuration is unavailable.');
-  const config=JSON.parse(readFileSync(path,'utf8'));
-  if(!config||typeof config!=='object'||Array.isArray(config)||Object.keys(config).some(k=>!['dbPath','sharedState','sourceCommit','buildIdentity','runnerStatusPath','model','jev','matching','verificationTtlMs'].includes(k))||!isAbsolute(config.dbPath)||!/^[a-f0-9]{40}$/.test(config.sourceCommit??'')||typeof config.buildIdentity!=='string'||!config.buildIdentity||config.buildIdentity.length>200||!isAbsolute(runnerStatusPath(config)))throw new Error('Runner configuration is unavailable.');
-  return config;
+  return bindRunnerConfig(JSON.parse(readFileSync(path,'utf8')),env);
 }
 export function writeRunnerStatus({path,identity,config,capabilities,ready=true,now=Date.now}){
   const parent=dirname(path),meta=lstatSync(parent);if(!isAbsolute(path)||!meta.isDirectory()||meta.isSymbolicLink()||(meta.mode&0o002)!==0)throw new Error('Runner status storage is unavailable.');

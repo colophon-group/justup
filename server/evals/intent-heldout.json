@@ -1,14 +1,145 @@
 {
-  "version": 1,
+  "version": 2,
   "purpose": "Provider-free compiler held-out contracts; these outputs do not measure Luna quality.",
-  "liveGate": {"minimumCases": 20, "primaryAccuracy": 0.95, "unsafeAcceptance": 0, "unaccountedHardRequirements": 0, "p95LatencyMs": 30000, "maximumOutputTokensPerAttempt": 6000, "maximumAttempts": 2},
+  "liveGate": {
+    "minimumCases": 20,
+    "primaryAccuracy": 0.95,
+    "unsafeAcceptance": 0,
+    "unaccountedHardRequirements": 0,
+    "p95LatencyMs": 30000,
+    "maximumOutputTokensPerAttempt": 6000,
+    "maximumAttempts": 2,
+    "maximumNativeToolCalls": 0
+  },
   "cases": [
-    {"id":"positive-company-alias","query":"Backend at Acme Labs","filters":{"companyInclude":["acme-labs"],"titleAny":["backend"]},"requirements":[{"id":"r1","text":"Acme backend roles","handling":"primary","reason":"Canonical company and title evidence."}],"expected":"accepted"},
-    {"id":"negative-unknown-remote-eligibility","query":"Work remotely from any country","filters":{"workplaces":["anywhere"]},"requirements":[{"id":"r1","text":"Any country eligibility","handling":"primary","reason":"Workplace evidence."}],"expected":"invalid"},
-    {"id":"unsupported-visa","query":"Visa sponsorship","filters":{},"requirements":[{"id":"r1","text":"Visa sponsorship","handling":"unsatisfied","reason":"No verified visa field or matching evidence is available."}],"expected":"warning"},
-    {"id":"ambiguous-missing-company","query":"Mercury engineering","filters":{"companyInclude":["Mercury"]},"requirements":[{"id":"r1","text":"Mercury company","handling":"primary","reason":"Requires unambiguous canonical identity."}],"expected":"invalid"},
-    {"id":"empty-results-preserve-term","query":"Astronaut jobs","filters":{"titleAny":["astronaut"]},"requirements":[{"id":"r1","text":"Astronaut title","handling":"primary","reason":"Explicit title term can truthfully produce zero matches."}],"expected":"accepted"},
-    {"id":"preference-not-hard","query":"Any role; ideally English","filters":{},"requirements":[{"id":"r1","text":"Ideally English","handling":"preference","reason":"User made this nonbinding."}],"expected":"accepted"},
-    {"id":"residual-provider-unavailable","query":"Climate impact roles","filters":{},"requirements":[{"id":"r1","text":"Climate impact","handling":"ai","reason":"Needs evidence interpretation."}],"residualAi":{"condition":"Role directly works on climate impact","requirementIds":["r1"]},"expected":"invalid"}
-  ]
+    {
+      "id": "positive-company-alias",
+      "query": "Backend at Acme Labs",
+      "filters": {
+        "companyInclude": [
+          "acme-labs"
+        ],
+        "titleAny": [
+          "backend"
+        ]
+      },
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Acme backend roles",
+          "handling": "primary",
+          "reason": "Canonical company and title evidence."
+        }
+      ],
+      "expected": "accepted"
+    },
+    {
+      "id": "negative-unknown-remote-eligibility",
+      "query": "Work remotely from any country",
+      "filters": {
+        "workplaces": [
+          "anywhere"
+        ]
+      },
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Any country eligibility",
+          "handling": "primary",
+          "reason": "Workplace evidence."
+        }
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "unsupported-visa",
+      "query": "Visa sponsorship",
+      "filters": {},
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Visa sponsorship",
+          "handling": "unsatisfied",
+          "reason": "No verified visa field or matching evidence is available."
+        }
+      ],
+      "expected": "warning"
+    },
+    {
+      "id": "ambiguous-missing-company",
+      "query": "Mercury engineering",
+      "filters": {
+        "companyInclude": [
+          "Mercury"
+        ]
+      },
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Mercury company",
+          "handling": "primary",
+          "reason": "Requires unambiguous canonical identity."
+        }
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "empty-results-preserve-term",
+      "query": "Astronaut jobs",
+      "filters": {
+        "titleAny": [
+          "astronaut"
+        ]
+      },
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Astronaut title",
+          "handling": "primary",
+          "reason": "Explicit title term can truthfully produce zero matches."
+        }
+      ],
+      "expected": "accepted"
+    },
+    {
+      "id": "preference-not-hard",
+      "query": "Any role; ideally English",
+      "filters": {},
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Ideally English",
+          "handling": "preference",
+          "reason": "User made this nonbinding."
+        }
+      ],
+      "expected": "accepted"
+    },
+    {
+      "id": "residual-provider-unavailable",
+      "query": "Climate impact roles",
+      "filters": {},
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "Climate impact",
+          "handling": "ai",
+          "reason": "Needs evidence interpretation."
+        }
+      ],
+      "residualAi": {
+        "condition": "Role directly works on climate impact",
+        "requirementIds": [
+          "r1"
+        ]
+      },
+      "expected": "invalid"
+    }
+  ],
+  "policy": {
+    "cliVersion": "0.159.2",
+    "model": "gpt-6-luna",
+    "reasoningEffort": "low",
+    "nativeTools": 0
+  }
 }
