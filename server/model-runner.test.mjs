@@ -14,7 +14,8 @@ const emit=(events=messages)=>`process.stdout.write(${JSON.stringify(lines(event
 test('exact model and read-only arguments remove inherited tool surfaces',()=>{
   const args=codexArguments({kind:'search_intent',schemaPath:'/schemas/intent.json',taskCwd:'/empty'}),settings=args.join(' ');
   assert.equal(args[args.indexOf('--model')+1],LUNA_MODEL);
-  for(const flag of ['--ignore-user-config','--ignore-rules','--strict-config','--ephemeral','--json'])assert.ok(args.includes(flag));
+  for(const flag of ['--ignore-user-config','--strict-config','--ephemeral','--json'])assert.ok(args.includes(flag));
+  assert.equal(args.includes('--ignore-rules'),false);
   assert.equal(args[args.indexOf('--sandbox')+1],'read-only');
   for(const feature of ['shell_tool','unified_exec','apps','plugins','memories','hooks','multi_agent','browser_use','computer_use','request_permissions_tool'])assert.ok(settings.includes(`--disable ${feature}`));
   assert.ok(settings.includes('web_search="disabled"'));assert.equal(args.at(-1),'-');assert.equal(settings.includes('untrusted'),false);

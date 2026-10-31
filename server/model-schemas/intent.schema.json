@@ -191,7 +191,8 @@
           "id",
           "text",
           "handling",
-          "reason"
+          "reason",
+          "bindings"
         ],
         "properties": {
           "id": {
@@ -217,6 +218,39 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 1000
+          },
+          "bindings": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "field",
+                "values"
+              ],
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "enum": [
+                    "companyInclude",
+                    "companyExclude",
+                    "titleAny",
+                    "bodyAll",
+                    "bodyNone",
+                    "locations",
+                    "workplaces",
+                    "employmentTypes",
+                    "postingLanguages",
+                    "seniority"
+                  ]
+                },
+                "values": {
+                  "$ref": "#/$defs/values"
+                }
+              }
+            }
           }
         }
       }

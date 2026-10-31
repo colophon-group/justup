@@ -3,12 +3,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { createIntentService,compileIntent,intentCapabilities,primaryMatches } from './intent.mjs';
+import { createIntentService,compileIntent,intentCapabilities,primaryMatches,intentModelInput } from './intent.mjs';
 
 const at=Date.parse('2026-10-31T16:00:00Z');
 const FIELDS=['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'];
-function output(filters={},requirements=[{id:'r1',text:'Backend roles',handling:'primary',reason:'Title evidence.'}],residualAi=null) {
-  return {title:'Backend',configuration:{schemaVersion:1,filters:{...Object.fromEntries(FIELDS.map(k=>[k,null])),...filters},residualAi},requirements};
+function output(filters={},requirements,residualAi=null) {
+  const bindings=Object.entries(filters).filter(([,v])=>v).map(([field,values])=>({field,values}));
+  requirements??=[{id:'r1',text:Object.values(filters).flat().join(' ')||'Any job',handling:'primary',reason:'Applied evidence.'}];
+  const accounted=requirements.map(r=>({...r,bindings:r.bindings??(r.handling==='primary'?bindings:[])}));
+  if(bindings.length&&!accounted.some(r=>r.handling==='primary'))accounted.unshift({id:'applied',text:Object.values(filters).flat().join(' '),handling:'primary',reason:'Applied evidence.',bindings});
+  return {title:'Backend',configuration:{schemaVersion:1,filters:{...Object.fromEntries(FIELDS.map(k=>[k,null])),...filters},residualAi},requirements:accounted};
 }
 function job(id,extra={}) { return {id,companyId:'acme',companyName:'Acme Labs',companySlug:'acme-labs',title:'Backend Engineer',bodyText:'Python services and databases.',firstObserved:`2026-10-2${id==='a'?'9':'8'}T10:00:00Z`,locations:[{name:'Zurich, Switzerland',workplace:'onsite'}],locales:['en'],employmentTypes:['full_time'],seniority:{id:'senior',name:'Senior'},...extra}; }
 function fixture(model={interpretIntent:async()=>output({titleAny:['backend']})},config={}) {
@@ -35,11 +39,24 @@ test('compiler normalizes dataset aliases and rejects unavailable values with ex
   const good=compileIntent(output({companyInclude:['ACME-LABS'],locations:['zurich, switzerland'],seniority:['Senior']}),caps);
   assert.equal(good.ok,true);assert.deepEqual(good.value.configuration.filters,{companyInclude:['acme'],locations:['Zurich, Switzerland'],seniority:['senior']});
   const bad=compileIntent(output({workplaces:['cross-border']}),caps);
-  assert.deepEqual(bad.diagnostics,[{path:'$.configuration.filters.workplaces[0]',code:'unknown_value'}]);
+  assert.ok(bad.diagnostics.some(d=>d.path==='$.configuration.filters.workplaces[0]'&&d.code==='unknown_value'&&Array.isArray(d.alternatives)));
 });
 test('compiler rejects conflicts, unknown keys, blank terms and AI without availability',()=>{
   const caps=intentCapabilities([job('a')]);
   for(const raw of [output({companyInclude:['acme'],companyExclude:['acme']}),output({salary:['100000']}),output({titleAny:['  ']}),output({},[{id:'r1',text:'Visa',handling:'ai',reason:'No primary field.'}],{condition:'Visa sponsorship',requirementIds:['r1']})]) assert.equal(compileIntent(raw,caps).ok,false);
+});
+test('unrelated existing filter cannot masquerade as implementation of a hard requirement',()=>{
+  const bad=output({titleAny:['backend']},[{id:'r1',text:'Visa sponsorship required',handling:'primary',reason:'Claimed supported.',bindings:[{field:'titleAny',values:['backend']}]}]);
+  const result=compileIntent(bad,intentCapabilities([job('a')]));assert.equal(result.ok,false);assert.ok(result.diagnostics.some(d=>d.code==='unimplemented_primary_requirement'));
+  const missing=output({titleAny:['backend']});missing.requirements[0].bindings=[];assert.equal(compileIntent(missing,intentCapabilities([job('a')])).ok,false);
+});
+test('large catalogue projection and bounded repair fit stdin while compiler sees all canonical values',()=>{
+  const jobs=Array.from({length:1000},(_,i)=>job(String(i),{companyId:`company-${i}`,companyName:`Company ${i}`,companySlug:`company-${i}`,locations:[{name:`City ${i}, Country ${i%2}`,workplace:'onsite'}]})),caps=intentCapabilities(jobs);
+  const query='Backend at Company 947 in Country 1',input=intentModelInput({query,capabilities:caps});assert.ok(Buffer.byteLength(JSON.stringify(input))<22000);assert.equal(input.query,query);assert.ok(input.capabilities.values.companies.some(c=>c.id==='company-947'));assert.equal(input.capabilities.catalogue.totals.companies,1000);
+  const wrong=compileIntent(output({companyInclude:['Company 947'],locations:['City 9999']}),caps);assert.equal(wrong.ok,false);assert.ok(wrong.diagnostics.some(d=>d.path==='$.configuration.filters.locations[0]'&&d.alternatives.length<=6));
+  const repair=intentModelInput({query,capabilities:caps,prior:{query,configuration:{schemaVersion:1,filters:{locations:jobs.map(j=>j.locations[0].name)},residualAi:null}},repair:{diagnostics:wrong.diagnostics,previous:output({companyInclude:['Company 947'],locations:['City 9999']})}});assert.ok(Buffer.byteLength(JSON.stringify(repair))+1600<24576);assert.equal(repair.prior.configurationContextPartial,true);
+  const compiled=compileIntent(output({locations:['Country 1']}),caps);assert.equal(compiled.ok,true);assert.deepEqual(compiled.value.configuration.filters.locations,['Country 1']);assert.equal(jobs.filter(j=>primaryMatches(j,compiled.value.configuration)).length,500);
+  const ambiguous=compileIntent(output({locations:['Paris']}),intentCapabilities([job('a',{locations:[{name:'Paris, France',workplace:'onsite'}]}),job('b',{locations:[{name:'Paris, United States',workplace:'onsite'}]})]));assert.equal(ambiguous.ok,false);
 });
 test('missing body/location/seniority evidence cannot satisfy required or excluded terms',()=>{
   for(const filters of [{bodyAll:['python']},{bodyNone:['agency']},{locations:['Zurich, Switzerland']},{workplaces:['remote']},{seniority:['senior']}]) assert.equal(primaryMatches(job('a',{bodyText:null,locations:[],seniority:null}),{filters}),false);
