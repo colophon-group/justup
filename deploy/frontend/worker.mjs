@@ -33,7 +33,7 @@ function response(body, status, headers = {}, privateResponse = false) {
 }
 
 function unavailable(code = 'dependency_unavailable', status = 503) {
-  return response(JSON.stringify({ code, message: status === 403 ? 'Request origin is not allowed.' : 'The preview service is unavailable.', requestId: crypto.randomUUID(), retryAfter: 30 }), status, { 'Content-Type': 'application/json', 'Retry-After': '30' }, true);
+  return response(JSON.stringify({ error: { code, message: status === 403 ? 'Request origin is not allowed.' : 'The preview service is unavailable.', requestId: crypto.randomUUID(), retryAfter: 30 } }), status, { 'Content-Type': 'application/json', 'Retry-After': '30' }, true);
 }
 
 export function createHandler(fetchUpstream = globalThis.fetch) {

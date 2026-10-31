@@ -3,14 +3,15 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "scripts": {
     "test:syntax": "node scripts/check-syntax.mjs",
     "test:browser": "playwright test",
     "test": "npm run test:full",
     "test:deployment": "node --test deploy/frontend/*.test.mjs",
-    "test:full": "npm run test:syntax && npm run test:deployment && npm run test:browser"
+    "test:full": "npm run test:syntax && npm run test:deployment && npm run test:server && npm run test:browser",
+    "test:server": "node scripts/test-server.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1"

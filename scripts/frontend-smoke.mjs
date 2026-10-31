@@ -30,12 +30,18 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
   }
   for (const policy of ['/privacy.html', '/usage.html']) await get(policy);
   assert.match(await (await get('/robots.txt')).text(), /Disallow: \//);
-  for (const path of ['/api/v1/session']) {
+  const health = await get('/api/v1/health');
+  assert.match(health.headers.get('Cache-Control') || '', /no-store/, 'Health can be cached');
+  for (const path of ['/api/v1/session', '/api/v1/version']) {
     const result = await get(path);
     assert.match(result.headers.get('Cache-Control') || '', /no-store/, `API can be cached: ${path}`);
     assert.match(result.headers.get('Content-Type') || '', /application\/json/, `API returned HTML: ${path}`);
     const body = await result.json();
     assert.ok(body && typeof body === 'object', `Invalid API object: ${path}`);
+    if (path === '/api/v1/session') {
+      assert.equal(body.user, null, 'Uncredentialed smoke must be a visitor');
+      assert.ok(body.access && typeof body.access === 'object', 'Missing server-owned access');
+    }
   }
   return { sourceSha: release.sourceSha, artifactSha256: release.artifactSha256, runtimeConfigSha256: version.runtimeConfigSha256, checkedAssets: release.assets.length, result: 'passed', scope: 'read-only frontend delivery; API/runner identities and authenticated journeys require separate release checks' };
 }

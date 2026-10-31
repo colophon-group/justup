@@ -33,13 +33,14 @@ test('artifact snapshots committed bytes, ignores dirty files, has stable digest
     execFileSync(process.execPath, [new URL('scripts/frontend-configure.mjs', root).pathname, first, 'justup-preview-test', 'https://preview.justup.test', 'https://api.justup.test']);
     const config = JSON.parse(await readFile(join(first, 'wrangler.json'), 'utf8'));
     assert.equal(config.assets.run_worker_first, true);
+    assert.equal(config.no_bundle, true); assert.equal(config.find_additional_modules, false);
     assert.equal(config.workers_dev, false); assert.equal(config.preview_urls, false);
     const version = { ...JSON.parse(config.vars.RELEASE_JSON), runtimeConfigSha256: config.vars.RUNTIME_CONFIG_SHA256 };
     const fetchFixture = async url => {
       const path = new URL(url).pathname;
       const headers = { 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store', 'Content-Type': 'application/json' };
       if (path === '/__preview/version') return new Response(JSON.stringify(version), { headers });
-      if (path.startsWith('/api/v1/')) return new Response('{}', { headers });
+      if (path.startsWith('/api/v1/')) return new Response(JSON.stringify({ user: null, access: { kind: 'guest' } }), { headers });
       if (path === '/robots.txt') return new Response('User-agent: *\nDisallow: /', { headers });
       return new Response(await readFile(join(first, 'assets', path.slice(1))), { headers });
     };

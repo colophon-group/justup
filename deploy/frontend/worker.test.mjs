@@ -32,7 +32,7 @@ test('API paths never fall back to HTML and malformed origins fail closed', asyn
   for (const API_ORIGIN of [undefined, 'http://api.test', 'https://user:secret@api.test', 'https://api.test/path', 'https://api.test?q=x']) {
     const result = await handle(request('/api/v1/session'), { ...environment(), API_ORIGIN });
     assert.equal(result.status, 503); privateHeaders(result);
-    assert.equal((await result.json()).code, 'dependency_unavailable');
+    assert.equal((await result.json()).error.code, 'dependency_unavailable');
   }
   assert.throws(() => httpsOrigin('https://api.test/#x'));
 });

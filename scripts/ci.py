@@ -87,11 +87,11 @@ def classify(path: str) -> str:
         return "docs"
     if path.startswith("deploy/frontend/") or (path.startswith("scripts/frontend-") and path.endswith(".mjs")):
         return "deployment"
-    if path in {"scripts/ci.py", ".gitignore", ".github/CODEOWNERS"} or path.startswith(".github/workflows/"):
+    if path in {"scripts/ci.py", "scripts/test-server.mjs", ".gitignore", ".github/CODEOWNERS"} or path.startswith(".github/workflows/"):
         return "tooling"
     if path in {"package.json", "package-lock.json", "npm-shrinkwrap.json", "scripts/check-syntax.mjs"}:
         return "app"
-    if path.startswith(("prototype/", "tests/browser/")):
+    if path.startswith(("prototype/", "tests/browser/", "server/")):
         return "app"
     if path.startswith("playwright.config."):
         return "app"
@@ -107,9 +107,9 @@ def select(paths: list[str], base_branch: str, full_override: bool) -> tuple[boo
     elif "unknown" in kinds:
         reason = "unrecognized path requires the full suite"
     elif "deployment" in kinds:
-        reason = "deployment contracts changed; run syntax, edge contracts and browser journeys"
+        reason = "deployment contracts changed; run syntax, edge/server contracts and browser journeys"
     elif "app" in kinds:
-        reason = "application or test files require syntax, deployment and browser checks"
+        reason = "application or test files require syntax, deployment, server and browser checks"
     elif "tooling" in kinds:
         reason = "CI tooling changed; run every available suite"
     else:
@@ -204,7 +204,7 @@ def run_pr(event_path: Path) -> None:
     run("npm", "ci")
     run(str(ROOT / "node_modules/.bin/playwright"), "install", "--with-deps", "chromium")
     run("npm", "run", "test:full")
-    append_summary(["- Full suite: passed (syntax, deployment contracts and locked Playwright browser journeys)."])
+    append_summary(["- Full suite: passed (syntax, deployment/server contracts and locked Playwright browser journeys)."])
 
 
 def selftest() -> None:
@@ -233,6 +233,9 @@ def selftest() -> None:
     assert select(["new-server/runtime.go"], "main", False)[:2] == (True, True)
     assert select([".github/workflows/ci.yml"], "dev", False)[:2] == (True, False)
     assert classify("scripts/unregistered.mjs") == "unknown"
+    assert classify("scripts/test-server.mjs") == "tooling"
+    assert select(["server/auth.mjs", "server/auth.test.mjs"], "dev", False)[:2] == (True, False)
+    assert select(["server/auth.mjs"], "main", False)[:2] == (True, True)
     browser_pr_paths = [
         ".gitignore", "package.json", "package-lock.json", "playwright.config.mjs",
         "scripts/check-syntax.mjs", "tests/browser/flows.spec.mjs",

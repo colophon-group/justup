@@ -14,7 +14,7 @@ const identity = Object.fromEntries(['sourceSha', 'treeSha', 'assetsSha256', 'wo
 const runtime = { publicOrigin, apiOrigin, apiPrefix: '/api/v1' };
 const config = {
   name: workerName, main: './worker.mjs', compatibility_date: '2026-10-31',
-  workers_dev: false, preview_urls: false,
+  workers_dev: false, preview_urls: false, no_bundle: true, find_additional_modules: false,
   assets: { directory: './assets', binding: 'ASSETS', run_worker_first: true, html_handling: 'none', not_found_handling: 'none' },
   routes: [{ pattern: new URL(publicOrigin).hostname, custom_domain: true }],
   vars: { PUBLIC_ORIGIN: publicOrigin, API_ORIGIN: apiOrigin, RELEASE_JSON: JSON.stringify(identity), RUNTIME_CONFIG_SHA256: digest(JSON.stringify(runtime)) },
