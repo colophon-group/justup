@@ -187,6 +187,11 @@ test('new request key retries unresolved research and deletion purges every atte
   await f.service.runTask(f.claim(retry.body.task.id));assert.equal((await f.service.route(f.ctx('GET'))).body.items[0].previewRevision,2);
   await f.service.route(f.ctx('DELETE',`/company-requests/${retry.body.request.id}`));assert.equal(f.records.size,0);assert.equal(f.db.prepare('SELECT count(*) n FROM demo_company_request_tasks').get().n,0);
 });
+test('direct company deletion holds the injected private transaction through the barrier',async t=>{
+  const f=fixture(t),created=await f.create(body());let released=0;
+  const service=createCompanyService({db:f.db,feed:{companies:()=>({items:[]})},tasks:f.tasks,beforePrivateDelete:()=>assert.equal(f.db.isTransaction,true),withPrivateTransaction:fn=>{f.db.exec('BEGIN');try{const result=fn();f.db.exec('COMMIT');return result;}catch(error){f.db.exec('ROLLBACK');throw error;}finally{assert.equal(f.db.isTransaction,false);released++;}}});
+  await service.route(f.ctx('DELETE',`/company-requests/${created.body.request.id}`));assert.equal(released,1);assert.equal(f.records.size,0);
+});
 
 test('request deletion purges private tasks and a late model response cannot recreate it', async (t) => {
   let resolve, barrierCalls = 0;

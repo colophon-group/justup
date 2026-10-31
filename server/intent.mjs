@@ -78,7 +78,7 @@ export function primaryMatches(job, {filters:f}) {
   return true;
 }
 
-export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,model,matching}={}) {
+export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching}={}) {
   if(!db||!feed||!tasks) throw new TypeError('Search dependencies are required.');
   db.exec(`CREATE TABLE IF NOT EXISTS demo_searches(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,accepted_json TEXT,draft_json TEXT,task_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
     CREATE INDEX IF NOT EXISTS demo_searches_owner ON demo_searches(owner_id);
@@ -182,8 +182,10 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(ctx.method==='GET'&&ctx.path===`/searches/${id}/results`) return {status:200,body:await results(r,ctx)};
     if(ctx.method==='DELETE'&&ctx.path===`/searches/${id}`) {
       if(typeof beforePrivateDelete!=='function') throw err('deletion_unavailable',503,'Deletion is temporarily unavailable.');
-      const barrier=beforePrivateDelete();if(barrier&&typeof barrier.then==='function') throw new TypeError('Deletion barrier must be synchronous.');
-      tx(db,()=>purgeSearch(ctx.accountId,id)); return {status:200,body:{deleted:true}};
+      const remove=()=>{const barrier=beforePrivateDelete();if(barrier&&typeof barrier.then==='function') throw new TypeError('Deletion barrier must be synchronous.');purgeSearch(ctx.accountId,id);};
+      if(withPrivateTransaction)withPrivateTransaction(remove);
+      else try{tx(db,remove);}finally{if(!db.isTransaction)afterPrivateTransaction?.();}
+      return {status:200,body:{deleted:true}};
     }
     if(ctx.method==='POST'&&ctx.path===`/searches/${id}/confirm`) {
       bodyKeys(ctx.body,['proposalId','expectedRevision']); const expected=revision(ctx.body.expectedRevision);

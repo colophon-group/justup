@@ -2,7 +2,7 @@
 // tests never seed auth or assert that an unobserved model toolset is safe.
 import { spawn } from 'node:child_process';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { isAbsolute,dirname } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { performance } from 'node:perf_hooks';
 
@@ -65,6 +65,7 @@ export function checkModelIsolation(config={}) {
     if(!isAbsolute(config.socketPath)||realpathSync(config.socketPath)!==config.socketPath) return false;
     const socket=statSync(config.socketPath);
     if(!socket.isSocket()||socket.uid!==0||(socket.mode&0o007)!==0) return false;
+    const parent=statSync(dirname(config.socketPath));if(!parent.isDirectory()||parent.uid!==0||(parent.mode&0o022)!==0)return false;
     if(!/^[a-f0-9]{64}$/.test(config.toolCatalogSha256??'')||!isAbsolute(config.attestationPath)) return false;
     if(realpathSync(config.attestationPath)!==config.attestationPath) return false;
     const reportFile=statSync(config.attestationPath);

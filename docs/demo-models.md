@@ -15,7 +15,7 @@ Use Node 24.22.2. The modules use Node built-ins only. Include both JSON files i
 node --test server/intent.test.mjs server/companies.test.mjs server/model-runner.test.mjs server/model-broker.test.mjs server/runner.test.mjs
 ```
 
-`createIntentService({db,feed,tasks,config,now,beforePrivateDelete,model,matching})` and `createCompanyService` synchronously create their own tables. HTTP already supplies authenticated `ctx.accountId`, parsed bodies, CSRF/Origin enforcement and safe errors. Company acceptance additionally needs `ctx.idempotencyKey` from the `Idempotency-Key` header. Never derive ownership from a body field.
+`createIntentService({db,feed,tasks,config,now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching})` and `createCompanyService` synchronously create their own tables. HTTP already supplies authenticated `ctx.accountId`, parsed bodies, CSRF/Origin enforcement and safe errors. Company acceptance additionally needs `ctx.idempotencyKey` from the `Idempotency-Key` header. Never derive ownership from a body field.
 
 Register both service factories with the API. Wire one runner handler registry:
 
@@ -59,7 +59,7 @@ Known identities use the imported catalogue without a provider. Unknown imported
 
 The broker independently retrieves at most two same-official-domain evidence pages. HTTPS stays pinned to a resolved public IPv4 address with the original TLS server name. Private/link-local/reserved/mixed DNS results, IP literals, non-HTTPS URLs, ATS official domains, cross-origin redirects, excessive redirects, unsupported content types and oversized bodies fail. IPv6-only sites remain unresolved. The page must contain the proposed company name outside scripts/styles. This supports a public identity preview; it does not independently settle corporate ownership or user ambiguity, which remain model/evaluation and explicit preview-acceptance concerns. HTTP status, URL/final URL, body hash and byte provenance are stored privately and purged with the request.
 
-Exact candidate ID, preview revision and the header idempotency key are required to accept once. Acceptance records requested scope only: it never follows, monitors, configures or onboards a company. Request/search deletion invokes the synchronous backup-generation barrier before SQL commit and removes associated private tasks, previews and evidence; account deletion composes the same plain SQL hooks inside the authentication transaction.
+Exact candidate ID, preview revision and the header idempotency key are required to accept once. Acceptance records requested scope only: it never follows, monitors, configures or onboards a company. Direct request/search deletion uses `withPrivateTransaction(syncFn)` with the backup-generation barrier inside the actual transaction before private SQL deletes. Its pending marker stays held through commit/rollback and releases only outside a transaction. Account deletion composes plain synchronous SQL hooks inside the authentication transaction, which owns that barrier lifecycle. Every private task, preview and evidence record is removed.
 
 ## Dedicated model broker
 

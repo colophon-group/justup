@@ -100,7 +100,7 @@ function importedCandidate(company) {
     evidenceUrls: [...new Set(evidenceUrls)].slice(0, 8), coverage: { state: 'imported_snapshot' } };
 }
 
-export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, model = null } = {}) {
+export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, afterPrivateTransaction, withPrivateTransaction, model = null } = {}) {
   if (!db || !feed?.companies || !tasks?.enqueue || (beforePrivateDelete != null && typeof beforePrivateDelete !== 'function')) throw new TypeError('Invalid company service configuration.');
   const maxPerOwner = config.maxCompanyRequestsPerOwner ?? 32;
   if (!Number.isSafeInteger(maxPerOwner) || maxPerOwner < 1 || maxPerOwner > 96) throw new TypeError('Invalid company request limit.');
@@ -242,13 +242,15 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     if (!id || id.length > 128 || id.includes('/')) throw problem('invalid_input');
     if (ctx.path.endsWith('/accept') && ctx.method === 'POST') return accept(ownerId, id, ctx.body, ctx.idempotencyKey);
     if (!ctx.path.endsWith('/accept') && ctx.method === 'DELETE') {
-      transaction(db, () => {
+      const remove=() => {
         if (!row(ownerId, id)) throw problem('not_found', 404, 'Not found.');
         if (typeof beforePrivateDelete !== 'function') throw problem('deletion_unavailable', 503, 'Deletion is temporarily unavailable.');
         const barrier = beforePrivateDelete();
         if (barrier && typeof barrier.then === 'function') throw new TypeError('Deletion barrier must be synchronous.');
         deleteRecord(ownerId, id);
-      });
+      };
+      if(withPrivateTransaction)withPrivateTransaction(remove);
+      else try{transaction(db,remove);}finally{if(!db.isTransaction)afterPrivateTransaction?.();}
       return { status: 200, body: { deleted: true } };
     }
     return null;
