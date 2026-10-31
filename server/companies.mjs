@@ -33,6 +33,7 @@ export function validateCompanyUrl(value, { official = false } = {}) {
   const host = publicHost(parsed.hostname);
   if (official && isAts(host)) throw problem('invalid_input');
   parsed.hostname = host;
+  if (parsed.href.length > 2048) throw problem('invalid_input');
   return parsed.href;
 }
 function domain(value, optional = false) {

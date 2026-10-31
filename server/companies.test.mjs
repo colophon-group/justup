@@ -139,7 +139,7 @@ test('acceptance requires the exact candidate, revision and idempotency key and 
 test('public URL validation rejects private and executable URLs and ATS official domains', async (t) => {
   for (const url of ['http://newcompany.com', 'https://localhost/a', 'https://127.0.0.1/', 'https://2130706433/', 'https://[::1]/',
     'https://internal.local/a', 'https://user:pass@newcompany.com', 'https://newcompany.com:8443/', 'file:///etc/passwd',
-    'https://newcompany.com/#secret', 'javascript:alert(1)']) {
+    'https://newcompany.com/#secret', 'javascript:alert(1)', `https://newcompany.com/${'é'.repeat(400)}`]) {
     assert.throws(() => validateCompanyUrl(url), rejectCode('invalid_input'));
   }
   assert.equal(validateCompanyUrl('https://jobs.greenhouse.io/newcompany'), 'https://jobs.greenhouse.io/newcompany');
