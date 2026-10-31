@@ -1,10 +1,8 @@
 # Justup development and release process
 
-Status: proposed starting policy, 31 October 2026
+This policy applies to Justup contributions now. The repository is in design and prototype work; the application test runner, `dev` branch, selected CI and release automation described below are not implemented yet. Activate their gates before the first live release, and update this document when the repository state changes.
 
-This process applies to Justup. Keep the policy small enough that every check has a clear purpose and owner. Add guidelines when a real review failure or recurring defect justifies one.
-
-## 1. Branch and release contract
+## 1. Branch and release requirements
 
 | Branch or ref | Purpose | Entry rule |
 | --- | --- | --- |
@@ -20,7 +18,28 @@ Release PRs use a merge commit, with current `main` an ancestor of the candidate
 
 For Justup's planned Cloudflare frontend and Hetzner API/runner, the release candidate preview must include compatible versions of **all three**, an isolated database and non-production credentials. Verify the immutable preview deployment and its API/runner artifact identities. After promotion, smoke-test production and retain the prior deployable artifacts and a database recovery path. A frontend-only preview cannot establish that the service works.
 
-## 2. Contribution quality
+## 2. Issues, commits and resource approval
+
+Open one issue for each meaningful work item. Title it `<Area>: <desired outcome>` with a short area name and an outcome, for example `Search: preserve results after invalid interpretation` or `CI: select affected test suites`. Do not put type, priority, status or an issue number in the title; labels and GitHub state carry those. A pure typo or metadata correction may omit an issue if it has no enduring context to preserve.
+
+The issue holds the motivation, current context, desired outcome, constraints, acceptance evidence and relevant links. Record material decisions and alternatives in its discussion. Keep implementation chronology out of code comments and product documentation; those files describe current behavior and contracts. A PR links its primary issue and documents the resulting changes and verification, without repeating the issue's rationale.
+
+Use an imperative commit subject with the issue reference visible in one-line file history: `Preserve valid search after model failure (refs #42)`. Every commit for that work item uses its issue number, including the final squash subject if squashing. Put secondary issue links in the commit body when necessary. `refs` links context without claiming automatic closure; close the issue when its desired outcome is accepted and link the merged PR. Do not rewrite older commits solely to adopt this convention.
+
+Use one type label and, only when needed, `blocked`:
+
+| Label | Use |
+| --- | --- |
+| `bug` | Current behavior violates an expected contract. |
+| `enhancement` | A user-facing capability or behavior change. |
+| `maintenance` | Refactoring, tests, CI, process or internal upkeep. |
+| `documentation` | Documentation-only work. |
+| `resource-request` | A separate request for a new external service or infrastructure spend. |
+| `blocked` | An issue is waiting on a decision or dependency; remove it when that condition clears. |
+
+When proposed work needs a new external service or infrastructure spend, create a separate `resource-request` issue and mark it `blocked`. State the purpose, existing alternatives, owner, environment, data/access scope, one-time and recurring cost estimate, spending ceiling and cleanup plan. Planning and code preparation may proceed. An authorized human must explicitly approve the resource and ceiling in that issue before provisioning, even if usable credentials already exist. A label, available account, or agent-authored comment is not approval. Reapproval is needed if scope or cost increases. Link the resource issue and its approval status from the implementation issue and PR.
+
+## 3. Contribution quality
 
 Every PR completes the [PR template](../.github/PULL_REQUEST_TEMPLATE.md). For each guideline, check the box and write one short **Applied: evidence** or **N/A: reason** line. A script may enforce completion and valid format; a reviewer judges whether the explanation is true. A checked box alone is not evidence.
 
@@ -32,11 +51,14 @@ Every PR completes the [PR template](../.github/PULL_REQUEST_TEMPLATE.md). For e
 | Q4 | Security and privacy | Are authorization, secrets, dependency trust, personal data and data retention handled where touched? |
 | Q5 | Data and deployment safety | Are schema/data changes compatible with deployed versions, observable, and recoverable? |
 | Q6 | User experience | Are accessibility, language, loading, empty and error states handled where users see a change? |
-| Q7 | Documentation and decisions | Are contracts, runbooks or design decisions updated where future contributors will need them? |
+| Q7 | Current-state code and docs | Do code, comments, tests, examples and docs describe what exists now, with obsolete paths and historical narrative removed? |
+| Q8 | Transform before adding | Does the change reshape or replace the existing path where possible, removing superseded code, tests and docs instead of accumulating parallel versions? If temporary compatibility is needed, is its owner and removal condition clear? |
+| Q9 | Dependency budget | Are new direct and transitive dependencies avoided where a small existing solution suffices? If added, does the issue record alternatives and why the dependency reduces the total maintenance surface enough to justify upkeep, security and upgrade cost, while the PR names the actual dependency change? |
+| Q10 | Resource authorization | Does work needing a new external service or infrastructure spend link to a separate `resource-request` issue, with no provisioning before explicit human approval? |
 
 Keep this checklist stable and version its IDs. A PR may mark a guideline N/A only with a specific reason; for example, “N/A: this changes only the search evaluation fixture, with no user-facing UI.” Claims such as “N/A: not needed” are incomplete. Reviewers request evidence when the explanation is doubtful. Mechanical rules belong in formatters, linters, type checks and CI rather than prose.
 
-## 3. Test creation, structure and maintenance
+## 4. Test creation, structure and maintenance
 
 Each PR also completes the four testing guidelines below. For a change with no affected behavior or tests, give a specific N/A reason; a behavior change without an automated test needs an explicit exception, manual evidence and reviewer acceptance. A passing test command alone does not explain whether the right behavior was tested.
 
@@ -53,7 +75,7 @@ Prioritize integration cases where boundaries create risk: search revisions and 
 
 Every suite has an owner, purpose, expected runtime and CI lane. Track failures and duration. Quarantine a flaky test only with an owner, issue, expiry and replacement signal during quarantine; fix or delete it before expiry. A removed test must follow removed behavior or be replaced by evidence at a better level. Review test additions that materially increase suite time or repeat an existing invariant.
 
-## 4. CI that selects relevant tests
+## 5. CI that selects relevant tests
 
 One required, always-running `CI / decision` check owns the result of each PR. It reports the changed paths, selected suites, reasons for selection and reasons for any skip. It fails if a required suite fails, a selected suite does not report a result, or the selection script fails. An unknown path triggers the full suite and is reported as a fallback; a passing full run may clear the check. Do not path-filter the required workflow itself: GitHub can leave a required check pending when the whole workflow is skipped.
 
@@ -63,7 +85,7 @@ Ordinary PRs run a fast baseline (format, lint/type checks for touched code, PR-
 
 Define AI evaluation pass/fail thresholds from representative baselines before the first live release; running an evaluation without an acceptance threshold does not make the release gate green.
 
-## 5. Release gate
+## 6. Release gate
 
 The release PR from the frozen candidate to `main` must record a named release owner, changelog, migration and rollback steps, feature flags, known limitations and candidate SHA. Its gate is:
 
@@ -94,16 +116,11 @@ Use deterministic provider fixtures for broad journeys and a bounded real-provid
 
 The production deploy is an explicit release action, not an automatic build on every `main` push. Same-byte frontend deployment requires runtime configuration or stable relative routes for API/auth origins and environment-specific public keys. This is a launch prerequisite: preview-specific values embedded at build time invalidate the tested artifact and block promotion until the deployment contract is fixed and reverified. If Cloudflare Pages is chosen, CI can use Wrangler Direct Upload to publish the retained prebuilt frontend bytes as a **new** production deployment; disable automatic production builds in a Git-integrated Pages project. A Pages preview cannot itself be promoted or used as a production rollback target. Verify the production asset hash and backend digests before smoke testing. If another hosting path rebuilds artifacts, prove source and output identity and repeat verification after any mismatch.
 
-## 6. Ownership and enforcement
+## 7. Ownership and enforcement
 
 Before the first live release, decide who may merge into `dev` and `main`, who owns each suite, and who can approve production promotion. Require PRs, current green checks and resolved review comments. Code owners or a second reviewer should inspect security, billing, migration and deploy changes. Restrict CI credentials to the minimum scope and keep preview and production secrets separate.
 
 The public GitHub repository has no branch protection or required checks configured yet. Until they are implemented, the release owner records the exact candidate SHA, check links and approval in the release PR and performs the merge manually. Treat protection and required checks as launch prerequisites, not as already enforced safeguards. Do not create an always-green placeholder CI check.
-
-## 7. Adoption
-
-1. **Now:** agree on this policy, use the PR checklist, define the initial suite manifest and critical journeys when the application code is scaffolded.
-2. **Before Justup launch:** implement the CI selector and always-running decision check, release preview, immutable artifact promotion, recovery test and available branch protections. Set AI and production-health pass thresholds. Measure and publish baseline CI duration and release verification time.
 
 ## References
 
