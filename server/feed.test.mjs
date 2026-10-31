@@ -9,7 +9,7 @@ function setup(t) {
   const feed = createFeed({ db: s.db, now: () => at, cursorSecret: 'x'.repeat(32) });
   function add(rows) {
     s.importSnapshot({ schemaVersion: 1, snapshotAt: iso(AT), verifiedAt: iso(AT), jobs: rows.map(([id, age]) => ({
-      id, companyId: 'company', companyName: 'Example', companySlug: null, title: `Role ${id}`, sourceUrl: `https://example.org/${id}`,
+      id, companyId: 'company', companyName: 'Example', companySlug: 'example', title: `Role ${id}`, sourceUrl: `https://example.org/${id}`,
       active: true, reserved: false, hasContent: true, firstObserved: iso(AT - age * DAY_MS), lastObserved: null,
       locales: ['en'], locations: [{ name: null, workplace: null }], employmentTypes: [], seniority: null, salary: null, bodyText: null,
       evidence: { source: 'jobseek_public', metadataFetchedAt: iso(AT), bodyFetchedAt: null, bodyUrl: null, bodySha256: null, textSha256: null, bodyBytes: 0, normalizationVersion: 1, truncated: false },
@@ -42,7 +42,7 @@ test('cursor preserves source ordering and rejects generation/access/tamper chan
 test('company catalogue exposes imported identity without inventing monitoring or website', (t) => {
   const { feed, add } = setup(t); add([['hidden', 1]]);
   const co = feed.company('company'); assert.equal(co.websiteUrl, null); assert.equal(co.coverage.state, 'imported_snapshot');
-  assert.equal(co.history, null); assert.ok(!JSON.stringify(co).includes('/hidden'));
+  assert.equal(co.history, null); assert.equal(co.evidence[0].url, 'https://jseek.co/en/company/example'); assert.ok(!JSON.stringify(co).includes('/hidden'));
   assert.equal(feed.companies({ q: 'EXAM' }).items.length, 1);
   assert.throws(() => feed.company('absent'), { status: 404 });
 });

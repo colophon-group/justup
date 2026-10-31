@@ -35,6 +35,7 @@ test('persistent demo files are private, imports are bounded and env flags are e
   truncateSync(input, 64 * 1024 * 1024 + 1); assert.throws(() => readImportFile(input), /64 MiB/);
   const env = configFromEnv({ JUSTUP_DEMO_POLICIES_REVIEWED: 'yes', JUSTUP_DEMO_ALLOW_LOCAL_HTTP: 'true' });
   assert.equal(env.policiesReviewed, false); assert.equal(env.allowInsecureLocalhost, true);
+  assert.equal(env.servicesEnabled, false); assert.equal(configFromEnv({ JUSTUP_DEMO_SERVICES_ENABLED: 'true', JUSTUP_DEMO_SHARED_STATE: 'true' }).sharedState, true);
 });
 test('health/version expose fixed identity and explicitly unavailable runner', async (t) => {
   const demo = await createDemo({ config: { allowedOrigin: 'https://preview.example', sourceCommit: 'a'.repeat(40), buildIdentity: 'build-a' }, authFactory: () => ({ session: () => null }) });

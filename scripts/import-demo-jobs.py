@@ -319,12 +319,12 @@ def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=Non
     body_budget = {"remaining": BODY_BUDGET_LIMIT}
     common = {"collection": "job_posting", "q": "*", "query_by": "title", "include_fields": ",".join(SOURCE_FIELDS), "sort_by": "first_seen_at:desc"}
 
-    def collect(extra_filter="", *, grouped=False, page=1, requested=250):
+    def collect(extra_filter="", *, grouped=False, page=1, requested=250, query="*"):
         nonlocal returned, query_count
         limit = min(250, requested, MAX_JOBS - returned)
         if limit <= 0 or len(selected) >= max_jobs:
             return 0
-        search = {**common, "filter_by": base_filter + (" && " + extra_filter if extra_filter else ""), "per_page": limit, "page": page}
+        search = {**common, "q": query, "filter_by": base_filter + (" && " + extra_filter if extra_filter else ""), "per_page": limit, "page": page}
         if grouped:
             search.update(group_by="company_id", group_limit=1)
         rows = documents(client.search(search), limit)
@@ -346,9 +346,24 @@ def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=Non
                     break
         return len(rows)
 
-    collect(grouped=True, requested=min(max_jobs, 250))
-    for stratum in ("location_types:=remote", "location_types:=hybrid", "locales:=de", "locales:=fr"):
-        collect(stratum, requested=min(100, max_jobs - len(selected)))
+    # Reserve slots before newest-first fill: plentiful companies must not consume
+    # the age windows or the explicit diversity requests. Tiny samples prefer guests.
+    guest_boundary = int((snapshot - timedelta(hours=48)).timestamp())
+    guest_budget = max(1, max_jobs // 4)
+    recent_budget = min(max_jobs - guest_budget, max(1, max_jobs // 4)) if max_jobs > 1 else 0
+    company_budget = max_jobs // 8
+    diversity_budget = max_jobs // 4
+    collect(f"first_seen_at:<={guest_boundary}", requested=guest_budget)
+    collect(f"first_seen_at:>{guest_boundary}", requested=recent_budget)
+    collect(grouped=True, requested=company_budget)
+    strata = (
+        ("location_types:=remote", "*"), ("location_types:=hybrid", "*"),
+        ("locales:=de", "*"), ("locales:=fr", "*"),
+        ("", "engineer"), ("", "sales"), ("", "care"),
+    )
+    for index, (extra_filter, query) in enumerate(strata):
+        quota = diversity_budget // len(strata) + (index < diversity_budget % len(strata))
+        collect(extra_filter, query=query, requested=quota)
     for page in range(1, 5):
         if returned >= MAX_JOBS or len(selected) >= max_jobs or collect(page=page, requested=min(250, max_jobs - len(selected))) == 0:
             break
@@ -392,7 +407,9 @@ def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=Non
                     continue
                 job = normalize_job(raw, fetched_at, client, clock, body_budget)
                 if job:
-                    selected[identifier] = job
+                    # Refresh must not displace the reserved initial age/diversity sample.
+                    if identifier in selected or len(selected) < max_jobs:
+                        selected[identifier] = job
                 else:
                     selected.pop(identifier, None)
                     unknown.add(identifier)
@@ -404,7 +421,7 @@ def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=Non
     jobs = sorted(selected.values(), key=lambda item: (-utc(item["firstObserved"]).timestamp(), item["id"]))[:max_jobs]
     return {
         "schemaVersion": 1, "snapshotAt": iso(snapshot), "verifiedAt": iso(clock()),
-        "selection": {"source": "jobseek_public", "cutoffAt": iso(cutoff), "rule": "company_representatives_then_bounded_strata_then_newest", "limit": max_jobs, "initialReturnedDocuments": returned, "initialQueries": query_count, "knownIdsRefreshed": len(known), "bodyTextBudgetBytes": BODY_BUDGET_LIMIT, "bodyTextRetainedBytes": sum(len(job["bodyText"].encode("utf-8")) for job in jobs if job["bodyText"]), "selectedJobs": len(jobs), "selectedCompanies": len({job["companyId"] for job in jobs})},
+        "selection": {"source": "jobseek_public", "cutoffAt": iso(cutoff), "rule": "reserved_age_windows_companies_diversity_then_newest", "samplingBudgets": {"guest48HoursTo14Days": guest_budget, "recentUnder48Hours": recent_budget, "companyRepresentatives": company_budget, "diversity": diversity_budget}, "limit": max_jobs, "initialReturnedDocuments": returned, "initialQueries": query_count, "knownIdsRefreshed": len(known), "bodyTextBudgetBytes": BODY_BUDGET_LIMIT, "bodyTextRetainedBytes": sum(len(job["bodyText"].encode("utf-8")) for job in jobs if job["bodyText"]), "selectedJobs": len(jobs), "selectedCompanies": len({job["companyId"] for job in jobs})},
         "jobs": jobs, "observations": observations, "unknownIds": sorted(unknown),
     }
 

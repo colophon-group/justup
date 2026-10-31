@@ -46,7 +46,8 @@ class FakeSource:
                 raise IMPORT.ImportFailure("source failed with private response")
             rows = self.refresh
         else:
-            rows = self.initial[:query["per_page"]]
+            start = (query.get("page", 1) - 1) * query["per_page"]
+            rows = self.initial[start:start + query["per_page"]]
         return {"hits": [{"document": row} for row in rows]}
 
     def body(self, identifier, locale):
@@ -112,8 +113,7 @@ class PublicImportTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result["jobs"]], ["job-1"])
         self.assertLessEqual(result["selection"]["initialReturnedDocuments"], 1000)
         query = source.searches[0]
-        self.assertEqual(query["group_by"], "company_id")
-        self.assertEqual(query["group_limit"], 1)
+        self.assertIn("first_seen_at:<=", query["filter_by"])
         self.assertEqual(set(query["include_fields"].split(",")), set(IMPORT.SOURCE_FIELDS))
         self.assertIn("tdm_reserved:!=true", query["filter_by"])
 
@@ -156,6 +156,47 @@ class PublicImportTests(unittest.TestCase):
             client.fetch("https://private.example/secret")
         with self.assertRaises(IMPORT.ImportFailure):
             IMPORT.NoRedirect().redirect_request(None, None, 302, "", {}, "https://private.example")
+
+    def test_128_slots_reserve_both_age_windows_and_diversity_before_abundant_companies(self):
+        boundary = int((NOW - timedelta(hours=48)).timestamp())
+
+        class RepresentativeSource(FakeSource):
+            def search(self, query):
+                self.searches.append(query)
+                first = int(NOW.timestamp()) - 3600
+                if query.get("group_by") == "company_id":
+                    prefix = "company"
+                elif f"first_seen_at:<={boundary}" in query["filter_by"]:
+                    prefix, first = "guest", boundary - 86400
+                elif f"first_seen_at:>{boundary}" in query["filter_by"]:
+                    prefix = "recent"
+                elif "location_types:=" in query["filter_by"]:
+                    prefix = "workplace-" + query["filter_by"].split("location_types:=")[1]
+                elif "locales:=" in query["filter_by"]:
+                    prefix = "language-" + query["filter_by"].split("locales:=")[1]
+                elif query["q"] != "*":
+                    prefix = "role-" + query["q"]
+                else:
+                    prefix = "newest"
+                rows = [posting(f"{prefix}-{index}", company_id=f"{prefix}-company-{index}", first_seen_at=first) for index in range(query["per_page"])]
+                return {"hits": [{"document": row} for row in rows]}
+
+        source = RepresentativeSource()
+        result = IMPORT.import_snapshot(source, SNAPSHOT, max_jobs=128, now=NOW)
+        self.assertEqual(len(result["jobs"]), 128)
+        self.assertTrue(any(IMPORT.utc(job["firstObserved"]).timestamp() <= boundary for job in result["jobs"]))
+        self.assertTrue(any(IMPORT.utc(job["firstObserved"]).timestamp() > boundary for job in result["jobs"]))
+        self.assertTrue(any(f"first_seen_at:<={boundary}" in query["filter_by"] for query in source.searches))
+        self.assertTrue(any(f"first_seen_at:>{boundary}" in query["filter_by"] for query in source.searches))
+        for value in ("location_types:=remote", "location_types:=hybrid", "locales:=de", "locales:=fr"):
+            self.assertTrue(any(value in query["filter_by"] for query in source.searches), value)
+        self.assertTrue({"engineer", "sales", "care"}.issubset({query["q"] for query in source.searches}))
+        representative = next(query for query in source.searches if query.get("group_by") == "company_id")
+        self.assertEqual(representative["per_page"], 16)
+        self.assertEqual(representative["group_limit"], 1)
+        self.assertTrue(all(query["per_page"] <= 250 for query in source.searches))
+        self.assertLessEqual(result["selection"]["initialReturnedDocuments"], 1000)
+        self.assertEqual(len({job["id"] for job in result["jobs"]}), 128)
 
     def test_aggregate_body_and_file_limits_keep_metadata_and_preserve_prior_export(self):
         body = ("<p>" + "é" * 200 + "</p>").encode()

@@ -23,6 +23,10 @@ Load an already reviewed private export with `node server/main.mjs --import /pri
 
 Jobs older than 14 days or with verification older than 24 hours are suppressed independently. Visitors receive only the 48-hour–14-day slice. Accounts receive eligible jobs within 14 days. Explicit inactive observations record when closure was observed; missing/failed refreshes remain unknown. Source descriptions and evidence hashes are internal only. Public DTOs expose structured fields and original links; the company catalogue does not infer official domains or claim board monitoring.
 
+## Standalone feature composition
+
+`JUSTUP_DEMO_SERVICES_ENABLED=true` selects the fixed reviewed `server/demo-composition.mjs` adapter. There is no module-path environment option or untrusted plugin loader. It exports synchronous `createApiServices(deps)` and `createApiReadiness({config,now})`; the executable passes those actual feature factories and readiness function to the core. If the adapter is absent, enabled startup fails. Its API role has no inference credentials or broker access. `JUSTUP_DEMO_RUNNER_STATUS_PATH` selects an absolute heartbeat metadata file, defaulting to `runner-status.json` beside the database. The adapter verifies the exact source/build identity and a heartbeat at most 30 seconds old. Disabled or stale model capabilities stay unavailable without closing account login or deletion. Queue composition and heartbeat production are adapter-owned; resource and UID proof remain operations-owned.
+
 ## Extend the API
 
 `await createDemo({config, now, serviceFactories, authFactory, logger})` returns `{server,store,feed,tasks,auth,services,close}`. `authFactory` is an isolated-test seam; normally it imports `createAuth` from `auth.mjs`. Each synchronous feature factory receives `{db,feed,tasks,config,now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction}` and returns one service or an array. A service may implement:

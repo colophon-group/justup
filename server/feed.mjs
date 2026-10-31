@@ -71,7 +71,8 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   function companyDto(job) {
     return { id: job.companyId, name: job.companyName, slug: job.companySlug, logoUrl: null,
       websiteUrl: null, coverage: { state: 'imported_snapshot' }, history: null,
-      evidence: [{ source: 'jobseek_public', url: 'https://jseek.co/' }] };
+      evidence: [{ source: 'jobseek_public', url: typeof job.companySlug === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(job.companySlug)
+        ? `https://jseek.co/en/company/${job.companySlug}` : 'https://jseek.co/' }] };
   }
   function companies({ q = '' } = {}) {
     if (typeof q !== 'string' || q.length > 100) throw problem('invalid_query');

@@ -126,6 +126,14 @@ export async function createDemo({ config = {}, now = Date.now, serviceFactories
     } };
   } catch (error) { store.close(); throw error; }
 }
+// The executable has one reviewed adapter, never an environment-selected module.
+export async function createConfiguredDemo({ config = {}, ...options } = {}) {
+  if (!config.servicesEnabled) return createDemo({ ...options, config });
+  const configured = { ...config, runnerStatusPath: config.runnerStatusPath ?? resolve(dirname(config.dbPath), 'runner-status.json') };
+  const { createApiServices, createApiReadiness } = await import('./demo-composition.mjs');
+  return createDemo({ ...options, config: { ...configured, readiness: createApiReadiness({ config: configured, now: options.now ?? Date.now }) },
+    serviceFactories: [createApiServices] });
+}
 export async function prepareRestoredDatabase({ dbPath, authFactory } = {}) {
   if (typeof dbPath !== 'string' || dbPath === ':memory:' || !lstatSync(dbPath).isFile() || lstatSync(dbPath).isSymbolicLink()) throw new Error('Use an existing restored demo database file.');
   const store = openStore(dbPath);
@@ -148,6 +156,7 @@ export function readImportFile(path) {
 }
 export function configFromEnv(env = process.env) {
   return {
+    servicesEnabled: env.JUSTUP_DEMO_SERVICES_ENABLED === 'true', runnerStatusPath: env.JUSTUP_DEMO_RUNNER_STATUS_PATH,
     dbPath: env.JUSTUP_DEMO_DB_PATH, sharedState: env.JUSTUP_DEMO_SHARED_STATE === 'true', allowedOrigin: env.JUSTUP_DEMO_ORIGIN,
     allowInsecureLocalhost: env.JUSTUP_DEMO_ALLOW_LOCAL_HTTP === 'true',
     inviteCode: env.JUSTUP_DEMO_INVITE_CODE, privacyUrl: env.JUSTUP_DEMO_PRIVACY_URL,
@@ -172,7 +181,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     try { console.log(JSON.stringify(store.importSnapshot(readImportFile(args[1])))); }
     finally { store.close(); }
   } else if (args.length === 0) {
-    const demo = await createDemo({ config, logger: (event) => console.log(JSON.stringify(event)) });
+    const demo = await createConfiguredDemo({ config, logger: (event) => console.log(JSON.stringify(event)) });
     const port = Number(process.env.JUSTUP_DEMO_PORT ?? 8787);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid demo port.');
     demo.server.listen(port, '127.0.0.1');
