@@ -37,7 +37,7 @@ Keep registration and login disabled until the static Privacy and Usage pages ha
 
 | Route | Input or result |
 | --- | --- |
-| `GET /session` | Viewer or null, server time, access rules, CSRF token, enabled capabilities, policy URLs/version and import freshness. |
+| `GET /session` | Viewer or null, server time, access rules, CSRF token, authentication availability, capabilities, policy URLs/version and import freshness. |
 | `POST /auth/register` | `{username,password,inviteCode}` → account/session; unavailable until policy approval and invite configuration. |
 | `POST /auth/login` | `{username,password}` → account/session; same policy gate. |
 | `POST /session/logout` | Revoke the current session and clear its cookie. |
@@ -50,6 +50,7 @@ Session example:
   "serverTime":"2026-10-31T16:00:00Z",
   "user":{"id":"account-id","username":"tester"},
   "access":{"kind":"demo","fullAccess":true,"legacy":false,"billingEnabled":false,"until":null},
+  "authentication":{"method":"username_password","loginEnabled":true,"registrationEnabled":true,"reason":null},
   "csrfToken":"opaque-token",
   "capabilities":{"search":true,"aiMatching":true,"companyRequests":true,"sse":false,"follows":false,"viewed":false,"preferences":false,"hiddenMatchCounts":false},
   "policies":{"privacyUrl":"https://preview.justup.work/privacy","usageUrl":"https://preview.justup.work/usage","version":"reviewed-version","reviewed":true},
@@ -58,6 +59,8 @@ Session example:
 ```
 
 The URLs and enabled flags above are illustrative. Return the deployed configuration and actual provider availability. A visitor has `user:null`, `access.kind:"guest"` and `fullAccess:false`. Anonymous visitors can read the public feed; creating or editing a model-backed search requires sign-in. The browser may preserve an unsubmitted visitor draft in memory, without inventing a saved account search.
+
+`authentication.reason` is null or `policy_unavailable`, `deletion_unavailable`, `dependency_unavailable`. Login requires reviewed configured policies and working retention/deletion protections. Registration additionally requires an invite configuration and remaining account capacity. Model availability is separate from login and account deletion. A wrong deletion password returns `invalid_credentials` while preserving the valid session; an expired session returns `unauthenticated`.
 
 Preview accounts can read eligible imported jobs first observed within 14 days. Visitors can read only jobs first observed 48 hours to 14 days ago. These are explicit demo access rules, not a paid-plan or free-trial entitlement. Access is rechecked on every result page.
 
@@ -75,6 +78,10 @@ Preview accounts can read eligible imported jobs first observed within 14 days. 
 | `GET /searches/:id/results?revision=…&cursor=…&limit=12` | Confirmed eligible matches and truthful scan status. |
 
 Long work returns `202` with `{search,task:{id,status:"pending"}}` or `{request,task:{id,status:"pending"}}`. Poll the owner-only task with bounded backoff. Its completed result contains the accepted search/request or a warning/clarification. `requestKey` makes retried submissions idempotent. The runner stores leases, uses execution/time/output limits and recovers interrupted work without duplicating acceptance.
+
+The full public task shape is `{id,kind,status,createdAt,updatedAt,result,error}`. Pending/running tasks have null result/error. A succeeded task returns `result:{search}` or `result:{request}`. A warned search returns `result:{proposal:{proposalId,searchId,expectedRevision,query,title,description,configuration,requirements,warnings}}`; company clarification returns `result:{request}` with its clarification state. A failed task has null result and safe `error:{code,message,retryable}`. Internal payload, output, lease and raw provider diagnostics never serialize.
+
+`POST`/`PATCH` search submissions return the full public task alongside the search. A first pending search has revision zero; an edit preserves its last accepted revision plus its draft. Confirmation returns `200 {search}`. `GET /searches` and `GET /company-requests` return `{items:[...]}`; deleting one returns `200 {deleted:true}`.
 
 An accepted search has `{id,revision,query,title,description,configuration,requirements,warnings,status:"ready"}`. The browser shows the user's query, generated tab title and warnings; the collapsed description is accepted metadata, not a separate visible criteria summary. Keep drafts/proposals distinct from this accepted state. A timeout, failed normalization, unresolved hard requirement or stale response cannot overwrite it. A warned proposal has a server-issued `proposalId`, expected revision and explicit unmet-requirement reasons.
 
@@ -124,7 +131,9 @@ SSE, follows, viewed state, preferences, hidden-match counts and Hiring Wire are
 | `POST /company-requests/:id/accept` | `{candidateId,previewRevision}` and `Idempotency-Key` → record that exact accepted identity/scope once. |
 | `DELETE /company-requests/:id` | Remove the account's request, preview and associated task data. |
 
-A request contains `{id,input,scope,status,candidate,previewRevision,taskId,createdAt}`. Status is pending/candidate/clarification/unresolved/accepted. A candidate contains server-issued ID, company name, supported official domain/site URL, evidence URLs and an explicit coverage state. Material ambiguity returns a short clarification, not a guessed identity. Search known identities before invoking Codex Luna. Treat provided pages as untrusted evidence, restrict tools and validate output URLs and sizes.
+A request contains `{id,input,scope,status,candidate,previewRevision,clarification,taskId,createdAt}`. Status is pending/candidate/clarification/unresolved/accepted. A candidate contains `{id,name,domain,websiteUrl,evidenceUrls,coverage}`. Material ambiguity returns a short clarification with candidate null. Search known identities before invoking Codex Luna. Treat provided pages as untrusted evidence, restrict tools and validate output URLs and sizes.
+
+A known immediate identity returns `201 {request}`; queued resolution returns `202 {request,task}`. Acceptance returns `200 {request}` with status accepted and references the exact server-held candidate and preview revision. Requirements use `{id,text,handling,reason}` and warnings use `{code,message,requirementIds}`; `handling` is primary/ai/preference/unsatisfied.
 
 Imported companies have `coverage.state:"imported_snapshot"`; an accepted new identity has `coverage.state:"requested"`. Neither claims that a board has been configured or that Justup currently monitors it. Do not fabricate a company website from an applicant-tracking-system job URL, or expose private crawler board configuration. Request acceptance does not write to Jobseek or start crawler onboarding.
 
