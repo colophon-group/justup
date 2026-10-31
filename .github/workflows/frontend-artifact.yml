@@ -1,0 +1,86 @@
+# Build retained frontend bytes without deployment credentials; this is not a release gate.
+name: Frontend artifact
+
+on:
+  pull_request:
+    branches:
+      - dev
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  retained-build:
+    name: Retain exact frontend build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.2'
+          package-manager-cache: false
+      - name: Build and verify committed frontend bytes
+        run: |
+          node scripts/frontend-prepare.mjs "$GITHUB_SHA" "$RUNNER_TEMP/justup-frontend"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { verifyArtifact } from './scripts/frontend-prepare.mjs';
+          const release = await verifyArtifact(join(process.env.RUNNER_TEMP, 'justup-frontend'));
+          assert.equal(release.sourceSha, process.env.GITHUB_SHA);
+          const tree = execFileSync('git', ['rev-parse', `${process.env.GITHUB_SHA}^{tree}`], { encoding: 'utf8' }).trim();
+          assert.equal(release.treeSha, tree);
+          const scope = process.env.GITHUB_EVENT_NAME === 'push'
+            ? 'Protected dev push; eligible for later exact-candidate selection, not deployment approval.'
+            : 'Proposed pull-request merge; verification only, not a deployable final candidate.';
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+            '### Retained frontend build', scope,
+            `- Source: \`${release.sourceSha}\``,
+            `- Tree: \`${release.treeSha}\``,
+            `- Frontend artifact SHA-256: \`${release.artifactSha256}\``,
+            '- No backend origin, runtime configuration or deployment credential is included.', '',
+          ].join('\n'));
+          JS
+      - name: Upload retained frontend bytes
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: justup-frontend-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/justup-frontend/assets/
+            ${{ runner.temp }}/justup-frontend/worker.mjs
+            ${{ runner.temp }}/justup-frontend/release.json
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 7
+      - name: Record immutable upload identity
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { appendFileSync } from 'node:fs';
+          assert.match(process.env.ARTIFACT_ID, /^\d+$/);
+          assert.match(process.env.ARTIFACT_DIGEST, /^[a-f0-9]{64}$/);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+            `- GitHub artifact ID: \`${process.env.ARTIFACT_ID}\``,
+            `- GitHub archive SHA-256: \`${process.env.ARTIFACT_DIGEST}\``,
+            '- Retention: seven days. Preserve a selected rollback artifact before expiry.', '',
+          ].join('\n'));
+          JS
