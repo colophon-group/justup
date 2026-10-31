@@ -8,7 +8,7 @@ import { mkdtempSync,mkdirSync,readFileSync,writeFileSync,renameSync,rmSync,lsta
 import { isAbsolute,join,resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
-import { CODEX_VERSION,codexArguments,codexEnvironment,executeCodex,validateModelData } from './model-runner.mjs';
+import { CODEX_VERSION,codexArguments,codexEnvironment,executeCodex,validateModelData,modelCatalogueReady } from './model-runner.mjs';
 import { validateCompanyUrl } from './companies.mjs';
 
 const schemas={intent:new URL('./model-schemas/intent.schema.json',import.meta.url),company:new URL('./model-schemas/company.schema.json',import.meta.url)};
@@ -200,7 +200,7 @@ function subscriptionAuth(bytes){
 }
 export function brokerConfigurationReady(config){
   try{
-    if(config.enabled!==true||config.cliVersion!==CODEX_VERSION||process.getuid()===0||!/^[a-f0-9]{64}$/.test(config.buildIdentity??'')||!/^[a-f0-9]{64}$/.test(config.hostPlanSha256??''))return false;
+    if(config.enabled!==true||config.cliVersion!==CODEX_VERSION||process.getuid()===0||!modelCatalogueReady()||!/^[a-f0-9]{64}$/.test(config.buildIdentity??'')||!/^[a-f0-9]{64}$/.test(config.hostPlanSha256??''))return false;
     protectedDirectory(config.protectedAuthHome);protectedDirectory(config.invocationRoot);protectedDirectory(config.taskCwd,{root:true,immutable:true});
     if(readdirSync(config.taskCwd).length||readdirSync(config.protectedAuthHome).some(n=>n!=='auth.json'))return false;
     for(const path of [config.codexPath,join(config.protectedAuthHome,'auth.json')]){if(realpathSync(path)!==path)return false;const s=lstatSync(path);if(!s.isFile()||s.uid!==(path===config.codexPath?0:process.getuid())||(s.mode&(path===config.codexPath?0o022:0o077))!==0)return false;}

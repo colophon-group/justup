@@ -1,26 +1,90 @@
 // Real subprocess tests with fake JSONL; never call a model or read operator auth.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync,readFileSync,rmSync } from 'node:fs';
+import { mkdtempSync,readFileSync,rmSync,writeFileSync,symlinkSync,linkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { codexArguments,codexEnvironment,checkModelIsolation,modelAttestationMatches,createCodexModel,executeCodex,validateModelData,CODEX_VERSION,LUNA_MODEL,EMPTY_TOOL_CATALOG_SHA256 } from './model-runner.mjs';
+import { pathToFileURL,fileURLToPath } from 'node:url';
+import { codexArguments,codexEnvironment,checkModelIsolation,modelAttestationMatches,createCodexModel,executeCodex,validateModelData,modelCatalogueReady,CODEX_VERSION,LUNA_MODEL,EMPTY_TOOL_CATALOG_SHA256,MODEL_CATALOGUE_SHA256 } from './model-runner.mjs';
+import { inspectWireCatalogue,assertEmptyWireCatalogue } from './evals/luna-wire-catalogue.mjs';
 
 const messages=[{type:'thread.started',thread_id:'private'},{type:'turn.started'},{type:'item.completed',item:{id:'m',type:'agent_message',text:'{"ok":true}'}},{type:'turn.completed',usage:{input_tokens:123,cached_input_tokens:100,output_tokens:4}}];
 const lines=(events)=>events.map(e=>JSON.stringify(e)).join('\n')+'\n';
 function fake(script,options={}) {return executeCodex({executable:process.execPath,args:['-e',script],cwd:tmpdir(),env:codexEnvironment({codexHome:tmpdir(),taskCwd:tmpdir()}),stdin:'untrusted input',timeoutMs:2000,...options});}
 const emit=(events=messages)=>`process.stdout.write(${JSON.stringify(lines(events))});`;
 
-test('exact model and read-only arguments remove inherited tool surfaces',()=>{
+test('both task profiles pin static Luna metadata and disable independent utility surfaces',()=>{
   const args=codexArguments({kind:'search_intent',schemaPath:'/schemas/intent.json',taskCwd:'/empty'}),settings=args.join(' ');
   assert.equal(CODEX_VERSION,'0.159.2');assert.deepEqual(args.slice(0,2),['--no-daemon','exec']);
   assert.equal(args[args.indexOf('--model')+1],LUNA_MODEL);
   for(const flag of ['--ignore-user-config','--strict-config','--ephemeral','--json'])assert.ok(args.includes(flag));
   assert.equal(args.includes('--ignore-rules'),false);
   assert.equal(args[args.indexOf('--sandbox')+1],'read-only');
-  for(const feature of ['shell_tool','unified_exec','apps','plugins','memories','hooks','multi_agent','browser_use','computer_use','request_permissions_tool','view_image','sleep_tool','skill_search','default_mode_request_user_input'])assert.ok(settings.includes(`--disable ${feature}`));
+  for(const feature of ['shell_tool','unified_exec','apps','plugins','memories','hooks','multi_agent','multi_agent_v2','agent_message_board','browser_use','computer_use','request_permissions_tool','view_image','sleep_tool','skill_search','default_mode_request_user_input','send_message_to_user_async','token_budget','current_time_reminder'])assert.ok(settings.includes(`--disable ${feature}`));
   assert.ok(settings.includes('web_search="disabled"'));assert.equal(args.at(-1),'-');assert.equal(settings.includes('untrusted'),false);
-  assert.ok(codexArguments({kind:'company_resolution',schemaPath:'/schemas/company.json',taskCwd:'/empty'}).includes('web_search="disabled"'));
+  const path=fileURLToPath(new URL('./model-catalogue.json',import.meta.url));
+  for(const kind of ['search_intent','company_resolution']){
+    const profile=codexArguments({kind,schemaPath:'/schemas/output.json',taskCwd:'/empty',cataloguePath:'/caller/substitute.json'});
+    for(const setting of [`model_catalog_json=${JSON.stringify(path)}`,'web_search="disabled"','tools.experimental_request_user_input.enabled=false','tools.update_plan.enabled=false','agents.enabled=false','cloud.skills.enabled=false','orchestrator.mcp.enabled=false','skills.bundled.enabled=false','skills.include_instructions=false'])assert.ok(profile.includes(setting));
+    assert.equal(profile.join(' ').includes('/caller/substitute.json'),false);
+  }
+});
+
+test('static policy changes only the seven reviewed tool selectors of the public shipped Luna record',()=>{
+  const bytes=readFileSync(new URL('./model-catalogue.json',import.meta.url)),catalogue=JSON.parse(bytes);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'),MODEL_CATALOGUE_SHA256);
+  assert.deepEqual(Object.keys(catalogue),['models']);assert.equal(catalogue.models.length,1);
+  const model=catalogue.models[0];assert.equal(model.slug,LUNA_MODEL);
+  const selectors={shell_type:'disabled',apply_patch_tool_type:null,experimental_supported_tools:[],supports_search_tool:false,tool_mode:'direct',multi_agent_version:null,node_repl_disabled:true};
+  for(const [key,value] of Object.entries(selectors))assert.deepEqual(model[key],value);
+  const original={...model,shell_type:'shell_command',apply_patch_tool_type:'freeform',experimental_supported_tools:['send_user_message_async','clock'],supports_search_tool:true,tool_mode:'code_mode_only',multi_agent_version:'v2',node_repl_disabled:false};
+  const canonical=value=>JSON.stringify(Array.isArray(value)?value.map(item=>JSON.parse(canonical(item))):value!==null&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,JSON.parse(canonical(value[key]))])):value);
+  const sha=value=>createHash('sha256').update(canonical(value)).digest('hex');
+  assert.equal(sha(original),'7377f1a8e9415591c0d13d68ea2b0a11e1a92afe50df7a85759e9ce2df839186');
+  assert.equal(sha(model.model_messages),'9d286e8de45c124fecce60edd216999ad14aca808e982581f4409c5581246cde');
+  assert.equal(model.use_responses_lite,true);assert.equal(modelCatalogueReady(),false,'a writable worktree is not a production immutable release');
+});
+
+test('missing, changed, symlinked and hardlinked fixed catalogues reject before argument construction',async t=>{
+  const source=readFileSync(new URL('./model-runner.mjs',import.meta.url)),bytes=readFileSync(new URL('./model-catalogue.json',import.meta.url));
+  for(const kind of ['search_intent','company_resolution'])for(const variant of ['missing','changed','symlink','hardlink']){
+    const dir=mkdtempSync(join(tmpdir(),'justup-catalogue-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+    const module=join(dir,'model-runner.mjs'),path=join(dir,'model-catalogue.json');writeFileSync(module,source);
+    if(variant==='changed')writeFileSync(path,Buffer.concat([bytes,Buffer.from(' ')]));
+    if(variant==='symlink'){writeFileSync(join(dir,'substitute.json'),bytes);symlinkSync(join(dir,'substitute.json'),path);}
+    if(variant==='hardlink'){writeFileSync(join(dir,'substitute.json'),bytes);linkSync(join(dir,'substitute.json'),path);}
+    const isolated=await import(pathToFileURL(module).href);
+    assert.throws(()=>isolated.codexArguments({kind,schemaPath:'/schema.json',taskCwd:'/empty'}),{code:'dependency_unavailable'});
+    assert.equal(isolated.modelCatalogueReady(),false);
+  }
+});
+
+test('complete Responses and Lite catalogues distinguish missing tools from all-carrier zero',()=>{
+  const message={type:'message',role:'user',content:[{type:'input_text',text:'synthetic'}]};
+  for(const kind of ['search_intent','company_resolution']){
+    for(const transport of ['responses','responses_lite']){
+      const body={model:LUNA_MODEL,input:transport==='responses_lite'?[{type:'additional_tools',role:'developer',tools:[]},message]:[message],...(transport==='responses'?{tools:[]}:{} )};
+      const result=assertEmptyWireCatalogue(body,{transport});
+      assert.equal(result.toolCatalogSha256,EMPTY_TOOL_CATALOG_SHA256);assert.equal(result.toolCount,0);
+      assert.equal(result.additionalToolsItems,transport==='responses_lite'?1:0);
+      const tool={type:'function',name:kind,parameters:{type:'object',properties:{}}};
+      if(transport==='responses_lite')body.input[0].tools=[tool];else body.tools=[tool];
+      assert.throws(()=>assertEmptyWireCatalogue(body,{transport}),{code:'unverified_catalogue'});
+    }
+  }
+  assert.throws(()=>assertEmptyWireCatalogue({model:LUNA_MODEL,input:[message]}),{code:'unverified_catalogue'});
+});
+
+test('AdditionalTools, nested namespaces, inventory and unknown carriers cannot hide behind top-level empty tools',()=>{
+  const tool={type:'function',name:'danger',parameters:{type:'object'}},base=()=>({model:LUNA_MODEL,tools:[],input:[{type:'additional_tools',role:'developer',tools:[]}]});
+  const nested=base();nested.input[0].tools=[{type:'namespace',name:'one',tools:[{type:'namespace',name:'two',tools:[tool]}]}];
+  const result=inspectWireCatalogue(nested);assert.equal(result.namespaceCount,2);assert.equal(result.toolCount,3);assert.equal(result.schemaHashes.length,3);
+  const direct=base();direct.tools=[tool];
+  const inventory=base();inventory.client_metadata={'x-codex-turn-metadata':JSON.stringify({tool_namespaces_info:{hidden:{name:'hidden',functions:{danger:{direct:false,deferred:true}}}}})};
+  const unknownInventory=base();unknownInventory.client_metadata={'x-codex-turn-metadata':JSON.stringify({tool_namespaces_info:{hidden:{name:'hidden',functions:{},future_tools:[tool]}}})};
+  for(const body of [nested,direct,inventory,unknownInventory,{...base(),future_catalogue:[tool]},{...base(),input:[{type:'future_tools',tools:[tool]}]},{...base(),input:[{type:'message',role:'user',content:[],tools:[tool]}]},{...base(),input:[{type:'additional_tools',role:'developer',tools:[],future_tools:[tool]}]}])assert.throws(()=>assertEmptyWireCatalogue(body),{code:'unverified_catalogue'});
+  const absent=base();delete absent.input[0].tools;assert.throws(()=>assertEmptyWireCatalogue(absent),{code:'unverified_catalogue'});
 });
 test('child environment excludes all inherited secret, proxy and runtime variables',()=>{
   const original={...process.env};try{Object.assign(process.env,{OPENAI_API_KEY:'secret',DOPPLER_TOKEN:'admin',DATABASE_URL:'private',DOCKER_HOST:'socket',HTTPS_PROXY:'proxy',SSH_AUTH_SOCK:'agent'});

@@ -1,17 +1,49 @@
 // Bounded Codex subscription boundary. Read before enabling a provider: local
 // tests never seed auth or assert that an unobserved model toolset is safe.
 import { spawn } from 'node:child_process';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { closeSync,constants,fstatSync,openSync,readFileSync,realpathSync,statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { isAbsolute,dirname } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { performance } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
 
 export const CODEX_VERSION='0.159.2';
 export const LUNA_MODEL='gpt-6-luna';
 // SHA256 of canonical JSON []; a matching nonempty catalogue is never approved.
 export const EMPTY_TOOL_CATALOG_SHA256='4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945';
+// Public Codex 0.159.2 / ff6aec96948b70d94983af2641a6b67c94faeff5
+// models-manager/models.json: preserve the complete shipped Luna record except
+// seven tool selectors. This is client policy, never account availability proof.
+export const MODEL_CATALOGUE_SHA256='0829441e0714986d05563eb5885fa7f22324eff3bf2446cc6be857a227c96402';
+const cataloguePath=fileURLToPath(new URL('./model-catalogue.json',import.meta.url));
 const fail=(code)=>Object.assign(new Error('The model task could not finish.'),{code});
 const plain=(v)=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&Object.getPrototypeOf(v)===Object.prototype;
+
+function checkedCatalogue({immutable=false}={}) {
+  let fd;
+  try {
+    if(realpathSync(cataloguePath)!==cataloguePath)throw fail('dependency_unavailable');
+    fd=openSync(cataloguePath,constants.O_RDONLY|constants.O_NOFOLLOW);
+    const before=fstatSync(fd);
+    if(!before.isFile()||before.nlink!==1||before.size<1||before.size>131_072)throw fail('dependency_unavailable');
+    if(immutable){
+      if(before.uid!==0||(before.mode&0o222)!==0)throw fail('dependency_unavailable');
+      for(let parent=dirname(cataloguePath);;parent=dirname(parent)){
+        const meta=statSync(parent);
+        if(!meta.isDirectory()||meta.uid!==0||(meta.mode&0o022)!==0)throw fail('dependency_unavailable');
+        if(parent===dirname(parent))break;
+      }
+    }
+    const bytes=readFileSync(fd),after=fstatSync(fd);
+    if(['dev','ino','size','mtimeMs','ctimeMs'].some(key=>before[key]!==after[key])||createHash('sha256').update(bytes).digest('hex')!==MODEL_CATALOGUE_SHA256)throw fail('dependency_unavailable');
+    return cataloguePath;
+  }catch{throw fail('dependency_unavailable');}
+  finally{if(fd!==undefined)closeSync(fd);}
+}
+// Called by the dedicated-UID broker before it can accept any work. Worktree
+// diagnostics validate the same pinned bytes but cannot establish this boundary.
+export function modelCatalogueReady(){try{checkedCatalogue({immutable:true});return true;}catch{return false;}}
 
 // This intentionally implements only the schema vocabulary in our two checked-in
 // schemas. Unknown schema keywords fail closed rather than silently weakening it.
@@ -48,12 +80,13 @@ export function validateModelData(value,schema,maxBytes=65_536) {
   visit(value,schema,'$');return issues;
 }
 
-const DISABLED=['shell_tool','unified_exec','apps','plugins','remote_plugin','memories','multi_agent','hooks','request_permissions_tool','browser_use','browser_use_external','computer_use','in_app_browser','image_generation','artifact','chronicle','code_mode','code_mode_host','code_mode_only','skill_mcp_dependency_install','tool_suggest','goals','workspace_dependencies','auth_elicitation','deferred_executor','enable_fanout','shell_snapshot','network_proxy','view_image','sleep_tool','skill_search','default_mode_request_user_input'];
+const DISABLED=['shell_tool','unified_exec','apps','plugins','remote_plugin','memories','multi_agent','multi_agent_v2','agent_message_board','hooks','request_permissions_tool','browser_use','browser_use_external','computer_use','in_app_browser','image_generation','artifact','chronicle','code_mode','code_mode_host','code_mode_only','skill_mcp_dependency_install','tool_suggest','goals','workspace_dependencies','auth_elicitation','deferred_executor','enable_fanout','shell_snapshot','network_proxy','view_image','sleep_tool','skill_search','default_mode_request_user_input','send_message_to_user_async','token_budget','current_time_reminder'];
 export function codexArguments({kind,schemaPath,taskCwd}) {
   if(!['search_intent','company_resolution'].includes(kind)||!isAbsolute(schemaPath)||!isAbsolute(taskCwd)) throw fail('invalid_input');
+  const catalogue=checkedCatalogue();
   return ['--no-daemon','exec','--ignore-user-config','--strict-config','--ephemeral','--json','--sandbox','read-only','--skip-git-repo-check','--cd',taskCwd,'--model',LUNA_MODEL,'--output-schema',schemaPath,
     ...DISABLED.flatMap(feature=>['--disable',feature]),
-    ...['approval_policy="never"','forced_login_method="chatgpt"','allow_login_shell=false','project_doc_max_bytes=0','skills.config=[]','mcp_servers={}','apps._default.enabled=false','memories.generate_memories=false','memories.use_memories=false','history.persistence="none"','analytics.enabled=false','feedback.enabled=false','model_reasoning_effort="low"','web_search="disabled"'].flatMap(v=>['--config',v]),'-'];
+    ...[`model_catalog_json=${JSON.stringify(catalogue)}`,'approval_policy="never"','forced_login_method="chatgpt"','allow_login_shell=false','project_doc_max_bytes=0','skills.config=[]','skills.bundled.enabled=false','skills.include_instructions=false','cloud.skills.enabled=false','orchestrator.mcp.enabled=false','agents.enabled=false','tools.experimental_request_user_input.enabled=false','tools.update_plan.enabled=false','mcp_servers={}','apps._default.enabled=false','memories.generate_memories=false','memories.use_memories=false','history.persistence="none"','analytics.enabled=false','feedback.enabled=false','model_reasoning_effort="low"','web_search="disabled"'].flatMap(v=>['--config',v]),'-'];
 }
 export function codexEnvironment({codexHome,taskCwd}) {
   // Never inherit process.env: no admin, DB, SSH, Docker, proxy, cloud or API keys.
