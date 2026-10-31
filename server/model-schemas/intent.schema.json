@@ -192,7 +192,8 @@
           "text",
           "handling",
           "reason",
-          "bindings"
+          "bindings",
+          "companyReference"
         ],
         "properties": {
           "id": {
@@ -251,6 +252,40 @@
                 }
               }
             }
+          },
+          "companyReference": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "input",
+                  "scope"
+                ],
+                "properties": {
+                  "input": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "scope": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
           }
         }
       }

@@ -10,8 +10,8 @@ const FIELDS=['companyInclude','companyExclude','titleAny','bodyAll','bodyNone',
 function output(filters={},requirements,residualAi=null) {
   const bindings=Object.entries(filters).filter(([,v])=>v).map(([field,values])=>({field,values}));
   requirements??=[{id:'r1',text:Object.values(filters).flat().join(' ')||'Any job',handling:'primary',reason:'Applied evidence.'}];
-  const accounted=requirements.map(r=>({...r,bindings:r.bindings??(r.handling==='primary'?bindings:[])}));
-  if(bindings.length&&!accounted.some(r=>r.handling==='primary'))accounted.unshift({id:'applied',text:Object.values(filters).flat().join(' '),handling:'primary',reason:'Applied evidence.',bindings});
+  const accounted=requirements.map(r=>({companyReference:null,...r,bindings:r.bindings??(r.handling==='primary'?bindings:[])}));
+  if(bindings.length&&!accounted.some(r=>r.handling==='primary'))accounted.unshift({id:'applied',text:Object.values(filters).flat().join(' '),handling:'primary',reason:'Applied evidence.',bindings,companyReference:null});
   return {title:'Backend',configuration:{schemaVersion:1,filters:{...Object.fromEntries(FIELDS.map(k=>[k,null])),...filters},residualAi},requirements:accounted};
 }
 function job(id,extra={}) { return {id,companyId:'acme',companyName:'Acme Labs',companySlug:'acme-labs',title:'Backend Engineer',bodyText:'Python services and databases.',firstObserved:`2026-10-2${id==='a'?'9':'8'}T10:00:00Z`,locations:[{name:'Zurich, Switzerland',workplace:'onsite'}],locales:['en'],employmentTypes:['full_time'],seniority:{id:'senior',name:'Senior'},...extra}; }
@@ -57,6 +57,19 @@ test('large catalogue projection and bounded repair fit stdin while compiler see
   const repair=intentModelInput({query,capabilities:caps,prior:{query,configuration:{schemaVersion:1,filters:{locations:jobs.map(j=>j.locations[0].name)},residualAi:null}},repair:{diagnostics:wrong.diagnostics,previous:output({companyInclude:['Company 947'],locations:['City 9999']})}});assert.ok(Buffer.byteLength(JSON.stringify(repair))+1600<24576);assert.equal(repair.prior.configurationContextPartial,true);
   const compiled=compileIntent(output({locations:['Country 1']}),caps);assert.equal(compiled.ok,true);assert.deepEqual(compiled.value.configuration.filters.locations,['Country 1']);assert.equal(jobs.filter(j=>primaryMatches(j,compiled.value.configuration)).length,500);
   const ambiguous=compileIntent(output({locations:['Paris']}),intentCapabilities([job('a',{locations:[{name:'Paris, France',workplace:'onsite'}]}),job('b',{locations:[{name:'Paris, United States',workplace:'onsite'}]})]));assert.equal(ambiguous.ok,false);
+});
+test('company prefill is bounded positive unknown metadata, never a known, ambiguous, excluded or unrelated mention',()=>{
+  const caps=intentCapabilities([job('a'),job('b',{companyId:'shared-1',companyName:'Shared',companySlug:'shared-one'}),job('c',{companyId:'shared-2',companyName:'Shared',companySlug:'shared-two'})]);
+  const raw=(name,handling='unsatisfied')=>output({},[{id:'company',text:`Company ${name}`,handling,reason:'This company is unavailable.',bindings:[],companyReference:{input:name,scope:'Zurich'}}]);
+  const accepted=compileIntent(raw('Newco'),caps,{query:'Jobs at Newco in Zurich'});assert.equal(accepted.ok,true);assert.deepEqual(accepted.value.warnings[0].companyRequestPrefill,{input:'Newco',scope:'Zurich'});assert.equal(accepted.value.warnings[0].code,'company_not_found');assert.deepEqual(Object.keys(accepted.value.requirements[0]).sort(),['handling','id','reason','text']);
+  assert.equal(compileIntent(raw('Newco'),caps,{query:'Newco jobs'}).value.warnings[0].companyRequestPrefill.scope,null);
+  for(const [name,query,handling] of [['Acme Labs','Jobs at Acme Labs','unsatisfied'],['acme-labs','Jobs at acme-labs','unsatisfied'],['Shared','Jobs at Shared','unsatisfied'],['Newco','Exclude Newco','unsatisfied'],['Newco','Ideally Newco','preference'],['Newco','Example mention Newco; backend jobs at Acme Labs','unsatisfied'],['Unrelated','Jobs at Newco','unsatisfied']])assert.equal(compileIntent(raw(name,handling),caps,{query}).value.warnings.some(w=>w.companyRequestPrefill),false,query);
+});
+test('warned company prefill survives explicit confirmation without creating a company request',async t=>{
+  const f=fixture({interpretIntent:async()=>output({},[{id:'company',text:'Company Newco',handling:'unsatisfied',reason:'Company is not imported.',bindings:[],companyReference:{input:'Newco',scope:null}}])});t.after(()=>f.db.close());
+  const created=await f.route('POST','/searches',{query:'Jobs at Newco',requestKey:'newco'}),done=await f.run(created.body.task.id),proposal=done.projection.proposal;
+  assert.equal(done.task.status,'warning');assert.deepEqual(proposal.warnings[0].companyRequestPrefill,{input:'Newco',scope:null});assert.equal(f.records.size,1);
+  const confirmed=await f.route('POST',`/searches/${created.body.search.id}/confirm`,{proposalId:proposal.proposalId,expectedRevision:0});assert.deepEqual(confirmed.body.search.warnings[0],proposal.warnings[0]);assert.equal(f.records.size,1);
 });
 test('missing body/location/seniority evidence cannot satisfy required or excluded terms',()=>{
   for(const filters of [{bodyAll:['python']},{bodyNone:['agency']},{locations:['Zurich, Switzerland']},{workplaces:['remote']},{seniority:['senior']}]) assert.equal(primaryMatches(job('a',{bodyText:null,locations:[],seniority:null}),{filters}),false);
@@ -126,6 +139,13 @@ test('cursor binds revision, access and generation and never exposes internal bo
   const ctx=f.ctx('GET',`${path}&cursor=${page.continuation.cursor}`);ctx.viewer.access={kind:'expired'};await assert.rejects(()=>f.service.route(ctx),{code:'stale_cursor'});
   f.setGeneration('g2');await assert.rejects(()=>f.route('GET',`${path}&cursor=${page.continuation.cursor}`),{status:409});
 });
+test('stale or unverified source pauses before eligibility work and resumes without claiming exhaustion',async t=>{
+  const f=fixture();t.after(()=>f.db.close());const created=await f.route('POST','/searches',{query:'backend',requestKey:'one'});await f.run(created.body.task.id);
+  const original=f.feed.eligibleJobs;let calls=0;f.feed.eligibleJobs=(args)=>{calls++;return original(args);};const path=`/searches/${created.body.search.id}/results?revision=1`;
+  for(const coverage of [{stale:true,verifiedAt:new Date(at).toISOString()},{stale:false,verifiedAt:null}]){f.feed.coverage=()=>coverage;const page=(await f.route('GET',path)).body;assert.equal(page.continuation.state,'paused');assert.equal(page.continuation.retryAfterMs,5000);assert.equal(page.coverage.state,'import_unavailable');assert.equal(page.coverage.description,'Imported listings need verification.');assert.equal(page.ai.status,'not_required');assert.deepEqual(page.items,[]);assert.equal(calls,0);
+    f.feed.coverage=()=>({stale:false,verifiedAt:new Date(at).toISOString()});const resumed=(await f.route('GET',`${path}&cursor=${page.continuation.cursor}`)).body;assert.equal(resumed.items[0].id,'a');calls=0;
+    f.setGeneration('new-generation');await assert.rejects(()=>f.route('GET',`${path}&cursor=${page.continuation.cursor}`),{code:'stale_cursor'});f.setGeneration('g1');}
+});
 test('residual condition without matching stays active with a resumable paused empty batch',async t=>{
   const f=fixture({interpretIntent:async()=>output({titleAny:['backend']},[{id:'r1',text:'Infrastructure',handling:'ai',reason:'Requires body interpretation.'}],{condition:'Infrastructure work',requirementIds:['r1']})},{config:{aiMatchingAvailable:true}});t.after(()=>f.db.close());
   const a=await f.route('POST','/searches',{query:'infrastructure backend',requestKey:'one'});await f.run(a.body.task.id);
@@ -137,7 +157,10 @@ test('injected matching owns its opaque continuation and receives only eligible 
   let supplied;const matching={available:()=>true,page:async args=>{supplied=args;return {items:[],continuation:{state:'pending',cursor:'matching-cursor',retryAfterMs:1000},ai:{status:'pending'}};}};
   const f=fixture({interpretIntent:async()=>output({titleAny:['backend']},[{id:'r1',text:'Infrastructure',handling:'ai',reason:'Needs body.'}],{condition:'Infrastructure',requirementIds:['r1']})},{matching});t.after(()=>f.db.close());
   const a=await f.route('POST','/searches',{query:'Infrastructure backend',requestKey:'one'});await f.run(a.body.task.id);
-  await f.route('GET',`/searches/${a.body.search.id}/results?revision=1&cursor=matching-cursor`);
+  const path=`/searches/${a.body.search.id}/results?revision=1`,first=(await f.route('GET',path)).body;assert.notEqual(first.continuation.cursor,'matching-cursor');
+  let eligibleCalls=0,matchingCalls=0;const getJobs=f.feed.eligibleJobs,page=matching.page;f.feed.eligibleJobs=(args)=>{eligibleCalls++;return getJobs(args);};matching.page=(args)=>{matchingCalls++;return page(args);};f.feed.coverage=()=>({stale:true,verifiedAt:null});
+  const paused=(await f.route('GET',`${path}&cursor=${first.continuation.cursor}`)).body;assert.equal(paused.continuation.state,'paused');assert.equal(paused.continuation.cursor,first.continuation.cursor);assert.equal(paused.ai.status,'dependency_unavailable');assert.equal(eligibleCalls,0);assert.equal(matchingCalls,0);
+  f.feed.coverage=()=>({stale:false,verifiedAt:new Date(at).toISOString()});await f.route('GET',`${path}&cursor=${paused.continuation.cursor}`);
   assert.deepEqual(supplied.jobs.map(j=>j.id),['a']);assert.equal(supplied.cursor,'matching-cursor');
 });
 test('account deletion composes synchronously and backup-barrier failure preserves private data',async t=>{

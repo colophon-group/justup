@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
 import { createModelBroker,createBrokerExecutor,brokerConfigurationReady,recoverBrokerScratch,publicIpv4,fetchCompanyEvidence,verifyPublicCompanyEvidence } from './model-broker.mjs';
-const data=()=>({title:'Backend',configuration:{schemaVersion:1,filters:Object.fromEntries(['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'].map(k=>[k,k==='titleAny'?['backend']:null])),residualAi:null},requirements:[{id:'r',text:'backend',handling:'primary',reason:'Title evidence.',bindings:[{field:'titleAny',values:['backend']}]} ]});
+const data=()=>({title:'Backend',configuration:{schemaVersion:1,filters:Object.fromEntries(['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'].map(k=>[k,k==='titleAny'?['backend']:null])),residualAi:null},requirements:[{id:'r',text:'backend',handling:'primary',reason:'Title evidence.',companyReference:null,bindings:[{field:'titleAny',values:['backend']}]} ]});
 const usage={inputTokens:100,cachedInputTokens:0,outputTokens:100,reasoningOutputTokens:0};
 async function fixture(t,execute,extra={}){
   const dir=mkdtempSync(join(tmpdir(),'justup-broker-')),socketPath=join(dir,'model.sock');
