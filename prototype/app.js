@@ -184,7 +184,7 @@ async function fetchResults(state) {
     if (next) state.seenCursors.add(next);
     state.cursor = next; state.scanState = ({ open: 'ready', pending: 'scanning', paused: 'paused', exhausted: 'complete', failed: 'failed' })[response.continuation.state]; state.retryAfterMs = response.continuation.retryAfterMs; state.ai = response.ai || {}; state.hidden = response.hidden; renderAccess(capable('hiddenMatchCounts') ? response.hidden : null);
     // Fill only the first viewport; all further rows are gated by the viewport sentinel.
-    if (state.initial) { state.initial = false; const initialCount = Math.min(state.buffer.length, Math.max(0, Math.ceil((innerHeight - $('#feed').getBoundingClientRect().top) / 130))); for (let index = 0; index < initialCount; index++) appendJob(state.buffer.shift(), false); }
+    if (state.initial) { state.initial = false; fillVisibleSlots(state.buffer, '#feed-tail', job => appendJob(job, false)); }
   } catch (error) { if (validFeed(state)) state.error = error; }
   finally { if (validFeed(state)) { state.loading = false; renderFeedStatus(); maybeAdvance(); } }
 }
@@ -205,6 +205,10 @@ function appendJob(job, animated) {
   });
   $('#feed').append(slot);
   if (animated && !reduced()) row.animate([{ opacity: .2, clipPath: 'inset(0 0 85% 0)' }, { opacity: 1, clipPath: 'inset(0)' }], { duration: 450, easing: 'cubic-bezier(.2,.7,.25,1)' });
+}
+function fillVisibleSlots(buffer, tail, append) {
+  // Measure again after every actual row: wrapping and mobile layout change its height.
+  while (buffer.length && !document.hidden && tailVisible(tail)) append(buffer.shift());
 }
 function tailVisible(selector) { const rectangle = $(selector).getBoundingClientRect(); return rectangle.top < innerHeight && rectangle.bottom > 0; }
 function maybeAdvance() {
@@ -266,7 +270,7 @@ async function loadCompanies(reset = true) {
     for (const company of result.items) if (company.id && !state.ids.has(company.id)) { state.ids.add(company.id); state.buffer.push(company); }
     if (result.nextCursor && result.nextCursor === state.cursor) throw new Error('The catalogue did not advance. Please refresh.');
     state.cursor = result.nextCursor || null; state.complete = !state.cursor;
-    if (reset) { const count = Math.min(state.buffer.length, Math.max(1, Math.ceil((innerHeight - $('#company-list').getBoundingClientRect().top) / 120))); for (let index = 0; index < count; index++) appendCompany(state.buffer.shift()); }
+    if (reset) fillVisibleSlots(state.buffer, '#company-tail', appendCompany);
   } catch (error) { if (state === catalogueState) state.error = error; }
   finally { if (state === catalogueState) { state.loading = false; renderCatalogueStatus(); advanceCatalogue(); } }
 }

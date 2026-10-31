@@ -139,3 +139,30 @@ test('guest company submission prompts sign-in without a model POST or clearing 
   await expect(page.locator('#sign-in-dialog')).toBeVisible(); await expect(page.locator('#request-query')).toHaveValue('A local museum'); await expect(page.locator('#query')).toHaveValue('Part-time museum jobs');
   expect(calls.some(call => call.key === 'POST /company-requests')).toBe(false); await expect(page.locator('#service-notice')).toBeHidden(); await expect(page.locator('#search-status')).not.toContainText('expired');
 });
+
+for (const surface of ['positions', 'companies']) {
+  test(`short mobile ${surface} list stays empty below the fold until its real slot is visible`, async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 420 });
+    const items = Array.from({ length: 10 }, (_, index) => ({ ...company, id: `company-${index}`, name: `Library ${index}` }));
+    await mockApi(page, { ...saved, 'GET /companies': { items }, 'GET /searches/search-1/results': completed(Array.from({ length: 10 }, (_, index) => job(index))) });
+    const isJobs = surface === 'positions', rows = isJobs ? '#feed [data-job]' : '#company-list [data-company]', tail = isJobs ? '#feed-tail' : '#company-tail';
+    await page.goto(isJobs ? '/' : '/#companies');
+    await expect(page.locator(isJobs ? '#feed-status' : '#company-scroll-status')).toContainText(isJobs ? 'Still checking' : 'More from the directory');
+    await expect.poll(() => page.locator(tail).evaluate(element => element.getBoundingClientRect().top)).toBeGreaterThan(420);
+    await page.waitForTimeout(600); await expect(page.locator(rows)).toHaveCount(0);
+    await page.locator(tail).scrollIntoViewIfNeeded(); await expect.poll(() => page.locator(rows).count()).toBeGreaterThan(0);
+    await page.evaluate(() => scrollTo(0, 0)); await page.waitForTimeout(500); const stopped = await page.locator(rows).count();
+    await page.waitForTimeout(600); expect(await page.locator(rows).count()).toBe(stopped); expect(stopped).toBeLessThan(10);
+  });
+}
+
+test('initial fills measure wrapped row geometry instead of assuming a fixed row height', async ({ page }) => {
+  const tallTitle = 'Long role title with detailed responsibilities '.repeat(18);
+  const tallDescription = 'Imported company description with several lines of public evidence. '.repeat(25);
+  await mockApi(page, { ...saved, 'GET /searches/search-1/results': completed(Array.from({ length: 12 }, (_, index) => ({ ...job(index), title: tallTitle + index }))), 'GET /companies': { items: Array.from({ length: 12 }, (_, index) => ({ ...company, id: `company-${index}`, description: tallDescription })) } });
+  for (const [route, rows] of [['/', '#feed [data-job]'], ['/#companies', '#company-list [data-company]']]) {
+    await page.goto(route); await expect.poll(() => page.locator(rows).count()).toBeGreaterThan(0); await page.waitForTimeout(550);
+    const tops = await page.locator(rows).evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top));
+    expect(tops.every(top => top < 1100)).toBe(true); expect(tops.length).toBeLessThan(12);
+  }
+});
