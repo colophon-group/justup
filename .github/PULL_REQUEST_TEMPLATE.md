@@ -4,7 +4,7 @@ What changes, and why? Link the issue or decision when one exists.
 
 ## Quality checklist
 
-Check every item. After the dash, replace `Applied` with `N/A` where appropriate and replace the placeholder with one short explanation or evidence. See the [guideline definitions](https://github.com/colophon-group/fresh-jobs-ui/blob/main/docs/development-process.md#2-contribution-quality).
+Check every item. After the dash, replace `Applied` with `N/A` where appropriate and replace the placeholder with one short explanation or evidence. See the [quality and testing guidelines](https://github.com/colophon-group/fresh-jobs-ui/blob/main/docs/development-process.md).
 
 - [ ] Q1 Focus and maintainability — Applied: <explanation or evidence>
 - [ ] Q2 Contracts and failure behavior — Applied: <explanation or evidence>
@@ -13,10 +13,14 @@ Check every item. After the dash, replace `Applied` with `N/A` where appropriate
 - [ ] Q5 Data and deployment safety — Applied: <explanation or evidence>
 - [ ] Q6 User experience — Applied: <explanation or evidence>
 - [ ] Q7 Documentation and decisions — Applied: <explanation or evidence>
+- [ ] T1 Create meaningful tests — Applied: <behavior covered or specific N/A reason>
+- [ ] T2 Put tests at the right level — Applied: <suite and reason or specific N/A reason>
+- [ ] T3 Keep tests trustworthy — Applied: <fixtures and maintenance evidence or specific N/A reason>
+- [ ] T4 Evaluate AI behavior — Applied: <evaluation result or specific N/A reason>
 
-## Verification
+## Tests and verification
 
-List the commands, CI checks, preview URL or manual steps used. State any verification that remains for the release gate.
+Name added or changed tests, their suites and the failure or edge case they cover. List commands, CI checks, preview URL or manual steps used. State any verification that remains for the release gate.
 
 ## Release impact
 
