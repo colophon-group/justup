@@ -1,0 +1,50 @@
+# The broker inherits fd3 and never receives the database/API/JEV identity.
+[Unit]
+Description=Justup isolated model broker
+Requires=justup-preview-model.socket srv-justup_preview.mount
+After=justup-preview-model.socket srv-justup_preview.mount
+ConditionPathExists=/srv/justup_preview/model/config/isolation-reviewed.json
+StartLimitIntervalSec=300
+StartLimitBurst=2
+
+[Service]
+Type=simple
+User=justup-preview-model
+Group=justup-preview-model
+Slice=justup-preview.slice
+WorkingDirectory=/srv/justup_preview/model/task-cwd
+ExecStartPre=/usr/bin/python3 /srv/justup_preview/ops/preview-host.py resource-guard
+ExecStart=/usr/bin/python3 /srv/justup_preview/ops/preview-model-run.py
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+TemporaryFileSystem=/tmp:ro /var/tmp:ro
+ReadWritePaths=/srv/justup_preview/model/invocations /srv/justup_preview/model/credentials
+ReadOnlyPaths=/srv/justup_preview/current /srv/justup_preview/model/config /srv/justup_preview/model/task-cwd
+InaccessiblePaths=-/srv/justup_preview/state -/srv/justup_preview/config -/srv/justup_preview/logs -/srv/justup_preview/broker -/srv/justup_preview/queue -/run/docker.sock -/var/run/docker.sock -/mnt/murmur -/root -/home
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=127.0.0.0/8 ::1/128 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10
+IPAddressAllow=127.0.0.53/32
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+LimitCORE=0
+LimitNOFILE=256
+LimitNPROC=64
+StandardOutput=null
+StandardError=null

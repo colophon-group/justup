@@ -1,0 +1,15 @@
+# Fail closed if root reserve, mounted disk boundary or kernel limits change.
+[Unit]
+Description=Check Justup preview boundaries
+Requires=srv-justup_preview.mount
+After=srv-justup_preview.mount
+
+[Service]
+Type=oneshot
+Slice=justup-preview.slice
+ExecStart=/usr/bin/python3 /srv/justup_preview/ops/preview-host.py guard --stop-on-failure
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+StandardOutput=null
+StandardError=null

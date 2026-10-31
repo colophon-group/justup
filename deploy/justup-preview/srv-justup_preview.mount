@@ -1,0 +1,11 @@
+# Only the exclusively created image belongs here; never an existing device.
+[Unit]
+Description=Justup preview hard disk boundary
+Before=justup-preview-api.service
+
+[Mount]
+What=/var/lib/justup-preview.disk
+Where=/srv/justup_preview
+Type=ext4
+Options=loop,nodev,nosuid
+TimeoutSec=30
