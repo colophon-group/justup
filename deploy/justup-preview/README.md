@@ -15,7 +15,7 @@ These files prepare one explicitly reviewed Linux ARM64 host. They do not provis
 
 `runtime.json` records the official prebuilt Node 24.22.2 Linux ARM64 archive and SHA256. Builds and browser tests run off-host. The artifact tool verifies that checksum, extracts only the Node executable/license and gathers application files from an exact Git commit, including its tree identity and complete file hashes. No npm application package or extra database service is added.
 
-Run the offline safety suite with:
+The `scripts/preview-operations.test.mjs` wrapper registers the same Python assertions with the deployment/full CI lane and propagates a failed exit or timeout. It adds no second test implementation. Run the offline safety suite directly with:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/preview-operations.test.py
