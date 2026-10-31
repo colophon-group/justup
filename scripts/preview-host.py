@@ -30,7 +30,7 @@ IMAGE = Path('/var/lib/justup-preview.disk')
 SLICE = 'justup-preview.slice'
 UNITS = ('justup-preview.slice', 'srv-justup_preview.mount', 'justup-preview-api.service',
          'justup-preview-guard.service', 'justup-preview-guard.timer',
-         'justup-preview-model.socket', 'justup-preview-model.service')
+         'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-runner.service')
 STOP_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service',
               'justup-preview-model.socket', 'justup-preview-model.service')
 ROOT_FLOOR = 8 * GIB
@@ -70,12 +70,17 @@ def plan(root, host_fingerprint=None):
             'uids': {'api': USER, 'queue': RUNNER_USER, 'model': MODEL_USER},
             'groups': {STATE_GROUP: [USER, RUNNER_USER], CLIENT_GROUP: [RUNNER_USER]},
             'modelSocket': 'root:' + CLIENT_GROUP + ' 0660; root-owned 0750 parent; inherited fd3',
+            'cumulativeJevLedger': {'path': str(BASE / 'queue/budget/jev.jsonl'), 'parentMode': '0700',
+                                    'fileMode': '0600', 'owner': RUNNER_USER,
+                                    'initializedByInstaller': False, 'restoredWithDatabase': False,
+                                    'maximumApprovedNanodollars': 500000000},
             'privateDeletionProtocol': 'pending marker held through SQL COMMIT/ROLLBACK; core integration required',
             'bind': '127.0.0.1:8787',
             'protected': ['jobseek-lightpanda-renderer', '/mnt/murmur', 'all existing services and volumes'],
             'startAutomatically': False,
             'blocked': ['runner tool/credential isolation review', 'approved policy URLs/version',
-                        'scoped runtime credential provisioning', 'frontend/tunnel fixed candidate route']}
+                        'scoped runtime credential provisioning', 'confirmed account pricing and prepared cumulative ledger',
+                        'pinned native ARM64 Codex executable', 'frontend/tunnel fixed candidate route']}
     body['planSha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return body
 
@@ -181,7 +186,7 @@ def guard(stop_on_failure=False):
     try:
         result = {'kernel': verify_caps(), 'storage': verify_storage()}
         groups = [(('logs',), 128 * MIB),
-                  (('state/work', 'model/invocations', 'model/credentials'), 512 * MIB)]
+                  (('state/work', 'queue/work', 'model/invocations', 'model/credentials'), 512 * MIB)]
         for directories, maximum in groups:
             usage = sum(p.lstat().st_size for directory in directories for p in (BASE / directory).rglob('*')
                         if p.is_file() and not p.is_symlink())
@@ -256,6 +261,7 @@ def install(root, expected, host_fingerprint):
             argv += ['--groups', groups]
         call(*argv, user)
     uid = pwd.getpwnam(USER)
+    queue_uid = pwd.getpwnam(RUNNER_USER)
     model_uid = pwd.getpwnam(MODEL_USER)
     for path in ('releases', 'ops', 'config'):
         (BASE / path).mkdir(mode=0o755)
@@ -276,6 +282,10 @@ def install(root, expected, host_fingerprint):
     (BASE / 'model/task-cwd').chmod(0o555)
     for path in ('model/invocations', 'model/credentials'):
         os.chown(BASE / path, model_uid.pw_uid, model_uid.pw_gid)
+    for path in ('queue', 'queue/config', 'queue/work', 'queue/budget'):
+        folder = BASE / path
+        folder.mkdir(mode=0o750 if path in {'queue', 'queue/config'} else 0o700)
+        os.chown(folder, 0 if path in {'queue', 'queue/config'} else queue_uid.pw_uid, queue_uid.pw_gid)
     generation = BASE / 'state/private-generation'
     generation.write_text(str(uuid.uuid4()) + '\n')
     generation.chmod(0o600)

@@ -44,7 +44,7 @@ def timestamp(value):
     return result.astimezone(timezone.utc)
 
 
-def verify(base_url, manifest, mode, runner_identity=None, import_generation=None, policy_version=None, fetch=get):
+def verify(base_url, manifest, mode, runner_identity=None, import_generation=None, policy_version=None, fetch=get, frontend_release=None):
     base_url = base_url.rstrip('/')
     origin = urlsplit(base_url)
     if origin.username or origin.password or origin.path or origin.query or origin.fragment or not origin.hostname:
@@ -68,6 +68,7 @@ def verify(base_url, manifest, mode, runner_identity=None, import_generation=Non
     if any(caps.get(key) is not False for key in ('sse', 'follows', 'viewed', 'preferences', 'hiddenMatchCounts')):
         raise ValueError('An unavailable demo capability was not reported as disabled.')
     checks = ['process_ready', 'exact_api_identity', 'uncached_guest_session', 'guest_access', 'disabled_capabilities']
+    frontend_identity = None
     if mode == 'preview':
         if not runner_identity or version.get('runner', {}).get('ready') is not True or version.get('runner', {}).get('identity') != runner_identity:
             raise ValueError('Actual runner readiness and exact identity are required.')
@@ -83,6 +84,16 @@ def verify(base_url, manifest, mode, runner_identity=None, import_generation=Non
             fetch(policies[key], False)
         if any(caps.get(key) is not True for key in ('search', 'companyRequests')):
             raise ValueError('Required live demo capabilities are unavailable.')
+        fields = ('sourceSha', 'treeSha', 'assetsSha256', 'workerSha256', 'artifactSha256')
+        if (not isinstance(frontend_release, dict)
+                or frontend_release.get('sourceSha') != manifest['sourceCommit']
+                or frontend_release.get('treeSha') != manifest['sourceTree']
+                or any(not re.fullmatch(r'[a-f0-9]{64}', frontend_release.get(key, '')) for key in fields[2:])):
+            raise ValueError('The retained built frontend must match this exact backend candidate.')
+        deployed_frontend, _ = fetch(base_url + '/__preview/version')
+        if not isinstance(deployed_frontend, dict) or any(deployed_frontend.get(key) != frontend_release[key] for key in fields):
+            raise ValueError('Deployed frontend identity differs from the retained compiled artifact.')
+        frontend_identity = {key: frontend_release[key] for key in fields}
         if session.get('coverage', {}).get('stale') is not False:
             raise ValueError('Imported coverage is stale or unavailable.')
         jobs, _ = fetch(base_url + '/api/v1/jobs?limit=12')
@@ -102,9 +113,10 @@ def verify(base_url, manifest, mode, runner_identity=None, import_generation=Non
         if 'noindex' not in frontend_headers.get('x-robots-tag', '').lower() and not re.search(r'<meta[^>]+name=["\']robots["\'][^>]+content=["\'][^"\']*noindex', html, re.I):
             raise ValueError('Frontend candidate does not explicitly exclude indexing.')
         checks += ['exact_ready_runner', 'exact_import_generation', 'approved_policy_pages', 'live_capabilities',
-                   'fresh_guest_public_projection', 'frontend_noindex']
+                   'fresh_guest_public_projection', 'exact_built_frontend_identity', 'frontend_noindex']
     return {'formatVersion': 1, 'scope': mode, 'baseUrl': base_url, **expected,
             'runnerIdentity': version.get('runner', {}).get('identity'), 'importGeneration': version.get('importGeneration'),
+            'frontend': frontend_identity,
             'checkedAt': datetime.now(timezone.utc).isoformat(), 'checks': checks, 'passed': True,
             'completeReleaseGate': False, 'browserJourneysRequired': True,
             'shareable': False}
@@ -118,6 +130,7 @@ def main():
     parser.add_argument('--expected-runner-identity')
     parser.add_argument('--expected-import-generation')
     parser.add_argument('--approved-policy-version')
+    parser.add_argument('--frontend-release', type=Path, help='Retained compiled frontend release.json; required in preview mode.')
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -126,7 +139,8 @@ def main():
         spec.loader.exec_module(artifact)
         manifest = artifact.validate_manifest(json.loads(args.manifest.read_text()))
         report = verify(args.base_url, manifest, args.mode, args.expected_runner_identity,
-                        args.expected_import_generation, args.approved_policy_version)
+                        args.expected_import_generation, args.approved_policy_version,
+                        frontend_release=json.loads(args.frontend_release.read_text()) if args.frontend_release else None)
         status = 0
     except (ValueError, OSError, KeyError, TypeError, HTTPError, URLError):
         report = {'formatVersion': 1, 'scope': args.mode, 'passed': False, 'shareable': False,

@@ -22,6 +22,7 @@ BASE = Path('/srv/justup_preview')
 CONFIG_KEYS = {
     'JUSTUP_DEMO_ORIGIN', 'JUSTUP_DEMO_INVITE_CODE', 'JUSTUP_DEMO_CSRF_SECRET', 'JUSTUP_DEMO_CURSOR_SECRET',
     'JUSTUP_DEMO_POLICIES_REVIEWED', 'JUSTUP_DEMO_PRIVACY_URL', 'JUSTUP_DEMO_USAGE_URL', 'JUSTUP_DEMO_POLICY_VERSION',
+    'JUSTUP_DEMO_SERVICES_ENABLED',
 }
 CATEGORIES = {'unknown', 'auth', 'mutation', 'health', 'read'}
 ROUTES = {'session', 'auth', 'jobs', 'searches', 'tasks', 'companies', 'company-requests', 'account', 'health', 'version'}
@@ -90,6 +91,8 @@ def child_environment(config, manifest):
     if not isinstance(config, dict) or set(config) - CONFIG_KEYS or any(not isinstance(value, str) for value in config.values()):
         raise ValueError('Only the documented API configuration keys are accepted.')
     origin = urlsplit(config.get('JUSTUP_DEMO_ORIGIN', ''))
+    if config.get('JUSTUP_DEMO_SERVICES_ENABLED', 'false') not in {'true', 'false'}:
+        raise ValueError('Service composition must be explicitly enabled or disabled.')
     if origin.scheme != 'https' or not origin.hostname or origin.path or origin.query or origin.fragment or origin.username or origin.password:
         raise ValueError('API origin must be an exact HTTPS origin.')
     for key in ('JUSTUP_DEMO_CSRF_SECRET', 'JUSTUP_DEMO_CURSOR_SECRET'):
@@ -107,9 +110,12 @@ def child_environment(config, manifest):
               'JUSTUP_DEMO_PORT': '8787', 'JUSTUP_DEMO_DB_PATH': str(BASE / 'state/preview.sqlite'),
               'JUSTUP_DEMO_PRIVATE_GENERATION_PATH': str(BASE / 'state/private-generation'),
               'JUSTUP_DEMO_BACKUP_DIR': str(BASE / 'state/backups'),
+              'JUSTUP_DEMO_SHARED_STATE': 'true',
+              'JUSTUP_DEMO_RUNNER_STATUS_PATH': str(BASE / 'state/runner-status.json'),
               'JUSTUP_DEMO_SOURCE_COMMIT': manifest['sourceCommit'],
               'JUSTUP_DEMO_BUILD_ID': manifest['buildIdentity']}
     result.setdefault('JUSTUP_DEMO_POLICIES_REVIEWED', 'false')
+    result.setdefault('JUSTUP_DEMO_SERVICES_ENABLED', 'false')
     return result
 
 

@@ -32,6 +32,7 @@ def load(name):
 
 host, artifact, launcher, recovery, http = [load(name) for name in
     ('preview-host', 'preview-artifact', 'preview-run', 'preview-recovery', 'preview-verify')]
+queue = load('preview-queue-run')
 
 
 def payload():
@@ -61,6 +62,11 @@ def bundle(path, manifest=None, files=None, extra=None):
 
 
 class ArtifactContracts(unittest.TestCase):
+    def test_backend_inventory_excludes_browser_sources_build_tools_and_dependencies(self):
+        for path in ('app/web/dist/index.html', 'app/web/src/app.tsx', 'app/prototype/app.mjs',
+                     'app/package.json', 'app/node_modules/react/index.js', 'app/scripts/frontend-prepare.mjs'):
+            with self.subTest(path=path):
+                self.assertFalse(artifact.allowed(path))
     def test_inventory_accepts_exact_bytes_and_rejects_changed_payload(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'candidate.tar'
@@ -201,9 +207,71 @@ class BoundaryContracts(unittest.TestCase):
         self.assertEqual(env['JUSTUP_DEMO_PORT'], '8787')
         self.assertEqual(env['JUSTUP_DEMO_BUILD_ID'], manifest['buildIdentity'])
         self.assertEqual(env['JUSTUP_DEMO_POLICIES_REVIEWED'], 'false')
+        self.assertEqual(env['JUSTUP_DEMO_SERVICES_ENABLED'], 'false')
+        self.assertEqual(env['JUSTUP_DEMO_SHARED_STATE'], 'true')
+        self.assertEqual(env['JUSTUP_DEMO_RUNNER_STATUS_PATH'], '/srv/justup_preview/state/runner-status.json')
         self.assertTrue(env['JUSTUP_DEMO_DB_PATH'].startswith('/srv/justup_preview/'))
         with self.assertRaises(ValueError):
             launcher.child_environment({**config, 'DOPPLER_TOKEN': 'private'}, manifest)
+
+    def test_queue_boundary_records_uninitialized_private_ledger_and_no_frontend_build(self):
+        root = HERE.parent
+        plan = host.plan(root, 'a' * 64)
+        ledger = plan['cumulativeJevLedger']
+        self.assertEqual(ledger['owner'], host.RUNNER_USER)
+        self.assertFalse(ledger['initializedByInstaller'])
+        self.assertFalse(ledger['restoredWithDatabase'])
+        self.assertEqual(ledger['maximumApprovedNanodollars'], 500000000)
+        unit = (root / 'deploy/justup-preview/justup-preview-runner.service').read_text()
+        self.assertIn('Slice=justup-preview.slice', unit)
+        self.assertIn('UMask=0007', unit)
+        self.assertIn('-/srv/justup_preview/model', unit)
+        self.assertIn('-/srv/justup_preview/config', unit)
+        self.assertNotIn('[Install]', unit)
+        self.assertNotIn('npm', unit)
+        api = (root / 'deploy/justup-preview/justup-preview-api.service').read_text()
+        self.assertIn('-/srv/justup_preview/queue', api)
+
+    def test_queue_pins_source_state_model_and_ledger_paths_without_inheriting_credentials(self):
+        manifest, _ = payload()
+        config = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
+                  'runnerStatusPath': '/srv/justup_preview/state/runner-status.json',
+                  'sourceCommit': manifest['sourceCommit'], 'buildIdentity': manifest['buildIdentity'],
+                  'jev': {'enabled': True, 'cumulativeBudget': {'path': str(queue.LEDGER_PATH),
+                           'excludedDirectories': ['/srv/justup_preview/state', '/srv/justup_preview/state/backups']}}}
+        self.assertIs(queue.validate_configuration(config, manifest), config)
+        for change in ({'sourceCommit': 'c' * 40}, {'sharedState': False}, {'dbPath': '/private/production.sqlite'},
+                       {'model': {'socketPath': '/tmp/other.sock'}}, {'command': 'arbitrary'},
+                       {'jev': {'enabled': True, 'cumulativeBudget': {'path': '/srv/justup_preview/state/ledger'}}}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                queue.validate_configuration({**config, **change}, manifest)
+        with patch.dict(os.environ, {'TYPESAFE_AI_TOKEN': 'private', 'OPENAI_API_KEY': 'private', 'DOPPLER_TOKEN': 'private'}):
+            env = queue.child_environment()
+        self.assertFalse({'TYPESAFE_AI_TOKEN', 'OPENAI_API_KEY', 'DOPPLER_TOKEN'} & env.keys())
+        self.assertEqual(env['JUSTUP_DEMO_RUNNER_CONFIG'], str(queue.CONFIG_PATH))
+
+    def test_queue_requires_existing_private_ledger_and_never_creates_or_repairs_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            root.chmod(0o700)
+            ledger = root / 'jev.jsonl'
+            with self.assertRaises(FileNotFoundError):
+                queue.validate_ledger(ledger)
+            self.assertFalse(ledger.exists())
+            ledger.write_bytes(b'{"kind":"approval"}\n')
+            ledger.chmod(0o600)
+            original = ledger.read_bytes()
+            queue.validate_ledger(ledger)
+            for unsafe in (0o640, 0o4600):
+                ledger.chmod(unsafe)
+                with self.assertRaises(ValueError):
+                    queue.validate_ledger(ledger)
+                self.assertEqual(ledger.read_bytes(), original)
+            ledger.chmod(0o600)
+            link = root / 'other.jsonl'
+            link.symlink_to(ledger)
+            with self.assertRaises(ValueError):
+                queue.validate_ledger(link)
 
     def test_policy_gate_requires_reviewed_urls_and_version(self):
         manifest, _ = payload()
@@ -331,6 +399,12 @@ class RecoveryContracts(unittest.TestCase):
     def test_restore_requires_auth_receipt_and_never_overwrites_live_generation(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            ledger = root / 'queue/budget/jev.jsonl'
+            ledger.parent.mkdir(parents=True)
+            ledger.write_bytes(b'{"kind":"approval"}\n{"kind":"reserve","reservedNanodollars":2688000}\n')
+            crash_lock = ledger.with_name(ledger.name + '.lock')
+            crash_lock.write_bytes(b'')
+            cumulative_before = ledger.read_bytes()
             db, folder, barrier = self.fixture(root)
             snapshot = self.make_backup(db, folder, barrier)
             before = barrier.read_bytes()
@@ -340,6 +414,9 @@ class RecoveryContracts(unittest.TestCase):
             self.assertTrue(result['sessionsInvalidated'])
             self.assertFalse(result['activated'])
             self.assertEqual(barrier.read_bytes(), before)
+            self.assertEqual(ledger.read_bytes(), cumulative_before)
+            self.assertTrue(crash_lock.exists())
+            self.assertFalse(any('jev' in p.name for p in folder.iterdir()))
             destination.unlink()
             with self.assertRaises(ValueError):
                 recovery.restore(snapshot, barrier, destination, [sys.executable, '-c', 'print(\"{}\")'], now=1001)
@@ -410,11 +487,22 @@ class HTTPVerificationContracts(unittest.TestCase):
             if not as_json:
                 return '<html>candidate</html>', {'x-robots-tag': 'noindex, nofollow'}
             return deepcopy(values[path]), {'cache-control': 'private, no-store'}
-        options = {'runner_identity': 'runner-build', 'import_generation': 'import-generation', 'policy_version': 'approved-v1', 'fetch': fetch}
+        frontend = {'sourceSha': manifest['sourceCommit'], 'treeSha': manifest['sourceTree'],
+                    'assetsSha256': 'c' * 64, 'workerSha256': 'd' * 64, 'artifactSha256': 'e' * 64}
+        values['/__preview/version'] = dict(frontend)
+        options = {'runner_identity': 'runner-build', 'import_generation': 'import-generation', 'policy_version': 'approved-v1',
+                   'fetch': fetch, 'frontend_release': frontend}
         report = http.verify('https://preview.example', manifest, 'preview', **options)
         self.assertIn('fresh_guest_public_projection', report['checks'])
         self.assertFalse(report['completeReleaseGate'])
         self.assertFalse(report['shareable'])
+        self.assertEqual(report['frontend'], frontend)
+        with self.assertRaisesRegex(ValueError, 'built frontend'):
+            http.verify('https://preview.example', manifest, 'preview', **{**options, 'frontend_release': None})
+        values['/__preview/version']['artifactSha256'] = 'f' * 64
+        with self.assertRaisesRegex(ValueError, 'frontend identity differs'):
+            http.verify('https://preview.example', manifest, 'preview', **options)
+        values['/__preview/version'] = dict(frontend)
         for change in ({'firstObserved': '2026-10-31T17:00:00Z'}, {'description': 'must stay internal'}):
             with self.subTest(change=change):
                 original = deepcopy(values['/api/v1/jobs?limit=12']['items'][0])
