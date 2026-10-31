@@ -429,9 +429,17 @@ def require_idle_preview():
     uids = {pwd.getpwnam(name).pw_uid for name in (USER, RUNNER_USER, MODEL_USER)}
     for path in PROC_ROOT.iterdir():
         try:
-            if path.name.isdigit() and path.stat().st_uid in uids:
+            if not path.name.isdigit():
+                continue
+            # Nondumpable processes can have root-owned /proc directories.
+            # The kernel status identities, not directory ownership, prove idle.
+            identity = next((line.split()[1:] for line in (path / 'status').read_text().splitlines()
+                             if line.startswith('Uid:')), [])
+            if len(identity) != 4 or any(not value.isdigit() for value in identity):
+                raise ValueError('Could not verify a running process identity.')
+            if any(int(value) in uids for value in identity):
                 raise ValueError('Dedicated preview identities must have no running processes.')
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             continue
 
 

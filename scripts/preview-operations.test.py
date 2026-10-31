@@ -424,9 +424,15 @@ class OperatorUpgradeContracts(unittest.TestCase):
 
     def test_active_dedicated_identity_blocks_replacement(self):
         with self.installation() as fixture:
-            (fixture.proc / '123').mkdir()
-            with self.assertRaisesRegex(ValueError, 'no running processes'):
-                self.upgrade(fixture)
+            process = fixture.proc / '123'
+            process.mkdir()
+            dedicated_uid = os.getuid() + 1234
+            # Model a nondumpable process: directory owner is the operator,
+            # while the actual kernel-reported identities belong to the model.
+            (process / 'status').write_text('Uid:\t' + '\t'.join([str(dedicated_uid)] * 4) + '\n')
+            with patch.object(host.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=dedicated_uid)):
+                with self.assertRaisesRegex(ValueError, 'no running processes'):
+                    self.upgrade(fixture)
             self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
             self.assertEqual(host.digest(fixture.base / 'ops/preview-artifact.py'), fixture.before['files']['scripts/preview-artifact.py'])
             self.assert_private_state_unchanged(fixture)
