@@ -7,7 +7,7 @@ export interface Coverage {
   state?: string;
   kind?: string;
   description?: string;
-  verifiedAt?: string;
+  verifiedAt?: string | null;
   stale?: boolean;
 }
 export interface Session {
@@ -40,9 +40,14 @@ export interface Requirement {
   handling: string;
   reason?: string;
 }
+export interface CompanyRequestPrefill {
+  input: string;
+  scope: string | null;
+}
 export interface Warning {
   code?: string;
   message: string;
+  companyRequestPrefill?: CompanyRequestPrefill;
 }
 export interface Search {
   id: string;
@@ -117,6 +122,7 @@ export interface ResultPage {
     insufficientEvidence?: number;
   };
   hidden?: { count: number; exact: boolean };
+  coverage?: Coverage;
 }
 export interface CompanyRequest {
   id: string;

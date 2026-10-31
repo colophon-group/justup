@@ -26,7 +26,7 @@ export function ResultFeed({
     ["open", "pending"].includes(feed.continuation.state);
   const { visible, initialCount } = useViewportReveal({
     items: feed.jobs,
-    resetKey: feed.key,
+    resetKey: `${feed.key}:${feed.bufferVersion}`,
     tailRef,
     active: active && !paused,
     loading: feed.loading,
@@ -64,9 +64,11 @@ export function ResultFeed({
   )
     status = (
       <>
-        {feed.continuation.state === "failed"
-          ? "Requirement checks failed. These positions are not included."
-          : "Search paused. There may be more matches."}{" "}
+        {feed.coverage?.stale || feed.coverage?.state === "import_unavailable"
+          ? feed.coverage.description || "Imported listings need verification."
+          : feed.continuation.state === "failed"
+            ? "Requirement checks failed. These positions are not included."
+            : "Search paused. There may be more matches."}{" "}
         <button className="text-link" id="resume-results" onClick={retry}>
           Check again
         </button>

@@ -2,6 +2,7 @@
 import type {
   Company,
   CompanyRequest,
+  CompanyRequestPrefill,
   Coverage,
   Job,
   RequestSubmission,
@@ -93,7 +94,9 @@ export function decodeCoverage(value: unknown): Coverage {
     ...optionalText(o, "state"),
     ...optionalText(o, "kind"),
     ...optionalText(o, "description"),
-    ...(o.verifiedAt == null ? {} : { verifiedAt: date(o.verifiedAt) }),
+    ...(o.verifiedAt === undefined
+      ? {}
+      : { verifiedAt: o.verifiedAt === null ? null : date(o.verifiedAt) }),
     ...(o.stale == null ? {} : { stale: flag(o.stale, "coverage status") }),
   };
 }
@@ -184,10 +187,33 @@ export function decodeCompany(value: unknown): Company {
         }),
   };
 }
+// Optional compiler hints cannot invalidate an otherwise usable warning.
+function decodePrefill(value: unknown): CompanyRequestPrefill | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const o = value as Record<string, unknown>;
+  const valid = (v: unknown): v is string =>
+    typeof v === "string" &&
+    v.trim().length > 0 &&
+    v.length <= 200 &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(v);
+  if (!valid(o.input) || (o.scope !== null && !valid(o.scope))) return;
+  return {
+    input: o.input.trim(),
+    scope: o.scope === null ? null : o.scope.trim(),
+  };
+}
 const decodeWarning = (value: unknown): Warning => {
   if (typeof value === "string") return { message: value };
   const o = record(value, "warning");
-  return { message: text(o.message, "warning"), ...optionalText(o, "code") };
+  const prefill =
+    o.code === "company_not_found"
+      ? decodePrefill(o.companyRequestPrefill)
+      : undefined;
+  return {
+    message: text(o.message, "warning"),
+    ...optionalText(o, "code"),
+    ...(prefill ? { companyRequestPrefill: prefill } : {}),
+  };
 };
 const decodeRequirement = (value: unknown): Requirement => {
   const o = record(value, "requirement");
@@ -320,6 +346,7 @@ export function decodeResults(value: unknown): ResultPage {
     fail("continuation state");
   const ai = record(o.ai ?? { status: "unavailable" }, "matching state");
   return {
+    ...(o.coverage == null ? {} : { coverage: decodeCoverage(o.coverage) }),
     searchId: text(o.searchId, "result search"),
     revision: count(o.revision, "result revision"),
     items: list(o.items, decodeJob, "position list"),
