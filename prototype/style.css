@@ -257,3 +257,12 @@ body.reduce-motion .wire-track{animation:none!important;transform:none!important
 @media(max-width:720px){}
 
 .hiring-wire{padding-inline:12px}
+
+/* Restrained listing cues share one line weight and inherit viewed-state colour. */
+.listing-icon{display:inline-block;width:14px;height:14px;flex:0 0 14px;vertical-align:-2px}
+.job-facts>.job-fact,.job-pay{display:inline-flex;align-items:center;gap:5px;min-width:0}
+.job-facts>span+span:before{content:none}
+.job-salary{display:flex;flex-wrap:wrap;align-items:center;gap:3px 13px}
+.job-skills{position:relative}
+.job-skills:before{content:'·';position:absolute;left:-8px}
+@media(max-width:720px){.listing-icon{width:13px;height:13px;flex-basis:13px}.job-facts{column-gap:12px}.job-salary{gap:3px 12px}}
