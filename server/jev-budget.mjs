@@ -2,7 +2,7 @@
 // Runtime only appends to an operator-prepared approved ledger; it never resets it.
 import { constants, openSync, closeSync, fstatSync, lstatSync, realpathSync, readFileSync,
   writeSync, fsyncSync, unlinkSync } from 'node:fs';
-import { dirname, basename, isAbsolute, resolve, relative } from 'node:path';
+import { dirname, basename, isAbsolute, resolve, relative, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const JEV_BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49';
@@ -14,7 +14,7 @@ const hash = (v) => createHash('sha256').update(JSON.stringify(v)).digest('hex')
 const integer = (v) => Number.isSafeInteger(v) && v >= 0;
 const exact = (a, b) => a && typeof a === 'object' && !Array.isArray(a)
   && Object.keys(a).sort().join(',') === [...b].sort().join(',');
-const within = (parent, path) => { const r = relative(parent, path); return r === '' || (!r.startsWith('..') && !isAbsolute(r)); };
+const within = (parent, path) => { const r = relative(parent, path); return r === '' || (r !== '..' && !r.startsWith(`..${sep}`) && !isAbsolute(r)); };
 const fail = (code = 'budget_unavailable') => Object.assign(new Error('Cumulative provider budget is unavailable.'), { code });
 
 // This pure template is deliberately UNAPPROVED. A protected operator must bind

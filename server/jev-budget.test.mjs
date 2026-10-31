@@ -110,8 +110,8 @@ test('unsafe modes, symlinks and preview data/backup paths are rejected', (t) =>
   chmodSync(join(f.dir, 'queue'), 0o750); assert.equal(f.budget.status().available, false); chmodSync(join(f.dir, 'queue'), 0o700);
   const link = join(f.dir, 'queue', 'link.jsonl'); symlinkSync(f.config.path, link);
   assert.equal(createJevBudget({ ...f.options, config: { ...f.config, path: link } }).status().available, false);
-  for (const part of ['data', 'backups']) {
-    const path = join(f.dir, part, 'ledger.jsonl'); writeFileSync(path, `${JSON.stringify(f.header)}\n`, { mode: 0o600 });
+  for (const part of ['data', 'backups']) for (const name of ['ledger.jsonl', '..ledger.jsonl']) {
+    const path = join(f.dir, part, name); writeFileSync(path, `${JSON.stringify(f.header)}\n`, { mode: 0o600 });
     assert.equal(createJevBudget({ ...f.options, config: { ...f.config, path } }).status().available, false);
   }
 });
