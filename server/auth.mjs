@@ -1,10 +1,11 @@
 // Invite-only demo accounts and SQLite sessions. Read when wiring authentication
-// or account deletion; HTTP cookie, origin and rate-limit protections live upstream.
+// or retention cleanup; HTTP cookie, origin and rate-limit protections live upstream.
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const deriveKey = promisify(scrypt);
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const ACCOUNT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SCRYPT_OPTIONS = Object.freeze({ N: 32768, r: 8, p: 3, maxmem: 64 * 1024 * 1024 });
 const ERROR_DETAILS = {
   invalid_input: [400, 'Invalid account input.'],
@@ -67,8 +68,10 @@ function publicAccount(row) {
 export function createAuth({ db, config = {}, now = Date.now, deleteAccountData = () => {} }) {
   const maxAccounts = config.maxAccounts ?? 30;
   const sessionTtlMs = config.sessionTtlMs ?? SESSION_TTL_MS;
+  const accountTtlMs = config.accountTtlMs ?? ACCOUNT_TTL_MS;
   if (!Number.isSafeInteger(maxAccounts) || maxAccounts < 1
       || !Number.isSafeInteger(sessionTtlMs) || sessionTtlMs < 1
+      || !Number.isSafeInteger(accountTtlMs) || accountTtlMs < 1 || accountTtlMs > ACCOUNT_TTL_MS
       || typeof now !== 'function' || typeof deleteAccountData !== 'function') {
     throw new TypeError('Invalid authentication configuration.');
   }
@@ -87,6 +90,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
       password_hash BLOB NOT NULL,
       created_at INTEGER NOT NULL
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS auth_accounts_expiry ON auth_accounts(created_at);
     CREATE TABLE IF NOT EXISTS auth_sessions (
       token_hash BLOB PRIMARY KEY,
       account_id TEXT NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,
@@ -100,15 +104,17 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
   const byUsername = db.prepare('SELECT * FROM auth_accounts WHERE username = ?');
   const byId = db.prepare('SELECT * FROM auth_accounts WHERE id = ?');
   const sessionRow = db.prepare(`
-    SELECT a.id, a.username, s.expires_at
+    SELECT a.id, a.username, a.created_at, s.expires_at
     FROM auth_sessions s JOIN auth_accounts a ON a.id = s.account_id
-    WHERE s.token_hash = ? AND s.expires_at > ?
+    WHERE s.token_hash = ? AND s.expires_at > ? AND a.created_at > ?
   `);
   const insertSession = db.prepare(`
     INSERT INTO auth_sessions (token_hash, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)
   `);
   const removeSession = db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?');
   const removeExpired = db.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?');
+  const expiredAccounts = db.prepare('SELECT id FROM auth_accounts WHERE created_at <= ? ORDER BY created_at, id');
+  const removeAllSessions = db.prepare('DELETE FROM auth_sessions');
   const removeAccountSessions = db.prepare('DELETE FROM auth_sessions WHERE account_id = ?');
   const removeAccount = db.prepare('DELETE FROM auth_accounts WHERE id = ?');
   const accountCount = db.prepare('SELECT count(*) AS count FROM auth_accounts');
@@ -130,7 +136,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
 
   function issueSession(account, timestamp) {
     const token = randomBytes(32).toString('base64url');
-    const expiresAt = timestamp + sessionTtlMs;
+    const expiresAt = Math.min(timestamp + sessionTtlMs, account.created_at + accountTtlMs);
     removeExpired.run(timestamp);
     insertSession.run(digest(token), account.id, timestamp, expiresAt);
     return { account: publicAccount(account), token, expiresAt };
@@ -149,8 +155,8 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     return transaction(() => {
       if (byUsername.get(username)) throw failure('username_taken');
       if (accountCount.get().count >= maxAccounts) throw failure('account_limit');
-      const account = { id: randomUUID(), username };
       const timestamp = now();
+      const account = { id: randomUUID(), username, created_at: timestamp };
       insertAccount.run(account.id, username, salt, hash, timestamp);
       return issueSession(account, timestamp);
     });
@@ -167,20 +173,25 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     const matches = timingSafeEqual(hash, account?.password_hash ?? dummyHash);
     if (!account || !matches) throw failure('invalid_credentials');
     return transaction(() => {
-      // A deletion may finish while the password hash runs outside the transaction.
-      if (!byId.get(account.id)) throw failure('invalid_credentials');
-      return issueSession(account, now());
+      // Deletion or hard account expiry may finish during password verification.
+      const currentAccount = byId.get(account.id);
+      const timestamp = now();
+      if (!currentAccount || currentAccount.created_at + accountTtlMs <= timestamp) {
+        throw failure('invalid_credentials');
+      }
+      return issueSession(currentAccount, timestamp);
     });
   }
 
   function session(token) {
     const hash = tokenHash(token);
     if (!hash) return null;
-    const row = sessionRow.get(hash, now());
+    const timestamp = now();
+    const row = sessionRow.get(hash, timestamp, timestamp - accountTtlMs);
     if (!row) return null;
     return {
       account: publicAccount(row),
-      expiresAt: row.expires_at,
+      expiresAt: Math.min(row.expires_at, row.created_at + accountTtlMs),
       access: { kind: 'demo', fullAccess: true, legacy: false, billingEnabled: false, until: null },
     };
   }
@@ -188,6 +199,18 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
   function logout(token) {
     const hash = tokenHash(token);
     if (hash) removeSession.run(hash);
+  }
+
+  // The caller owns any filesystem privacy barrier. It must run in this hook
+  // before private SQL deletes and may throw to abort the whole SQL transaction.
+  function deleteStoredAccount(accountId) {
+    const sessionsDeleted = removeAccountSessions.run(accountId).changes;
+    const result = deleteAccountData(accountId);
+    if (result && typeof result.then === 'function') {
+      throw new TypeError('Account deletion callback must be synchronous.');
+    }
+    removeAccount.run(accountId);
+    return sessionsDeleted;
   }
 
   async function deleteAccount(token, password) {
@@ -199,15 +222,30 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     if (!timingSafeEqual(hash, account.password_hash)) throw failure('invalid_credentials');
     return transaction(() => {
       if (!session(token)) throw failure('unauthenticated');
-      removeAccountSessions.run(account.id);
-      const result = deleteAccountData(account.id);
-      if (result && typeof result.then === 'function') {
-        throw new TypeError('Account deletion callback must be synchronous.');
-      }
-      removeAccount.run(account.id);
+      deleteStoredAccount(account.id);
       return { deleted: true };
     });
   }
 
-  return { register, login, session, logout, deleteAccount };
+  function cleanup() {
+    const timestamp = now();
+    return transaction(() => {
+      let sessionsDeleted = removeExpired.run(timestamp).changes;
+      const expired = expiredAccounts.all(timestamp - accountTtlMs);
+      for (const account of expired) sessionsDeleted += deleteStoredAccount(account.id);
+      return { accountsDeleted: expired.length, sessionsDeleted };
+    });
+  }
+
+  function invalidateAllSessions() {
+    return { sessionsDeleted: removeAllSessions.run().changes };
+  }
+
+  function registrationState() {
+    if (!inviteDigest) return { enabled: false, reason: 'registration_closed' };
+    if (accountCount.get().count >= maxAccounts) return { enabled: false, reason: 'account_limit' };
+    return { enabled: true, reason: null };
+  }
+
+  return { register, login, session, logout, deleteAccount, cleanup, invalidateAllSessions, registrationState };
 }

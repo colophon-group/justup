@@ -10,6 +10,7 @@ const PASSWORD = 'only-a-test-password';
 const INVITE = 'only-a-test-invitation';
 const START = Date.UTC(2026, 9, 31, 12);
 const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
 function fixture(t, options = {}) {
   const db = new DatabaseSync(':memory:');
@@ -174,7 +175,9 @@ test('account deletion requires the current password, removes private rows and r
   const second = await auth.login({ username: 'tester', password: PASSWORD });
   db.prepare('INSERT INTO private_rows VALUES (?, ?)').run(signedUp.account.id, 'test-private-data');
   await assert.rejects(auth.deleteAccount(signedUp.token, 'incorrect-test-password'), errorWith('invalid_credentials', 401));
+  await assert.rejects(auth.deleteAccount(signedUp.token, 'short'), errorWith('invalid_credentials', 401));
   assert.ok(auth.session(signedUp.token));
+  assert.ok(auth.session(second.token));
   assert.equal(db.prepare('SELECT count(*) AS n FROM private_rows').get().n, 1);
   assert.deepEqual(await auth.deleteAccount(signedUp.token, PASSWORD), { deleted: true });
   assert.deepEqual(removed, [signedUp.account.id]);
@@ -256,9 +259,114 @@ test('auth can reopen the same schema and an explicitly configured session lifet
 
 test('invalid configuration fails before accepting authentication work', (t) => {
   for (const config of [{ maxAccounts: 0 }, { maxAccounts: 1.5 }, { sessionTtlMs: -1 },
-    { sessionTtlMs: Infinity }, { inviteCode: true }, { inviteCode: 'x'.repeat(257) }]) {
+    { sessionTtlMs: Infinity }, { accountTtlMs: 0 }, { accountTtlMs: THIRTY_DAYS + 1 },
+    { accountTtlMs: Infinity }, { inviteCode: true }, { inviteCode: 'x'.repeat(257) }]) {
     const db = new DatabaseSync(':memory:');
     t.after(() => db.close());
     assert.throws(() => createAuth({ db, config }), /Invalid authentication configuration/);
   }
+});
+
+test('accounts deny login and session access at 30 days before cleanup, including in-flight login', async (t) => {
+  const { auth, db, register, setTime } = fixture(t);
+  await register();
+  setTime(START + THIRTY_DAYS - 1);
+  const signedIn = await auth.login({ username: 'tester', password: PASSWORD });
+  assert.equal(signedIn.expiresAt, START + THIRTY_DAYS);
+  assert.ok(auth.session(signedIn.token));
+  // Even a session row with a later deadline cannot extend the account's life.
+  db.prepare('UPDATE auth_sessions SET expires_at = ?').run(START + THIRTY_DAYS + SEVEN_DAYS);
+  const pendingLogin = auth.login({ username: 'tester', password: PASSWORD });
+  setTime(START + THIRTY_DAYS);
+  assert.equal(auth.session(signedIn.token), null);
+  await assert.rejects(pendingLogin, errorWith('invalid_credentials', 401));
+  await assert.rejects(auth.login({ username: 'tester', password: PASSWORD }), errorWith('invalid_credentials', 401));
+  await assert.rejects(auth.deleteAccount(signedIn.token, PASSWORD), errorWith('unauthenticated', 401));
+  assert.equal(db.prepare('SELECT count(*) AS n FROM auth_accounts').get().n, 1);
+});
+
+test('a shorter account deadline caps sessions and cleanup revokes tokens and deletes only expired private data', async (t) => {
+  const removed = [];
+  const { auth, db, register, setTime } = fixture(t, {
+    config: { accountTtlMs: 1000, sessionTtlMs: 500 },
+    deleteAccountData: (database) => {
+      database.exec('CREATE TABLE private_rows (account_id TEXT NOT NULL) STRICT');
+      return (id) => {
+        assert.equal(database.prepare('SELECT count(*) AS n FROM auth_sessions WHERE account_id = ?').get(id).n, 0);
+        database.prepare('DELETE FROM private_rows WHERE account_id = ?').run(id);
+        removed.push(id);
+      };
+    },
+  });
+  const old = await register('older');
+  setTime(START + 500);
+  const live = await register('newer');
+  for (const account of [old.account, live.account]) db.prepare('INSERT INTO private_rows VALUES (?)').run(account.id);
+  setTime(START + 999);
+  const oldSession = await auth.login({ username: 'older', password: PASSWORD });
+  const liveSession = await auth.login({ username: 'newer', password: PASSWORD });
+  assert.equal(oldSession.expiresAt, START + 1000);
+  assert.deepEqual(auth.cleanup(), { accountsDeleted: 0, sessionsDeleted: 0 });
+  setTime(START + 1000);
+  assert.deepEqual(auth.cleanup(), { accountsDeleted: 1, sessionsDeleted: 2 });
+  assert.deepEqual(removed, [old.account.id]);
+  assert.equal(auth.session(oldSession.token), null);
+  assert.equal(auth.session(live.token), null);
+  assert.ok(auth.session(liveSession.token));
+  assert.deepEqual(db.prepare('SELECT account_id FROM private_rows').all().map((row) => row.account_id), [live.account.id]);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM auth_accounts').get().n, 1);
+  assert.deepEqual(auth.cleanup(), { accountsDeleted: 0, sessionsDeleted: 0 });
+});
+
+test('cleanup rolls back all accounts, private SQL and expired-session purges if a privacy barrier fails', async (t) => {
+  let calls = 0;
+  let fail = true;
+  const { auth, db, register, setTime } = fixture(t, {
+    config: { accountTtlMs: 1000 },
+    deleteAccountData: (database) => {
+      database.exec('CREATE TABLE private_rows (account_id TEXT NOT NULL) STRICT');
+      return (id) => {
+        calls += 1;
+        if (fail && calls === 2) throw new Error('Deliberate test privacy barrier failure.');
+        database.prepare('DELETE FROM private_rows WHERE account_id = ?').run(id);
+      };
+    },
+  });
+  const first = await register('first');
+  setTime(START + 1);
+  const second = await register('second');
+  for (const account of [first.account, second.account]) db.prepare('INSERT INTO private_rows VALUES (?)').run(account.id);
+  setTime(START + 2000);
+  assert.throws(() => auth.cleanup(), /Deliberate test privacy barrier failure/);
+  for (const table of ['auth_accounts', 'auth_sessions', 'private_rows']) {
+    assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 2);
+  }
+  assert.equal(auth.session(first.token), null);
+  fail = false;
+  assert.deepEqual(auth.cleanup(), { accountsDeleted: 2, sessionsDeleted: 2 });
+  assert.equal(db.prepare('SELECT count(*) AS n FROM private_rows').get().n, 0);
+});
+
+test('restore session invalidation returns only counts, revokes every token and preserves accounts', async (t) => {
+  const { auth, db, register } = fixture(t);
+  const first = await register('first');
+  const second = await register('second');
+  assert.deepEqual(auth.invalidateAllSessions(), { sessionsDeleted: 2 });
+  assert.equal(auth.session(first.token), null);
+  assert.equal(auth.session(second.token), null);
+  assert.deepEqual(auth.invalidateAllSessions(), { sessionsDeleted: 0 });
+  assert.equal(db.prepare('SELECT count(*) AS n FROM auth_accounts').get().n, 2);
+  assert.ok(await auth.login({ username: 'first', password: PASSWORD }));
+});
+
+test('registration state exposes only availability and reflects invitation, cap and cleanup', async (t) => {
+  const closed = fixture(t, { config: { inviteCode: '' } });
+  assert.deepEqual(closed.auth.registrationState(), { enabled: false, reason: 'registration_closed' });
+  const { auth, register, setTime } = fixture(t, { config: { maxAccounts: 1, accountTtlMs: 1000 } });
+  assert.deepEqual(auth.registrationState(), { enabled: true, reason: null });
+  await register();
+  assert.deepEqual(auth.registrationState(), { enabled: false, reason: 'account_limit' });
+  setTime(START + 1000);
+  auth.cleanup();
+  assert.deepEqual(auth.registrationState(), { enabled: true, reason: null });
 });
