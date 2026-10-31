@@ -408,3 +408,5 @@ input[type=radio]:checked{background:radial-gradient(circle,var(--ink) 0 4px,var
 #company-page section,#company-page .report-facts{margin-block:30px}
 @media(max-width:720px){.policy-footer{flex-direction:column;gap:12px}.access-gate-copy h2{font-size:28px}.hiring-history{gap:5px}}
 @media(prefers-reduced-motion:reduce){.wire-track{animation:none!important}.live i{animation:none!important}}
+#auth-invite,#delete-password{display:block;width:100%;background:transparent;border:1.5px solid var(--ink);padding:13px;font-size:16px;margin:10px 0 18px}
+#auth-invite-field{margin-top:18px}.follow-company{position:relative;z-index:2}

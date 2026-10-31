@@ -5,7 +5,8 @@ const baseURL = deployed || 'http://127.0.0.1:4173';
 
 export default defineConfig({
   testDir: './tests/browser',
-  testMatch: deployed ? '**/deployed.spec.mjs' : '**/flows.spec.mjs',
+  testMatch: deployed ? '**/deployed.spec.mjs' : '**/*.spec.mjs',
+  testIgnore: deployed ? [] : ['**/deployed.spec.mjs'],
   workers: 1,
   retries: 0,
   reporter: process.env.CI ? 'github' : 'list',

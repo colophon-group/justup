@@ -32,7 +32,7 @@ window.JustupApi = (() => {
     try { data = await response.json(); } catch { throw new ApiError(response.status, { code: 'invalid_response', message: 'The service returned an unreadable response. Please try again.' }); }
     if (!response.ok) {
       const error = new ApiError(response.status, { ...data.error, retryAfter: data.error?.retryAfter || response.headers.get('Retry-After') });
-      if (response.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event('justup-session-expired'));
+      if (response.status === 401 && ['session_expired', 'unauthenticated'].includes(error.code) && !path.startsWith('/auth/')) window.dispatchEvent(new Event('justup-session-expired'));
       throw error;
     }
     return data;

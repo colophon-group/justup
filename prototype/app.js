@@ -23,7 +23,7 @@ function companyMark(company = {}) { const url = sourceURL(company.logoUrl); ret
 function clearProtectedState() {
   searchGeneration++; catalogueGeneration++; companyGeneration++; requestGeneration++; queryDrafts.clear();
   stopLive(); clearTimeout(requestTimer);
-  searchMutation = null; discoveryMutation = null; searchProposal = null;
+  searchMutation = null; discoveryMutation = null; searchProposal = null; searchSubmitOwner = null;
   session = null; JustupApi.setSession(null); accountId = 'visitor'; searches = []; selectedId = null; draft.query = ''; postingLanguages = new Set(); followedOnly = false; requestState = null; feedState = null; catalogueState = null;
   $('#feed').replaceChildren(); $('#company-list').replaceChildren(); $('#company-page').replaceChildren(); $('#request-content').replaceChildren(); $('#search-tabs').replaceChildren(); $('#query').value = ''; $('#access-notice').replaceChildren(); $('#access-notice').hidden = true; $('#search-accounting').replaceChildren();
 }
@@ -37,7 +37,7 @@ async function bootstrap() {
     if (!result || !result.capabilities || !result.access || !Object.hasOwn(result, 'user')) throw new Error('The service returned incomplete session information.');
     session = result; JustupApi.setSession(result); accountId = result.user?.id || 'visitor'; postingLanguages = new Set(result.preferences?.postingLanguages || []);
     $('#service-notice').hidden = true; $('#header-sign-in').hidden = !!result.user;
-    $('#job-search button[type=submit]').disabled = !capable('search');
+    $('#job-search button[type=submit]').disabled = !!session?.user && !capable('search');
     $('#live-label').textContent = 'LIVE EDITION';
     $('#coverage-disclosure').textContent = result.coverage ? `Imported snapshot${result.coverage.verifiedAt ? ' · verified ' + dateText(result.coverage.verifiedAt) : ''}${result.coverage.stale ? ' · refresh needed' : ''}. This demo does not imply continuous monitoring.` : 'Company coverage and import age are not reported by the service.';
     renderHiringWire(result.signals || []);
@@ -57,6 +57,8 @@ async function bootstrap() {
   }
 }
 function renderSearchShell() {
+  searchProposal = null; searchSubmitOwner = null;
+  $('#job-search button[type=submit]').disabled = !session || (!!session.user && !capable('search'));
   $('#search-tabs').innerHTML = searches.map(search => `<div class="search-tab"><button role="tab" aria-selected="${selectedId === search.id}" data-search="${escapeHTML(search.id)}">${escapeHTML(search.title || 'Saved search')}</button><button class="tab-remove" data-delete-search="${escapeHTML(search.id)}" aria-label="Delete ${escapeHTML(search.title || 'search')}">×</button></div>`).join('');
   const search = current(); $('#query').value = queryDrafts.get(search.id) ?? search.query ?? '';
   $('#search-intro').hidden = !!search.id; $('#landing-overview').hidden = !!search.id; $('#search-results').hidden = !search.id;
@@ -86,26 +88,38 @@ async function awaitTask(id, valid) {
   }
   throw new Error('The check is still pending. Retry the same request to resume it without creating a duplicate.');
 }
-let searchProposal = null;
+let searchProposal = null, searchSubmitOwner = null;
 function renderSearchProposal(proposal, searchId) {
   searchProposal = { ...proposal, searchId };
   $('#search-status').innerHTML = `<strong>This search needs your decision.</strong><p>${escapeHTML(proposal.message || 'Some requirements cannot be applied.')}</p>${(proposal.requirements || []).filter(item => item.status === 'unsatisfied').map(item => `<p>${escapeHTML(item.text)}: ${escapeHTML(item.reason || 'not supported')}</p>`).join('')}${(proposal.warnings || []).map(warning => `<p>${escapeHTML(typeof warning === 'string' ? warning : warning.message)}</p>`).join('')}<button class="button outline" id="confirm-search-proposal">Accept these limitations</button>`;
 }
 async function confirmSearchProposal() {
-  const proposal = searchProposal, generation = ++searchGeneration;
-  const result = await JustupApi.request(`/searches/${encodeURIComponent(proposal.searchId)}/confirm`, { method: 'POST', body: { proposalId: proposal.proposalId, expectedRevision: proposal.expectedRevision }, idempotencyKey: JustupApi.key() });
-  const completed = result.task ? await awaitTask(result.task.id, () => generation === searchGeneration) : result;
-  if (generation !== searchGeneration) return;
-  const accepted = completed.search;
-  if (!accepted?.id || accepted.status !== 'ready') throw new Error('The proposal has not become an accepted search.');
-  searches = searches.filter(search => search.id !== accepted.id); searches.push(accepted); selectedId = accepted.id; queryDrafts.delete(accepted.id); searchProposal = null;
-  renderSearchShell(); $('#search-status').textContent = 'Search saved with your confirmed limitations.'; resetFeed();
+  const proposal = searchProposal;
+  if (!proposal) return;
+  const generation = ++searchGeneration;
+  proposal.confirmKey ||= JustupApi.key();
+  $('#confirm-search-proposal').disabled = true;
+  try {
+    const result = await JustupApi.request(`/searches/${encodeURIComponent(proposal.searchId)}/confirm`, { method: 'POST', body: { proposalId: proposal.proposalId, expectedRevision: proposal.expectedRevision }, idempotencyKey: proposal.confirmKey });
+    const completed = result.task ? await awaitTask(result.task.id, () => generation === searchGeneration) : result;
+    if (generation !== searchGeneration) return;
+    const accepted = completed.search;
+    if (!accepted?.id || accepted.status !== 'ready') throw new Error('The proposal has not become an accepted search.');
+    searches = searches.filter(search => search.id !== accepted.id); searches.push(accepted); selectedId = accepted.id; queryDrafts.delete(accepted.id); queryDrafts.delete(null); searchProposal = null;
+    renderSearchShell(); $('#search-status').textContent = 'Search saved with your confirmed limitations.'; resetFeed();
+  } catch (error) {
+    if (generation !== searchGeneration) return;
+    if (feedState?.id === selectedId) feedState.generation = searchGeneration;
+    $('#search-status').textContent = `${errorText(error)} The last accepted search is unchanged.`;
+  }
 }
 async function saveSearch(options = {}) {
   if (!session) throw new Error('Connect to the service before searching.');
   if (!session.user) { openSignIn('Sign in to interpret and save your search. Your unsent text stays here.'); return; }
   const query = $('#query').value.trim();
   if (!query) { $('#query').focus(); return; }
+  searchProposal = null;
+  const owner = Symbol('search submission'); searchSubmitOwner = owner;
   const search = current(), generation = ++searchGeneration, previous = search.id;
   const payload = { query, ...(search.id ? { expectedRevision: search.revision } : {}), ...options };
   const fingerprint = JSON.stringify({ id: search.id, payload });
@@ -117,17 +131,17 @@ async function saveSearch(options = {}) {
     if (generation !== searchGeneration) return;
     const completed = result.task ? await awaitTask(result.task.id, () => generation === searchGeneration) : result;
     if (generation !== searchGeneration) return;
-    if (completed.proposal) { renderSearchProposal(completed.proposal, result.search?.id || search.id); return; }
+    if (completed.proposal) { renderSearchProposal(completed.proposal, result.search?.id || search.id); if (previous && feedState?.id === previous) feedState.generation = searchGeneration; return; }
     const accepted = completed.search;
     if (!accepted?.id || accepted.revision == null || typeof accepted.query !== 'string') throw new Error('The service did not return an accepted search revision.');
-    searchMutation = null; queryDrafts.delete(accepted.id);
+    searchMutation = null; queryDrafts.delete(accepted.id); if (!previous) queryDrafts.delete(null);
     searches = searches.filter(item => item.id !== accepted.id); searches.push(accepted); selectedId = accepted.id; draft.query = '';
     $('#search-status').textContent = 'Search saved.'; renderSearchShell(); await resetFeed();
   } catch (error) {
     if (generation !== searchGeneration) return;
     $('#search-status').textContent = `${errorText(error)}${previous ? ' The last accepted revision and its results are unchanged.' : ''}`;
     if (previous && feedState?.id === previous) { feedState.generation = searchGeneration; startLive(); }
-  } finally { if (generation === searchGeneration || selectedId !== previous) $('#job-search button[type=submit]').disabled = !capable('search'); }
+  } finally { if (searchSubmitOwner === owner) $('#job-search button[type=submit]').disabled = !!session?.user && !capable('search'); }
 }
 function stopLive() { clearTimeout(liveTimer); liveSource?.close(); liveSource = null; }
 function renderAccess(hidden) {
@@ -166,7 +180,7 @@ async function fetchResults(state) {
     if (next && next === state.cursor && response.continuation?.state !== 'exhausted') throw new Error('The search stopped making progress. Retry or refresh the search.');
     if (next && state.seenCursors.has(next)) throw new Error('The service repeated a results cursor. Refresh this search.');
     if (next) state.seenCursors.add(next);
-    state.cursor = next; state.scanState = ({ open: 'ready', pending: 'scanning', paused: 'paused', exhausted: 'complete', failed: 'failed' })[response.continuation.state]; state.retryAfterMs = response.continuation.retryAfterMs; state.ai = response.ai || {}; state.hidden = response.hidden; renderAccess(response.hidden);
+    state.cursor = next; state.scanState = ({ open: 'ready', pending: 'scanning', paused: 'paused', exhausted: 'complete', failed: 'failed' })[response.continuation.state]; state.retryAfterMs = response.continuation.retryAfterMs; state.ai = response.ai || {}; state.hidden = response.hidden; renderAccess(capable('hiddenMatchCounts') ? response.hidden : null);
     // Fill only the first viewport; all further rows are gated by the viewport sentinel.
     if (state.initial) { state.initial = false; const initialCount = Math.min(state.buffer.length, Math.max(0, Math.ceil((innerHeight - $('#feed').getBoundingClientRect().top) / 130))); for (let index = 0; index < initialCount; index++) appendJob(state.buffer.shift(), false); }
   } catch (error) { if (validFeed(state)) state.error = error; }
@@ -174,9 +188,9 @@ async function fetchResults(state) {
 }
 function appendJob(job, animated) {
   const company = job.company;
-  const facts = [job.locations?.map(location => location.name).filter(Boolean).join(', '), [...new Set((job.locations || []).map(location => location.workplace).filter(Boolean))].join(', '), job.employmentTypes?.join(', ')].filter(Boolean).map((value, index) => `<span>${index === 0 ? '<span aria-hidden="true">⌖ </span>' : ''}${escapeHTML(value)}</span>`).join('');
+  const facts = [job.locations?.map(location => location.name).filter(Boolean).join(', '), [...new Set((job.locations || []).map(location => location.workplace).filter(Boolean))].join(', '), job.employmentTypes?.map(value => value.replaceAll('_', ' ')).join(', ')].filter(Boolean).map((value, index) => `<span>${index === 0 ? '<span aria-hidden="true">⌖ </span>' : ''}${escapeHTML(value)}</span>`).join('');
   const slot = document.createElement('div'); slot.className = 'job-slot';
-  slot.innerHTML = `<article class="job clickable-row${job.viewed ? ' viewed' : ''}${job.isNew ? ' is-new' : ''}" data-job="${escapeHTML(job.id)}"><div class="job-age">${job.isNew ? '<span class="new-badge">New</span>' : ''}<time datetime="${escapeHTML(job.firstObserved)}" title="First observed ${escapeHTML(dateText(job.firstObserved))}">${ageText(job.firstObserved)}</time></div><div class="job-story"><h2 class="job-title"><a class="posting-link" href="${escapeHTML(sourceURL(job.sourceUrl))}" target="_blank" rel="noopener noreferrer">${escapeHTML(job.title)}</a></h2><div class="job-facts">${facts}</div>${job.salary ? `<span class="job-salary"><span aria-hidden="true">¤ </span>${escapeHTML(typeof job.salary === 'string' ? job.salary : job.salary.text || '')}</span>` : ''}</div><div class="job-employer"><a class="job-company" href="#company/${encodeURIComponent(company.id)}">${companyMark(company)}<span>${escapeHTML(company.name)}</span></a><p class="job-source">Direct from employer</p></div><span class="open-posting" aria-hidden="true">↗</span></article>`;
+  slot.innerHTML = `<article class="job list-row clickable-row${job.viewed ? ' viewed' : ''}${job.isNew ? ' is-new' : ''}" data-job="${escapeHTML(job.id)}"><div class="job-age">${job.isNew ? '<span class="new-badge">New</span>' : ''}<time datetime="${escapeHTML(job.firstObserved)}" title="First observed ${escapeHTML(dateText(job.firstObserved))}">${ageText(job.firstObserved)}</time></div><div class="job-story"><h2 class="job-title"><a class="posting-link row-link" href="${escapeHTML(sourceURL(job.sourceUrl))}" target="_blank" rel="noopener noreferrer">${escapeHTML(job.title)}</a></h2><div class="job-facts">${facts}</div>${job.salary ? `<span class="job-salary"><span aria-hidden="true">¤ </span>${escapeHTML(typeof job.salary === 'string' ? job.salary : job.salary.text || '')}</span>` : ''}</div><div class="job-employer"><a class="job-company" href="#company/${encodeURIComponent(company.id)}">${companyMark(company)}<span>${escapeHTML(company.name)}</span></a><p class="job-source">Direct from employer</p></div><span class="open-posting" aria-hidden="true">↗</span></article>`;
   const row = slot.firstElementChild;
   row.addEventListener('click', event => {
     if (event.target.closest('.job-company')) return;
@@ -199,7 +213,7 @@ function maybeAdvance() {
     // Recheck at completion: scrolling away must never reveal unseen rows offscreen.
     setTimeout(() => { if (!validFeed(state)) return; state.revealing = false; if (!tailVisible('#feed-tail') || $('#jobs-page').hidden) return; appendJob(state.buffer.shift(), true); renderFeedStatus(); maybeAdvance(); }, 450);
   } else if (state.scanState !== 'complete' && state.scanState !== 'paused' && state.scanState !== 'failed' && state.cursor) {
-    state.revealing = true; setTimeout(() => { if (!validFeed(state)) return; state.revealing = false; if (tailVisible('#feed-tail')) fetchResults(state); }, 450);
+    state.revealing = true; setTimeout(() => { if (!validFeed(state)) return; state.revealing = false; if (tailVisible('#feed-tail')) fetchResults(state); }, Math.max(450, Math.min(30000, Number(state.retryAfterMs) || 0)));
   }
 }
 function renderFeedStatus() {
@@ -209,7 +223,7 @@ function renderFeedStatus() {
   else if (state.loading || state.buffer.length || state.scanState === 'scanning') text = '<span class="looking"><span class="looking-mark" aria-hidden="true"><i></i><i></i><i></i></span>Still checking for matching positions…</span>';
   else if (state.scanState === 'failed') text = 'Requirement checks failed. Matches have not been substituted. <button class="text-link" id="resume-results">Try again</button>';
   else if (state.scanState === 'paused') text = 'Search paused. There may be more matches. <button class="text-link" id="resume-results">Check again</button>';
-  else if (state.scanState === 'complete') text = state.ids.size ? 'You’ve reached the back page of available matches.' : state.ai?.pending || state.ai?.failed || state.ai?.insufficientEvidence ? 'No confirmed matches. Some positions could not yet be evaluated.' : 'No matching positions found in the completed search.';
+  else if (state.scanState === 'complete') text = state.ids.size ? 'You’ve reached the back page of available matches.' : state.ai?.pending || state.ai?.failed || state.ai?.insufficientEvidence || ['pending', 'failed', 'insufficient_evidence'].includes(state.ai?.status) ? 'No confirmed matches. Some positions could not yet be evaluated.' : 'No matching positions found in the completed search.';
   else text = 'More results are not available yet. <button class="text-link" id="resume-results">Check again</button>';
   const ai = state.ai || {};
   if (ai.pending) text += `<span class="end-note">${escapeHTML(ai.pending)} positions still awaiting requirement checks.</span>`;
@@ -255,8 +269,8 @@ async function loadCompanies(reset = true) {
   finally { if (state === catalogueState) { state.loading = false; renderCatalogueStatus(); advanceCatalogue(); } }
 }
 function appendCompany(company) {
-  const row = document.createElement('article'); row.className = 'company-row clickable-row'; row.dataset.company = company.id;
-  row.innerHTML = `<div class="company-info"><a class="company-name" href="#company/${encodeURIComponent(company.id)}">${companyMark(company)}<span>${escapeHTML(company.name)}</span></a></div><div class="company-industry">${escapeHTML(company.industry || company.description || '')}</div><div class="company-state"><span class="status">${escapeHTML(company.statusLabel || company.coverage?.description || 'Coverage not reported')}</span></div><div class="company-actions">${capable('follows') ? `<button class="follow-company" data-follow="${escapeHTML(company.id)}" aria-pressed="${company.followed === true}">${company.followed ? 'Following ✓' : 'Follow +'}</button>` : ''}<span class="company-open" aria-hidden="true">↗</span></div>`;
+  const row = document.createElement('article'); row.className = 'company-row list-row clickable-row'; row.dataset.company = company.id;
+  row.innerHTML = `<div class="company-info"><a class="company-name row-link" href="#company/${encodeURIComponent(company.id)}">${companyMark(company)}<span>${escapeHTML(company.name)}</span></a></div><div class="company-industry">${escapeHTML(company.industry || company.description || '')}</div><div class="company-state"><span class="status">${escapeHTML(company.statusLabel || company.coverage?.description || 'Coverage not reported')}</span></div><div class="company-actions">${capable('follows') ? `<button class="follow-company" data-follow="${escapeHTML(company.id)}" aria-pressed="${company.followed === true}">${company.followed ? 'Following ✓' : 'Follow +'}</button>` : ''}<span class="company-open" aria-hidden="true">↗</span></div>`;
   row.addEventListener('click', event => { if (!event.target.closest('a,button')) row.querySelector('a').click(); });
   $('#company-list').append(row);
 }
@@ -296,12 +310,16 @@ async function discoverCompany(query, clarification) {
   const payload = { input: clarification ? `${query} — ${clarification}` : query };
   const fingerprint = JSON.stringify(payload);
   if (discoveryMutation?.fingerprint !== fingerprint) discoveryMutation = { fingerprint, key: JustupApi.key() };
-  const response = await JustupApi.request('/company-requests', { method: 'POST', body: { ...payload, requestKey: discoveryMutation.key }, idempotencyKey: discoveryMutation.key });
+  const mutation = discoveryMutation;
+  try {
+  const response = mutation.response || await JustupApi.request('/company-requests', { method: 'POST', body: { ...payload, requestKey: mutation.key }, idempotencyKey: mutation.key });
   if (generation !== requestGeneration || accountGeneration !== sessionGeneration || $('#request-page').hidden) return;
-  discoveryMutation = null; requestPolls = 0;
+  mutation.response = response; requestPolls = 0;
   const completed = response.task ? await awaitTask(response.task.id, () => generation === requestGeneration && accountGeneration === sessionGeneration && !$('#request-page').hidden) : response;
   if (generation !== requestGeneration || accountGeneration !== sessionGeneration || $('#request-page').hidden) return;
+  discoveryMutation = null;
   requestState = completed.request; renderCompanyRequest();
+  } catch (error) { if (generation === requestGeneration && accountGeneration === sessionGeneration) throw error; }
 }
 function renderCompanyRequest() {
   const request = requestState; if (!request) return;
@@ -366,7 +384,7 @@ function init() {
   $('#edition-date').textContent = new Date().toLocaleDateString('en', { weekday: 'short', day: 'numeric', month: 'long' });
   initSurfaces(); initPostingLanguages(); initSearchExamples();
   $('#job-search').addEventListener('submit', event => { event.preventDefault(); runAction(saveSearch); });
-  $('#query').addEventListener('input', () => { queryDrafts.set(selectedId, $('#query').value); if (!selectedId) draft.query = $('#query').value; });
+  $('#query').addEventListener('input', () => { if (searchProposal) { searchProposal = null; $('#search-status').textContent = 'Search text changed. Submit it to check the updated request.'; } queryDrafts.set(selectedId, $('#query').value); if (!selectedId) draft.query = $('#query').value; });
   $('#company-search').addEventListener('submit', event => { event.preventDefault(); loadCompanies(); });
   $('#followed-only').addEventListener('click', () => { followedOnly = !followedOnly; $('#followed-only').setAttribute('aria-pressed', String(followedOnly)); if (selectedId) runAction(saveSearch); });
   $('#add-search').addEventListener('click', () => { searchGeneration++; stopLive(); selectedId = null; feedState = null; draft.query = ''; queryDrafts.delete(null); renderSearchShell(); location.hash = 'jobs'; $('#query').focus(); });

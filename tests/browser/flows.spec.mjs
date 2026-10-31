@@ -101,3 +101,28 @@ test('inactive deletion and tab changes preserve per-search drafts without reloa
 test('unsafe source URLs cause an explicit contract error and optional surfaces stay unavailable', async ({ page }) => {
   await mockApi(page, { ...saved, 'GET /searches/search-1/results': completed([{ ...job(1), sourceUrl: 'javascript:alert(1)' }]) }); await page.goto('/'); await expect(page.locator('#feed-status')).toContainText('invalid posting'); await expect(page.locator('[data-job]')).toHaveCount(0); await expect(page.locator('#followed-only')).toBeHidden(); await expect(page.locator('.search-config [data-posting-languages]')).toBeHidden(); await expect(page.locator('#hiring-wire')).toBeHidden();
 });
+
+test('an incorrect deletion password keeps the account and accepted results intact', async ({ page }) => {
+  await mockApi(page, { ...saved, 'DELETE /account': { status: 401, body: { error: { code: 'invalid_credentials', message: 'Password is incorrect.' } } } }); await page.goto('/'); await expect(page.locator('[data-job]')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByRole('button', { name: 'Delete account', exact: true }).click(); await page.locator('#delete-password').fill('incorrect-test-password'); await page.locator('#confirm-delete-account').click();
+  await expect(page.locator('#delete-account-status')).toContainText('incorrect'); await expect(page.locator('[data-job]')).toHaveCount(1); await expect(page.locator('#sign-in-dialog')).not.toBeVisible(); await expect(page.locator('#delete-password')).toHaveValue('');
+});
+
+test('a pending company task resumes after polling failure without a duplicate submission', async ({ page }) => {
+  let attempts = 0; const calls = await mockApi(page, { 'POST /company-requests': { httpStatus: 202, body: { request: { id: 'request-1', status: 'pending' }, task: { id: 'company-task', status: 'pending' } } }, 'GET /tasks/company-task': () => ++attempts === 1 ? { status: 503, body: { error: { code: 'unavailable', message: 'Task service unavailable.' } } } : { status: 'succeeded', result: { request: { id: 'request-1', status: 'candidate', previewRevision: 1, candidate: company } } } });
+  await page.goto('/#request'); await page.locator('#request-query').fill('Library'); await page.getByRole('button', { name: 'Find company' }).click(); await expect(page.locator('#request-status')).toContainText('Task service unavailable'); await page.getByRole('button', { name: 'Find company' }).click(); await expect(page.getByRole('heading', { name: 'Test Library' })).toBeVisible(); expect(calls.filter(call => call.key === 'POST /company-requests')).toHaveLength(1);
+});
+
+test('editing a warned query invalidates its old confirmation action', async ({ page }) => {
+  await mockApi(page, { ...saved, 'PATCH /searches/search-1': { search: { id: 'search-1' }, task: { id: 'warning-task', status: 'pending' } }, 'GET /tasks/warning-task': { status: 'warning', result: { proposal: { proposalId: 'proposal-1', expectedRevision: 1, message: 'Cannot check this.' } } } }); await page.goto('/'); await submit(page, 'Warned request'); await expect(page.locator('#confirm-search-proposal')).toBeVisible(); await page.locator('#query').fill('A different query'); await expect(page.locator('#confirm-search-proposal')).toHaveCount(0);
+});
+
+test('an older save finishing cannot release the busy state of a newer tab submission', async ({ page }) => {
+  let finishOld, finishNew;
+  const oldResponse = new Promise(resolve => { finishOld = resolve; }), newResponse = new Promise(resolve => { finishNew = resolve; });
+  const second = { ...search(), id: 'search-2', title: 'Garden desk', query: 'Garden jobs' };
+  await mockApi(page, { ...saved, 'GET /searches': { items: [search(), second] }, 'GET /searches/search-2/results': completed([job(2)]), 'PATCH /searches/search-1': async () => { await oldResponse; return { search: search(2, 'Old changed request') }; }, 'PATCH /searches/search-2': async () => { await newResponse; return { search: { ...second, revision: 2, query: 'New changed request' } }; } });
+  await page.goto('/'); await submit(page, 'Old changed request'); await page.getByRole('tab', { name: 'Garden desk' }).click(); await submit(page, 'New changed request');
+  await expect(page.locator('#job-search button[type=submit]')).toBeDisabled(); finishOld(); await page.waitForTimeout(100); await expect(page.locator('#job-search button[type=submit]')).toBeDisabled();
+  finishNew(); await expect(page.locator('#job-search button[type=submit]')).toBeEnabled(); await expect(page.locator('#query')).toHaveValue('New changed request');
+});
