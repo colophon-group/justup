@@ -52,7 +52,7 @@ test('credentials are policy-gated; rejected login preserves the visitor draft a
 });
 
 test('unreviewed static policies keep registration and login disabled', async ({ page }) => {
-  await mockApi(page, { 'GET /session': session({ user: null, policies: { reviewed: false, version: 'demo-draft-2', privacyUrl: null, usageUrl: null } }) }); await page.goto('/'); await page.locator('#header-sign-in').click();
+  await mockApi(page, { 'GET /session': session({ user: null, policies: { reviewed: false, version: 'demo-draft-3', privacyUrl: null, usageUrl: null } }) }); await page.goto('/'); await page.locator('#header-sign-in').click();
   await expect(page.locator('#sign-in-unavailable')).toContainText('being reviewed'); await expect(page.locator('#sign-in-form')).toBeHidden();
 });
 
