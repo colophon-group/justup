@@ -264,5 +264,5 @@ body.reduce-motion .wire-track{animation:none!important;transform:none!important
 .job-facts>span+span:before{content:none}
 .job-salary{display:flex;flex-wrap:wrap;align-items:center;gap:3px 13px}
 .job-skills{position:relative}
-.job-skills:before{content:'·';position:absolute;left:-8px}
+.job-pay+.job-skills:before{content:'·';position:absolute;left:-8px}
 @media(max-width:720px){.listing-icon{width:13px;height:13px;flex-basis:13px}.job-facts{column-gap:12px}.job-salary{gap:3px 12px}}
