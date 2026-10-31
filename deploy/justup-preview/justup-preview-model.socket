@@ -4,6 +4,7 @@ Description=Justup isolated model broker socket
 Requires=srv-justup_preview.mount
 After=srv-justup_preview.mount
 ConditionPathExists=/srv/justup_preview/model/config/isolation-reviewed.json
+ConditionPathExists=/srv/justup_preview/.preview-install.json
 
 [Socket]
 ListenStream=/srv/justup_preview/broker/model.sock

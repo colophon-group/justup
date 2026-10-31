@@ -4,6 +4,7 @@ Description=Justup isolated model broker
 Requires=justup-preview-model.socket srv-justup_preview.mount
 After=justup-preview-model.socket srv-justup_preview.mount
 ConditionPathExists=/srv/justup_preview/model/config/isolation-reviewed.json
+ConditionPathExists=/srv/justup_preview/.preview-install.json
 StartLimitIntervalSec=300
 StartLimitBurst=2
 
@@ -29,7 +30,7 @@ PrivateDevices=yes
 PrivateTmp=yes
 TemporaryFileSystem=/tmp:ro /var/tmp:ro
 ReadWritePaths=/srv/justup_preview/model/invocations /srv/justup_preview/model/credentials
-ReadOnlyPaths=/srv/justup_preview/current /srv/justup_preview/model/config /srv/justup_preview/model/task-cwd
+ReadOnlyPaths=/srv/justup_preview/current /srv/justup_preview/model/config /srv/justup_preview/model/task-cwd /srv/justup_preview/.preview-install.json
 InaccessiblePaths=-/srv/justup_preview/state -/srv/justup_preview/config -/srv/justup_preview/logs -/srv/justup_preview/broker -/srv/justup_preview/queue -/run/docker.sock -/var/run/docker.sock -/mnt/murmur -/root -/home
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=127.0.0.0/8 ::1/128 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10
