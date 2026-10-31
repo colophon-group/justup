@@ -174,7 +174,10 @@ export function SearchWorkspace({
                     aria-describedby="search-guidance"
                     value={query}
                     onChange={(event) => workspace.setQuery(event.target.value)}
-                    onFocus={() => setFocused(true)}
+                    onFocus={() => {
+                      workspace.beginEditing();
+                      setFocused(true);
+                    }}
                     onBlur={() => setFocused(false)}
                     onKeyDown={(event) => {
                       if (

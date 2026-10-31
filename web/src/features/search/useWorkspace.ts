@@ -250,6 +250,7 @@ export function useWorkspace(
     state,
     search: selectedSearch(state),
     query: queryText(state),
+    beginEditing: () => dispatch({ type: "editing" }),
     setQuery: (value: string) => dispatch({ type: "query", value }),
     submit,
     confirm,

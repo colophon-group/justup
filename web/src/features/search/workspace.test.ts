@@ -12,6 +12,51 @@ const search = (id = "s", revision = 1, query = "Library jobs"): Search => ({
   requirements: [],
   warnings: [],
 });
+test("initial hydration respects an empty editor already chosen by the user", () => {
+  for (const action of [
+    { type: "editing" } as const,
+    { type: "new" } as const,
+    { type: "query", value: "" } as const,
+    { type: "query", value: "   " } as const,
+  ]) {
+    const current = workspaceReducer(emptyWorkspace(), action);
+    const loaded = workspaceReducer(current, {
+      type: "loaded",
+      searches: [search()],
+    });
+    assert.equal(loaded.selectedId, null);
+    assert.equal(queryText(loaded), queryText(current));
+    assert.equal(loaded.searches.length, 1);
+  }
+  const untouched = workspaceReducer(emptyWorkspace(), {
+    type: "loaded",
+    searches: [search()],
+  });
+  assert.equal(untouched.selectedId, "s");
+  assert.equal(queryText(untouched), "Library jobs");
+});
+test("focusing the editor preserves its current query and warned proposal", () => {
+  const loaded = workspaceReducer(emptyWorkspace(), {
+    type: "loaded",
+    searches: [search()],
+  });
+  const proposal = {
+    proposalId: "p",
+    searchId: "s",
+    expectedRevision: 1,
+    query: "Library jobs with an unsupported requirement",
+    title: "Library",
+    requirements: [],
+    warnings: [],
+  };
+  const draft = workspaceReducer(loaded, { type: "query", value: proposal.query });
+  const warned = workspaceReducer(draft, { type: "proposal", proposal });
+  const focused = workspaceReducer(warned, { type: "editing" });
+  assert.equal(focused.proposal, proposal);
+  assert.equal(focused.selectedId, "s");
+  assert.equal(queryText(focused), proposal.query);
+  assert.equal(workspaceReducer(focused, { type: "editing" }), focused);
+});
 test("accepted work preserves text typed after submission and removes only the submitted draft", () => {
   let state = workspaceReducer(emptyWorkspace(), {
     type: "query",
