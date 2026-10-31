@@ -65,6 +65,24 @@ test('deletion rotates and flushes recovery generation before private SQL commit
   assert.equal(readFileSync(generationPath, 'utf8'), before); assert.ok(demo.tasks.get('a', task.id));
 });
 
+test('dot-prefixed generation and database children cannot bypass backup path exclusion', (t) => {
+  for (const misplaced of ['generation', 'database']) {
+    const dir = mkdtempSync(join(tmpdir(), 'justup-backup-path-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const backupDir = join(dir, 'backups'); mkdirSync(backupDir);
+    const generationPath = join(misplaced === 'generation' ? backupDir : dir, '..private-generation');
+    const dbPath = join(misplaced === 'database' ? backupDir : dir, '..live.sqlite');
+    const generation = '00000000-0000-4000-8000-000000000000\n';
+    writeFileSync(generationPath, generation); writeFileSync(dbPath, 'live database');
+    const store = openStore(); t.after(() => store.close());
+    const barrier = createDeletionBarrier({ generationPath, backupDir, dbPath, db: store.db });
+    assert.equal(barrier.ready(), false, misplaced);
+    assert.throws(() => store.transaction(() => barrier.beforePrivateDelete()), /storage is unavailable/);
+    assert.equal(readFileSync(generationPath, 'utf8'), generation);
+    assert.equal(readFileSync(dbPath, 'utf8'), 'live database');
+    assert.equal(existsSync(generationPath + '.pending'), false);
+  }
+});
+
 // A separate process performs SQLite's real online backup while the writer holds
 // an uncommitted deletion. Generation-only consumers used to accept this copy.
 const COPY_DURING_TRANSACTION = `

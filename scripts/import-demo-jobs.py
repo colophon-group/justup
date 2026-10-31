@@ -72,6 +72,22 @@ def text(value, limit):
     return value.strip()[:limit] if isinstance(value, str) else ""
 
 
+def location_id(value):
+    # Public Typesense location_direct_ids are positive int32 GeoNames IDs.
+    # Preserve older opaque string IDs, but never stringify a malformed number.
+    if isinstance(value, str):
+        value = value.strip()
+        if not value or len(value) > 128:
+            return None
+        if re.fullmatch(r"[+-]?\d+", value):
+            value = int(value)
+        elif re.match(r"[+-]?\d", value):
+            return None
+        else:
+            return value
+    return str(value) if not isinstance(value, bool) and isinstance(value, int) and 0 < value <= 2147483647 else None
+
+
 def number(value):
     return value if not isinstance(value, bool) and isinstance(value, (int, float)) and 0 <= value < 10**12 else None
 
@@ -249,7 +265,7 @@ def normalize_job(raw, fetched_at, client, clock=None, body_budget=None):
         def at(name):
             return arrays[name][position] if position < len(arrays[name]) else None
         name = text(at("location_names"), 200) or None
-        identifier = text(at("location_direct_ids"), 128) or None
+        identifier = location_id(at("location_direct_ids"))
         workplace = at("location_types") if at("location_types") in ("onsite", "remote", "hybrid") else "unknown"
         geo_type = text(at("location_geo_types"), 40) or None
         if name or identifier:

@@ -4,15 +4,15 @@ import { openStore, DAY_MS } from './store.mjs';
 import { createFeed } from './feed.mjs';
 const AT = Date.parse('2026-10-31T12:00:00Z'), iso = (v) => new Date(v).toISOString();
 const viewer = { account: { id: 'account-a' } };
-function setup(t) {
+function setup(t, options = {}) {
   const s = openStore(); t.after(() => s.close()); let at = AT;
-  const feed = createFeed({ db: s.db, now: () => at, cursorSecret: 'x'.repeat(32) });
-  function add(rows) {
-    s.importSnapshot({ schemaVersion: 1, snapshotAt: iso(AT), verifiedAt: iso(AT), jobs: rows.map(([id, age]) => ({
+  const feed = createFeed({ db: s.db, now: () => at, cursorSecret: 'x'.repeat(32), ...options });
+  function add(rows, observedAt = AT) {
+    s.importSnapshot({ schemaVersion: 1, snapshotAt: iso(observedAt), verifiedAt: iso(observedAt), jobs: rows.map(([id, age]) => ({
       id, companyId: 'company', companyName: 'Example', companySlug: 'example', title: `Role ${id}`, sourceUrl: `https://example.org/${id}`,
       active: true, reserved: false, hasContent: true, firstObserved: iso(AT - age * DAY_MS), lastObserved: null,
       locales: ['en'], locations: [{ name: null, workplace: null }], employmentTypes: [], seniority: null, salary: null, bodyText: null,
-      evidence: { source: 'jobseek_public', metadataFetchedAt: iso(AT), bodyFetchedAt: null, bodyUrl: null, bodySha256: null, textSha256: null, bodyBytes: 0, normalizationVersion: 1, truncated: false },
+      evidence: { source: 'jobseek_public', metadataFetchedAt: iso(observedAt), bodyFetchedAt: null, bodyUrl: null, bodySha256: null, textSha256: null, bodyBytes: 0, normalizationVersion: 1, truncated: false },
     })), observations: [], unknownIds: [] });
   }
   return { s, feed, add, advance: (ms) => { at += ms; } };
@@ -30,6 +30,41 @@ test('independent age expiry and verification TTL never invent closure', (t) => 
   advance(1); assert.deepEqual(feed.list().items.map((j) => j.id), ['valid']);
   advance(DAY_MS); assert.equal(feed.list().items.length, 0); assert.equal(feed.coverage().stale, true);
   assert.equal(s.db.prepare("SELECT active FROM demo_jobs WHERE id='valid'").get().active, 1);
+});
+test('missing evidence pauses the feed while a fresh eligible zero completes', (t) => {
+  const { feed, add } = setup(t);
+  const unavailable = feed.list();
+  assert.deepEqual(unavailable.items, []);
+  assert.deepEqual(unavailable.continuation, { cursor: null, state: 'paused', retryAfterMs: 5000 });
+  assert.deepEqual(unavailable.coverage, { kind: 'imported_snapshot', verifiedAt: null, stale: true,
+    state: 'import_unavailable', description: 'Imported listings need verification.' });
+  assert.equal(unavailable.ai.status, 'not_required');
+  add([['too-recent-for-guest', 1]]);
+  const completed = feed.list();
+  assert.deepEqual(completed.items, []);
+  assert.equal(completed.continuation.state, 'exhausted');
+  assert.equal(completed.continuation.retryAfterMs, null);
+  assert.equal(completed.coverage.stale, false);
+});
+test('stale evidence pauses after cursor validation and a refreshed import recovers without exposing old rows', (t) => {
+  const ttl = 5 * 60_000, { feed, add, advance, s } = setup(t, { verificationTtlMs: ttl });
+  const rows = [['first', 3], ['second', 4]]; add(rows);
+  const cursor = feed.list({ limit: 1 }).continuation.cursor;
+  advance(ttl);
+  const paused = feed.list({ cursor });
+  assert.deepEqual(paused.items, []);
+  assert.deepEqual(paused.continuation, { cursor, state: 'paused', retryAfterMs: 5000 });
+  assert.equal(paused.coverage.stale, true);
+  assert.equal(paused.coverage.state, 'import_unavailable');
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_jobs WHERE active=1').get().n, 2);
+  assert.throws(() => feed.list({ cursor: cursor + 'x' }), { code: 'invalid_cursor' });
+  assert.throws(() => feed.list({ viewer, cursor }), { code: 'stale_cursor' });
+  add(rows, AT + ttl);
+  assert.throws(() => feed.list({ cursor }), { code: 'stale_cursor' });
+  const refreshed = feed.list();
+  assert.deepEqual(refreshed.items.map(j => j.id), ['first', 'second']);
+  assert.equal(refreshed.coverage.stale, false);
+  assert.equal(refreshed.continuation.state, 'exhausted');
 });
 test('cursor preserves source ordering and rejects generation/access/tamper changes', (t) => {
   const { feed, add } = setup(t); add([['b', 3], ['a', 3], ['c', 4]]);

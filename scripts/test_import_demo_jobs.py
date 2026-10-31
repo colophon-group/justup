@@ -90,6 +90,17 @@ class PublicImportTests(unittest.TestCase):
         self.assertIsNone(job["evidence"]["textSha256"])
         self.assertFalse(job["evidence"]["aiEligible"])
 
+    def test_numeric_location_ids_preserve_positive_int32_identity_without_guessing_malformed_ids(self):
+        identifiers = [2657896, 2147483647, 1, 0, -1, 2147483648, True, 1.0,
+                       None, {}, [], "+02657896", "0", "-1", "2147483648", "1.5", "zurich"]
+        names = [f"Observed label {position}" for position in range(len(identifiers))]
+        source = FakeSource([posting(location_direct_ids=identifiers, location_names=names)])
+        job = IMPORT.import_snapshot(source, SNAPSHOT, max_jobs=1, now=NOW)["jobs"][0]
+        self.assertEqual([location["id"] for location in job["locations"]],
+                         ["2657896", "2147483647", "1", None, None, None, None, None,
+                          None, None, None, "2657896", None, None, None, None, "zurich"])
+        self.assertEqual([location["name"] for location in job["locations"]], names)
+
     def test_closed_reserved_missing_and_failed_refresh_have_different_observations(self):
         previous = {"jobs": [{"id": value} for value in ("closed", "reserved", "missing")]}
         source = FakeSource(refresh=[posting("closed", is_active=False), posting("reserved", tdm_reserved=True)])

@@ -3,7 +3,7 @@
 import { createServer } from 'node:http';
 import { mkdirSync, chmodSync, readFileSync, statSync, lstatSync, readdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, unlinkSync, accessSync, fstatSync, realpathSync, constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { dirname, resolve, isAbsolute, relative } from 'node:path';
+import { dirname, resolve, isAbsolute, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { openStore } from './store.mjs';
 import { createFeed } from './feed.mjs';
@@ -20,7 +20,7 @@ export function createDeletionBarrier({ generationPath, backupDir, dbPath, db } 
     && isAbsolute(generationPath) && isAbsolute(backupDir);
   const pendingPath = configured ? `${generationPath}.pending` : null;
   let ownedMarker = null;
-  const inside = (root, path) => { const rel = relative(resolve(root), resolve(path)); return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)); };
+  const inside = (root, path) => { const rel = relative(resolve(root), resolve(path)); return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)); };
   function absentPending() {
     try { lstatSync(pendingPath); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
     throw new Error('A private deletion transaction is pending.');

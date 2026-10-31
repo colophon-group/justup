@@ -18,20 +18,22 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
       || Buffer.byteLength(cursorSecret) < 32) throw new TypeError('Invalid feed configuration.');
   const latest = () => db.prepare('SELECT * FROM demo_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   const access = (viewer) => viewer?.account?.id ? 'demo' : 'guest';
-  function coverage() {
+  function coverageAt(at) {
     const row = latest();
+    const stale = !row || at - row.verified_at >= verificationTtlMs;
     return { kind: 'imported_snapshot', verifiedAt: row ? new Date(row.verified_at).toISOString() : null,
-      stale: !row || now() - row.verified_at >= verificationTtlMs };
+      stale, ...(stale ? { state: 'import_unavailable', description: 'Imported listings need verification.' } : {}) };
   }
-  function eligibleJobs({ viewer = null } = {}) {
-    const at = now();
-    if (coverage().stale) return [];
+  const coverage = () => coverageAt(now());
+  function eligibleAt(viewer, at) {
+    if (coverageAt(at).stale) return [];
     const upper = at - (access(viewer) === 'guest' ? 2 * DAY_MS : 0);
     return db.prepare(`SELECT * FROM demo_jobs WHERE active=1 AND reserved=0 AND first_seen_at>=? AND first_seen_at<=?
       AND verified_at>? AND verified_at<=? ORDER BY first_seen_at DESC, id ASC`).all(at - 14 * DAY_MS, upper, at - verificationTtlMs, at)
       .map((r) => ({ ...JSON.parse(r.data_json), bodyText: r.body_text, evidenceHash: r.evidence_hash,
         verifiedAt: new Date(r.verified_at).toISOString() }));
   }
+  const eligibleJobs = ({ viewer = null } = {}) => eligibleAt(viewer, now());
   function sign(value) { return createHmac('sha256', cursorSecret).update(value).digest('base64url'); }
   function encode(value) {
     const data = Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -56,14 +58,17 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   function list({ viewer = null, cursor = null, limit = 12 } = {}) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw problem('invalid_limit');
     const position = cursor == null ? null : decode(cursor, viewer);
-    const jobs = eligibleJobs({ viewer }).filter((j) => !position
+    const at = now(), currentCoverage = coverageAt(at);
+    if (currentCoverage.stale) return { asOf: new Date(at).toISOString(), items: [],
+      continuation: { cursor, state: 'paused', retryAfterMs: 5000 }, ai: { status: 'not_required' }, coverage: currentCoverage };
+    const jobs = eligibleAt(viewer, at).filter((j) => !position
       || Date.parse(j.firstObserved) < position.first || (Date.parse(j.firstObserved) === position.first && j.id > position.id));
     const page = jobs.slice(0, limit), last = page.at(-1), more = jobs.length > limit;
-    return { asOf: new Date(now()).toISOString(), items: page.map(publicJob), continuation: {
+    return { asOf: new Date(at).toISOString(), items: page.map(publicJob), continuation: {
       cursor: more ? encode({ v: 1, generation: latest().generation, access: access(viewer),
-        createdAt: position?.createdAt ?? now(), first: Date.parse(last.firstObserved), id: last.id }) : null,
+        createdAt: position?.createdAt ?? at, first: Date.parse(last.firstObserved), id: last.id }) : null,
       state: more ? 'open' : 'exhausted', retryAfterMs: null,
-    }, ai: { status: 'not_required' }, coverage: coverage() };
+    }, ai: { status: 'not_required' }, coverage: currentCoverage };
   }
   function companyRows() {
     return db.prepare('SELECT company_id, data_json FROM demo_jobs ORDER BY first_seen_at DESC, id ASC').all();
