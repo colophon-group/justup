@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <meta name="justup-policy-status" content="draft">
-  <meta name="justup-policy-version" content="demo-draft-2">
+  <meta name="justup-policy-version" content="demo-draft-3">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'">
   <title>Privacy — Justup</title>
   <meta name="description" content="Draft privacy information for the Justup web preview. Operator review is incomplete.">
   <link rel="stylesheet" href="/policies.css">
 </head>
-<body data-policy="privacy" data-policy-status="draft" data-policy-version="demo-draft-2">
+<body data-policy="privacy" data-policy-status="draft" data-policy-version="demo-draft-3">
   <a class="skip-link" href="#main">Skip to privacy information</a>
   <div class="policy-paper">
     <header class="policy-header">
@@ -23,36 +23,52 @@
       <h1>Privacy.</h1>
       <aside class="policy-status" aria-labelledby="review-status">
         <h2 id="review-status">Draft — review incomplete</h2>
-        <p>This information has not been approved for real sign-in or public sharing. The active data flows and final policy text still need to be reviewed. Sign-in must remain disabled until the reviewed pages are published.</p>
-        <p>Draft version: <strong>demo-draft-2</strong>. No effective date has been set.</p>
+        <p>This information has not been approved for real sign-in or public sharing. This draft describes prepared implementation and locally checked controls. Deployment settings, provider handling and the final text still need verification and operator review. Sign-in must remain disabled until the reviewed pages are published.</p>
+        <p>Draft version: <strong>demo-draft-3</strong>. No effective date has been set.</p>
       </aside>
       <section class="policy-section" aria-labelledby="section-0">
         <h2 id="section-0">Who runs Justup?</h2>
         <p>Justup is operated by Viktor Shcherbakov. For privacy questions or requests about your data, email <a href="mailto:business@colophon-group.org">business@colophon-group.org</a>.</p>
+        <p>If you contact us by email, we receive your message and reply address to answer your request. The mailbox provider and retention settings still need review.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-1">
-        <h2 id="section-1">Identity and sign-in</h2>
-        <p>The login provider, exact permissions and account identifiers need to be confirmed. This draft does not claim that Google sign-in or any particular Google permission is active.</p>
+        <h2 id="section-1">Accounts and private records</h2>
+        <p>The prepared preview uses invite-only local username/password accounts. Registration does not ask for an email address. There is no Google login, resume upload or payment collection.</p>
+        <p>The server checks your password and stores a salted password hash. It stores hashes of random session tokens rather than the tokens themselves. Sessions are valid for up to seven days, within a fixed account deadline of 30 days after registration; signing in does not extend that account deadline.</p>
+        <p>Your account, saved searches, company requests and their background tasks are private account records. The server checks ownership and protects changes against cross-site requests. Public job and company records are separate from these private records.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-2">
-        <h2 id="section-2">Search and AI matching</h2>
-        <p>The reviewed notice must identify which search text and profile details are sent to an AI service, why they are needed, which provider receives them and how that provider handles them. These fields and settings are not yet confirmed. Do not include sensitive personal details in a search.</p>
+        <h2 id="section-2">Searches and AI</h2>
+        <p>Model-backed features remain disabled until their execution, data handling and quality checks are complete. The prepared search flow would send your search text, relevant prior accepted query and criteria, supported filter values and validation feedback to OpenAI to interpret your requirements.</p>
+        <p>If ordinary filters cannot express a requirement and AI matching is available, TypeSafe’s JEV service would receive that remaining condition and eligible public posting text and metadata to check the match. The application does not add your Justup account identifier, username, password, session token or billing identifiers to these model inputs.</p>
+        <p>What you type is still part of the input. Do not put sensitive personal information in a search or company request. Provider retention, training use, processing countries and transfer arrangements still require verification before these features can be enabled.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-3">
         <h2 id="section-3">Company requests</h2>
-        <p>The reviewed notice must explain what a request records, who can see it, how it is associated with an account and which services receive it. Request visibility and retention have not yet been confirmed.</p>
+        <p>A submitted request stores the company name or website, any supplied scope, the proposed identity and confirmation state under your account. Opening a prefilled form does not submit it. Known imported companies can be identified without an AI call.</p>
+        <p>For an unfamiliar company, the prepared verification flow would fetch a limited amount of public official-site evidence and send your company input and that evidence to OpenAI. Public websites contacted by the server can receive ordinary request metadata. An uncertain identity must remain unresolved or ask for clarification; you confirm the exact proposed company before it is recorded.</p>
+        <p>A confirmed request does not start career-page collection, follow a company or establish that Justup monitors it.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-4">
-        <h2 id="section-4">Cookies, storage, analytics and logs</h2>
-        <p>The actual session cookies, browser storage, analytics and hosting or application logs must be inventoried, including their purpose and duration. This draft makes no claim that visiting the preview is free of logging or storage.</p>
+        <h2 id="section-4">Cookies, browser state and diagnostics</h2>
+        <p>The prepared HTTPS configuration uses essential host-only session and request-protection cookies, marked Secure, HttpOnly and SameSite=Lax. The session cookie lasts up to seven days; a signed-out request-protection cookie lasts one hour. Final deployed cookie settings still need to be checked.</p>
+        <p>The application keeps sensitive account, query, draft and request state in memory or on the server, not in browser localStorage. It includes no analytics or advertising tracker. This does not mean the hosting services keep no access or security logs.</p>
+        <p>Application diagnostics are restricted to request identifiers, route categories, status, duration, redacted error codes and bounded token/cost counts. They exclude raw searches, request bodies, usernames, passwords, tokens and IP addresses. Network-derived information is also used in memory to limit abusive request rates. Local diagnostic logs have a configured seven-day ceiling; actual host cleanup and hosting-layer logging remain under review.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-5">
-        <h2 id="section-5">Recipients and processing locations</h2>
-        <p>The hosting, identity, AI and other processors must be named. Processing countries and any international transfers, protection arrangements and safeguards still need confirmation.</p>
+        <h2 id="section-5">Hosting and outside websites</h2>
+        <p>Cloudflare is intended to deliver the website and forward its API requests, including account-form submissions and cookies, to the isolated Hetzner application and database host in Nuremberg, Germany. OpenAI and TypeSafe are the intended AI recipients described above. Their processing locations, provider-side retention and applicable transfer arrangements are not yet verified.</p>
+        <p>The current imported job and company records contain no remote logo URLs. Employer and source links open outside Justup when you choose them. Those websites receive your web request and apply their own privacy notices.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-6">
-        <h2 id="section-6">Retention, deletion and privacy requests</h2>
-        <p>The reviewed notice must state how long account, search, request and log data are kept, including provider copies and backups. It must describe the deletion controls that actually work, any exceptions, and how to request access, correction or deletion. No deletion timing or outcome is promised by this draft.</p>
+        <h2 id="section-6">Retention and deletion</h2>
+        <p>The implementation gives account access a 30-day deadline and removes expired private account data through cleanup while the API is running. Sessions and local matching decisions have seven-day limits. Recovery tooling is limited to two SQLite backups and a seven-day usable backup age; pruning happens after a successful backup or an explicit cleanup command. These controls and their deployed cleanup must be verified before approval.</p>
+        <p>Password-confirmed account deletion removes the current account, sessions and its private searches, requests, tasks and matching data. Private deletion invalidates and purges recovery backups, and restoring a database revokes its sessions. These are logical and file-level controls: immediate secure erasure of storage remnants or copies already held by a provider is not promised.</p>
+        <p>Use the contact above for questions about access, correction or deletion, including when an in-app control is unavailable.</p>
+      </section>
+      <section class="policy-section" aria-labelledby="section-7">
+        <h2 id="section-7">What still needs review?</h2>
+        <p>Before approval, the fixed deployment must confirm cookie values, ownership and deletion behavior, cleanup and backup pruning, hosting/access/security logs, contact-mailbox handling, and each provider’s actual metadata, retention, processing locations and transfer arrangements. Model isolation and quality evidence and the final operator review are also outstanding. This draft is not an approved notice for active accounts or model use.</p>
       </section>
     </main>
     <footer><a href="/usage.html">Read the usage information ↗</a><a href="/#jobs">Back to search ↗</a></footer>
