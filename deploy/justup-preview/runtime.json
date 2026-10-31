@@ -1,0 +1,32 @@
+{
+  "nodeVersion": "24.22.2",
+  "platform": "linux-arm64",
+  "url": "https://nodejs.org/download/release/v24.22.2/node-v24.22.2-linux-arm64.tar.xz",
+  "sha256": "eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8",
+  "checksumSource": "https://nodejs.org/download/release/v24.22.2/SHASUMS256.txt",
+  "codex": {
+    "version": "0.159.2",
+    "platform": "linux-arm64",
+    "target": "aarch64-unknown-linux-musl",
+    "package": "@openai/codex@0.159.2-linux-arm64",
+    "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.2-linux-arm64.tgz",
+    "sha256": "1c4756c2f67f1310ffb03234d61d540ad85916cef5383e46e0e7851f1721c142",
+    "integrity": "sha512-Pm0W2PnFeTEqPx+AOIwgOVB4dBtY24cuD0tx1hjCor60CbSAT7WBPZVNUINSrTCDrMndvQC67p71ZEz+gmPPkA==",
+    "entrypoint": "runtime/codex/bin/codex",
+    "executableSha256": "113aa5d5952a6fd3950a88323219747d0c91978ebee948509a540c8a460e59a3",
+    "sandboxHelper": "runtime/codex/codex-resources/bwrap",
+    "sandboxHelperSha256": "c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4",
+    "licenseSource": "https://github.com/openai/codex/blob/rust-v0.159.2/LICENSE",
+    "licenseSha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+    "installGuide": "https://learn.chatgpt.com/docs/codex/cli",
+    "omittedDisabledHelpers": [
+      "codex-code-mode-host",
+      "rg",
+      "zsh"
+    ],
+    "nativeVersionHelpProofRequired": true,
+    "maximumOffHostArchiveBytes": 201326592,
+    "selectedExecutablesWithNodeBytes": 371432656,
+    "toolCatalogSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  }
+}

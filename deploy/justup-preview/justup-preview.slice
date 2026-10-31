@@ -1,0 +1,14 @@
+# Aggregate ceiling for every preview process, including maintenance and routing.
+[Unit]
+Description=Justup isolated preview resource ceiling
+
+[Slice]
+CPUAccounting=yes
+CPUQuota=50%
+CPUWeight=10
+MemoryAccounting=yes
+MemoryHigh=768M
+MemoryMax=1G
+MemorySwapMax=0
+TasksAccounting=yes
+TasksMax=96
