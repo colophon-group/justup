@@ -12,8 +12,11 @@ matching. Neither provider failure nor insufficient evidence removes a requireme
 or substitutes unprocessed jobs. `feed.publicJob` supplies the final public
 projection; raw bodies, evidence hashes, scan counts and task output stay private.
 
-The default provider is disabled. An active scoped Justup key, explicit spending
-approval and a completed real benchmark are not configured by this change. No
+The default provider is disabled. Existing-key use is authorized in
+[resource issue 49](https://github.com/colophon-group/justup/issues/49), with the
+initial Justup cumulative guard still mandatory. Isolation review, confirmed
+account pricing, protected key delivery, ledger initialization and a completed
+real benchmark remain pending. No
 real provider request or infrastructure allocation is part of the test suite.
 
 ## Compose the service
@@ -70,7 +73,7 @@ restore generation barrier is owned by the core/auth composition.
 The worker's `config.jev` must supply all of the following before provider
 execution is available:
 
-- `enabled:true`, `authorizationApproved:true`, a scoped active `token` and a
+- `enabled:true`, `authorizationApproved:true`, the approved existing `token` through queue-only delivery and a
   bounded non-secret `projectId`.
 - `model:'jev-1.14.0'` (or omit the field to use that pinned version).
 - `pricing:{confirmed:true,model:'jev-1.14.0',version,inputNanodollarsPerToken:42,
@@ -80,30 +83,106 @@ execution is available:
   `calls`, `inputTokens`, `outputTokens`, `costNanodollars`. These apply to fixed
   UTC-aligned daily windows by default (`windowMs` can lower the window to at
   least one minute). Values are intentionally absent by default.
+- `cumulativeBudget` binding a protected queue-only ledger to the exact approved
+  resource/slug, human approval record, ledger identity, confirmed pricing and a cap
+  no greater than 500,000,000 nanodollars ($0.50). The protected operator steps
+  below are required; an agent-authored flag or template is not approval.
 
 Use protected runtime delivery described in [secrets](secrets.md). Do not reuse
 Jobseek production, legacy, dormant, administration or quarantine credentials.
 Never put a key in a browser, fixture, command argument, issue or log.
 
-Every attempt reserves a call, conservative input/output token capacity and its
-maximum priced input cost in both account and project ledgers before network
-access. Success reconciles measured usage. A timeout, malformed reply, crash or
-other ambiguous attempt retains its entire reservation. A retry reserves new
-capacity. The default is one retry, with a 15-second per-attempt timeout and
+Every attempt reserves daily call/token/cost capacity and then durably reserves
+the full verified 64k-input-token maximum in the separate cumulative ledger
+before network access. Output pricing must be confirmed zero. Cumulative
+reservations are never refunded, including success, timeout, malformed reply,
+crash before a request and ambiguous failure. Each retry needs another full
+reservation. Daily SQLite accounting separately reconciles successful measured
+usage; it retains conservative capacity for ambiguous attempts. The default is
+one retry, with a 15-second per-attempt timeout and
 bounded exponential backoff respecting short `Retry-After` values. Long provider
 backoff pauses the scan for a later task instead of holding the runner. An actual
-usage overrun is retained in accounting and pauses without returning decisions.
-This is conservative local accounting, not exactly-once provider billing.
+usage overrun pauses without returning decisions. A response claiming more than
+64k input tokens also appends a durable halt to the cumulative ledger and blocks
+future requests pending operator reconciliation. This is conservative local
+accounting under verified provider price/context limits, not exactly-once billing
+or an independently verified provider-account spending control.
 
-These are per-window database limits, not a lifetime benchmark or funded-account
-ceiling. Recreating a deleted account resets its account counters. Project
-aggregate counters survive account deletion within the current database, but a
-database replacement or restored older snapshot can rewind them. A cumulative
-benchmark approval therefore needs a separately fixed attempt/token bound and
-reconciliation across retries/restores, or an enforced provider-account spending
-limit. Daily limits alone do not prove that total ceiling. Neither mechanism nor
-a concrete total benchmark allowance is authorized or claimed here; review the
-actual resource approval before activation or resuming from a restore.
+Daily SQLite limits remain abuse controls: deleting/recreating accounts or
+restoring an older database can reset those counters. It cannot replenish the
+separate cumulative ledger, which contains no account IDs, queries, job evidence,
+provider keys or other private account data. Account deletion never changes it.
+The runtime never creates, truncates, resets, refunds or restores that ledger.
+
+## Prepare the cumulative ledger after isolation review
+
+No active ledger or real key is initialized by this change. The operator must:
+
+1. Verify the recorded human authorization in issue 49 and complete the queue/API/model
+   identity and logging review in [operations issue 35](https://github.com/colophon-group/justup/issues/35).
+   Confirm actual account input pricing, free output and the supported per-request
+   input maximum privately. Do not publish account balances or key values.
+2. Create a dedicated queue-owned mode-0700 directory outside the preview database
+   directory and backups, such as `/srv/justup_preview/queue`. The API and isolated
+   model identities must have no access. Use canonical absolute paths without
+   symlinks. Root creates this directory; the runtime does not create it.
+3. Under a protected operator action, prepare a new mode-0600 regular ledger file
+   owned by the queue UID, with one compact UTF-8 JSON header plus a final newline.
+   Its fields are the pure `unapprovedJevBudgetTemplate()` result in
+   `server/jev-budget.mjs`, with the actual human `approvalId`, actual confirmed
+   pricing version/values and approved cap filled only after the technical review. The
+   template itself has null approval/pricing and is unusable. Keep its unique
+   `ledgerId`; no runtime or unapproved initializer creates an approved ledger.
+   `approvalId` accepts an issue-49 approval comment URL, `operator-user-turn:UUID`
+   or `operator-approval:UUID` referencing the protected operator's verified human
+   authorization record. These syntactic bindings do not verify or grant approval
+   themselves. Do not publish private chat contents or account billing state.
+4. Supply protected queue-only configuration:
+
+   ```js
+   cumulativeBudget: {
+     path: '/srv/justup_preview/queue/budget-ledger.jsonl',
+     excludedDirectories: [previewDataDirectory, previewBackupDirectory],
+     approval: {
+       approved: false, // remains false until the protected human-approved step
+       resourceId: 'https://github.com/colophon-group/justup/issues/49',
+       resourceSlug: 'demo-jev-evaluation-budget',
+       approvalId: null, ledgerId: null, capNanodollars: 500000000
+     }
+   }
+   ```
+
+   The approved configuration and header must match exactly, including the
+   pinned model and confirmed `config.jev.pricing`. The current transport accepts
+   42 nanodollars/input token and zero output charge; that catalog rate has not
+   been verified for the actual account. A different actual rate needs a reviewed
+   transport/pricing update before activation. Do not give this configuration,
+   ledger path or the JEV key to the API or model process.
+5. Exclude the ledger from preview SQLite backups, restores and deletion/retention
+   jobs. Preserve it across restarts and account deletion. A missing file,
+   mismatched approval/price/cap, unsafe permissions/ownership, symlink, hard link,
+   corruption or partial final record fails closed. Each append takes an exclusive
+   lock and fsyncs the full irreversible reservation before any request. Concurrent
+   callers cannot reserve beyond the cap. The file is bounded at 4 MiB/10,000
+   lines and validates sequence numbers, cumulative totals and a hash chain.
+6. A retained `.lock`, damaged ledger or durable halt requires explicit operator
+   reconciliation. The runtime never removes a retained crash lock. Preserve all
+   known reservations conservatively; do not roll back a valid ledger prefix,
+   replay an older copy or reset the cap to resume. Loss of the ledger closes
+   execution. Remove Justup's protected access to the approved existing key before
+   disposing of the ledger during teardown. The key may serve Jobseek too: do not
+   revoke it without the owning operator's coordinated approval. Any increased
+   Justup allowance requires new explicit approval.
+
+At the unverified catalog rate of 42 nanodollars/token, each full reservation is
+2,688,000 nanodollars ($0.002688); a $0.50 cap admits at most 186 attempts, including
+retries. This is a conditional arithmetic example, not an approved price, billing
+balance or promised evaluation count. The monotonic guarantee relies on keeping
+the queue ledger outside database restoration and on the protected operator never
+rewinding/replacing it. It does not protect against privileged filesystem tampering
+or incorrect provider pricing/usage; unexpected usage halts further execution.
+
+## Provider data and request limits
 
 Requests go only to `https://api.typesafe.ai/v1/systemone`, with redirects denied.
 They contain the residual condition plus each selected public posting's title,
@@ -173,7 +252,7 @@ claim zero retention. See TypeSafe's [legal reference](https://docs.typesafe.ai/
 Run Node.js 24.22.2:
 
 ```sh
-node --test server/jev.test.mjs server/matching.test.mjs
+node --test server/jev-budget.test.mjs server/jev.test.mjs server/matching.test.mjs
 ```
 
 The focused suite uses fixed clocks, in-memory SQLite and fake network responses.
@@ -183,7 +262,11 @@ zero-yield resumption, stale/expired/access-bound cursors, evidence/version cach
 invalidation, deduplication, cancellation and private deletion.
 API-role tests also prove trusted-heartbeat queueing without credentials, an
 independent execution denial with no HTTP, and deletion of provider-private
-ledgers by the keyless API client. A separate local
+SQLite rows by the keyless API client while the anonymous cumulative ledger
+survives. Ledger tests cover restart/old-database restoration/account recreation,
+crash reservations, two-process reservation races at the cap, retry charging,
+corruption/partial writes, unsafe paths, unapproved configuration and durable
+usage-overrun halts. A separate local
 composition smoke exercised the actual core store/feed/tasks together with
 matching and a fake TypeSafe transport, including atomic lease completion and
 cleanup inside the core transaction. It did not run an HTTP server or deployment.
@@ -204,8 +287,9 @@ A deterministic scan with 120 candidates and the final 12 accepted measured:
 
 This supports a provisional 24-candidate default under the local byte/token
 limits. No real-provider latency, token cost, acceptance rate or accuracy has
-been measured. Before public sharing, an approved scoped active key and explicit
-budget must enable a bounded benchmark on the actual eligible demo slice. Repeat
+been measured. Before public sharing, reviewed queue-only delivery of the approved
+existing key, verified pricing and the initialized cumulative ledger must enable
+a bounded benchmark on the actual eligible demo slice. Repeat
 the reviewed held-out cases at least three times, require no false acceptance on
 ambiguous cases and perfect acceptance precision in this small gate, and report
 variance plus sample size. Also measure actual-slice acceptance, throughput,

@@ -213,7 +213,10 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     const alive = () => !signal?.aborted && taskLive(task) && scanById(scan.id)?.task_id === task.id;
     while (alive() && now() - started < workMs && batches < maxBatches) {
       if ((feed.generation() ?? 'unavailable') !== scan.generation || feed.coverage().stale) { pause = 'import_unavailable'; break; }
-      if (!executionAvailable()) { pause = 'dependency_unavailable'; break; }
+      if (!executionAvailable()) {
+        const reason = readOnlyProvider ? null : provider.readiness?.().reason;
+        pause = ['budget_exhausted', 'budget_unavailable', 'budget_locked'].includes(reason) ? reason : 'dependency_unavailable'; break;
+      }
       const pending = rows(scan.id).filter((r) => r.decision == null);
       if (!pending.length || readyCount(scanById(scan.id)) >= readyLimit) break;
       const current = new Map(feed.eligibleJobs({ viewer: { account: { id: scan.owner_id } } }).map((j) => [j.id, j]));
@@ -258,7 +261,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
             || result.decisions.some((d) => !expected.delete(d.id) || !['accepted', 'rejected', 'insufficient_evidence'].includes(d.decision)) || expected.size) throw err('invalid_response');
       } catch (e) {
         usage.attempts += e.attempts ?? 0; usage.ambiguousAttempts += e.ambiguousAttempts ?? 0;
-        pause = ['budget_exhausted', 'usage_overrun', 'dependency_unavailable'].includes(e.code) ? e.code : 'provider_unavailable'; break;
+        pause = ['budget_exhausted', 'budget_unavailable', 'budget_locked', 'usage_overrun', 'dependency_unavailable'].includes(e.code) ? e.code : 'provider_unavailable'; break;
       }
       if (!alive()) return { status: 'failed', errorCode: 'task_interrupted', output: null };
       tx(db, () => {

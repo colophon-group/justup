@@ -1,6 +1,7 @@
 // Bounded TypeSafe Choice transport and durable spend reservations. Read before
 // changing model/prompt versions, token accounting, retries or provider readiness.
 import { randomUUID } from 'node:crypto';
+import { createJevBudget, JEV_ATTEMPT_INPUT_TOKENS } from './jev-budget.mjs';
 
 export const JEV_MODEL = 'jev-1.14.0';
 export const PROMPT_VERSION = 'justup-residual-v1';
@@ -136,7 +137,9 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
     input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cost_nano INTEGER NOT NULL,
     state TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT;`);
   const pricing = config.pricing;
-  function available() {
+  const cumulative = createJevBudget({ config: config.cumulativeBudget, model: JEV_MODEL, pricing,
+    databasePath: db.prepare('PRAGMA database_list').all().find((r) => r.name === 'main')?.file });
+  function configurationAvailable() {
     return config.enabled === true && config.authorizationApproved === true
       && typeof config.token === 'string' && config.token.length >= 8 && !/[\r\n]/u.test(config.token)
       && typeof config.projectId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/u.test(config.projectId)
@@ -145,6 +148,7 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
       && pricing.version.length > 0 && pricing.inputNanodollarsPerToken === 42 && pricing.outputNanodollarsPerToken === 0
       && budgetValid(config.budgets?.account) && budgetValid(config.budgets?.project);
   }
+  function available() { return configurationAvailable() && cumulative.status().available; }
   function cleanup() {
     db.prepare('DELETE FROM demo_jev_usage WHERE window_start<?').run(now() - 7 * DAY);
     db.prepare('DELETE FROM demo_jev_reservations WHERE created_at<?').run(now() - 7 * DAY);
@@ -204,7 +208,9 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
     } catch { await reader.cancel().catch(() => {}); throw new JevError('invalid_response'); }
   }
   async function classify({ ownerId, condition, jobs, signal } = {}) {
-    if (!available()) throw new JevError('dependency_unavailable');
+    if (!configurationAvailable()) throw new JevError('dependency_unavailable');
+    const readiness = cumulative.status();
+    if (!readiness.available) throw new JevError(readiness.reason);
     if (typeof ownerId !== 'string' || !ownerId || ownerId.length > 128) throw new JevError('invalid_request');
     const plan = planJevBatch(condition, jobs);
     if (!plan.selected.length || plan.selected.length !== jobs.length || plan.skipped.length) throw new JevError('invalid_request');
@@ -212,9 +218,15 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
     const started = now();
     for (let retry = 0; retry <= retries; retry++) {
       if (signal?.aborted) throw new JevError('cancelled', { attempts, ambiguousAttempts });
-      let reservation;
-      try { reservation = reserve(ownerId, plan.reservation); }
-      catch (e) { throw new JevError(e instanceof JevError ? e.code : 'provider_unavailable', { attempts, ambiguousAttempts }); }
+      let reservation, aggregateReservation;
+      try {
+        reservation = reserve(ownerId, plan.reservation);
+        aggregateReservation = cumulative.reserve(); // fsynced, irreversible, before any network access
+      } catch (e) {
+        if (reservation) settle(reservation, { inputTokens: 0, outputTokens: 0 });
+        throw new JevError(['budget_exhausted', 'budget_unavailable', 'budget_locked'].includes(e.code)
+          ? e.code : e instanceof JevError ? e.code : 'provider_unavailable', { attempts, ambiguousAttempts });
+      }
       attempts++;
       const controller = new AbortController();
       const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
@@ -234,17 +246,23 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
             await response.body?.cancel().catch(() => {});
             throw new JevError(RETRYABLE.has(response.status) && backoffMs <= 5000 ? 'provider_unavailable' : 'provider_rejected');
           }
-          return parseJevResponse(await readResponse(response), plan.selected);
+          const value = await readResponse(response);
+          cumulative.assertUsage(value?.usage);
+          return parseJevResponse(value, plan.selected);
         })();
         const result = await Promise.race([request, boundary]);
         if (settle(reservation, result.usage)) throw new JevError('usage_overrun');
         return { ...result, model: JEV_MODEL, classifierVersion: CLASSIFIER_VERSION, attempts, ambiguousAttempts,
           latencyMs: Math.max(0, now() - started), requestBytes: plan.requestBytes,
           reservedInputTokens: plan.reservation.inputTokens,
+          cumulativeReservedInputTokens: JEV_ATTEMPT_INPUT_TOKENS,
+          cumulativeReservationNanodollars: aggregateReservation.costNanodollars,
+          cumulativeReservedNanodollars: aggregateReservation.reservedNanodollars,
           costNanodollars: result.usage.inputTokens * pricing.inputNanodollarsPerToken };
       } catch (error) {
         if (error?.code !== 'usage_overrun') { settle(reservation); ambiguousAttempts++; }
-        const code = signal?.aborted ? 'cancelled' : error instanceof JevError ? error.code : 'provider_unavailable';
+        const code = signal?.aborted ? 'cancelled' : error instanceof JevError
+          || ['usage_overrun', 'budget_unavailable', 'budget_locked'].includes(error?.code) ? error.code : 'provider_unavailable';
         if (retry >= retries || !['provider_unavailable', 'provider_timeout'].includes(code)) throw new JevError(code, { attempts, ambiguousAttempts });
       } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
       await sleep(backoffMs, signal);
@@ -256,5 +274,8 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
     // Aggregated project usage deliberately survives deletion, without identity.
   }
   return { available, classify, plan: planJevBatch, cleanup, deleteAccountData,
-    readiness: () => ({ available: available(), reason: available() ? null : 'dependency_unavailable', model: JEV_MODEL, classifierVersion: CLASSIFIER_VERSION }) };
+    readiness: () => {
+      const state = configurationAvailable() ? cumulative.status() : { available: false, reason: 'dependency_unavailable' };
+      return { ...state, model: JEV_MODEL, classifierVersion: CLASSIFIER_VERSION };
+    } };
 }

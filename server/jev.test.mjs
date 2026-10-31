@@ -3,8 +3,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, appendFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createJevClient, JEV_MODEL, planJevBatch, parseJevResponse } from './jev.mjs';
+import { unapprovedJevBudgetTemplate, JEV_BUDGET_RESOURCE } from './jev-budget.mjs';
 
 const at = Date.parse('2026-10-31T16:00:00Z');
 const job = (id = 'synthetic-1', bodyText = 'The role includes a documented four day working week. '.repeat(5)) => ({
@@ -15,12 +18,24 @@ const budgets = { calls: 100, inputTokens: 1_000_000, outputTokens: 100_000, cos
 const configuration = () => ({ enabled: true, authorizationApproved: true, token: 'synthetic-test-token', projectId: 'test-project',
   pricing: { confirmed: true, model: JEV_MODEL, version: 'official-2026-10-31', inputNanodollarsPerToken: 42, outputNanodollarsPerToken: 0 },
   budgets: { account: { ...budgets }, project: { ...budgets } }, maxRetries: 0 });
+function installLedger(t, config, cap = 500_000_000) {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'justup-provider-budget-test-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const part of ['queue', 'data', 'backups']) mkdirSync(join(dir, part), { mode: 0o700 });
+  const price = config.pricing?.version ? config.pricing : configuration().pricing;
+  const header = { ...unapprovedJevBudgetTemplate(), approvalId: `${JEV_BUDGET_RESOURCE}#issuecomment-1`, capNanodollars: cap,
+    pricingVersion: price.version, inputNanodollarsPerToken: 42, outputNanodollarsPerToken: 0 };
+  config.cumulativeBudget = { path: join(dir, 'queue', 'budget-ledger.jsonl'), excludedDirectories: [join(dir, 'data'), join(dir, 'backups')],
+    approval: { approved: true, ledgerId: header.ledgerId, resourceId: JEV_BUDGET_RESOURCE, resourceSlug: header.resourceSlug, approvalId: header.approvalId, capNanodollars: cap } };
+  writeFileSync(config.cumulativeBudget.path, `${JSON.stringify(header)}\n`, { mode: 0o600 });
+  return { dir, header, rows: () => readFileSync(config.cumulativeBudget.path, 'utf8').trim().split('\n').map(JSON.parse) };
+}
 const response = (request, choice = 'accepted') => ({ model: JEV_MODEL, answers: Object.fromEntries(Object.keys(request.questions).reverse().map((key) => [key,
   { type: 'choice', choice, confidence: 0.985, probabilities: { accepted: choice === 'accepted' ? 0.99 : 0.005,
     rejected: choice === 'rejected' ? 0.99 : 0.005, insufficient_evidence: choice === 'insufficient_evidence' ? 0.99 : 0.005 } }])),
 usage: { input_tokens: 300, output_tokens: 24 } });
 function fixture(t, config = configuration(), fetch = async (_url, options) => Response.json(response(JSON.parse(options.body)))) {
   const db = new DatabaseSync(':memory:'); t.after(() => db.close());
+  if (!Object.hasOwn(config, 'cumulativeBudget')) installLedger(t, config);
   const client = createJevClient({ db, config, fetch, now: () => at, sleep: async () => {} });
   return { db, client };
 }
@@ -127,6 +142,7 @@ test('usage overruns retain measured charges and stop without returning a match'
 test('already aborted requests do not reserve capacity and rate limits respect Retry-After', async (t) => {
   const db = new DatabaseSync(':memory:'); t.after(() => db.close());
   let calls = 0; const delays = [], config = configuration(); config.maxRetries = 1;
+  installLedger(t, config);
   const client = createJevClient({ db, config, now: () => at, sleep: async (ms) => { delays.push(ms); },
     fetch: async (_url, options) => { calls++; return calls === 1 ? new Response('{}', { status: 429, headers: { 'Retry-After': '2' } }) : Response.json(response(JSON.parse(options.body))); } });
   const controller = new AbortController(); controller.abort();
@@ -134,6 +150,59 @@ test('already aborted requests do not reserve capacity and rate limits respect R
   assert.equal(db.prepare('SELECT count(*) AS n FROM demo_jev_usage').get().n, 0);
   const result = await client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] });
   assert.equal(calls, 2); assert.deepEqual(delays, [2000]); assert.equal(result.ambiguousAttempts, 1);
+});
+
+test('missing, unapproved and corrupt aggregate ledgers make zero HTTP requests', async (t) => {
+  for (const mode of ['missing', 'unapproved', 'corrupt']) {
+    let calls = 0; const config = configuration();
+    const ledger = installLedger(t, config);
+    if (mode === 'missing') rmSync(config.cumulativeBudget.path);
+    if (mode === 'unapproved') config.cumulativeBudget.approval.approved = false;
+    if (mode === 'corrupt') appendFileSync(config.cumulativeBudget.path, 'partial');
+    const { client } = fixture(t, config, async () => { calls++; throw new Error('HTTP must be blocked'); });
+    assert.equal(client.available(), false);
+    await assert.rejects(client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] }), { code: 'budget_unavailable' });
+    assert.equal(calls, 0); assert(ledger.dir);
+  }
+});
+
+test('ambiguous retry pays two irreversible 64k reservations and a third attempt is blocked', async (t) => {
+  const config = configuration(); config.maxRetries = 1;
+  const ledger = installLedger(t, config, 64_000 * 42 * 2); let calls = 0;
+  const { client } = fixture(t, config, async (_url, options) => {
+    calls++; if (calls === 1) throw new Error('ambiguous fake failure');
+    return Response.json(response(JSON.parse(options.body)));
+  });
+  const result = await client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] });
+  assert.equal(result.attempts, 2); assert.equal(result.cumulativeReservedNanodollars, 64_000 * 42 * 2);
+  assert.equal(ledger.rows().at(-1).reservedNanodollars, 64_000 * 42 * 2);
+  client.deleteAccountData('owner');
+  await assert.rejects(client.classify({ ownerId: 'new-account', condition: 'Four day week', jobs: [job()] }), { code: 'budget_exhausted' });
+  assert.equal(calls, 2);
+});
+
+test('a fresh or restored SQLite database cannot replenish aggregate reservations', async (t) => {
+  const config = configuration(), ledger = installLedger(t, config, 64_000 * 42); let calls = 0;
+  const { client } = fixture(t, config, async (_url, options) => { calls++; return Response.json(response(JSON.parse(options.body))); });
+  await client.classify({ ownerId: 'deleted-account', condition: 'Four day week', jobs: [job()] });
+  client.deleteAccountData('deleted-account');
+  // An empty SQLite database represents a restore predating every account/call.
+  const { client: restored } = fixture(t, config, async () => { calls++; throw new Error('No refill after DB restore'); });
+  await assert.rejects(restored.classify({ ownerId: 'recreated-account', condition: 'Four day week', jobs: [job()] }), { code: 'budget_exhausted' });
+  assert.equal(ledger.rows().at(-1).reservedNanodollars, 64_000 * 42); assert.equal(calls, 1);
+});
+
+test('aggregate reservation is durable before fake network runs, and usage overruns halt future calls', async (t) => {
+  const config = configuration(), ledger = installLedger(t, config); let calls = 0;
+  const { client } = fixture(t, config, async (_url, options) => {
+    calls++; assert.equal(ledger.rows().at(-1).reservedNanodollars, 64_000 * 42);
+    const result = response(JSON.parse(options.body)); result.usage.input_tokens = 64_001;
+    return Response.json(result);
+  });
+  await assert.rejects(client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] }), { code: 'usage_overrun' });
+  assert.equal(ledger.rows().at(-1).kind, 'halt'); assert.equal(client.available(), false);
+  await assert.rejects(client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] }), { code: 'budget_unavailable' });
+  assert.equal(calls, 1);
 });
 
 test('reviewed synthetic train/heldout labels exercise all three protocol outcomes', () => {
