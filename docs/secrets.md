@@ -12,6 +12,7 @@ Doppler holds secret values. Git holds project names, configuration, and instruc
 | `justup-dormant` | Unused or historical credentials requiring review before reuse | `dormant`; imported Jobseek material uses `dormant_jobseek_*` |
 | `jobseek-runtime` | Existing Jobseek crawler and worker credentials, kept separate from Justup defaults | Per-service `prd_*`; `legacy_crawler` preserves the local snapshot |
 | `jobseek-web-runtime` | Existing Jobseek web credentials | Vercel `dev_*`, `stg_*`, `prd_*`; `legacy_web` preserves the local snapshot |
+| `jobseek-ci-runtime` | Existing Jobseek CI runtime credentials, grouped by service | Production configurations for crawler, web support, observability, canary access and TLS identities |
 
 The `legacy` environment is an import boundary, not a development environment. A file named `.env.local` can contain production access. Do not promote these credentials into Justup defaults or assume they are safe for contributors.
 
@@ -55,7 +56,7 @@ Do not add cross-project secret references from runtime/deployment to administra
 
 ## Import and migration contract
 
-The migration reads existing Jobseek local environment files and service-owned host credential files, plus Vercel values that the provider explicitly returns decrypted. It copies values into Doppler and compares them against a fresh read in memory. It does not print values, write plaintext exports, restart services, change live credentials, or delete source files.
+The migration reads existing Jobseek local environment files and service-owned host credential files, plus Vercel values that the provider explicitly returns decrypted or marks plain. It copies values into Doppler and compares them against a fresh read in memory. It does not print values, write plaintext exports, restart services, change live credentials, or delete source files.
 
 Distinct historical values are retained as numbered variants in dormant storage, with source metadata in a private migration report outside Git. Historical does not mean valid: review ownership, scope, expiration and current provider status before any reuse. Possibly exposed OpenAI material is quarantined separately and still requires provider-side revocation.
 
