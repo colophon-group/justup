@@ -16,8 +16,10 @@ const fingerprint = (j) => sha({ title: j.title, companyName: j.companyName, bod
 const order = (a, b) => Date.parse(b.firstObserved) - Date.parse(a.firstObserved) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const terminal = (t) => !t || ['succeeded', 'warning', 'failed', 'cancelled'].includes(t.status);
 
-export function createMatchingService({ db, feed, tasks, config = {}, now = Date.now, provider } = {}) {
+export function createMatchingService({ db, feed, tasks, config = {}, now = Date.now, provider,
+  availability, readOnlyProvider = false } = {}) {
   if (!db || !feed?.eligibleJobs || !feed?.publicJob || !tasks?.enqueue || !tasks?.get || !tasks?.complete) throw new TypeError('Matching dependencies are required.');
+  if (typeof readOnlyProvider !== 'boolean' || (availability != null && typeof availability !== 'function')) throw new TypeError('Invalid matching role configuration.');
   provider ??= createJevClient({ db, config: config.jev ?? {}, now });
   const version = config.matching?.classifierVersion ?? CLASSIFIER_VERSION;
   const batchSize = config.matching?.batchSize ?? 24, maxBatches = config.matching?.maxBatchesPerTask ?? 4;
@@ -51,7 +53,13 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     PRIMARY KEY(owner_id,search_id,cache_key)) STRICT;`);
   const scanById = (id) => db.prepare('SELECT * FROM demo_match_scans WHERE id=?').get(id);
   const rows = (id) => db.prepare('SELECT * FROM demo_match_jobs WHERE scan_id=? ORDER BY position').all(id);
-  const available = () => provider.available?.() === true;
+  const executionAvailable = () => !readOnlyProvider && provider.available?.() === true && typeof provider.classify === 'function';
+  function available() {
+    // The API has no provider key. Its trusted same-build runner heartbeat can
+    // authorize enqueueing, never execution; missing/stale/failed reads close it.
+    if (!readOnlyProvider) return executionAvailable();
+    try { return availability?.() === true; } catch { return false; }
+  }
   function deleteScan(scan) {
     if (scan.task_id) tasks.delete(scan.owner_id, scan.task_id);
     db.prepare('DELETE FROM demo_match_scans WHERE id=?').run(scan.id);
@@ -205,7 +213,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     const alive = () => !signal?.aborted && taskLive(task) && scanById(scan.id)?.task_id === task.id;
     while (alive() && now() - started < workMs && batches < maxBatches) {
       if ((feed.generation() ?? 'unavailable') !== scan.generation || feed.coverage().stale) { pause = 'import_unavailable'; break; }
-      if (!available()) { pause = 'dependency_unavailable'; break; }
+      if (!executionAvailable()) { pause = 'dependency_unavailable'; break; }
       const pending = rows(scan.id).filter((r) => r.decision == null);
       if (!pending.length || readyCount(scanById(scan.id)) >= readyLimit) break;
       const current = new Map(feed.eligibleJobs({ viewer: { account: { id: scan.owner_id } } }).map((j) => [j.id, j]));
@@ -281,6 +289,10 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     });
   }
   return { available, page, runTask, deleteSearchData, deleteAccountData, cleanup,
-    capabilities: () => ({ aiMatching: available() }), readiness: () => provider.readiness?.() ?? { available: available() },
+    capabilities: () => ({ aiMatching: available() }), readiness: () => {
+      const ready = available();
+      return { ...provider.readiness?.(), available: ready, reason: ready ? null : 'dependency_unavailable',
+        role: readOnlyProvider ? 'queue' : 'worker', executionAvailable: executionAvailable() };
+    },
     taskResult: () => undefined };
 }

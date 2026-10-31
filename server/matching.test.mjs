@@ -116,6 +116,50 @@ test('disabled providers and stale imports report paused rather than fabricated 
   assert.equal(stale.continuation.state, 'paused'); assert.equal(stale.ai.status, 'import_unavailable');
 });
 
+test('API heartbeat readiness queues without credentials and cannot enable provider execution', async (t) => {
+  let requests = 0, ready = true;
+  t.mock.method(globalThis, 'fetch', async () => { requests++; throw new Error('HTTP forbidden in API role'); });
+  const s = setup(t, { count: 2 });
+  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, now: s.time,
+    readOnlyProvider: true, availability: () => ready });
+  const args = { ownerId: owner, searchId: 'api-search', revision: 1, configuration, jobs: s.jobs(), viewer };
+  assert.equal(api.available(), true); assert.equal(api.readiness().executionAvailable, false);
+  assert.equal(api.readiness().role, 'queue');
+  const initial = api.page(args); assert.equal(initial.continuation.state, 'pending');
+  const task = s.tasks.claim(); assert.equal(task.kind, 'ai_match');
+  const result = await api.runTask(task);
+  assert.equal(result.output.pause, 'dependency_unavailable'); assert.equal(requests, 0);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_jobs WHERE decision IS NULL').get().n, 2);
+  ready = false;
+  const paused = api.page({ ...args, cursor: initial.continuation.cursor });
+  assert.equal(paused.continuation.state, 'paused'); assert.equal(paused.ai.status, 'dependency_unavailable');
+  assert.equal(api.available(), false);
+  const brokenHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,
+    readOnlyProvider: true, availability: () => { throw new Error('heartbeat unavailable'); } });
+  assert.equal(brokenHeartbeat.available(), false);
+});
+
+test('API role prohibits execution even if a provider is accidentally injected and purges private provider ledgers', async (t) => {
+  let executed = 0;
+  const s = setup(t, { count: 1 });
+  // The default keyless API provider creates and cleans its accounting schema.
+  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, now: s.time,
+    readOnlyProvider: true, availability: () => true });
+  s.db.prepare('INSERT INTO demo_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('account', owner, START, 1, 100, 10, 4200, 0);
+  s.db.prepare('INSERT INTO demo_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('project', 'project', START, 1, 100, 10, 4200, 0);
+  s.db.prepare('INSERT INTO demo_jev_reservations VALUES(?,?,?,?,?,?,?,?,?)').run('reservation', owner, 'project', START, 100, 10, 4200, 'reserved', START);
+  const guarded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, now: s.time,
+    readOnlyProvider: true, availability: () => true,
+    provider: { available: () => true, classify: async () => { executed++; return { decisions: [] }; } } });
+  guarded.page({ ownerId: owner, searchId: 'guarded', revision: 1, configuration, jobs: s.jobs(), viewer });
+  const task = s.tasks.claim(), result = await guarded.runTask(task);
+  assert.equal(result.output.pause, 'dependency_unavailable'); assert.equal(executed, 0);
+  s.db.exec('BEGIN IMMEDIATE'); api.deleteAccountData(owner); s.db.exec('COMMIT');
+  assert.equal(s.db.prepare("SELECT count(*) AS n FROM demo_jev_usage WHERE scope='account'").get().n, 0);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_jev_reservations').get().n, 0);
+  assert.equal(s.db.prepare("SELECT calls FROM demo_jev_usage WHERE scope='project'").get().calls, 1);
+});
+
 test('cursors bind owner, revision, condition, access, import generation and ten-minute expiry', (t) => {
   const s = setup(t); const result = s.page(); const cursor = result.continuation.cursor;
   assert(!cursor.includes('synthetic')); assert.equal(cursor.length, 43);

@@ -26,6 +26,19 @@ lease. Its 90-second task bound contains matching's 60-second work deadline.
 Matching performs decision writes and the final task completion with live lease
 checks; `committed:true` means the runner must not complete the task again.
 
+The API process must not receive a JEV key or provider broker access. Compose its
+instance with `readOnlyProvider:true` and
+`availability:() => trustedFreshSameBuildHeartbeat.aiMatching === true`. Only this
+queue/read role uses the callback: `available()`, capabilities and readiness
+reflect that trusted heartbeat, and page reads can enqueue work and deliver exact
+cached decisions without a local provider credential. A missing or throwing
+callback closes availability. The worker role ignores this callback and requires
+its actual provider to be configured. Independently, `runTask` always refuses
+provider execution in the API role, even if a provider was accidentally injected;
+it pauses unresolved work with `dependency_unavailable` and makes no request.
+The default keyless API client still owns the accounting tables and synchronous
+private cleanup. No fake successful provider is substituted for the heartbeat.
+
 The page interface is:
 
 ```js
@@ -35,8 +48,9 @@ matching.page({ownerId,searchId,revision,configuration,jobs,viewer,cursor,limit,
 
 It returns the complete results envelope with `searchId`, `revision`, `asOf`,
 allowlisted `items`, `continuation`, `ai` and `coverage`. Ownership comes from the
-validated session. `available()` and `capabilities().aiMatching` report actual
-configuration readiness. Do not set a separate optimistic capability flag. The
+validated session. `available()` and `capabilities().aiMatching` report the
+role's actual worker or trusted queue readiness. Do not set a separate optimistic
+capability flag. The
 module's `taskResult` deliberately returns no raw task output to the browser.
 
 Register `deleteAccountData(ownerId)` with the auth deletion transaction. The
@@ -53,7 +67,8 @@ restore generation barrier is owned by the core/auth composition.
 
 ## Provider readiness and bounds
 
-`config.jev` must supply all of the following before `available()` is true:
+The worker's `config.jev` must supply all of the following before provider
+execution is available:
 
 - `enabled:true`, `authorizationApproved:true`, a scoped active `token` and a
   bounded non-secret `projectId`.
@@ -79,6 +94,16 @@ bounded exponential backoff respecting short `Retry-After` values. Long provider
 backoff pauses the scan for a later task instead of holding the runner. An actual
 usage overrun is retained in accounting and pauses without returning decisions.
 This is conservative local accounting, not exactly-once provider billing.
+
+These are per-window database limits, not a lifetime benchmark or funded-account
+ceiling. Recreating a deleted account resets its account counters. Project
+aggregate counters survive account deletion within the current database, but a
+database replacement or restored older snapshot can rewind them. A cumulative
+benchmark approval therefore needs a separately fixed attempt/token bound and
+reconciliation across retries/restores, or an enforced provider-account spending
+limit. Daily limits alone do not prove that total ceiling. Neither mechanism nor
+a concrete total benchmark allowance is authorized or claimed here; review the
+actual resource approval before activation or resuming from a restore.
 
 Requests go only to `https://api.typesafe.ai/v1/systemone`, with redirects denied.
 They contain the residual condition plus each selected public posting's title,
@@ -155,7 +180,10 @@ The focused suite uses fixed clocks, in-memory SQLite and fake network responses
 It proves primary candidate narrowing, uncertainty, provider outages, strict
 reply parsing, spend reservations and retries, chronological blocking,
 zero-yield resumption, stale/expired/access-bound cursors, evidence/version cache
-invalidation, deduplication, cancellation and private deletion. A separate local
+invalidation, deduplication, cancellation and private deletion.
+API-role tests also prove trusted-heartbeat queueing without credentials, an
+independent execution denial with no HTTP, and deletion of provider-private
+ledgers by the keyless API client. A separate local
 composition smoke exercised the actual core store/feed/tasks together with
 matching and a fake TypeSafe transport, including atomic lease completion and
 cleanup inside the core transaction. It did not run an HTTP server or deployment.
