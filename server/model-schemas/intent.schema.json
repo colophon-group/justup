@@ -1,0 +1,249 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "configuration",
+    "requirements"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "filters",
+        "residualAi"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "enum": [
+            1
+          ]
+        },
+        "filters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "companyInclude": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/values"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "companyExclude": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/values"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "titleAny": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/terms"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "bodyAll": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/terms"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "bodyNone": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/terms"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "locations": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/values"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "workplaces": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/values"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "employmentTypes": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/values"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "postingLanguages": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/values"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "seniority": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/values"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "companyInclude",
+            "companyExclude",
+            "titleAny",
+            "bodyAll",
+            "bodyNone",
+            "locations",
+            "workplaces",
+            "employmentTypes",
+            "postingLanguages",
+            "seniority"
+          ]
+        },
+        "residualAi": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "condition",
+                "requirementIds"
+              ],
+              "properties": {
+                "condition": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "requirementIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "text",
+          "handling",
+          "reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "handling": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "ai",
+              "preference",
+              "unsatisfied"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "values": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "terms": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      }
+    }
+  }
+}

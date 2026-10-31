@@ -1,0 +1,88 @@
+---
+summary: Search/company task contracts, bounded Codex execution and the remaining model-release proofs.
+read_when: Composing the demo runner, reviewing model isolation or enabling a scoped provider check.
+---
+
+# Demo model tasks
+
+The services implement the [frozen browser contract](https://github.com/colophon-group/justup/issues/33#issuecomment-6546280909). They do not enable a model by default. Search interpretation uses exactly `gpt-6-luna` with low reasoning through pinned Codex CLI `0.143.0` and ChatGPT subscription authentication. There is no model replacement, local parser fallback, paid API key, production scheduler or crawler write.
+
+## Compose and test
+
+Use Node 24.22.2. The modules use Node built-ins only. Include both JSON files in `server/model-schemas/` in the immutable runtime artifact; copying `.mjs` files alone is insufficient.
+
+```sh
+node --test server/intent.test.mjs server/companies.test.mjs server/model-runner.test.mjs server/model-broker.test.mjs server/runner.test.mjs
+```
+
+`createIntentService({db,feed,tasks,config,now,beforePrivateDelete,model,matching})` and `createCompanyService` synchronously create their own tables. HTTP already supplies authenticated `ctx.accountId`, parsed bodies, CSRF/Origin enforcement and safe errors. Company acceptance additionally needs `ctx.idempotencyKey` from the `Idempotency-Key` header. Never derive ownership from a body field.
+
+Register both service factories with the API. Wire one runner handler registry:
+
+```js
+const handlers = {
+  search_intent: intent.runTask,
+  company_resolution: companies.runTask,
+  // When the matching service is composed:
+  ai_match: matching.runTask,
+};
+```
+
+`createRunner` claims at most one task, heartbeats a 30-second lease, bounds each handler to 90 seconds, and uses queue recovery. Handlers receive `(task,{signal})`. A service commits its accepted revision/preview and terminal task result in one SQLite savepoint, then returns `{status,output,committed:true}`. The runner verifies that terminal state instead of completing it twice. Failure without a state change can return `{status:'failed',errorCode}`. Every asynchronous handler must recheck abort, ownership, current draft and lease before a write.
+
+The executable `server/runner.mjs` needs an operator-owned absolute `JUSTUP_RUNNER_ADAPTER` module exporting `createRunnerDependencies()`. It does not load provider credentials or create a polling schedule itself. The adapter supplies the store, services, handler registry and shutdown cleanup.
+
+## Searches
+
+An initial search stays revision 0 until accepted. Edits preserve the last accepted search and store a separate draft. A valid zero-result query succeeds. A provider outage, failed repair or obsolete response preserves the accepted state and draft. An unsatisfied requirement produces a warning proposal that requires exact revision/proposal confirmation. No requirements are loosened to increase the result count.
+
+The compiler's public configuration is `{schemaVersion:1,filters,residualAi}`. Model-only filter keys are all present with nullable values for strict structured output; compilation removes nulls. `compilerCapabilities()` describes actual canonical values and operators:
+
+| Filter | Meaning |
+| --- | --- |
+| `companyInclude`, `companyExclude` | Canonical imported company IDs; names/slugs normalize only when unambiguous. |
+| `titleAny` | Case-insensitive substring OR. |
+| `bodyAll`, `bodyNone` | Required substring AND / excluded substring OR. Missing text cannot satisfy either. |
+| `locations` | Exact canonical location-label OR. A label does not prove remote eligibility. |
+| `workplaces` | Known onsite/remote/hybrid OR. |
+| `employmentTypes`, `postingLanguages`, `seniority` | Known canonical values OR; missing evidence stays unknown. |
+
+Every requirement has `{id,text,handling,reason}`; handling is primary/ai/preference/unsatisfied. The compiler rejects unknown fields, unsupported values, conflicting include/exclude terms, missing AI conditions and unavailable AI. It supplies exact field diagnostics and one bounded repair, including the rejected candidate only when it passed the bounded schema. The description is derived from applied filters and active residual conditions; it is collapsed metadata. The visible text remains the user query, tab title and warnings.
+
+Only the query, prior accepted query/configuration, capabilities, AI availability and bounded repair data enter the intent prompt. No account/user/billing identifiers or job bodies enter it. Capabilities that exceed the process's input budget fail explicitly; there is no silent truncation or invented capability. A live dataset within the prompt budget is a release requirement.
+
+Results call `feed.eligibleJobs` before primary filtering and `feed.publicJob` before serialization. Opaque primary cursors bind account/access, revision, imported generation, position and a ten-minute lifetime. Matching owns its separate cursor when present, receives only eligible primary matches, and returns a resolved page. Without that dependency, an active residual condition returns an empty, resumable paused page with `dependency_unavailable`.
+
+## Company requests
+
+Known identities use the imported catalogue without a provider. Unknown imported official domains/sites remain null. Unresolved input queues bounded research; ambiguity returns clarification without a guessed candidate. New candidates require a trusted `{data,evidenceVerified:true,evidenceProvenance?}` wrapper, followed by strict service validation. An unchecked model URL never establishes verification.
+
+The broker independently retrieves at most two same-official-domain evidence pages. HTTPS stays pinned to a resolved public IPv4 address with the original TLS server name. Private/link-local/reserved/mixed DNS results, IP literals, non-HTTPS URLs, ATS official domains, cross-origin redirects, excessive redirects, unsupported content types and oversized bodies fail. IPv6-only sites remain unresolved. The page must contain the proposed company name outside scripts/styles. This supports a public identity preview; it does not independently settle corporate ownership or user ambiguity, which remain model/evaluation and explicit preview-acceptance concerns. HTTP status, URL/final URL, body hash and byte provenance are stored privately and purged with the request.
+
+Exact candidate ID, preview revision and the header idempotency key are required to accept once. Acceptance records requested scope only: it never follows, monitors, configures or onboards a company. Request/search deletion invokes the synchronous backup-generation barrier before SQL commit and removes associated private tasks, previews and evidence; account deletion composes the same plain SQL hooks inside the authentication transaction.
+
+## Dedicated model broker
+
+The API/queue runner may not launch Codex with its database-readable UID. `server/model-broker.mjs` is a separate local process under a dedicated model UID, without API/database/JEV/admin groups or Docker access. The host configuration must deny those paths, not merely omit their names from prompts.
+
+Production uses systemd socket activation: exactly FD 3, `LISTEN_PID` matching the broker and `LISTEN_FDS=1`. The root-owned Unix socket is mode 0660 in a root-owned directory; only the queue runner joins its client group. The API cannot connect. The broker never accepts a caller-provided command, schema path, working directory or environment, and cannot create/remove an arbitrary production socket path.
+
+The JSON-lines request is exactly `{schemaId:'intent'|'company',prompt,timeoutMs}`. Prompt UTF-8 is at most 24,576 bytes, the frame at most 32,768, and the deadline at most 60 seconds. One invocation runs globally; concurrent requests receive a safe limit error. Responses contain only validated final data, numeric usage, a verification flag and bounded evidence provenance, or `{ok:false,error:{code}}`. No raw stream, tool trace or provider exception crosses the socket.
+
+`JUSTUP_MODEL_BROKER_CONFIG` names a root-owned, non-writable JSON configuration with `enabled`, `cliVersion`, `codexPath`, `protectedAuthHome`, `invocationRoot` and `taskCwd`. Paths must be real absolute paths. The task working directory is empty, root-owned and immutable. Auth/invocation directories are private to the non-root model UID. Code/artifact paths stay read-only. The process environment is reconstructed from literal HOME/CODEX_HOME/TMPDIR/PATH/locale settings and never inherits API keys, proxies, database URLs, admin, SSH or Docker variables.
+
+Each request creates a private invocation home/scratch, copies only protected scoped subscription auth, and uses `--ignore-user-config --ignore-rules --strict-config --ephemeral --json --sandbox read-only --output-schema`. Command/unified execution, apps, plugins, hooks, memories, agents, browser/computer use, image/artifact tools, skills dependencies and other discovered local surfaces are disabled. Search also disables web search; company research permits at most six observed remote web calls. Actual advertised tools must be measured before enabling this boundary. JSONL event checks detect unexpected tools but do not prevent an already-started tool; OS isolation and advertised-tool exclusion remain essential.
+
+The parent bounds stdin/stdout/stderr, elapsed time and observed tool counts, sends TERM then KILL to the whole child process group (including surviving descendants), validates the final schema again, and records only safe codes, numeric usage and latency. The 6,000-output-token threshold is checked against actual completion usage. It is not a provider-side token or monetary cap; no supported hard Codex output-token setting has been established for this CLI. Subscriber rate limits and host allocation still apply.
+
+Runs copy back only bounded ChatGPT subscription auth-refresh state and remove the invocation directory, including after provider failure. Startup removes owned stale invocation directories and refuses unrelated entries. A crash or kill can interrupt cleanup until recovery, so host expiry and crash-recovery verification remain required. `--ephemeral` promises no rollout files, not proof that logs/caches contain no prompt text. Inspect every actual invocation file and deny persistent raw traces before attesting retention. Do not promise provider zero retention.
+
+`createBrokerExecutor({socketPath})` supplies the injected transport for `createCodexModel`. The model client stays unavailable without an enabled configuration, a root-owned socket and a root-owned reviewed attestation matching `cliVersion`, model, tool-catalog hash, socket, `executorBoundary:'dedicated_uid_broker'`, `deniedPathsVerified:true` and `retentionVerified:true`. New company research additionally requires `companyResearchVerified:true` or an explicit trusted evidence verifier. A missing provider does not affect existing login sessions, deletion or ordinary feed access.
+
+## Evidence and remaining release gate
+
+The provider-free suite covers compilation, one repair, warned confirmation, edits removing criteria, stale/deleted work, access/generation cursors, missing matching, company ambiguity/duplicates/acceptance, process limits, redaction, local socket framing and public HTTPS verification. An additional local integration composed both services and the runner with the actual core SQLite queue and synchronous account deletion. No model/auth/host provisioning was performed for these tests.
+
+The versioned intent/company fixtures in `server/evals/` distinguish compiler contracts from live model quality. They include positive, negative and ambiguous held-out cases and explicit accuracy/unsafe-acceptance/latency/tool/token thresholds. They are a small seed, not a passing live baseline. Before release, expand and review the declared minimum case sets, run the pinned model against them, report actual latency and usage with variance, and require zero guessed ambiguous identities, unverified candidates or dropped hard requirements. A fixture pass cannot make the live quality gate green.
+
+Official sources: [non-interactive execution](https://learn.chatgpt.com/docs/non-interactive-mode), [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference). Local `codex exec --help` confirmed the flags and `features list` in an empty temporary home confirmed relevant disables. CLI 0.143.0 rejects the newer `agents.enabled` key, so the implementation uses its actual `multi_agent` feature switch. `--strict-config` cannot be tested through `features list`; exact exec/tool-denial, output-schema, auth isolation, subprocess filesystem denial, cleanup after crash and deployed resource/deletion/browser proofs remain required before runtime enablement.
