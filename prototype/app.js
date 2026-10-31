@@ -19,6 +19,7 @@ function ageText(value) { const elapsed = Date.now() - new Date(value).getTime()
 function announce(message) { $('#announcer').textContent = message; }
 function errorText(error) { return `${error.message || 'The service is unavailable.'}${error.retryAfter ? ` Try again after ${error.retryAfter} seconds.` : ''}${error.requestId ? ` Reference: ${error.requestId}.` : ''}`; }
 async function runAction(action, target = $('#search-status')) { try { await action(); } catch (error) { if (error.name !== 'AbortError') { target.textContent = errorText(error); announce(target.textContent); } } }
+function coverageLabel(state) { return state === 'imported_snapshot' ? 'Imported snapshot' : state === 'requested' ? 'Identity requested' : 'Coverage not reported'; }
 function companyMark(company = {}) { const url = sourceURL(company.logoUrl); return url ? `<img class="mark company-logo" src="${escapeHTML(url)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="mark" aria-hidden="true">↗</span>'; }
 function clearProtectedState() {
   searchGeneration++; catalogueGeneration++; companyGeneration++; requestGeneration++; queryDrafts.clear();
@@ -47,13 +48,13 @@ async function bootstrap() {
       searches = Array.isArray(response.items) ? response.items : [];
       selectedId = queryDrafts.get(null)?.trim() ? null : searches.find(search => search.status === 'ready')?.id || null;
     } catch (error) { $('#search-status').textContent = `Saved searches unavailable. ${errorText(error)}`; }
-    renderSearchShell(); route();
+    renderSearchShell(); if (session.user && !capable('search')) $('#search-status').textContent = 'Search interpretation is unavailable right now. Your accepted searches remain available.'; route();
   } catch (error) {
     if (generation !== sessionGeneration) return;
     session = null; JustupApi.setSession(null); renderHiringWire();
     $('#live-label').textContent = 'SERVICE UNAVAILABLE';
     $('#service-notice').innerHTML = `<p>${escapeHTML(errorText(error))}</p><button class="button outline" id="retry-session">Try again</button>`;
-    renderSearchShell(); route();
+    renderSearchShell(); if (session.user && !capable('search')) $('#search-status').textContent = 'Search interpretation is unavailable right now. Your accepted searches remain available.'; route();
   }
 }
 function renderSearchShell() {
@@ -73,7 +74,7 @@ function renderSearchAccounting(search) {
   const requirements = Array.isArray(search.requirements) ? search.requirements : [];
   const warnings = Array.isArray(search.warnings) ? search.warnings : [];
   // Criteria remain in the user's search text. Surface only actionable accounting.
-  $('#search-accounting').innerHTML = search.id ? `<ul class="requirement-list">${requirements.filter(requirement => ['unsatisfied', 'unsupported', 'unmet'].includes(requirement.status)).map(requirement => `<li><strong>Not met:</strong> ${escapeHTML(requirement.text || requirement.label)}</li>`).join('')}</ul>${warnings.map(warning => `<p class="model-warning">${escapeHTML(typeof warning === 'string' ? warning : warning.message)}</p>`).join('')}` : '';
+  $('#search-accounting').innerHTML = search.id ? `<ul class="requirement-list">${requirements.filter(requirement => ['unsatisfied', 'unsupported', 'unmet'].includes(requirement.handling)).map(requirement => `<li><strong>Not met:</strong> ${escapeHTML(requirement.text || requirement.label)}${requirement.reason ? ` · ${escapeHTML(requirement.reason)}` : ''}</li>`).join('')}</ul>${warnings.map(warning => `<p class="model-warning">${escapeHTML(typeof warning === 'string' ? warning : warning.message)}</p>`).join('')}` : '';
 }
 async function awaitTask(id, valid) {
   if (!id) throw new Error('The service did not identify its background task.');
@@ -90,8 +91,8 @@ async function awaitTask(id, valid) {
 }
 let searchProposal = null, searchSubmitOwner = null;
 function renderSearchProposal(proposal, searchId) {
-  searchProposal = { ...proposal, searchId };
-  $('#search-status').innerHTML = `<strong>This search needs your decision.</strong><p>${escapeHTML(proposal.message || 'Some requirements cannot be applied.')}</p>${(proposal.requirements || []).filter(item => item.status === 'unsatisfied').map(item => `<p>${escapeHTML(item.text)}: ${escapeHTML(item.reason || 'not supported')}</p>`).join('')}${(proposal.warnings || []).map(warning => `<p>${escapeHTML(typeof warning === 'string' ? warning : warning.message)}</p>`).join('')}<button class="button outline" id="confirm-search-proposal">Accept these limitations</button>`;
+  searchProposal = { ...proposal, searchId: proposal.searchId || searchId };
+  $('#search-status').innerHTML = `<strong>This search needs your decision.</strong><p>${escapeHTML(proposal.message || 'Some requirements cannot be applied.')}</p>${(proposal.requirements || []).filter(item => item.handling === 'unsatisfied').map(item => `<p>${escapeHTML(item.text)}: ${escapeHTML(item.reason || 'not supported')}</p>`).join('')}${(proposal.warnings || []).map(warning => `<p>${escapeHTML(typeof warning === 'string' ? warning : warning.message)}</p>`).join('')}<button class="button outline" id="confirm-search-proposal">Accept these limitations</button>`;
 }
 async function confirmSearchProposal() {
   const proposal = searchProposal;
@@ -133,7 +134,7 @@ async function saveSearch(options = {}) {
     if (generation !== searchGeneration) return;
     if (completed.proposal) { renderSearchProposal(completed.proposal, result.search?.id || search.id); if (previous && feedState?.id === previous) feedState.generation = searchGeneration; return; }
     const accepted = completed.search;
-    if (!accepted?.id || accepted.revision == null || typeof accepted.query !== 'string') throw new Error('The service did not return an accepted search revision.');
+    if (!accepted?.id || accepted.revision == null || accepted.status !== 'ready' || typeof accepted.query !== 'string') throw new Error('The service did not return an accepted search revision.');
     searchMutation = null; queryDrafts.delete(accepted.id); if (!previous) queryDrafts.delete(null);
     searches = searches.filter(item => item.id !== accepted.id); searches.push(accepted); selectedId = accepted.id; draft.query = '';
     $('#search-status').textContent = 'Search saved.'; renderSearchShell(); await resetFeed();
@@ -270,7 +271,7 @@ async function loadCompanies(reset = true) {
 }
 function appendCompany(company) {
   const row = document.createElement('article'); row.className = 'company-row list-row clickable-row'; row.dataset.company = company.id;
-  row.innerHTML = `<div class="company-info"><a class="company-name row-link" href="#company/${encodeURIComponent(company.id)}">${companyMark(company)}<span>${escapeHTML(company.name)}</span></a></div><div class="company-industry">${escapeHTML(company.industry || company.description || '')}</div><div class="company-state"><span class="status">${escapeHTML(company.statusLabel || company.coverage?.description || 'Coverage not reported')}</span></div><div class="company-actions">${capable('follows') ? `<button class="follow-company" data-follow="${escapeHTML(company.id)}" aria-pressed="${company.followed === true}">${company.followed ? 'Following ✓' : 'Follow +'}</button>` : ''}<span class="company-open" aria-hidden="true">↗</span></div>`;
+  row.innerHTML = `<div class="company-info"><a class="company-name row-link" href="#company/${encodeURIComponent(company.id)}">${companyMark(company)}<span>${escapeHTML(company.name)}</span></a></div><div class="company-industry">${escapeHTML(company.industry || company.description || '')}</div><div class="company-state"><span class="status">${escapeHTML(coverageLabel(company.coverage?.state))}</span></div><div class="company-actions">${capable('follows') ? `<button class="follow-company" data-follow="${escapeHTML(company.id)}" aria-pressed="${company.followed === true}">${company.followed ? 'Following ✓' : 'Follow +'}</button>` : ''}<span class="company-open" aria-hidden="true">↗</span></div>`;
   row.addEventListener('click', event => { if (!event.target.closest('a,button')) row.querySelector('a').click(); });
   $('#company-list').append(row);
 }
@@ -302,7 +303,7 @@ function renderRequestForm() {
   clearTimeout(requestTimer); requestGeneration++; requestState = null; requestPolls = 0;
   $('#request-content').innerHTML = `<form id="request-form" class="request-form"><label for="request-query">Company name or website</label><div class="query-field"><input id="request-query" type="text" required autocomplete="organization" placeholder="A name. We’ll check the facts."></div><p class="helper">Give us a lead. You’ll confirm the company before it joins the catalogue.</p><button class="button dark" type="submit">Find company ↗</button></form><p id="request-status" role="status"></p>`;
   $('#step-find').classList.add('active'); $('#step-confirm').classList.remove('active'); $('#step-add').classList.remove('active');
-  if (!capable('companyRequests')) { $('#request-form button').disabled = true; $('#request-status').textContent = session?.user ? 'Company requests are not available in this demo yet.' : 'Sign in to request a company.'; if (!session?.user) $('#request-status').insertAdjacentHTML('beforeend', ' <button class="text-link" data-sign-in>Sign in</button>'); }
+  if (!session?.user || !capable('companyRequests')) { $('#request-form button').disabled = true; $('#request-status').textContent = session?.user ? 'Company requests are not available in this demo yet.' : 'Sign in to request a company.'; if (!session?.user) $('#request-status').insertAdjacentHTML('beforeend', ' <button class="text-link" data-sign-in>Sign in</button>'); }
 }
 async function discoverCompany(query, clarification) {
   const previous = requestState, generation = ++requestGeneration, accountGeneration = sessionGeneration;
@@ -332,13 +333,13 @@ function renderCompanyRequest() {
   } else if (request.status === 'candidate') {
     const candidate = request.candidate || {};
     requestState.acceptKey ||= JustupApi.key();
-    $('#request-content').innerHTML = `<div class="candidate"><span class="eyebrow">Company found · please confirm</span><div class="candidate-heading">${companyMark(candidate)}<h2>${escapeHTML(candidate.name)}</h2></div>${candidate.description ? `<p>${escapeHTML(candidate.description)}</p>` : ''}${candidate.websiteUrl && sourceURL(candidate.websiteUrl) ? `<a class="text-link" href="${escapeHTML(sourceURL(candidate.websiteUrl))}" target="_blank" rel="noopener noreferrer">Check company website ↗</a>` : ''}<p>${escapeHTML(candidate.coverage?.description || 'Not yet collecting jobs from this company.')}</p></div><div class="candidate-actions"><button class="button dark" id="accept-company" ${!candidate.id || request.previewRevision == null ? 'disabled' : ''}>Yes, that’s the one ↗</button><button class="text-link" id="reject-company">Not this company</button></div>${status}`;
+    $('#request-content').innerHTML = `<div class="candidate"><span class="eyebrow">Company found · please confirm</span><div class="candidate-heading">${companyMark(candidate)}<h2>${escapeHTML(candidate.name)}</h2></div>${candidate.description ? `<p>${escapeHTML(candidate.description)}</p>` : ''}${candidate.websiteUrl && sourceURL(candidate.websiteUrl) ? `<a class="text-link" href="${escapeHTML(sourceURL(candidate.websiteUrl))}" target="_blank" rel="noopener noreferrer">Check company website ↗</a>` : ''}<p>${escapeHTML(coverageLabel(candidate.coverage?.state))}</p>${(candidate.evidenceUrls || []).filter(sourceURL).length ? `<p class="small-print">Sources: ${(candidate.evidenceUrls || []).filter(sourceURL).map(url => `<a href="${escapeHTML(sourceURL(url))}" target="_blank" rel="noopener noreferrer">${escapeHTML(new URL(url).hostname)} ↗</a>`).join(' · ')}</p>` : ''}</div><div class="candidate-actions"><button class="button dark" id="accept-company" ${!candidate.id || request.previewRevision == null ? 'disabled' : ''}>Yes, that’s the one ↗</button><button class="text-link" id="reject-company">Not this company</button></div>${status}`;
   } else if (request.status === 'clarification') {
-    $('#request-content').innerHTML = `<h2>A little more to go on.</h2><p>${escapeHTML(request.question || 'Which company did you mean?')}</p><form id="clarification-form"><label for="company-clarification">More details</label><div class="query-field"><input id="company-clarification" required placeholder="Website, industry, or the full name"></div><button class="button dark">Continue ↗</button></form>${status}`;
+    $('#request-content').innerHTML = `<h2>A little more to go on.</h2><p>${escapeHTML(request.clarification || 'Which company did you mean?')}</p><form id="clarification-form"><label for="company-clarification">More details</label><div class="query-field"><input id="company-clarification" required placeholder="Website, industry, or the full name"></div><button class="button dark">Continue ↗</button></form>${status}`;
   } else if (request.status === 'unresolved') {
-    $('#request-content').innerHTML = `<h2>No confirmed match.</h2><p>${escapeHTML(request.message || 'We couldn’t confidently identify this company. Try its website or full name.')}</p><button class="button outline" id="new-request">Try another lead</button>${status}`;
+    $('#request-content').innerHTML = `<h2>No confirmed match.</h2><p>${escapeHTML(request.reason || 'We couldn’t confidently identify this company. Try its website or full name.')}</p><button class="button outline" id="new-request">Try another lead</button>${status}`;
   } else if (request.status === 'accepted') {
-    $('#request-content').innerHTML = `<h2>On the record.</h2><p>${escapeHTML(request.message || 'The company identity is accepted. Career-page setup has not been confirmed yet.')}</p>${request.company?.id ? `<a class="button dark" href="#company/${encodeURIComponent(request.company.id)}">View company ↗</a>` : '<a class="button outline" href="#companies">Company catalogue ↗</a>'}${status}`;
+    $('#request-content').innerHTML = `<h2>On the record.</h2><p>${escapeHTML(request.message || 'The company identity request is recorded. This does not start career-page setup.')}</p>${request.company?.id ? `<a class="button dark" href="#company/${encodeURIComponent(request.company.id)}">View company ↗</a>` : '<a class="button outline" href="#companies">Company catalogue ↗</a>'}${status}`;
   } else $('#request-content').innerHTML = `<h2>Request unavailable.</h2><p>The service returned an unknown request state.</p><button class="button outline" id="new-request">Start again</button>${status}`;
 }
 async function refreshRequest() {

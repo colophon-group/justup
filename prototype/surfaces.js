@@ -5,9 +5,14 @@ function openSignIn(reason = 'Sign in to save your edition.') {
   const policies = session?.policies;
   const localPolicy = value => { try { const url = new URL(value, location.origin); return !!value && url.origin === location.origin && ['http:', 'https:'].includes(url.protocol); } catch { return false; } };
   const reviewed = policies?.reviewed === true && !!policies.version && localPolicy(policies.privacyUrl) && localPolicy(policies.usageUrl);
-  $('#sign-in-form').hidden = !reviewed;
-  $('#sign-in-unavailable').hidden = reviewed;
-  $('#sign-in-unavailable').textContent = 'Account access is unavailable while the privacy and usage notices are being reviewed.';
+  const auth = session?.authentication;
+  const enabled = reviewed && auth?.method === 'username_password' && auth.loginEnabled === true;
+  const registration = enabled && auth.registrationEnabled === true;
+  $('#auth-register-choice').hidden = !registration; $('#auth-register').disabled = !registration;
+  if (!registration) { $('#auth-register').checked = false; $('#auth-invite-field').hidden = true; $('#auth-invite').required = false; }
+  $('#sign-in-form').hidden = !enabled;
+  $('#sign-in-unavailable').hidden = enabled;
+  $('#sign-in-unavailable').textContent = !reviewed ? 'Account access is unavailable while the privacy and usage notices are being reviewed.' : 'Account access is unavailable right now. Please try again later.';
   $('#sign-in-dialog').showModal();
 }
 function renderSettings() {

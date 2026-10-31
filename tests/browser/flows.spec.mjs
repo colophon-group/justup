@@ -75,7 +75,7 @@ test('a warned proposal keeps old results until its exact limitations are explic
 
 test('request clarification and acceptance bind the exact preview revision', async ({ page }) => {
   let attempts = 0;
-  const calls = await mockApi(page, { 'POST /company-requests': () => ({ request: ++attempts === 1 ? { id: 'request-1', input: 'Library', status: 'clarification', question: 'Which library?' } : { id: 'request-2', input: 'Library, London', status: 'candidate', previewRevision: 4, candidate: company } }), 'POST /company-requests/request-2/accept': { request: { id: 'request-2', status: 'accepted', company } } }); await page.goto('/#request'); await page.locator('#request-query').fill('Library'); await page.getByRole('button', { name: 'Find company' }).click();
+  const calls = await mockApi(page, { 'POST /company-requests': () => ({ request: ++attempts === 1 ? { id: 'request-1', input: 'Library', status: 'clarification', clarification: 'Which library?' } : { id: 'request-2', input: 'Library, London', status: 'candidate', previewRevision: 4, candidate: company } }), 'POST /company-requests/request-2/accept': { request: { id: 'request-2', status: 'accepted', company } } }); await page.goto('/#request'); await page.locator('#request-query').fill('Library'); await page.getByRole('button', { name: 'Find company' }).click();
   await expect(page.getByText('Which library?', { exact: true })).toBeVisible(); await page.locator('#company-clarification').fill('London'); await page.getByRole('button', { name: 'Continue ↗' }).click();
   await page.getByRole('button', { name: 'Yes, that’s the one ↗' }).click(); await expect(page.getByRole('heading', { name: 'On the record.' })).toBeVisible();
   const accept = calls.find(call => call.key.endsWith('/accept')); expect(accept.body).toEqual({ candidateId: 'library', previewRevision: 4 }); expect(accept.headers['idempotency-key']).toBeTruthy(); expect(calls.find(call => call.key === 'POST /company-requests').body.input).toBe('Library');
@@ -125,4 +125,8 @@ test('an older save finishing cannot release the busy state of a newer tab submi
   await page.goto('/'); await submit(page, 'Old changed request'); await page.getByRole('tab', { name: 'Garden desk' }).click(); await submit(page, 'New changed request');
   await expect(page.locator('#job-search button[type=submit]')).toBeDisabled(); finishOld(); await page.waitForTimeout(100); await expect(page.locator('#job-search button[type=submit]')).toBeDisabled();
   finishNew(); await expect(page.locator('#job-search button[type=submit]')).toBeEnabled(); await expect(page.locator('#query')).toHaveValue('New changed request');
+});
+
+test('configured authentication availability is enforced independently of reviewed policies', async ({ page }) => {
+  await mockApi(page, { 'GET /session': session({ user: null, authentication: { method: 'username_password', loginEnabled: false, registrationEnabled: false, reason: 'deletion_unavailable' } }) }); await page.goto('/'); await page.locator('#header-sign-in').click(); await expect(page.locator('#sign-in-form')).toBeHidden(); await expect(page.locator('#sign-in-unavailable')).toContainText('unavailable right now');
 });
