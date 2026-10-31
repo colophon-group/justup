@@ -48,12 +48,12 @@ export function createJevBudget({ config, model, pricing, databasePath = null } 
   const cost = expected ? expected.inputNanodollarsPerToken * JEV_ATTEMPT_INPUT_TOKENS : null;
   function secure(stat, mode, directory = false) {
     if ((directory ? !stat.isDirectory() : !stat.isFile()) || stat.uid !== process.getuid()
-        || (stat.mode & 0o777) !== mode || (!directory && stat.nlink !== 1)) throw fail();
+        || (stat.mode & 0o7777) !== mode || (!directory && stat.nlink !== 1)) throw fail();
   }
   function openLedger() {
     if (!expected || !Number.isSafeInteger(cost) || cost > expected.capNanodollars) throw fail();
     const parent = dirname(path);
-    if (realpathSync(parent) !== parent || exclusions.some((p) => within(p, path))
+    if (realpathSync(parent) !== parent || exclusions.some((p) => realpathSync(p) !== p || within(p, path))
         || (databasePath && databasePath !== ':memory:' && (resolve(databasePath) === path || dirname(resolve(databasePath)) === parent))) throw fail();
     secure(lstatSync(parent), 0o700, true);
     const original = lstatSync(path); secure(original, 0o600);
