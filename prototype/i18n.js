@@ -9,6 +9,7 @@ const browserLanguage=()=>preferences().map(value=>value.toLowerCase().split('-'
 const language=()=>choice==='auto'?browserLanguage():choice;
 const locale=()=>choice==='auto'?(preferences().find(value=>value.toLowerCase().split('-')[0]===language())||'en-GB'):({en:'en-GB',de:'de-DE',fr:'fr-FR',es:'es-ES'}[language()]);
 const rows=[
+['Back to search','Zurück zur Suche','Retour à la recherche','Volver a la búsqueda'],
 ['THE HIRING REPORT','DER STELLENREPORT','LE RAPPORT EMPLOI','EL INFORME DE EMPLEO'],
 ['Company file','Unternehmensakte','Dossier entreprise','Ficha de empresa'],
 ['On record since','Erfasst seit','Suivi depuis le','En seguimiento desde'],
