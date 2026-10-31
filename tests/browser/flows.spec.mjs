@@ -130,3 +130,12 @@ test('an older save finishing cannot release the busy state of a newer tab submi
 test('configured authentication availability is enforced independently of reviewed policies', async ({ page }) => {
   await mockApi(page, { 'GET /session': session({ user: null, authentication: { method: 'username_password', loginEnabled: false, registrationEnabled: false, reason: 'deletion_unavailable' } }) }); await page.goto('/'); await page.locator('#header-sign-in').click(); await expect(page.locator('#sign-in-form')).toBeHidden(); await expect(page.locator('#sign-in-unavailable')).toContainText('unavailable right now');
 });
+
+test('guest company submission prompts sign-in without a model POST or clearing either draft', async ({ page }) => {
+  const calls = await mockApi(page, { 'GET /session': session({ user: null, capabilities: { search: false, companyRequests: true } }) });
+  await page.goto('/'); await expect(page.locator('#job-search button[type=submit]')).toBeEnabled(); await page.locator('#query').fill('Part-time museum jobs');
+  await page.getByRole('link', { name: 'Companies', exact: true }).click(); await page.getByRole('link', { name: 'Request a company +' }).click();
+  await page.locator('#request-query').fill('A local museum'); await page.getByRole('button', { name: 'Find company' }).click();
+  await expect(page.locator('#sign-in-dialog')).toBeVisible(); await expect(page.locator('#request-query')).toHaveValue('A local museum'); await expect(page.locator('#query')).toHaveValue('Part-time museum jobs');
+  expect(calls.some(call => call.key === 'POST /company-requests')).toBe(false); await expect(page.locator('#service-notice')).toBeHidden(); await expect(page.locator('#search-status')).not.toContainText('expired');
+});

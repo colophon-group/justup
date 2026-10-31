@@ -304,9 +304,11 @@ function renderRequestForm() {
   clearTimeout(requestTimer); requestGeneration++; requestState = null; requestPolls = 0;
   $('#request-content').innerHTML = `<form id="request-form" class="request-form"><label for="request-query">Company name or website</label><div class="query-field"><input id="request-query" type="text" required autocomplete="organization" placeholder="A name. We’ll check the facts."></div><p class="helper">Give us a lead. You’ll confirm the company before it joins the catalogue.</p><button class="button dark" type="submit">Find company ↗</button></form><p id="request-status" role="status"></p>`;
   $('#step-find').classList.add('active'); $('#step-confirm').classList.remove('active'); $('#step-add').classList.remove('active');
-  if (!session?.user || !capable('companyRequests')) { $('#request-form button').disabled = true; $('#request-status').textContent = session?.user ? 'Company requests are not available in this demo yet.' : 'Sign in to request a company.'; if (!session?.user) $('#request-status').insertAdjacentHTML('beforeend', ' <button class="text-link" data-sign-in>Sign in</button>'); }
+  if (!session?.user || !capable('companyRequests')) { $('#request-form button').disabled = !!session?.user; $('#request-status').textContent = session?.user ? 'Company requests are not available in this demo yet.' : 'Sign in to request a company.'; if (!session?.user) $('#request-status').insertAdjacentHTML('beforeend', ' <button class="text-link" data-sign-in>Sign in</button>'); }
 }
 async function discoverCompany(query, clarification) {
+  if (!session?.user) { openSignIn('Sign in to request a company. Your company lead and search draft stay here.'); return; }
+  if (!capable('companyRequests')) throw new Error('Company requests are unavailable right now.');
   const previous = requestState, generation = ++requestGeneration, accountGeneration = sessionGeneration;
   $('#request-status').textContent = 'Following your lead…';
   const payload = { input: clarification ? `${query} — ${clarification}` : query };
