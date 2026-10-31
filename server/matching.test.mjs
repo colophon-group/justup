@@ -130,13 +130,23 @@ test('API heartbeat readiness queues without credentials and cannot enable provi
   const result = await api.runTask(task);
   assert.equal(result.output.pause, 'dependency_unavailable'); assert.equal(requests, 0);
   assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_jobs WHERE decision IS NULL').get().n, 2);
+  // The actual worker instance can consume the API's queued scan and the
+  // keyless API can subsequently deliver its exact committed decisions.
+  s.advance(5001); api.page({ ...args, cursor: initial.continuation.cursor });
+  const completed = await s.run(); assert.equal(completed.committed, true);
   ready = false;
-  const paused = api.page({ ...args, cursor: initial.continuation.cursor });
+  const confirmed = api.page({ ...args, cursor: initial.continuation.cursor });
+  assert.equal(confirmed.items.length, 2); assert.equal(confirmed.continuation.state, 'exhausted');
+  const paused = api.page({ ...args, searchId: 'unprocessed-search',
+    configuration: { ...configuration, residualAi: { condition: 'A different unresolved condition.' } } });
   assert.equal(paused.continuation.state, 'paused'); assert.equal(paused.ai.status, 'dependency_unavailable');
   assert.equal(api.available(), false);
   const brokenHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,
     readOnlyProvider: true, availability: () => { throw new Error('heartbeat unavailable'); } });
   assert.equal(brokenHeartbeat.available(), false);
+  const workerCannotBorrowHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,
+    provider: { available: () => false }, availability: () => true });
+  assert.equal(workerCannotBorrowHeartbeat.available(), false);
 });
 
 test('API role prohibits execution even if a provider is accidentally injected and purges private provider ledgers', async (t) => {
