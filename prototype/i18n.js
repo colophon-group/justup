@@ -9,6 +9,12 @@ const browserLanguage=()=>preferences().map(value=>value.toLowerCase().split('-'
 const language=()=>choice==='auto'?browserLanguage():choice;
 const locale=()=>choice==='auto'?(preferences().find(value=>value.toLowerCase().split('-')[0]===language())||'en-GB'):({en:'en-GB',de:'de-DE',fr:'fr-FR',es:'es-ES'}[language()]);
 const rows=[
+["Senior backend roles in Switzerland. Go required.", "Senior-Backend-Stellen in der Schweiz. Mit Go.", "Postes backend senior en Suisse. Go requis.", "Puestos backend sénior en Suiza. Con Go."],
+["Product design roles in Europe.", "Produktdesign-Stellen in Europa.", "Postes en design produit en Europe.", "Diseño de producto en Europa."],
+["Robotics roles in Germany.", "Robotik-Stellen in Deutschland.", "Postes en robotique en Allemagne.", "Puestos de robótica en Alemania."],
+["Remote engineering roles in Europe. Go preferred.", "Remote-Entwicklung in Europa. Go bevorzugt.", "Développement à distance en Europe. Go souhaité.", "Ingeniería remota en Europa. Preferiblemente Go."],
+["Senior data roles with a published salary.", "Senior-Datenrollen mit Gehaltsangabe.", "Postes data senior avec salaire affiché.", "Puestos sénior de datos con salario publicado."],
+
 ['Sign in for a free week of full access. Older matches are available below.','Melde dich für eine kostenlose Woche mit vollem Zugang an. Ältere Treffer findest du unten.','Connectez-vous pour une semaine gratuite d’accès complet. Des offres plus anciennes sont disponibles ci-dessous.','Entra para una semana gratis de acceso completo. Las coincidencias anteriores están disponibles abajo.'],
 ['Followed only','Nur gefolgte','Suivies seulement','Solo seguidas'],
 ['Search options','Suchoptionen','Options de recherche','Opciones de búsqueda'],
