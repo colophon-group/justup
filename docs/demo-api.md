@@ -15,6 +15,8 @@ Use Node.js 24 LTS ES modules, built-in HTTP/crypto/SQLite and one bounded runne
 
 The existing ARM64 host is in Nuremberg. Keep its production Lightpanda renderer intact. The aggregate preview ceiling is half a CPU, 1 GiB RAM, 2 GiB disk and 96 tasks, with at most one model task in flight. Verify and enforce these limits before deployment. Builds run off-host. A resource outside the authorized host/free Cloudflare allowance needs a separately approved resource request.
 
+The browser application lives in `web/` and deploys its compiled React/Vite artifact. Build committed inputs and the lockfile in an unprivileged off-host builder, then upload the retained bytes. The API/runner package contains only backend runtime files. Record the frontend artifact identity alongside compatible API and runner identities; do not deploy source files or compile on the bounded host.
+
 ## HTTP rules
 
 All browser calls use same-origin `/api/v1` routes. Bodies and responses are JSON except health text if needed. Times are ISO 8601 UTC; job discovery timestamps always retain their source value. IDs come from the server. Private records derive ownership from the session, never a supplied account ID.
@@ -85,6 +87,8 @@ The full public task shape is `{id,kind,status,createdAt,updatedAt,result,error}
 
 An accepted search has `{id,revision,query,title,description,configuration,requirements,warnings,status:"ready"}`. The browser shows the user's query, generated tab title and warnings; the collapsed description is accepted metadata, not a separate visible criteria summary. Keep drafts/proposals distinct from this accepted state. A timeout, failed normalization, unresolved hard requirement or stale response cannot overwrite it. A warned proposal has a server-issued `proposalId`, expected revision and explicit unmet-requirement reasons.
 
+A compiler-generated `company_not_found` warning may include `companyRequestPrefill:{input,scope}`. `input` is a plain company name of at most 200 characters and `scope` is a plain string or null. Offer this only for a stated positive company requirement that the full imported catalogue cannot resolve; known aliases, ambiguity, exclusions and unrelated mentions must not generate a hint. Strip the model's internal company-reference fields from public requirements. An explicit warning action can prefill the existing company form; only the user's form submission creates a request.
+
 Search configuration version 1 supports only evidence-backed primary filters: company inclusion/exclusion, title terms, required/excluded body terms, location labels, workplace type, employment type, posting language and available seniority. Define exact operators and canonical values in the compiler's capabilities response. Missing evidence is unknown. Location labels alone do not prove cross-border remote eligibility. Do not invent salary or visa normalization from unavailable fields.
 
 Luna receives the request, prior accepted query/configuration when edited, current capabilities and AI availability. The compiler returns field-level normalization and conflict diagnostics for one bounded repair. Every requirement is accounted for as primary, residual AI, nonbinding preference or unsatisfied with a reason. The final collapsed description describes the applied configuration. A valid zero-result search is distinct from failed compilation.
@@ -115,6 +119,8 @@ Results example:
 ```
 
 Use continuation states `open`, `pending`, `paused`, `exhausted`, `failed`. Empty pending/open batches are not exhaustion. Cursors bind revision, scan position, access mode and imported evidence generation; stale cursors return 409. Ordering is descending source first-observed time with stable posting ID as tie-breaker.
+
+Missing or stale imported evidence returns an empty `paused` page with `retryAfterMs:5000`, never a completed zero-result search. Coverage has `stale:true`, an `import_unavailable` state and a short description explaining that imported listings need verification; `verifiedAt` can be null. Preserve cursor ownership, revision and generation validation before returning the pause. Do not run matching against unavailable evidence. Residual AI reports `dependency_unavailable`; a search without residual AI retains `not_required`. Show the source reason with the existing manual retry action. Fresh data with no eligible matches can return `exhausted`.
 
 Residual matching runs only after freshness and primary filters. JEV returns accept/reject/insufficient-evidence; provider failure is separate. Cached decisions bind condition, evidence hash and classifier version, scoped for account deletion. Batch enough candidates for low acceptance rates within bounded concurrency/work budgets. Deliver a resolved newest-first prefix; never substitute unevaluated candidates. Pauses and outages retain scan position and active AI requirements.
 
