@@ -1,6 +1,12 @@
+---
+summary: Motion and reading-position rules for the Justup interface.
+read_when: Changing result arrivals, scrolling, reduced motion or the news ribbon.
+status: Proposed design values for review.
+---
+
 # Justup motion language
 
-Status: proposed motion specification for the accepted **Extra Orange** visual direction. The live-dot pulse is requested; exact timing values are starting values for review.
+The live-dot pulse is part of the orange-and-ink visual direction. Exact timing values are starting values for review.
 
 ## Visual baseline
 

@@ -1,4 +1,6 @@
 'use strict';
+// Chooses interface language and applies translated UI copy, not employer content.
+// Read when changing language choices, UI copy or local search matching.
 const I18n=(()=>{
 const supported=['en','de','fr','es'];
 const names={en:'English',de:'Deutsch',fr:'Français',es:'Español'};

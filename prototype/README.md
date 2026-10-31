@@ -1,6 +1,13 @@
+---
+summary: Run and explore the browser-only Justup prototype with fictional data.
+read_when: Reviewing current prototype behavior or changing its browser code.
+---
+
 # Justup interactive prototype
 
-A buildless, browser-local mockup of the Extra Orange edition. It uses fictional job listings and 20 fictional companies, with a shared observation ledger for the feed, company reports and Hiring Wire. No API keys, build step, backend or real requests are required. Pinned D3 geometry utilities are bundled locally.
+A browser-only mockup of Justup's orange-and-ink design. It uses fictional job listings and 20 fictional companies, with one shared set of observations for the feed, company reports and weekly company-news ribbon (Hiring Wire). No API keys, build step, server or real requests are required. Map-drawing libraries are bundled locally.
+
+## Run locally
 
 From this repository:
 
@@ -9,6 +16,8 @@ python3 -m http.server 4173 --bind 127.0.0.1 --directory prototype
 ```
 
 Open http://127.0.0.1:4173.
+
+## Explore the prototype
 
 - Results share an ink frame with a cream masthead and narrow cream surround. The listing surface stays coral so both light and dark company marks retain their established contrast; logos are never recoloured. The frame grows with the feed and keeps the reserved loading/exhaustion area. Mobile spacing retains useful text width.
 - Scroll the positions feed. Each additional job starts only when its slot reaches the visible viewport, at least 450 ms after the preceding reveal starts. Background candidate pages are buffered independently. Leaving the tail or backgrounding the tab stops consumption.

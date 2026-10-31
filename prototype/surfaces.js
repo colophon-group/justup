@@ -1,4 +1,6 @@
 'use strict';
+// Runs the browser-only account, access, settings and membership screens.
+// Read when changing sign-in simulation, account switching or access notices.
 let pendingAuthAction=null;
 const day=86400000;
 function signedIn(){return accountId!=='guest';}

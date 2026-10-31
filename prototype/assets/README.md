@@ -1,3 +1,8 @@
+---
+summary: Sources and behavior of the prototype's bundled map and language data.
+read_when: Changing the globe, map libraries or posting-language catalogue.
+---
+
 # Globe assets
 
 `world-countries.json` contains simplified country and territory boundaries from Natural Earth’s public-domain 1:50m dataset (excluding Antarctica). Coordinates retain their spherical geometry; polygon winding is normalized for D3. Stored country centers select a company-specific starting orientation.
