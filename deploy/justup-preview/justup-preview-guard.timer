@@ -1,0 +1,12 @@
+# Preview-only guard. No existing host timer or global logging policy is changed.
+[Unit]
+Description=Check Justup preview reserve each minute
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=5
+Unit=justup-preview-guard.service
+
+[Install]
+WantedBy=timers.target

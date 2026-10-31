@@ -1,0 +1,53 @@
+# Root installs immutable application bytes; this UID can write only preview state.
+[Unit]
+Description=Justup isolated preview API
+Requires=srv-justup_preview.mount
+After=srv-justup_preview.mount network-online.target
+RequiresMountsFor=/srv/justup_preview
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=justup-preview-api
+Group=justup-preview-api
+Slice=justup-preview.slice
+WorkingDirectory=/srv/justup_preview/current/app
+ExecStartPre=/usr/bin/python3 /srv/justup_preview/ops/preview-host.py guard
+ExecStart=/usr/bin/python3 /srv/justup_preview/ops/preview-run.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+TemporaryFileSystem=/tmp:ro /var/tmp:ro
+ReadWritePaths=/srv/justup_preview/state /srv/justup_preview/logs
+ReadOnlyPaths=/srv/justup_preview/current /srv/justup_preview/config
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/mnt/murmur -/root -/home
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+LimitCORE=0
+LimitNOFILE=1024
+LimitNPROC=64
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
