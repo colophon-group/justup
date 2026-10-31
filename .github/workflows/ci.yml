@@ -29,6 +29,6 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24.22.2'
       - name: Check pull request and run selected suites
         run: python3 scripts/ci.py run --event "$GITHUB_EVENT_PATH"
