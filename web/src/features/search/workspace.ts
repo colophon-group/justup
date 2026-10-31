@@ -28,6 +28,7 @@ export const queryText = (state: Workspace): string =>
 export type Action =
   | { type: "busy"; value: boolean }
   | { type: "loaded"; searches: Search[] }
+  | { type: "editing" }
   | { type: "query"; value: string }
   | { type: "select"; id: string | null }
   | { type: "new" }
@@ -64,11 +65,18 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
           state.selectedId &&
           searches.some((search) => search.id === state.selectedId)
             ? state.selectedId
-            : state.drafts.new?.trim()
+            : state.drafts.new !== undefined
               ? null
               : (searches.find((search) => search.status === "ready")?.id ??
                 null),
       };
+    }
+    case "editing": {
+      const key = draftKey(state.selectedId);
+      // Claim the displayed draft before native text insertion can race hydration.
+      return state.drafts[key] !== undefined
+        ? state
+        : { ...state, drafts: { ...state.drafts, [key]: queryText(state) } };
     }
     case "query":
       return {
