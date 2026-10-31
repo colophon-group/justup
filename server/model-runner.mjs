@@ -51,7 +51,7 @@ export function codexArguments({kind,schemaPath,taskCwd}) {
   if(!['search_intent','company_resolution'].includes(kind)||!isAbsolute(schemaPath)||!isAbsolute(taskCwd)) throw fail('invalid_input');
   return ['exec','--ignore-user-config','--strict-config','--ephemeral','--json','--sandbox','read-only','--skip-git-repo-check','--cd',taskCwd,'--model',LUNA_MODEL,'--output-schema',schemaPath,
     ...DISABLED.flatMap(feature=>['--disable',feature]),
-    ...['approval_policy="never"','forced_login_method="chatgpt"','allow_login_shell=false','project_doc_max_bytes=0','skills.max_context_tokens=0','skills.config=[]','mcp_servers={}','apps._default.enabled=false','memories.generate_memories=false','memories.use_memories=false','history.persistence="none"','analytics.enabled=false','feedback.enabled=false','model_reasoning_effort="low"',`web_search="${kind==='company_resolution'?'live':'disabled'}"`].flatMap(v=>['--config',v]),'-'];
+    ...['approval_policy="never"','forced_login_method="chatgpt"','allow_login_shell=false','project_doc_max_bytes=0','skills.config=[]','mcp_servers={}','apps._default.enabled=false','memories.generate_memories=false','memories.use_memories=false','history.persistence="none"','analytics.enabled=false','feedback.enabled=false','model_reasoning_effort="low"',`web_search="${kind==='company_resolution'?'live':'disabled'}"`].flatMap(v=>['--config',v]),'-'];
 }
 export function codexEnvironment({codexHome,taskCwd}) {
   // Never inherit process.env: no admin, DB, SSH, Docker, proxy, cloud or API keys.
@@ -81,8 +81,9 @@ export function executeCodex({executable,args,cwd,env,stdin,signal,timeoutMs=45_
     if(signal?.aborted) {reject(fail('task_timeout'));return;}
     let child,done=false,budgetTimer,killTimer,stdoutBytes=0,stderrBytes=0,lineBuffer='',message=null,usage=null,turns=0,toolCalls=0;
     const webEvents=[],decoder=new StringDecoder('utf8');
+    const eventCounts={agentMessages:0,reasoningItems:0,webSearches:0,commandExecutions:0,fileChanges:0,mcpCalls:0,otherItems:0};
     function kill(finished) {if(!child?.pid){finished();return;}try{process.kill(-child.pid,'SIGTERM');}catch{}killTimer=setTimeout(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}finished();},100);}
-    function stop(code) {if(done)return;done=true;clearTimeout(budgetTimer);signal?.removeEventListener('abort',abort);kill(()=>reject(fail(code)));}
+    function stop(code) {if(done)return;done=true;clearTimeout(budgetTimer);signal?.removeEventListener('abort',abort);kill(()=>reject(Object.assign(fail(code),{metrics:{eventCounts:{...eventCounts},stdoutBytes,stderrBytes,usage}})));}
     const abort=()=>stop('task_timeout');
     function event(e) {
       if(!plain(e)||typeof e.type!=='string') return stop('invalid_output');
@@ -97,6 +98,7 @@ export function executeCodex({executable,args,cwd,env,stdin,signal,timeoutMs=45_
       if(e.type.startsWith('item.')) {
         const item=e.item;
         if(!plain(item)||typeof item.type!=='string') return stop('invalid_output');
+        if(e.type==='item.started'||e.type==='item.completed'&&item.type==='agent_message')eventCounts[({agent_message:'agentMessages',reasoning:'reasoningItems',web_search:'webSearches',command_execution:'commandExecutions',file_change:'fileChanges',mcp_tool_call:'mcpCalls'})[item.type]??'otherItems']++;
         if(['command_execution','file_change','mcp_tool_call','collab_tool_call','image_generation','dynamic_tool_call'].includes(item.type)) return stop('tool_not_allowed');
         if(!['agent_message','reasoning','plan','web_search'].includes(item.type)) return stop('tool_not_allowed');
         if(item.type==='web_search') {
@@ -135,7 +137,7 @@ export function executeCodex({executable,args,cwd,env,stdin,signal,timeoutMs=45_
       if(done)return;
       if(code!==0||!message||!usage)return stop(code!==0?'provider_unavailable':'invalid_output');
       let data;try{data=JSON.parse(message);}catch{return stop('invalid_output');}
-      done=true;kill(()=>resolve({data,usage,webEvents,toolCalls,stdoutBytes,stderrBytes}));
+      done=true;kill(()=>resolve({data,usage,webEvents,toolCalls,stdoutBytes,stderrBytes,eventCounts}));
     });
   });
 }

@@ -35,3 +35,23 @@ test('queue status writes atomic non-secret metadata and shutdown removes availa
   writeRunnerStatus({path:f.path,identity:'queue-build',config:f.config,ready:false,capabilities:{search:false,companyRequests:false,aiMatching:false},now:()=>AT});assert.equal(readRunnerStatus({config:f.config,now:()=>AT}).ready,false);
 });
 test('queue configuration refuses an ordinary contributor-owned config',t=>{const f=fixture(t);f.write();assert.throws(()=>readRunnerConfig(f.path),/unavailable/);});
+test('assembled core/auth/matching API consumes heartbeat, exposes real services and deletes accounts without model secrets',async t=>{
+  let createConfiguredDemo,createAuth;
+  try{({createConfiguredDemo}=await import('./main.mjs'));({createAuth}=await import('./auth.mjs'));await import('./matching.mjs');}
+  catch(error){if(error.code==='ERR_MODULE_NOT_FOUND'){t.skip('Core/auth/matching dependency PRs must be assembled for this cross-module contract.');return;}throw error;}
+  const f=fixture(t);f.write();const origin='http://127.0.0.1:18787',password='Synthetic-password-123!';
+  const demo=await createConfiguredDemo({config:{...f.config,dbPath:':memory:',servicesEnabled:true,allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,privacyUrl:'https://preview.example/privacy',usageUrl:'https://preview.example/usage',policyVersion:'fixture',inviteCode:'fixture-invite',jev:{token:'must-never-enter-api-response'}},now:()=>AT,authFactory:createAuth});
+  t.after(()=>demo.close());await new Promise(resolve=>demo.server.listen(0,'127.0.0.1',resolve));const endpoint=`http://127.0.0.1:${demo.server.address().port}/api/v1`;
+  const account=await demo.auth.register({username:'fixtureuser',password,inviteCode:'fixture-invite'}),headers={cookie:`justup_demo_session=${account.token}`};
+  // Cookie name is part of the core boundary, not a provider/session substitute.
+  const coreSession=await demo.auth.session(account.token);assert.ok(coreSession.account.id);
+  const call=(path,options={})=>fetch(endpoint+path,{...options,headers:{...headers,...options.headers}});
+  const response=await call('/session');let session=await response.json();
+  assert.ok(session.user);assert.equal(session.capabilities.search,true);assert.equal(JSON.stringify(session).includes('must-never'),false);
+  assert.deepEqual(await (await call('/searches')).json(),{items:[]});assert.deepEqual(await (await call('/company-requests')).json(),{items:[]});
+  f.write({updatedAt:new Date(AT-30001).toISOString()});session=await (await call('/session')).json();assert.ok(session.user);assert.equal(session.capabilities.search,false);
+  assert.equal((await call('/health')).status,503);
+  const mutationHeaders={origin,'content-type':'application/json','x-csrf-token':session.csrfToken};
+  assert.equal((await call('/searches',{method:'POST',headers:mutationHeaders,body:JSON.stringify({query:'backend',requestKey:'unavailable'})})).status,503);
+  const deleted=await call('/account',{method:'DELETE',headers:mutationHeaders,body:JSON.stringify({password})});assert.equal(deleted.status,200);assert.equal(demo.auth.session(account.token),null);
+});
