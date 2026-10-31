@@ -17,3 +17,10 @@ test-results/
 # Production application build output
 web/dist/
 *.tsbuildinfo
+
+# Isolated demo storage and private public-source exports
+.demo/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+__pycache__/
