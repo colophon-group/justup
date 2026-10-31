@@ -1,0 +1,39 @@
+// Fixed API feature composition and same-build queue availability. The API never
+// loads provider credentials, connects to the model socket or executes inference.
+import { lstatSync,readFileSync } from 'node:fs';
+import { dirname,isAbsolute,join } from 'node:path';
+import { createIntentService } from './intent.mjs';
+import { createCompanyService } from './companies.mjs';
+
+// Matching is an independently reviewed module. Its absence leaves the dependency
+// unavailable; no replacement classifier or successful stand-in is constructed.
+let matchingFactory=null;
+try{matchingFactory=(await import('./matching.mjs')).createMatchingService;}catch(error){if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;}
+const disabled=()=>({search:false,companyRequests:false,aiMatching:false});
+export function runnerStatusPath(config){return config.runnerStatusPath??(typeof config.dbPath==='string'&&isAbsolute(config.dbPath)?join(dirname(config.dbPath),'runner-status.json'):null);}
+export function readRunnerStatus({config={},now=Date.now}={}){
+  const absent={ready:false,identity:null,sourceCommit:null,buildIdentity:null,lastHeartbeat:null,capabilities:disabled()};
+  try{
+    const path=runnerStatusPath(config);if(!isAbsolute(path)||!/^[a-f0-9]{40}$/.test(config.sourceCommit??'')||typeof config.buildIdentity!=='string'||!config.buildIdentity||config.buildIdentity.length>200)return absent;
+    const meta=lstatSync(path);if(!meta.isFile()||meta.isSymbolicLink()||meta.size>8192||(meta.mode&0o007)!==0)return absent;
+    const status=JSON.parse(readFileSync(path,'utf8'));
+    if(status.schemaVersion!==1||status.sourceCommit!==config.sourceCommit||status.buildIdentity!==config.buildIdentity||typeof status.identity!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(status.identity)||typeof status.ready!=='boolean'||typeof status.updatedAt!=='string')return absent;
+    const at=Date.parse(status.updatedAt);if(!Number.isFinite(at)||at>now()+1000||now()-at>30_000)return absent;
+    const c=status.capabilities;if(!c||Object.keys(c).sort().join(',')!=='aiMatching,companyRequests,search'||Object.values(c).some(v=>typeof v!=='boolean'))return absent;
+    return {ready:status.ready,identity:status.identity,sourceCommit:status.sourceCommit,buildIdentity:status.buildIdentity,lastHeartbeat:status.updatedAt,capabilities:status.ready?{...c}:disabled()};
+  }catch{return absent;}
+}
+export function createApiReadiness({config={},now=Date.now}={}){
+  return ()=>{const {capabilities,...runner}=readRunnerStatus({config,now});return {ready:runner.ready,runner,capabilities};};
+}
+export function createApiServices(deps){
+  const {config={},now=Date.now}=deps;
+  // Explicit allowlist: even an accidental caller config containing secrets is
+  // never passed into feature providers or retained in an API-side model object.
+  const apiConfig={maxCompanyRequestsPerOwner:config.maxCompanyRequestsPerOwner,matching:config.matching};
+  const heartbeat=()=>readRunnerStatus({config:{dbPath:config.dbPath,runnerStatusPath:config.runnerStatusPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},now}).capabilities;
+  const matching=matchingFactory?.({...deps,config:apiConfig,readOnlyProvider:true,availability:()=>heartbeat().aiMatching});
+  const intent=createIntentService({...deps,config:apiConfig,model:undefined,matching,availability:()=>heartbeat().search});
+  const companies=createCompanyService({...deps,config:apiConfig,model:undefined,availability:()=>heartbeat().companyRequests});
+  return [intent,companies,...(matching?[matching]:[])];
+}

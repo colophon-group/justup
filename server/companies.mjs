@@ -100,7 +100,7 @@ function importedCandidate(company) {
     evidenceUrls: [...new Set(evidenceUrls)].slice(0, 8), coverage: { state: 'imported_snapshot' } };
 }
 
-export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, afterPrivateTransaction, withPrivateTransaction, model = null } = {}) {
+export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, afterPrivateTransaction, withPrivateTransaction, model = null, availability } = {}) {
   if (!db || !feed?.companies || !tasks?.enqueue || (beforePrivateDelete != null && typeof beforePrivateDelete !== 'function')) throw new TypeError('Invalid company service configuration.');
   const maxPerOwner = config.maxCompanyRequestsPerOwner ?? 32;
   if (!Number.isSafeInteger(maxPerOwner) || maxPerOwner < 1 || maxPerOwner > 96) throw new TypeError('Invalid company request limit.');
@@ -179,6 +179,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
       } catch { return false; }
     });
     const known = exact.length === 1 ? importedCandidate(exact[0]) : null;
+    if(!known&&typeof availability==='function'&&availability()!==true)throw problem('dependency_unavailable',503,'Company research is temporarily unavailable.');
     const id = randomUUID();
     let task = null;
     try {
@@ -298,5 +299,5 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
       throw error;
     }
   }
-  return { capabilities: { companyRequests: true }, route, taskResult, deleteAccountData, runTask };
+  return { capabilities: ()=>({ companyRequests: typeof availability==='function'?availability()===true:true }), route, taskResult, deleteAccountData, runTask };
 }

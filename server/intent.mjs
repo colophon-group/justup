@@ -15,6 +15,44 @@ function bodyKeys(body, keys) { if(!body||typeof body!=='object'||Array.isArray(
 function revision(v) { if(!Number.isSafeInteger(v)||v<0) throw err('invalid_input'); return v; }
 function key(v) { if(typeof v!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(v)) throw err('invalid_input'); return v; }
 const hash = (v) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+const words=s=>fold(s).replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+function entries(caps,field){
+  const v=caps.values;
+  if(field==='companyInclude'||field==='companyExclude')return v.companies;
+  if(field==='seniority')return v.seniority;
+  return v[field].map(id=>{let aliases=[];if(field==='locations')aliases=id.split(',').map(s=>s.trim()).filter(Boolean);if(field==='postingLanguages')try{aliases=[new Intl.DisplayNames(['en'],{type:'language'}).of(id)];}catch{}return {id,aliases};});
+}
+function normalizeValue(caps,field,value){
+  if(TEXT_KEYS.has(field))return {values:[value.trim()]};
+  const all=entries(caps,field),exact=all.filter(v=>fold(v.id)===fold(value));
+  if(exact.length===1)return {values:[exact[0].id]};
+  const matched=all.filter(v=>[v.name,...(v.aliases??[])].filter(Boolean).some(s=>words(s)===words(value)));
+  // Country/region labels expand to every actually observed location under that
+  // label. A shared city name across countries remains ambiguous.
+  if(field==='locations'&&matched.length&&matched.every(v=>words(v.id.split(',').at(-1))===words(value)))return {values:[matched[0].id.split(',').at(-1).trim()],group:true};
+  return matched.length===1?{values:[matched[0].id]}:{values:[],code:matched.length?'ambiguous_value':'unknown_value'};
+}
+function alternatives(caps,field,value){
+  if(!KEYS.includes(field)||TEXT_KEYS.has(field))return [];
+  const tokens=words(value).split(' ').filter(t=>t.length>1);
+  return entries(caps,field).map(v=>({id:v.id,score:[v.id,v.name,...(v.aliases??[])].filter(Boolean).reduce((n,s)=>n+tokens.filter(t=>words(s).includes(t)).length,0)})).sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id)).slice(0,6).map(v=>v.id);
+}
+export function projectIntentCapabilities(caps,{query,prior,diagnostics=[]}={},maxBytes=8500){
+  const relevant=[query,prior?.query,...Object.values(prior?.configuration?.filters??{}).flatMap(v=>v.slice(0,8)),...diagnostics.flatMap(d=>[d.value,...(d.alternatives??[])])].filter(v=>typeof v==='string').join(' '),tokens=[...new Set(words(relevant).split(' ').filter(t=>t.length>2))].slice(0,128);
+  const select=(values,max)=>values.map(value=>{const encoded=JSON.stringify(value),normalized=words(typeof value==='string'?value:encoded);return {value,encoded,score:tokens.reduce((n,t)=>n+(normalized.includes(t)?1:0),0)};}).sort((a,b)=>b.score-a.score||a.encoded.localeCompare(b.encoded)).slice(0,max).map(v=>v.value);
+  const projected={...caps,values:{companies:select(caps.values.companies,12),locations:select(caps.values.locations,24),workplaces:caps.values.workplaces,employmentTypes:caps.values.employmentTypes,postingLanguages:select(caps.values.postingLanguages,32),seniority:select(caps.values.seniority,16)},catalogue:{partial:true,totals:Object.fromEntries(Object.entries(caps.values).map(([k,v])=>[k,v.length])),omissionIsNotUnsupported:true,instruction:'Company/location values shown are relevant examples. Propose exact user names or observed country/city labels even if omitted; the compiler checks the full catalogue and returns bounded alternatives. Never drop a requirement because a value is omitted.'}};
+  while(Buffer.byteLength(JSON.stringify(projected))>maxBytes){const field=['companies','locations','seniority','postingLanguages'].sort((a,b)=>JSON.stringify(projected.values[b]).length-JSON.stringify(projected.values[a]).length).find(k=>projected.values[k].length);if(!field)throw err('invalid_output');projected.values[field].pop();}
+  return projected;
+}
+function boundedPrior(prior,max=2){if(!prior)return null;const configuration=structuredClone(prior.configuration),omitted={};for(const [field,values] of Object.entries(configuration.filters)){if(values.length>max){configuration.filters[field]=values.slice(0,max);omitted[field]={count:values.length-max,fullValueHash:hash(values)};}}return {query:prior.query,configuration,...(Object.keys(omitted).length?{configurationContextPartial:true,omitted,instruction:'Current query is complete and authoritative. Omitted prior values are context, never permission to drop current requirements.'}:{})};}
+export function intentModelInput({query,prior,capabilities,repair}){
+  const diagnostics=(repair?.diagnostics??[]).slice(0,4).map(d=>({...d,...(d.alternatives?{alternatives:d.alternatives.slice(0,3)}:{})}));
+  const input={query,prior:boundedPrior(prior),capabilities:projectIntentCapabilities(capabilities,{query,prior,diagnostics},6500),aiAvailable:capabilities.aiAvailable,...(repair?{repair:{diagnostics,previous:repair.previous??null}}:{})};
+  if(Buffer.byteLength(JSON.stringify(input))>22000&&input.repair){input.repair.previous=null;input.repair.previousOmittedForBudget=true;}
+  if(Buffer.byteLength(JSON.stringify(input))>22000){input.capabilities=projectIntentCapabilities(capabilities,{query,prior,diagnostics},3500);input.prior=boundedPrior(prior,1);}
+  if(Buffer.byteLength(JSON.stringify(input))>22000)throw err('invalid_output');
+  return input;
+}
 
 export function intentCapabilities(jobs, aiAvailable = false) {
   const values = (items) => [...new Set(items.filter(Boolean))].sort();
@@ -30,25 +68,27 @@ export function compileIntent(raw, capabilities) {
   if(diagnostics.length) return {ok:false,diagnostics};
   const data = structuredClone(raw), f=data.configuration.filters;
   for(const field of KEYS) if(f[field]===null) delete f[field];
-  const catalog = capabilities.values;
-  const canonical = { companyInclude:catalog.companies,companyExclude:catalog.companies,seniority:catalog.seniority,
-    ...Object.fromEntries(['locations','workplaces','employmentTypes','postingLanguages'].map(k=>[k,catalog[k].map(v=>({id:v,aliases:[]}))])) };
   for(const [field, values] of Object.entries(f)) {
-    f[field] = [...new Set(values.map((value,index)=> {
-      if(TEXT_KEYS.has(field)) return value.trim();
-      const matches=canonical[field].filter(v=>[v.id,v.name,...(v.aliases??[])].filter(Boolean).some(s=>fold(s)===fold(value)));
-      if(matches.length!==1) { diagnostics.push({path:`$.configuration.filters.${field}[${index}]`,code:matches.length?'ambiguous_value':'unknown_value'}); return value; }
-      return matches[0].id;
-    }))];
+    f[field] = [...new Set(values.flatMap((value,index)=> {const normalized=normalizeValue(capabilities,field,value);if(normalized.code)diagnostics.push({path:`$.configuration.filters.${field}[${index}]`,code:normalized.code,value,alternatives:alternatives(capabilities,field,value)});return normalized.values;}))];
   }
   for(const [a,b] of [['companyInclude','companyExclude'],['bodyAll','bodyNone']]) if((f[a]??[]).some(v=>(f[b]??[]).some(x=>fold(v)===fold(x)))) diagnostics.push({path:`$.configuration.filters.${b}`,code:'conflicting_value'});
   const ids=data.requirements.map(r=>r.id);
   if(new Set(ids).size!==ids.length) diagnostics.push({path:'$.requirements',code:'duplicate_id'});
   const residual=data.configuration.residualAi;
+  const covered=new Set();
   for(const r of data.requirements) {
-    if(r.handling==='primary'&&!Object.keys(f).length) diagnostics.push({path:`$.requirements[${ids.indexOf(r.id)}].handling`,code:'missing_primary_filter'});
+    const path=`$.requirements[${ids.indexOf(r.id)}]`;
+    if(r.handling==='primary'&&!r.bindings.length)diagnostics.push({path:`${path}.bindings`,code:'missing_primary_binding'});
+    if(r.handling!=='primary'&&r.bindings.length)diagnostics.push({path:`${path}.bindings`,code:'unexpected_binding'});
+    for(const [i,b] of r.bindings.entries())for(const value of b.values){
+      const normalized=normalizeValue(capabilities,b.field,value),all=TEXT_KEYS.has(b.field)?[{id:value,aliases:[]}]:entries(capabilities,b.field).filter(e=>normalized.values.includes(e.id)||normalized.group&&normalized.values.includes(e.id.split(',').at(-1).trim()));
+      const stated=all.some(e=>[e.id,e.name,...(e.aliases??[])].filter(Boolean).some(alias=>words(alias).length>1&&words(r.text).includes(words(alias))));
+      if(normalized.code||!normalized.values.length||normalized.values.some(v=>!f[b.field]?.includes(v))||!stated)diagnostics.push({path:`${path}.bindings[${i}]`,code:'unimplemented_primary_requirement'});
+      else for(const v of normalized.values)covered.add(`${b.field}\0${v}`);
+    }
     if(r.handling==='ai'&&(!residual||!residual.requirementIds.includes(r.id))) diagnostics.push({path:`$.requirements[${ids.indexOf(r.id)}].handling`,code:'missing_ai_condition'});
   }
+  for(const [field,values] of Object.entries(f))if(values.some(v=>!covered.has(`${field}\0${v}`)))diagnostics.push({path:`$.configuration.filters.${field}`,code:'unaccounted_filter'});
   if(residual) {
     if(!capabilities.aiAvailable) diagnostics.push({path:'$.configuration.residualAi',code:'ai_unavailable'});
     if(residual.requirementIds.some(id=>!data.requirements.some(r=>r.id===id&&r.handling==='ai'))) diagnostics.push({path:'$.configuration.residualAi.requirementIds',code:'unknown_ai_requirement'});
@@ -59,7 +99,7 @@ export function compileIntent(raw, capabilities) {
   // Description is derived from the normalized configuration, never trusted model prose.
   const parts=Object.entries(f).map(([k,v])=>`${labels[k]}: ${v.join(', ')}.`);
   if(residual) parts.push(`Additional evidence required: ${residual.condition}`);
-  return {ok:true,value:{title:data.title,configuration:data.configuration,requirements:data.requirements,warnings,description:parts.join(' ')||'All eligible imported jobs.'}};
+  return {ok:true,value:{title:data.title,configuration:data.configuration,requirements:data.requirements.map(({bindings,...r})=>r),warnings,description:parts.join(' ')||'All eligible imported jobs.'}};
 }
 
 export function primaryMatches(job, {filters:f}) {
@@ -70,7 +110,7 @@ export function primaryMatches(job, {filters:f}) {
   if((f.bodyAll||f.bodyNone)&&!job.bodyText) return false;
   if(f.bodyAll&&!f.bodyAll.every(t=>contains(job.bodyText,t))) return false;
   if(f.bodyNone&&f.bodyNone.some(t=>contains(job.bodyText,t))) return false;
-  if(f.locations&&!job.locations.some(l=>includes(f.locations,l.name))) return false;
+  if(f.locations&&!job.locations.some(l=>includes(f.locations,l.name)||typeof l.name==='string'&&includes(f.locations,l.name.split(',').at(-1).trim()))) return false;
   if(f.workplaces&&!job.locations.some(l=>includes(f.workplaces,l.workplace))) return false;
   if(f.employmentTypes&&!job.employmentTypes.some(t=>includes(f.employmentTypes,t))) return false;
   if(f.postingLanguages&&!job.locales.some(t=>includes(f.postingLanguages,t))) return false;
@@ -78,7 +118,7 @@ export function primaryMatches(job, {filters:f}) {
   return true;
 }
 
-export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching}={}) {
+export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability}={}) {
   if(!db||!feed||!tasks) throw new TypeError('Search dependencies are required.');
   db.exec(`CREATE TABLE IF NOT EXISTS demo_searches(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,accepted_json TEXT,draft_json TEXT,task_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
     CREATE INDEX IF NOT EXISTS demo_searches_owner ON demo_searches(owner_id);
@@ -86,7 +126,8 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     CREATE TABLE IF NOT EXISTS demo_search_proposals(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,expected_revision INTEGER NOT NULL,task_id TEXT NOT NULL,proposal_json TEXT NOT NULL) STRICT;
     CREATE TABLE IF NOT EXISTS demo_search_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,position INTEGER NOT NULL,created_at INTEGER NOT NULL) STRICT;`);
   const row=(owner,id)=>db.prepare('SELECT * FROM demo_searches WHERE owner_id=? AND id=?').get(owner,id);
-  const available=()=>typeof model?.interpretIntent==='function'&&(typeof model.available!=='function'||model.available('search_intent'));
+  const executionAvailable=()=>typeof model?.interpretIntent==='function'&&(typeof model.available!=='function'||model.available('search_intent'));
+  const available=()=>typeof availability==='function'?availability()===true:executionAvailable();
   function publicSearch(r) {
     if(!r) return null;
     const accepted=r.accepted_json?JSON.parse(r.accepted_json):{id:r.id,revision:0,query:JSON.parse(r.draft_json)?.query??'',title:'New search',description:'',configuration:null,requirements:[],warnings:[],status:'pending'};
@@ -113,15 +154,14 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(task.kind!=='search_intent') throw new TypeError('Wrong task kind.');
     const r=row(task.ownerId,task.payload.searchId);
     if(!r||r.task_id!==task.id||r.revision!==task.payload.expectedRevision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
-    if(!available()) return {status:'failed',errorCode:'dependency_unavailable'};
+    if(!executionAvailable()) return {status:'failed',errorCode:'dependency_unavailable'};
     const accepted=r.accepted_json?JSON.parse(r.accepted_json):null;
     const caps=intentCapabilities(feed.eligibleJobs({viewer:{account:{id:task.ownerId}}}),Boolean(matching?.available?.()??config.aiMatchingAvailable));
-    const input={query:task.payload.query,prior:accepted?{query:accepted.query,configuration:accepted.configuration}:null,capabilities:caps,aiAvailable:caps.aiAvailable};
     let result,previous;
     for(let attempt=0;attempt<2;attempt++) {
       if(signal?.aborted) return {status:'failed',errorCode:'task_timeout'};
       let raw;
-      try { raw=await model.interpretIntent({...input,...(attempt?{repair:{diagnostics:result.diagnostics,previous}}:{})},{signal}); }
+      try {raw=await model.interpretIntent(intentModelInput({query:task.payload.query,prior:accepted,capabilities:caps,...(attempt?{repair:{diagnostics:result.diagnostics,previous}}:{})}),{signal}); }
       catch { return {status:'failed',errorCode:signal?.aborted?'task_timeout':'provider_unavailable'}; }
       result=compileIntent(raw,caps);
       if(result.ok) break;

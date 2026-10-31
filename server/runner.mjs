@@ -40,14 +40,11 @@ export function createRunner({tasks,handlers,workerId=`demo-${randomUUID()}`,lea
   return {runOnce,run,stop:()=>controller?.abort(),ready:()=>!busy,workerId};
 }
 
-// Optional CLI adapter is operator-owned code, never a browser/model-supplied path.
-// It exports async createRunnerDependencies() -> {tasks,handlers,...configuration}.
+// CLI bootstrap is a fixed reviewed module. Operator JSON supplies bounded
+// configuration, never a module, command or browser/model-supplied path.
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) {
-  const adapter=process.env.JUSTUP_RUNNER_ADAPTER;
-  if(!adapter?.startsWith('/')) {console.error('Runner dependency adapter is unavailable.');process.exitCode=1;}
-  else {
-    const shutdown=new AbortController();process.once('SIGTERM',()=>shutdown.abort());process.once('SIGINT',()=>shutdown.abort());
-    try{const module=await import(pathToFileURL(adapter));const deps=await module.createRunnerDependencies();await createRunner(deps).run({signal:shutdown.signal});await deps.close?.();}
-    catch{console.error('Runner could not start.');process.exitCode=1;}
-  }
+  const shutdown=new AbortController();process.once('SIGTERM',()=>shutdown.abort());process.once('SIGINT',()=>shutdown.abort());let deps;
+  try{const module=await import('./demo-runner-adapter.mjs');deps=await module.createRunnerDependencies();await createRunner(deps).run({signal:shutdown.signal});}
+  catch{console.error('Runner could not start.');process.exitCode=1;}
+  finally{await deps?.close?.();}
 }
