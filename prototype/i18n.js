@@ -9,6 +9,25 @@ const browserLanguage=()=>preferences().map(value=>value.toLowerCase().split('-'
 const language=()=>choice==='auto'?browserLanguage():choice;
 const locale=()=>choice==='auto'?(preferences().find(value=>value.toLowerCase().split('-')[0]===language())||'en-GB'):({en:'en-GB',de:'de-DE',fr:'fr-FR',es:'es-ES'}[language()]);
 const rows=[
+["Posting languages", "Sprachen der Stellenanzeigen", "Langues des offres", "Idiomas de las ofertas"],
+["Posting languages.", "Sprachen der Stellenanzeigen.", "Langues des offres.", "Idiomas de las ofertas."],
+["Any language", "Alle Sprachen", "Toutes les langues", "Cualquier idioma"],
+["Matches any selected language. Applies to all your searches.", "Eine ausgewählte Sprache genügt. Gilt für alle deine Suchen.", "Une langue sélectionnée suffit. S’applique à toutes vos recherches.", "Basta con coincidir con un idioma seleccionado. Se aplica a todas tus búsquedas."],
+["Choose as many as you like. A posting only needs to match one.", "Wähle beliebig viele Sprachen. Eine Übereinstimmung genügt.", "Choisissez autant de langues que vous voulez. Une seule doit correspondre.", "Elige tantos idiomas como quieras. Basta con que la oferta coincida con uno."],
+["Find a language", "Sprache finden", "Trouver une langue", "Buscar un idioma"],
+["Search by name or language code", "Nach Name oder Sprachcode suchen", "Rechercher par nom ou code de langue", "Buscar por nombre o código de idioma"],
+["selected", "ausgewählt", "sélectionnées", "seleccionados"],
+["Remove language", "Sprache entfernen", "Retirer la langue", "Quitar idioma"],
+["No languages found. Try another name or code.", "Keine Sprache gefunden. Versuche einen anderen Namen oder Code.", "Aucune langue trouvée. Essayez un autre nom ou code.", "No se encontraron idiomas. Prueba otro nombre o código."],
+["Show more languages", "Weitere Sprachen anzeigen", "Afficher plus de langues", "Mostrar más idiomas"],
+["Loading languages…", "Sprachen werden geladen…", "Chargement des langues…", "Cargando idiomas…"],
+["Could not load languages.", "Sprachen konnten nicht geladen werden.", "Impossible de charger les langues.", "No se pudieron cargar los idiomas."],
+["Try again", "Erneut versuchen", "Réessayer", "Volver a intentar"],
+["Cancel language selection", "Sprachauswahl abbrechen", "Annuler la sélection des langues", "Cancelar selección de idiomas"],
+["Cancel", "Abbrechen", "Annuler", "Cancelar"],
+["Done", "Fertig", "Terminé", "Listo"],
+["Posting languages updated.", "Sprachen der Stellenanzeigen aktualisiert.", "Langues des offres mises à jour.", "Idiomas de las ofertas actualizados."],
+
 ['Back to search','Zurück zur Suche','Retour à la recherche','Volver a la búsqueda'],
 ['THE HIRING REPORT','DER STELLENREPORT','LE RAPPORT EMPLOI','EL INFORME DE EMPLEO'],
 ['Company file','Unternehmensakte','Dossier entreprise','Ficha de empresa'],

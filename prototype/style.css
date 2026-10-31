@@ -266,3 +266,45 @@ body.reduce-motion .wire-track{animation:none!important;transform:none!important
 .job-skills{position:relative}
 .job-pay+.job-skills:before{content:'·';position:absolute;left:-8px}
 @media(max-width:720px){.listing-icon{width:13px;height:13px;flex-basis:13px}.job-facts{column-gap:12px}.job-salary{gap:3px 12px}}
+
+/* Posting language is visible at search level; language names never use flags. */
+.posting-language-scope{display:flex;align-items:baseline;gap:7px;max-width:100%;width:fit-content;border:0;padding:5px 0;margin:6px 0 5px;font:11px/1.6 var(--mono);text-align:left}
+.posting-language-scope>strong{font-weight:600;min-width:0;overflow-wrap:anywhere}
+.posting-language-scope>span:first-child{flex-shrink:0}
+.posting-language-scope:hover{text-decoration:none;box-shadow:0 1px 0 var(--ink)}
+.job-facts>.job-posting-languages{display:inline-flex;align-items:center;max-width:100%;padding:0 5px;border:1px solid var(--rule);font:10px/1.6 var(--mono);overflow-wrap:anywhere}
+.posting-language-setting{margin-top:23px}
+.posting-language-setting-button{display:flex;align-items:center;justify-content:space-between;gap:15px;width:100%;padding:11px 12px;background:var(--cream);border:1.5px solid var(--ink);font-size:12px;line-height:1.6;text-align:left}
+.posting-language-setting-button>span:first-child{min-width:0;overflow-wrap:anywhere}
+.posting-language-setting-button:hover{text-decoration:none;box-shadow:3px 3px 0 var(--ink)}
+#posting-language-dialog{width:min(590px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:23px 25px;overflow:hidden}
+#posting-language-dialog h2{font:900 42px/1.05 var(--display);letter-spacing:-.4px;margin:21px 0 12px}
+#posting-language-help{font-size:11px;line-height:1.7;margin:0 0 18px}
+#posting-language-find{width:100%;background:transparent;border:1.5px solid var(--ink);padding:11px 12px;font-size:13px;line-height:1.5}
+#posting-language-find:focus-visible{outline-offset:2px;outline-width:2px}
+.posting-language-selection{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:14px 0 12px;font-size:10px}
+#posting-language-any{border:1px solid var(--ink);padding:6px 10px;font-size:11px}
+#posting-language-any[aria-pressed=true]{background:var(--ink);color:var(--cream)}
+#posting-language-chips{display:flex;flex-wrap:wrap;gap:6px;max-height:88px;overflow:auto;padding:3px;margin:0 -3px 10px;overscroll-behavior:contain}
+.posting-language-chip{display:inline-flex;align-items:center;gap:10px;border:1px solid var(--ink);background:var(--paper);padding:4px 7px;font-size:10px;line-height:1.6;text-align:left;max-width:100%}
+.posting-language-chip>span:first-child{overflow-wrap:anywhere}
+.posting-language-chip>span:last-child{font-size:16px;line-height:1}
+#posting-language-list{height:275px;max-height:31dvh;overflow:auto;overscroll-behavior:contain;border-block:1px solid var(--rule);padding:4px}
+.posting-language-choice{display:flex;align-items:center;gap:12px;min-height:49px;margin:0!important;padding:8px 7px;cursor:pointer;font-size:12px;font-weight:500}
+.posting-language-choice:hover,.posting-language-choice:has(:focus-visible){background:var(--paper)}
+.posting-language-choice input{width:16px;height:16px;accent-color:var(--ink);flex-shrink:0;margin:0}
+.posting-language-choice>span:nth-child(2){flex:1;min-width:0;overflow-wrap:anywhere}
+.posting-language-choice b{display:block;font-weight:600;line-height:1.5}
+.posting-language-choice small{display:block;font-size:10px;line-height:1.6;margin-top:2px;opacity:.7}
+.posting-language-code{font-size:9px;opacity:.65;flex-shrink:0}
+#posting-language-more{display:block;width:100%;border:0;border-top:1px solid var(--rule);margin-top:5px;padding:13px 8px;text-align:left;font-size:11px;font-weight:600}
+#posting-language-empty,#posting-language-load-state{font-size:12px;line-height:1.8;padding:12px 7px}
+.posting-language-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:18px}
+@media(max-width:720px){.posting-language-scope{font-size:10px;gap:6px}.job-facts>.job-posting-languages{font-size:9px}#posting-language-dialog{padding:19px 17px}#posting-language-dialog h2{font-size:37px}#posting-language-help{font-size:10px}#posting-language-list{max-height:30dvh}.posting-language-choice{font-size:11px;gap:10px}.posting-language-choice small{font-size:9px}}
+@media(max-height:600px){#posting-language-dialog{overflow:auto}#posting-language-list{height:145px;max-height:28dvh}#posting-language-chips{max-height:52px}}
+/* Keep the actions reachable when long translations and many selections meet a small screen. */
+#posting-language-dialog[open]{display:flex;flex-direction:column}
+#posting-language-dialog>*{flex-shrink:0}
+#posting-language-dialog #posting-language-list{flex:0 1 275px;min-height:85px}
+#posting-language-dialog #posting-language-chips{flex-shrink:1;min-height:28px}
+@media(max-width:720px){#posting-language-dialog h2{font-size:clamp(27px,8vw,37px)}#posting-language-find{font-size:16px}}
