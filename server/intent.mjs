@@ -70,7 +70,7 @@ export function intentCapabilities(jobs, aiAvailable = false) {
 function companyPrefill(r,caps,query){
   const ref=r.companyReference;if(!ref||r.handling!=='unsatisfied')return null;
   const name=words(ref.input),request=typeof query==='string'?query:r.text;
-  const unsafe=/[\u0000-\u001f\u007f<>]|https?:\/\/|www\.|\b[a-z\d][a-z\d.-]*\.[a-z]{2,}(?:\/|\s|$)/iu;
+  const unsafe=/[\u0000-\u001f\u007f<>]|\b[a-z][a-z\d+.-]*:|www\.|[\p{L}\p{N}][\p{L}\p{N}.-]*\.[\p{L}]{2,}/iu;
   if(name.length<2||unsafe.test(ref.input)||!words(r.text).includes(name)||!words(request).includes(name)||normalizeValue(caps,'companyInclude',ref.input).code!=='unknown_value')return null;
   const clauses=request.split(/[.;!?\n]/u).filter(s=>words(s).includes(name));
   const negative=/\b(not|no|exclude|excluding|except|avoid|without|prefer|preferably|ideally|optional|mention|example|nicht|ohne|sans)\b|(?:^|\s)-\s*\p{L}/iu;
