@@ -40,6 +40,7 @@ RUNNER_USER = 'justup-preview-runner'
 MODEL_USER = 'justup-preview-model'
 STATE_GROUP = 'justup-preview-state'
 CLIENT_GROUP = 'justup-preview-model-client'
+OPERATOR_UID = 0
 
 
 def call(*args, capture=False):
@@ -67,6 +68,7 @@ def plan(root, host_fingerprint=None):
             files[f'scripts/{path.name}'] = digest(path)
     body = {'formatVersion': 1, 'hostMachineSha256': host_fingerprint, 'files': files, 'mount': str(BASE), 'newImage': str(IMAGE),
             'imageBytes': DISK_LIMIT, 'minimumRootFreeBytesAfterAllocation': ROOT_FLOOR,
+            'physicalPreallocationRequired': True, 'formatDiscardAllowed': False, 'automaticReallocation': False,
             'slice': {'cpuQuota': '50%', 'cpuWeight': 10, 'memoryHigh': 768 * MIB,
                       'memoryMax': GIB, 'memorySwapMax': 0, 'tasksMax': 96},
             'uids': {'api': USER, 'queue': RUNNER_USER, 'model': MODEL_USER},
@@ -133,9 +135,28 @@ def root_reserve(extra=0, available=None):
     return free
 
 
-def verify_storage(check_reserve=True):
+def _image_stat(require_preallocation=True):
     if IMAGE.is_symlink() or not IMAGE.is_file() or IMAGE.stat().st_size != DISK_LIMIT:
         raise ValueError('The preview image must be the exact dedicated 2 GiB regular file.')
+    image = IMAGE.stat()
+    if image.st_uid != OPERATOR_UID or image.st_nlink != 1 or image.st_mode & 0o7777 != 0o600:
+        raise ValueError('The preview image must remain private, single-link and root-owned.')
+    if require_preallocation and image.st_blocks * 512 < DISK_LIMIT:
+        raise ValueError('The preview image is not physically preallocated; stop and review external discard or hole-punching.')
+    return image
+
+
+def verify_image():
+    return _image_stat()
+
+
+def format_image():
+    # mkfs otherwise issues discard and punches out the prior fallocate.
+    call('mkfs.ext4', '-q', '-m', '0', '-E', 'nodiscard', '-F', str(IMAGE))
+    return verify_image()
+
+
+def _mounted_image_size():
     if not os.path.ismount(BASE) or BASE.stat().st_dev == BASE.parent.stat().st_dev:
         raise ValueError('The preview filesystem is not a dedicated mounted boundary.')
     filesystem = call('findmnt', '-n', '-o', 'FSTYPE', '--mountpoint', str(BASE), capture=True)
@@ -144,14 +165,25 @@ def verify_storage(check_reserve=True):
     if not re.fullmatch(r'/dev/loop[0-9]+', source):
         raise ValueError('Preview source is not a loop device.')
     backing = (Path('/sys/class/block') / Path(source).name / 'loop/backing_file').read_text().strip()
-    if filesystem != 'ext4' or '/' + backing.lstrip('/') != str(IMAGE) or not {'nodev', 'nosuid'} <= options:
+    if (filesystem != 'ext4' or '/' + backing.lstrip('/') != str(IMAGE) or not {'nodev', 'nosuid'} <= options
+            or any(value == 'discard' or value.startswith('discard=') for value in options)):
         raise ValueError('Mounted source or filesystem safety options differ from the dedicated image.')
     size = os.statvfs(BASE).f_blocks * os.statvfs(BASE).f_frsize
     if size > DISK_LIMIT:
         raise ValueError('Mounted filesystem exceeds 2 GiB.')
+    return size
+
+
+def _verify_storage(check_reserve, require_preallocation):
+    image = _image_stat(require_preallocation)
+    size = _mounted_image_size()
     if check_reserve:
         root_reserve()
-    return {'imageBytes': IMAGE.stat().st_size, 'filesystemBytes': size}
+    return {'imageBytes': image.st_size, 'allocatedImageBytes': image.st_blocks * 512, 'filesystemBytes': size}
+
+
+def verify_storage(check_reserve=True):
+    return _verify_storage(check_reserve, require_preallocation=True)
 
 
 def proof():
@@ -247,7 +279,7 @@ def install(root, expected, host_fingerprint):
         os.fsync(fd)
     finally:
         os.close(fd)
-    call('mkfs.ext4', '-q', '-m', '0', '-F', str(IMAGE))
+    format_image()
     BASE.mkdir(mode=0o755)
     for name in UNITS[1:]:
         target = Path('/etc/systemd/system') / name
@@ -315,7 +347,9 @@ def require_operator(cleanup=False):
         raise ValueError('Deployment and teardown require the dedicated root operator step.')
     if cleanup:
         verify_caps()
-        verify_storage(check_reserve=False)
+        # Only teardown enters this branch after validating the operator-bound
+        # owned marker. Lost reservation must not block safe normal unmount.
+        _verify_storage(check_reserve=False, require_preallocation=False)
     else:
         guard()
 
@@ -390,11 +424,17 @@ def switch(build):
     return {'current': build, 'apiStopped': True, 'activated': False}
 
 
-def teardown(erase_data=False):
-    require_operator(cleanup=True)
-    marker = json.loads((BASE / '.preview-install.json').read_text())
-    if marker.get('formatVersion') != 1 or not re.fullmatch(r'[a-f0-9]{64}', marker.get('planSha256', '')):
+def teardown(erase_data=False, expected_plan=None):
+    if os.geteuid() != 0 or not re.fullmatch(r'[a-f0-9]{64}', expected_plan or ''):
+        raise ValueError('Teardown requires root and the exact reviewed installed plan digest.')
+    marker_path = BASE / '.preview-install.json'
+    meta = marker_path.lstat()
+    if marker_path.is_symlink() or not marker_path.is_file() or meta.st_uid != OPERATOR_UID or meta.st_nlink != 1 or meta.st_mode & 0o022 or meta.st_size > 4096:
+        raise ValueError('The owned installation marker is unavailable or unsafe.')
+    marker = json.loads(marker_path.read_text())
+    if marker.get('formatVersion') != 1 or marker.get('planSha256') != expected_plan:
         raise ValueError('Missing owned installation marker; refuse teardown.')
+    require_operator(cleanup=True)
     stop_preview()
     call('systemctl', 'disable', '--now', 'justup-preview-guard.timer')
     call('systemctl', 'stop', 'justup-preview-guard.service')
@@ -450,7 +490,7 @@ def main():
         elif args.command == 'switch':
             result = switch(args.build_identity)
         elif args.command == 'teardown':
-            result = teardown(args.erase_data)
+            result = teardown(args.erase_data, args.reviewed_plan_sha)
         else:
             if os.geteuid() != 0:
                 raise ValueError('Stopping preview units requires root.')
