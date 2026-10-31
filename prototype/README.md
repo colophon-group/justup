@@ -60,7 +60,7 @@ The first demo contract disables SSE, follows, viewed writes, preferences, hidde
 
 The existing coral/cream/ink design, text-size logos, display headlines, typewriter body, WANTED requests and everyday newspaper humor remain. Errors, account access and privacy wording stay literal. Company logos retain original colours; feedback uses cream/coral rather than an ink background.
 
-Additional rows reveal individually with 450ms pacing only while the tail is actually in view. Scrolling away or backgrounding stops consumption. The catalogue uses the same pacing. Reduced motion removes visual motion while retaining pacing. Typing hints stop on interaction and resume after blur only when the field is empty; their examples never become drafts or submit values.
+Additional rows reveal individually with 450ms pacing only while the tail is actually in view. Scrolling away or backgrounding stops consumption. The catalogue uses the same pacing. Reduced motion removes visual motion while retaining pacing. The 51 English typing examples mix short and detailed requests, everyday work and restrained jokes. Typing hints stop on interaction and resume after blur only when the field is empty; their examples never become drafts or submit values.
 
 ## Browser state
 
