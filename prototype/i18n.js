@@ -9,6 +9,7 @@ const browserLanguage=()=>preferences().map(value=>value.toLowerCase().split('-'
 const language=()=>choice==='auto'?browserLanguage():choice;
 const locale=()=>choice==='auto'?(preferences().find(value=>value.toLowerCase().split('-')[0]===language())||'en-GB'):({en:'en-GB',de:'de-DE',fr:'fr-FR',es:'es-ES'}[language()]);
 const rows=[
+['Sign in for a free week of full access. Older matches are available below.','Melde dich für eine kostenlose Woche mit vollem Zugang an. Ältere Treffer findest du unten.','Connectez-vous pour une semaine gratuite d’accès complet. Des offres plus anciennes sont disponibles ci-dessous.','Entra para una semana gratis de acceso completo. Las coincidencias anteriores están disponibles abajo.'],
 ['Followed only','Nur gefolgte','Suivies seulement','Solo seguidas'],
 ['Search options','Suchoptionen','Options de recherche','Opciones de búsqueda'],
 ["Posting languages", "Sprachen der Stellenanzeigen", "Langues des offres", "Idiomas de las ofertas"],
