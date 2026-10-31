@@ -1,0 +1,254 @@
+/* A company report, set like the market pages of the edition. */
+.report-masthead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:30px;padding:6px 0 29px;border-bottom:4px solid var(--ink)}
+.report-identity>.eyebrow{font-size:10px;letter-spacing:1.2px}
+.report-masthead .detail-heading{margin:13px 0 14px}
+.report-masthead .detail-heading h1{font-size:clamp(58px,7.1vw,90px);line-height:.92;letter-spacing:-1.2px}
+.report-masthead .company-subtitle{font-size:12px;line-height:1.5;gap:10px}
+.report-masthead .company-subtitle .mark{width:18px;height:18px;font-size:18px}
+.report-description{max-width:620px;font-size:12px;line-height:1.7;margin:17px 0 0}
+.report-identity-aside{display:flex;flex-direction:column;align-items:flex-end;justify-content:space-between;gap:20px;padding-top:1px}
+.report-edition{font-size:10px;text-transform:uppercase;letter-spacing:.6px}
+.report-header-actions{display:flex;gap:10px;align-items:stretch;margin-top:21px}
+.report-header-actions .company-follow{min-height:44px}
+.report-header-actions .button{gap:17px}
+.report-since{font-size:10px;line-height:1.6}
+.report-market{padding-top:27px}
+.report-quote{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+.report-quote-main>.eyebrow{font-size:10px;letter-spacing:.7px}
+.report-quote-line{display:flex;align-items:center;gap:22px;margin-top:7px}
+.report-quote-line>strong{font:900 112px/.9 var(--display);letter-spacing:-2px}
+.report-delta{display:flex;flex-direction:column;gap:9px;margin-top:10px}
+.report-change{display:inline-flex;align-self:flex-start;align-items:center;gap:6px;padding:5px 9px;background:var(--cream);font-size:18px;font-weight:700;line-height:1.4}
+.report-change.is-down{background:transparent;border:1px solid var(--ink);font-size:18px;padding:4px 8px}
+.report-comparison{font-size:10px;line-height:1.5}
+.report-quote-main>p{font-size:12px;margin:11px 0 0}
+.report-ranges{display:flex;gap:3px;padding-top:5px}
+.report-ranges button,.report-currencies button{min-height:34px;min-width:42px;border:1px solid transparent;padding:7px 10px;font-size:11px;line-height:1.4;font-weight:600}
+.report-ranges button[aria-pressed=true],.report-currencies button[aria-pressed=true]{background:var(--ink);color:var(--cream)}
+.report-ranges button:hover,.report-currencies button:hover{text-decoration:none;border-color:var(--ink)}
+.report-chart-heading{display:flex;align-items:baseline;justify-content:space-between;gap:20px;margin-top:32px}
+.report-chart-heading h2{font:900 32px/1.1 var(--display);letter-spacing:-.2px;margin:0}
+.report-chart-readout{display:flex;gap:10px;align-items:baseline;font-size:10px;font-variant-numeric:tabular-nums;min-width:235px;justify-content:flex-end}
+.report-chart-readout strong{font-size:15px;min-width:28px;text-align:right}
+.report-chart{margin:14px 0 0;min-width:0;min-height:100px}
+.report-chart>svg{display:block;width:100%;height:auto;overflow:visible;touch-action:pan-y pinch-zoom;animation:report-appear 180ms ease-out}
+.report-chart>svg:focus:not(:focus-visible){outline:none}
+.report-chart>svg:focus-visible{outline:2px solid var(--ink);outline-offset:5px}
+.report-chart-grid{stroke:var(--ink);stroke-opacity:.15;stroke-width:1;vector-effect:non-scaling-stroke}
+.report-axis{fill:var(--ink);font:10px var(--mono);opacity:.75}
+.report-price-line{stroke:var(--ink);stroke-width:2.3;stroke-linecap:round;stroke-linejoin:round;fill:none;vector-effect:non-scaling-stroke}
+.report-latest{fill:var(--ink);stroke:var(--paper);stroke-width:2}
+.report-volume-bar{fill:var(--ink);opacity:.32}
+.report-crosshair{pointer-events:none}
+.report-crosshair line{stroke:var(--ink);stroke-opacity:.5;stroke-width:1;stroke-dasharray:3 4;vector-effect:non-scaling-stroke}
+.report-crosshair circle{fill:var(--cream);stroke:var(--ink);stroke-width:2;vector-effect:non-scaling-stroke}
+.report-chart-hit{cursor:crosshair}
+.report-gap-label{font:11px var(--mono);fill:var(--muted)}
+.report-chart-caption{display:flex;justify-content:space-between;gap:15px;font-size:10px;line-height:1.6;opacity:.8;margin-top:6px}
+.report-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:31px 0 0;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);padding:23px 0 24px}
+.report-metric{display:flex;flex-direction:column;gap:9px;padding-left:26px;border-left:1px solid var(--rule)}
+.report-metric:first-child{padding-left:0;border-left:0}
+.report-metric>.eyebrow{font-size:9px;letter-spacing:.6px}
+.report-metric strong{font:900 46px/.95 var(--display);letter-spacing:-.6px;font-variant-numeric:tabular-nums}
+.report-metric strong small{font-size:25px;vertical-align:top;margin-left:2px;line-height:1.4}
+.report-metric>span:last-child{font-size:10px;line-height:1.7}
+.report-analysis-grid,.report-bottom-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0;margin-top:39px}
+.report-section{min-width:0}
+.report-section-heading{display:flex;justify-content:space-between;gap:12px;align-items:baseline;margin-bottom:11px}
+.report-section-heading .eyebrow,.report-notebook>.eyebrow{font-size:9px}
+.report-period{font-size:10px;white-space:nowrap}
+.report-section h2{font:900 35px/1.05 var(--display);letter-spacing:-.3px;margin:0 0 23px}
+.report-roles,.report-footprint{padding-right:34px}
+.report-pay,.report-notebook{border-left:1px solid var(--rule);padding-left:34px}
+.report-role-list{display:grid;gap:16px}
+.report-role-row{display:grid;grid-template-columns:19px minmax(0,1fr) 25px;align-items:start;gap:10px;font-size:12px;line-height:1.5}
+.report-rank{font-size:9px;padding-top:2px;opacity:.6}
+.report-role-row>div{display:grid;gap:7px}
+.report-role-row>div>i{display:block;width:var(--share);height:5px;background:var(--ink);min-width:2px}
+.report-role-row>b{text-align:right;font-size:11px;font-weight:600}
+.report-levels{margin-top:28px}
+.report-levels>.eyebrow{font-size:9px}
+.report-levels>div{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:9px;font-size:10px;line-height:1.6}
+.report-levels b{font-weight:500;opacity:.75}
+.report-currencies{display:flex;gap:4px;flex-wrap:wrap;margin:-3px 0 17px}
+.report-currencies button{font-size:10px;min-width:39px;min-height:30px;padding:5px 8px}
+.report-pay-sample{display:flex;align-items:baseline;gap:9px;font-size:10px;margin:0 0 22px}
+.report-pay-sample strong{font-size:16px}
+.report-pay-rows{display:grid;gap:18px}
+.report-pay-row>div:first-child{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:11px;line-height:1.5}
+.report-pay-row b{white-space:nowrap;font-size:11px;font-weight:600}
+.report-pay-track{position:relative;margin-top:8px;height:10px;background:linear-gradient(var(--rule),var(--rule)) left 4px/100% 1px no-repeat}
+.report-pay-track>i{position:absolute;top:1px;height:7px;background:var(--ink);min-width:3px}
+.report-pay-track>i:before,.report-pay-track>i:after{content:'';position:absolute;top:-2px;width:1px;height:11px;background:var(--ink)}
+.report-pay-track>i:before{left:0}.report-pay-track>i:after{right:0}
+.report-salary-note{font-size:10px;line-height:1.6;opacity:.8;margin:22px 0 0}
+.report-bottom-grid{border-top:1px solid var(--ink);padding-top:27px;margin-top:35px}
+.report-footprint h2{margin-bottom:9px}
+.report-footprint-body{display:grid;grid-template-columns:240px minmax(0,1fr);gap:20px;align-items:center}
+.report-footprint .company-map{height:232px}
+.report-footprint .company-map svg{width:232px}
+.report-country-list{font-size:10px;line-height:1.5;display:grid;gap:15px}
+.report-country-list>div{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.report-country-list b{font-weight:600}
+.report-notebook h2{margin:12px 0 25px}
+.report-notebook-row{margin-bottom:24px}
+.report-notebook-row>span{display:block;font-size:12px;font-weight:600;margin-bottom:13px}
+.report-workplace-bar{display:flex;height:12px;gap:3px;overflow:hidden}
+.report-workplace-bar i{background:var(--ink);min-width:0}
+.report-workplace-bar i:nth-child(2){background:var(--cream)}
+.report-workplace-bar i:nth-child(3){background:var(--ink);opacity:.25}
+.report-workplace-key{display:flex;gap:15px;flex-wrap:wrap;margin-top:12px;font-size:9px;line-height:1.6}
+.report-workplace-key>span{display:flex;align-items:center;gap:5px}
+.report-workplace-key i{display:block;width:7px;height:7px;background:var(--ink)}
+.report-workplace-key i[style*='1']{background:var(--cream)}
+.report-workplace-key i[style*='2']{opacity:.25}
+.report-workplace-key b{font-weight:500;margin-left:2px}
+.report-skills{display:flex;flex-wrap:wrap;gap:9px 19px;font-size:11px;line-height:1.6}
+.report-skills b{font-weight:500;margin-left:4px;opacity:.6;font-size:9px}
+.report-source-scope{font-size:10px;line-height:1.6;opacity:.7;margin:26px 0 0}
+.report-record{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);border-top:3px solid var(--ink);margin-top:24px;padding:27px 0 40px;gap:34px}
+.report-record .eyebrow{font-size:9px}
+.report-record h2{font:900 32px/1.05 var(--display);margin:11px 0 12px}
+.report-record p{font-size:11px;line-height:1.7;max-width:370px;margin-bottom:0}
+.report-record .profile-sources{margin-top:0;gap:13px}
+.report-record .career-links{flex-direction:column;align-items:flex-start;gap:8px}
+.report-record .career-links a{font-size:11px}
+.report-record .last-check{font-size:11px}
+.report-request{font-size:11px;line-height:1.7;display:block;margin-top:22px}
+.report-request b{display:inline-block;font-weight:600}
+.report-request:hover{text-decoration:none}
+.report-request:hover b{text-decoration:underline;text-underline-offset:4px}
+.report-record p.report-coverage-warning{font-size:11px;background:var(--cream);padding:10px 13px;margin-top:16px}
+.report-pending{display:grid;grid-template-columns:140px minmax(0,500px);gap:35px;align-items:center;min-height:330px;padding:50px 0}
+.report-pending-mark{font:900 140px/1 var(--display);color:var(--cream)}
+.report-pending h2{font:900 55px/1 var(--display);margin:14px 0 17px}
+.report-pending p{font-size:13px;line-height:1.8;margin:0 0 25px}
+.report-empty{font-size:12px;line-height:1.8;min-height:95px}
+@keyframes report-appear{from{opacity:.5}to{opacity:1}}
+@media(min-width:721px) and (max-width:1000px){.report-footprint-body{grid-template-columns:180px minmax(0,1fr);gap:12px}.report-footprint .company-map{height:180px}.report-footprint .company-map svg{width:180px}.report-header-actions{flex-direction:column;align-items:flex-end}.report-header-actions .company-follow{min-height:34px}.report-metric{padding-left:17px}.report-pay,.report-notebook{padding-left:24px}.report-roles,.report-footprint{padding-right:24px}}
+@media(max-width:720px){
+  .report-masthead{grid-template-columns:1fr;gap:19px;padding:3px 0 22px}
+  .report-masthead .detail-heading{margin:12px 0}
+  .report-masthead .detail-heading h1{font-size:clamp(52px,12vw,74px)}
+  .report-masthead .company-subtitle{font-size:11px}
+  .report-description{font-size:11px;margin-top:13px;max-width:420px}
+  .report-identity-aside{display:grid;grid-template-columns:1fr auto;align-items:center;gap:14px 10px;justify-content:initial}
+  .report-edition{display:none}
+  .report-header-actions{margin:0;gap:8px;grid-column:1/-1;justify-content:flex-start}
+  .report-header-actions .button{font-size:11px;padding:10px 13px;min-height:39px}
+  .report-header-actions .company-follow{min-height:39px}
+  .report-since{font-size:9px;grid-column:1/-1}
+  .report-market{padding-top:24px}
+  .report-quote-main>.eyebrow{font-size:8px}
+  .report-quote-line{gap:13px;margin-top:9px}
+  .report-quote-line>strong{font-size:85px}
+  .report-change,.report-change.is-down{font-size:15px;padding:3px 7px}
+  .report-delta{gap:6px;margin-top:7px}
+  .report-comparison{font-size:8px;max-width:95px}
+  .report-ranges{gap:0;padding-top:0}
+  .report-ranges button{font-size:10px;min-width:33px;padding:6px;min-height:31px}
+  .report-quote-main>p{font-size:10px;margin-top:9px}
+  .report-chart-heading{margin-top:27px;gap:9px}
+  .report-chart-heading h2{font-size:26px;max-width:165px}
+  .report-chart-readout{font-size:8px;gap:5px;min-width:0;flex-wrap:wrap;max-width:170px}
+  .report-chart-readout strong{font-size:12px;min-width:18px}
+  .report-chart{overflow:hidden;margin:8px -1px 0}
+  .report-chart svg{width:calc(100% + 2px);height:auto}.report-chart .report-axis{font-size:15px}.report-chart .report-gap-label{font-size:14px}
+  .report-chart-caption{font-size:8px;gap:12px;margin-top:2px}
+  .report-metrics{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:24px;margin-top:24px;padding:22px 0}
+  .report-metric{padding-left:19px;gap:7px}
+  .report-metric:nth-child(3){padding-left:0;border-left:0}
+  .report-metric>.eyebrow{font-size:8px}
+  .report-metric strong{font-size:40px}
+  .report-metric>span:last-child{font-size:9px}
+  .report-analysis-grid,.report-bottom-grid{grid-template-columns:1fr;margin-top:28px;gap:29px}
+  .report-roles,.report-footprint{padding-right:0}
+  .report-pay,.report-notebook{padding-left:0;border-left:0;border-top:1px solid var(--ink);padding-top:25px}
+  .report-section h2{font-size:32px;margin-bottom:23px}
+  .report-section-heading{gap:10px}
+  .report-section-heading .eyebrow{font-size:8px}
+  .report-period{font-size:9px}
+  .report-role-list{gap:15px}
+  .report-role-row{font-size:11px}
+  .report-currencies{margin-top:-4px}
+  .report-pay-row>div:first-child{font-size:10px}
+  .report-pay-row b{font-size:10px}
+  .report-footprint-body{grid-template-columns:minmax(160px,1fr) minmax(90px,.7fr);gap:18px}
+  .report-footprint .company-map{height:210px}
+  .report-footprint .company-map svg{width:210px}
+  .report-country-list{font-size:9px}
+  .report-notebook h2{margin-top:12px}
+  .report-notebook-row>span{font-size:11px}
+  .report-record{grid-template-columns:1fr;gap:23px;margin-top:26px;padding-top:23px}
+  .report-record h2{font-size:31px}
+  .report-record p{font-size:10px}
+  .report-record .career-links a,.report-record .last-check,.report-request{font-size:10px}
+  .report-pending{grid-template-columns:50px minmax(0,1fr);gap:15px;min-height:320px;padding:35px 0}
+  .report-pending-mark{font-size:70px}
+  .report-pending h2{font-size:44px}
+  .report-pending p{font-size:11px}
+}
+@media(max-width:370px){.report-quote{gap:7px}.report-quote-line>strong{font-size:77px}.report-ranges button{min-width:29px;padding:6px 4px}.report-chart-heading h2{font-size:25px}.report-comparison{max-width:84px}.report-footprint-body{gap:9px}}
+@media(prefers-reduced-motion:reduce){.report-chart>svg{animation:none}}
+body.reduce-motion .report-chart>svg{animation:none}
+
+/* Coral paper, cream stock and a strip of solid ink: the report is printed in layers. */
+.report-market{display:grid;grid-template-columns:245px minmax(0,1fr);margin:28px -22px 0;padding:0;background:var(--cream)}
+.report-quote{background:var(--ink);color:var(--cream);padding:27px 24px 22px;flex-direction:column;justify-content:space-between;gap:29px}
+.report-quote-main>.eyebrow{font-size:10px;line-height:1.8;max-width:160px;display:block}
+.report-quote-line{flex-direction:column;align-items:flex-start;gap:17px;margin-top:26px}
+.report-quote-line>strong{color:var(--paper);font-size:124px}
+.report-delta{margin-top:0;gap:9px}
+.report-change,.report-change.is-down{background:var(--paper);color:var(--ink);border:0;padding:4px 8px;font-size:17px}
+.report-change.is-down{background:transparent;color:var(--cream);border:1px solid var(--cream);padding:3px 7px}
+.report-comparison{opacity:.8}
+.report-quote-main>p{margin-top:23px;font-size:10px}
+.report-ranges{padding-top:0;gap:5px}
+.report-ranges button{border-color:transparent;color:var(--cream);min-width:43px}
+.report-ranges button[aria-pressed=true]{background:var(--cream);color:var(--ink)}
+.report-ranges button:hover{border-color:var(--cream)}
+.report-chart-paper{padding:26px 24px 18px;min-width:0;display:flex;flex-direction:column;justify-content:center}
+.report-chart-paper .report-chart-heading{margin-top:0;align-items:flex-start}
+.report-chart-heading h2{font-size:30px}
+.report-chart-readout{min-width:0;max-width:200px;flex-wrap:wrap;gap:5px 9px}
+.report-chart{margin-top:23px}
+.report-chart-paper #report-plot-fill stop{stop-color:var(--paper)}
+.report-chart-paper #report-plot-fill stop:first-child{stop-opacity:.7}
+.report-chart-paper #report-plot-fill stop:last-child{stop-opacity:.02}
+.report-volume-bar{opacity:1;fill:var(--paper)}
+.report-latest{fill:var(--paper);stroke:var(--ink)}
+.report-crosshair circle{fill:var(--paper)}
+.report-pay{background:var(--cream);border:0;padding:25px 25px 23px;margin:-25px -22px 0 12px}
+.report-roles{padding-right:22px}
+.report-pay-track>i{background:var(--paper)}
+.report-pay-track>i:before,.report-pay-track>i:after{background:var(--ink)}
+.report-currencies button[aria-pressed=true]{background:var(--ink);color:var(--cream)}
+.report-workplace-bar i:first-child,.report-workplace-key i[data-workplace='0']{background:var(--ink);opacity:1}
+.report-workplace-bar i:nth-child(2),.report-workplace-key i[data-workplace='1']{background:var(--cream);opacity:1}
+.report-workplace-bar i:nth-child(3),.report-workplace-key i[data-workplace='2']{background:repeating-linear-gradient(135deg,transparent 0 2px,var(--ink) 2px 3px);opacity:1}
+.report-skills>span{background:var(--cream);padding:3px 7px}
+@media(min-width:721px) and (max-width:1000px){
+ .report-market{grid-template-columns:210px minmax(0,1fr)}
+ .report-quote{padding:24px 20px}.report-quote-line>strong{font-size:111px}
+ .report-chart-paper{padding:23px 19px 18px}.report-chart-heading{flex-wrap:wrap;gap:12px}
+ .report-chart-readout{justify-content:flex-start;max-width:none}
+ .report-pay{padding:25px 20px 23px;margin-left:9px}
+}
+@media(max-width:720px){
+ .report-market{display:block;margin:25px -13px 0}
+ .report-quote{padding:20px 18px;flex-direction:row;gap:14px;align-items:flex-end}
+ .report-quote-main>.eyebrow{font-size:8px;max-width:none}
+ .report-quote-line{flex-direction:row;align-items:center;margin-top:12px;gap:15px}
+ .report-quote-line>strong{font-size:89px}
+ .report-change,.report-change.is-down{font-size:14px}
+ .report-comparison{max-width:90px}
+ .report-quote-main>p{margin-top:11px;font-size:9px}
+ .report-ranges{flex-direction:column;gap:1px}
+ .report-ranges button{font-size:9px;min-height:27px;min-width:34px;padding:4px 5px}
+ .report-chart-paper{padding:21px 13px 14px}
+ .report-chart-heading{gap:10px}.report-chart-heading h2{font-size:27px}
+ .report-chart{margin-top:17px}
+ .report-chart-readout{max-width:165px;gap:4px}
+ .report-roles{padding-right:0}
+ .report-pay{margin:0 -13px;padding:24px 13px 22px;border:0}
+}
