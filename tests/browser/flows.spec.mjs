@@ -52,7 +52,7 @@ test('credentials are policy-gated; rejected login preserves the visitor draft a
 });
 
 test('unreviewed static policies keep registration and login disabled', async ({ page }) => {
-  await mockApi(page, { 'GET /session': session({ user: null, policies: { reviewed: false, version: 'demo-draft-2', privacyUrl: null, usageUrl: null } }) }); await page.goto('/'); await page.locator('#header-sign-in').click();
+  await mockApi(page, { 'GET /session': session({ user: null, policies: { reviewed: false, version: 'demo-draft-3', privacyUrl: null, usageUrl: null } }) }); await page.goto('/'); await page.locator('#header-sign-in').click();
   await expect(page.locator('#sign-in-unavailable')).toContainText('being reviewed'); await expect(page.locator('#sign-in-form')).toBeHidden();
 });
 
@@ -124,7 +124,7 @@ test('401 expiry clears private state and rejects a late request preview from th
 });
 
 test('inactive deletion and tab changes preserve per-search drafts without reloading active results', async ({ page }) => {
-  const other = { ...search(), id: 'search-2', title: 'Garden desk', query: 'Garden jobs' }; const calls = await mockApi(page, { ...saved, 'GET /searches': { items: [search(), other] }, 'GET /searches/search-2/results': completed([job(2)], 1, 'search-2'), 'DELETE /searches/search-2': {} }); await page.goto('/'); await page.locator('#query').fill('Unsent library draft'); await page.getByRole('tab', { name: 'Garden desk' }).click(); await page.locator('#query').fill('Unsent garden draft'); await page.getByRole('tab', { name: 'Library desk' }).click(); await expect(page.locator('#query')).toHaveValue('Unsent library draft'); const before = calls.filter(call => call.key === 'GET /searches/search-1/results').length;
+  const other = { ...search(), id: 'search-2', title: 'Garden desk', query: 'Garden jobs' }; const calls = await mockApi(page, { ...saved, 'GET /searches': { items: [search(), other] }, 'GET /searches/search-2/results': completed([job(2)], 1, 'search-2'), 'DELETE /searches/search-2': {} }); await page.goto('/'); await expect(page.getByRole('tab', { name: 'Library desk' })).toHaveAttribute('aria-selected', 'true'); await expect(page.locator('#query')).toHaveValue('Remote library jobs'); await page.locator('#query').fill('Unsent library draft'); await page.getByRole('tab', { name: 'Garden desk' }).click(); await page.locator('#query').fill('Unsent garden draft'); await page.getByRole('tab', { name: 'Library desk' }).click(); await expect(page.locator('#query')).toHaveValue('Unsent library draft'); const before = calls.filter(call => call.key === 'GET /searches/search-1/results').length;
   await page.getByRole('button', { name: 'Delete Garden desk' }).click(); await page.locator('#confirm-delete-search').click(); await expect(page.getByRole('tab', { name: 'Garden desk' })).toHaveCount(0); await expect(page.locator('#query')).toHaveValue('Unsent library draft'); expect(calls.filter(call => call.key === 'GET /searches/search-1/results').length).toBe(before);
 });
 

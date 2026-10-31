@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <meta name="justup-policy-status" content="draft">
-  <meta name="justup-policy-version" content="demo-draft-2">
+  <meta name="justup-policy-version" content="demo-draft-3">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'">
   <title>Usage — Justup</title>
   <meta name="description" content="Draft usage information for the Justup web preview. Operator review is incomplete.">
   <link rel="stylesheet" href="/policies.css">
 </head>
-<body data-policy="usage" data-policy-status="draft" data-policy-version="demo-draft-2">
+<body data-policy="usage" data-policy-status="draft" data-policy-version="demo-draft-3">
   <a class="skip-link" href="#main">Skip to usage information</a>
   <div class="policy-paper">
     <header class="policy-header">
@@ -23,37 +23,44 @@
       <h1>Usage.</h1>
       <aside class="policy-status" aria-labelledby="review-status">
         <h2 id="review-status">Draft — review incomplete</h2>
-        <p>This information has not been approved for real sign-in or public sharing. The active data flows and final policy text still need to be reviewed. Sign-in must remain disabled until the reviewed pages are published.</p>
-        <p>Draft version: <strong>demo-draft-2</strong>. No effective date has been set.</p>
+        <p>This information has not been approved for real sign-in or public sharing. This draft describes prepared implementation and locally checked controls. Deployment settings, provider handling and the final text still need verification and operator review. Sign-in must remain disabled until the reviewed pages are published.</p>
+        <p>Draft version: <strong>demo-draft-3</strong>. No effective date has been set.</p>
       </aside>
       <section class="policy-section" aria-labelledby="section-0">
         <h2 id="section-0">About this preview</h2>
-        <p>Justup is operated by Viktor Shcherbakov and is being prepared as a temporary web preview. Features and availability may change. This draft is not an approved set of usage conditions.</p>
+        <p>Justup is operated by Viktor Shcherbakov and is being prepared as a temporary web preview. This draft describes the implemented local behavior and prepared features; it is not an approved set of usage conditions or proof of a deployed service.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-1">
-        <h2 id="section-1">Access and payments</h2>
-        <p>The temporary preview does not collect payments. Access settings still require review; this draft does not grant a subscription, trial or legacy-account benefit.</p>
+        <h2 id="section-1">Access and availability</h2>
+        <p>The temporary preview does not collect payments and does not grant a subscription, trial or legacy-account benefit. Accounts use an invitation, username and password. The prepared account limit is 30, with an account deadline 30 days after registration; actual deployed settings still need review.</p>
+        <p>Availability is limited and features can be paused. Models remain disabled until execution, data handling and quality checks pass. Live updates, followed/viewed state, posting-language preferences, request priority, Hiring Wire and billing are unavailable in this first preview.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-2">
-        <h2 id="section-2">Search, coverage and uncertainty</h2>
-        <p>When AI is used to interpret a search or match a listing, it can misunderstand criteria, omit a useful result or include an unsuitable one. Check the employer’s posting before making a decision.</p>
-        <p>Coverage is limited to the company pages being tracked. It is not a complete view of the job market. “First seen” means when collection first observed the posting, not necessarily when the employer published it. Monitoring can have gaps, and a role may close before the next check.</p>
+        <h2 id="section-2">Fresh listings, limited coverage</h2>
+        <p>The preview uses a bounded imported snapshot of public Jobseek listings, not continuous monitoring of every company. It is not a complete view of the job market.</p>
+        <p>Results are always newest first and limited to the last 14 days. “First seen” means when collection first observed the posting, not necessarily when the employer published it. Visitors can access listings first seen between 48 hours and 14 days ago; signed-in testers can access the eligible last-14-day slice.</p>
+        <p>Old, inactive or unverified listings are not shown. Missing or stale imported evidence pauses results with a retry action instead of reporting that there are no matches. A role can still close before the next source check.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-3">
-        <h2 id="section-3">Company pages and applications</h2>
-        <p>Source links lead to third-party pages with their own terms and privacy notices. Review the employer’s current description and apply there. A listing or hiring trend is not a guarantee of a vacancy, an interview, an offer or completed hiring.</p>
+        <h2 id="section-3">Interpreting a search</h2>
+        <p>When enabled, AI can misunderstand criteria, omit a useful result or include an unsuitable one. Ordinary filters run before any extra model-based matching. Check the employer’s posting before making a decision.</p>
+        <p>A failed interpretation keeps the last accepted search. A partial search with unmet requirements needs your explicit confirmation before those criteria are accepted. Editing your search text changes the request; it is not a conversation with a recruiter.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-4">
-        <h2 id="section-4">Requesting a company</h2>
-        <p>Company discovery can identify the wrong organisation. Check the proposed company before confirming it. A confirmed request does not guarantee successful collection or a completion date. Any priority handling must match the access actually enabled for the preview.</p>
+        <h2 id="section-4">Company pages and requests</h2>
+        <p>Company pages show only available imported identity and source evidence. They do not establish a company’s location, hiring performance or continuous monitoring.</p>
+        <p>Your submitted identity request and its task are private to your account. Known imported companies need no AI research. If company verification is enabled, unfamiliar or ambiguous input can require public-site evidence or clarification. Check the exact company preview before confirming it.</p>
+        <p>Confirmation records that identity and requested scope. It does not start a crawler, follow the company, grant priority or guarantee successful collection or a completion date.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-5">
-        <h2 id="section-5">Using the service</h2>
-        <p>Do not submit information you are not entitled to share, impersonate another person, or interfere with other people’s access or the service. Do not treat generated matches or hiring statistics as verified advice.</p>
+        <h2 id="section-5">Applications and responsible use</h2>
+        <p>Source links lead to third-party pages with their own terms and privacy notices. Review the employer’s current description and apply there. A listing is not a guarantee of a vacancy, interview, offer or completed hiring.</p>
+        <p>Do not submit information you are not entitled to share, impersonate another person or interfere with other people’s access. Keep sensitive personal information out of searches and company requests. Do not treat generated matches as verified advice.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-6">
         <h2 id="section-6">Questions and problem reports</h2>
         <p>For questions or to report an incorrect match, an incorrect company identity, a broken source link or an access problem, email <a href="mailto:business@colophon-group.org">business@colophon-group.org</a>.</p>
+        <p>Final deployment behavior, provider handling and the complete Privacy and Usage text still need verification and operator review before activation. This draft has no effective date.</p>
       </section>
     </main>
     <footer><a href="/privacy.html">Read the privacy information ↗</a><a href="/#jobs">Back to search ↗</a></footer>
