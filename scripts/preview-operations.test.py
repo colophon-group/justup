@@ -80,6 +80,8 @@ class ArtifactContracts(unittest.TestCase):
     def test_backend_inventory_excludes_browser_sources_build_tools_and_dependencies(self):
         for path in ('app/web/dist/index.html', 'app/web/src/app.tsx', 'app/prototype/app.mjs',
                      'app/package.json', 'app/node_modules/react/index.js', 'app/scripts/frontend-prepare.mjs',
+                     'app/server/evals/luna-wire-catalogue.mjs',
+                     'app/server/./evals/luna-wire-catalogue.mjs', 'app/server//evals/luna-wire-catalogue.mjs',
                      'runtime/codex/bin/codex-code-mode-host', 'runtime/codex/codex-path/rg', 'runtime/codex/codex-resources/zsh/bin/zsh'):
             with self.subTest(path=path):
                 self.assertFalse(artifact.allowed(path))

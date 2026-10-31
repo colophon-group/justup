@@ -72,11 +72,13 @@ def read_host_plan(base):
 
 def allowed(path):
     parts = PurePosixPath(path).parts
-    return (not path.startswith('/') and '..' not in parts and '\\' not in path
-            and (path in {'runtime/bin/node', 'runtime/LICENSE'} or path in CODEX_FILES or
-                 (path.startswith('app/server/') and path.endswith('.mjs') and not path.endswith('.test.mjs')) or
-                 path in {MODEL_CATALOGUE, 'app/scripts/import-demo-jobs.py', 'app/server/model-schemas/intent.schema.json',
-                          'app/server/model-schemas/company.schema.json', 'app/server/model-schemas/company-domain-proposal.schema.json'}))
+    if path.startswith('/') or '..' in parts or '\\' in path or PurePosixPath(path).as_posix() != path:
+        return False
+    return (path in {'runtime/bin/node', 'runtime/LICENSE', MODEL_CATALOGUE, 'app/scripts/import-demo-jobs.py',
+                     'app/server/model-schemas/intent.schema.json', 'app/server/model-schemas/company.schema.json',
+                     'app/server/model-schemas/company-domain-proposal.schema.json'} or path in CODEX_FILES or
+            (path.startswith('app/server/') and not path.startswith('app/server/evals/')
+             and path.endswith('.mjs') and not path.endswith('.test.mjs')))
 
 
 def identity(manifest):
