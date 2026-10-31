@@ -129,6 +129,11 @@ test('account deletion composes synchronously and backup-barrier failure preserv
   await assert.rejects(()=>noDelete.route(f.ctx('DELETE',`/searches/${a.body.search.id}`)),{status:503});assert.equal(f.records.size,1);
   f.db.exec('BEGIN');f.service.deleteAccountData('owner');f.db.exec('COMMIT');assert.equal(f.records.size,0);assert.deepEqual((await f.route('GET','/searches')).body.items,[]);
 });
+test('direct deletion holds the core private transaction through the barrier and SQL commit',async t=>{
+  const f=fixture();t.after(()=>f.db.close());const created=await f.route('POST','/searches',{query:'backend',requestKey:'one'});let barriers=0,released=0;
+  const service=createIntentService({db:f.db,feed:f.feed,tasks:f.tasks,beforePrivateDelete:()=>{assert.equal(f.db.isTransaction,true);barriers++;},withPrivateTransaction:fn=>{f.db.exec('BEGIN');try{const result=fn();f.db.exec('COMMIT');return result;}catch(error){f.db.exec('ROLLBACK');throw error;}finally{assert.equal(f.db.isTransaction,false);released++;}}});
+  assert.equal((await service.route(f.ctx('DELETE',`/searches/${created.body.search.id}`))).status,200);assert.equal(barriers,1);assert.equal(released,1);
+});
 test('held-out compiler fixtures enforce acceptance, warning and unsafe-output rejection',()=>{
   const fixtures=JSON.parse(readFileSync(new URL('./evals/intent-heldout.json',import.meta.url)));
   for(const item of fixtures.cases) {
