@@ -22,6 +22,7 @@ test('store isolates SQLite settings and strips unapproved imported fields', (t)
   s.importSnapshot(snapshot([raw]));
   const row = s.db.prepare('SELECT * FROM demo_jobs').get();
   assert.equal(s.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+  assert.equal(s.db.prepare('PRAGMA synchronous').get().synchronous, 2);
   assert.equal(s.db.prepare('PRAGMA busy_timeout').get().timeout, 5000);
   assert.equal(row.first_seen_at, AT - 3 * DAY_MS);
   assert.ok(!row.data_json.includes('privateBoardConfig'));

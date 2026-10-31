@@ -54,7 +54,7 @@ async function readBody(req, maxBytes) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw problem('invalid_json');
   return body;
 }
-export function createHandler({ auth, feed, tasks, db, services = [], config = {}, now = Date.now, logger = () => {} }) {
+export function createHandler({ auth, feed, tasks, db, services = [], config = {}, now = Date.now, logger = () => {}, afterPrivateTransaction = () => {} }) {
   const origin = new URL(config.allowedOrigin ?? 'https://preview.justup.work');
   const insecure = config.allowInsecureLocalhost === true && origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);
   if (origin.origin !== (config.allowedOrigin ?? 'https://preview.justup.work') || (!insecure && origin.protocol !== 'https:')) throw new TypeError('Set one allowed HTTPS browser origin.');
@@ -113,6 +113,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(serialized);
     };
+    const finish = (status, body) => { afterPrivateTransaction(); return send(status, body); };
     try {
       const url = new URL(req.url, origin.origin);
       if (!url.pathname.startsWith('/api/v1/')) throw problem('not_found', 404);
@@ -142,39 +143,41 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       }
       if (method === 'GET' && path === '/session') {
         if (!viewer) res.setHeader('Set-Cookie', cookie(csrfCookie, guestToken, now() + 3_600_000));
-        return send(200, sessionBody(viewer, sessionToken, guestToken));
+        return finish(200, sessionBody(viewer, sessionToken, guestToken));
       }
       if (authRoute) {
         const result = path === '/auth/register' ? await auth.register(body) : await auth.login(body);
         res.setHeader('Set-Cookie', [cookie(cookieName, result.token, result.expiresAt), cookie(csrfCookie, '', now())]);
-        return send(path === '/auth/register' ? 201 : 200, sessionBody(auth.session(result.token), result.token, guestToken));
+        return finish(path === '/auth/register' ? 201 : 200, sessionBody(auth.session(result.token), result.token, guestToken));
       }
       if (method === 'POST' && path === '/session/logout') {
         auth.logout(token); res.setHeader('Set-Cookie', cookie(cookieName, '', now()));
-        return send(200, { loggedOut: true });
+        return finish(200, { loggedOut: true });
       }
       if (method === 'DELETE' && path === '/account') {
         const result = await auth.deleteAccount(token, body.password);
-        res.setHeader('Set-Cookie', cookie(cookieName, '', now())); return send(200, result);
+        res.setHeader('Set-Cookie', cookie(cookieName, '', now())); return finish(200, result);
       }
       if (method === 'GET' && path === '/jobs') {
         const rawLimit = url.searchParams.get('limit');
         const pageLimit = rawLimit == null ? 12 : /^\d{1,2}$/.test(rawLimit) ? Number(rawLimit) : NaN;
-        return send(200, feed.list({ viewer, cursor: url.searchParams.get('cursor'), limit: pageLimit }));
+        return finish(200, feed.list({ viewer, cursor: url.searchParams.get('cursor'), limit: pageLimit }));
       }
-      if (method === 'GET' && path === '/companies') return send(200, feed.companies({ q: url.searchParams.get('q') ?? '' }));
-      if (method === 'GET' && /^\/companies\/[^/]+$/.test(path)) return send(200, feed.company(decodePath(path.split('/')[2])));
+      if (method === 'GET' && path === '/companies') return finish(200, feed.companies({ q: url.searchParams.get('q') ?? '' }));
+      if (method === 'GET' && /^\/companies\/[^/]+$/.test(path)) return finish(200, feed.company(decodePath(path.split('/')[2])));
       if (method === 'GET' && path === '/health') {
         const readiness = typeof config.readiness === 'function' ? config.readiness() : { ready: true, runner: { ready: false, identity: null } };
-        return send(readiness.ready ? 200 : 503, { ...readiness, coverage: feed.coverage() });
+        return finish(readiness.ready ? 200 : 503, { ...readiness, coverage: feed.coverage() });
       }
-      if (method === 'GET' && path === '/version') return send(200, {
+      if (method === 'GET' && path === '/version') return finish(200, {
         sourceCommit: config.sourceCommit ?? null, schemaVersion: 1, buildIdentity: config.buildIdentity ?? null,
         runner: (typeof config.readiness === 'function' ? config.readiness().runner : null) ?? { ready: false, identity: null },
         importGeneration: feed.generation(),
       });
       if (!viewer) throw problem('unauthenticated', 401);
-      const ctx = { method, path, url, body, viewer, accountId: viewer.account.id, requestId, db };
+      const idempotencyKey = req.headers['idempotency-key'] ?? null;
+      if (idempotencyKey !== null && (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(idempotencyKey))) throw problem('invalid_input');
+      const ctx = { method, path, url, body, viewer, accountId: viewer.account.id, requestId, db, idempotencyKey };
       if (method === 'GET' && /^\/tasks\/[^/]+$/.test(path)) {
         const task = tasks.get(viewer.account.id, decodePath(path.split('/')[2]));
         if (!task) throw problem('not_found', 404);
@@ -183,11 +186,11 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
           const candidate = await service.taskResult(task, ctx);
           if (candidate !== undefined) { output = candidate; break; }
         }
-        return send(200, tasks.publicView(task, output));
+        return finish(200, tasks.publicView(task, output));
       }
       for (const service of services) {
         const result = await service.route?.(ctx);
-        if (result != null) return send(result.status ?? 200, result.body);
+        if (result != null) return finish(result.status ?? 200, result.body);
       }
       throw problem('not_found', 404);
     } catch (error) {
@@ -197,6 +200,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         send(status, { error: { code: known ? error.code : 'internal_error', message: known ? SAFE_ERRORS.get(error.code) : 'The request could not be completed.', requestId } });
       } else res.destroy();
     } finally {
+      try { afterPrivateTransaction(); } catch { /* Retain unsafe pending state; never clear a foreign marker. */ }
       // Only approved metadata reaches diagnostics; exceptions, URLs, bodies,
       // tokens, usernames and IP addresses never reach this sink.
       try { logger({ requestId, category, status: res.statusCode, durationMs: Math.max(0, now() - started) }); } catch { /* Logging cannot change request behavior. */ }

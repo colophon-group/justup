@@ -103,3 +103,14 @@ test('authentication availability reflects deletion/config gates and wrong delet
   assert.equal(denied.res.headers.get('set-cookie'), null);
   assert.equal((await s.request('/session', { headers: { Cookie: login.cookie } })).body.user.id, 'account-a');
 });
+
+test('feature idempotency comes only from the bounded HTTP header and request cleanup runs after routing', async (t) => {
+  const s = await setup(t); const login = await s.login();
+  const headers = { Origin: ORIGIN, 'X-CSRF-Token': login.body.csrfToken, Cookie: login.cookie, 'Content-Type': 'application/json' };
+  const ok = await s.request('/searches', { method: 'POST', headers: { ...headers, 'Idempotency-Key': 'accept-identity:one' }, body: '{"requestKey":"body-value"}' });
+  assert.equal(ok.res.status, 202); assert.equal(s.calls.at(-1).idempotencyKey, 'accept-identity:one');
+  await s.request('/searches', { method: 'POST', headers, body: '{"requestKey":"body-value"}' });
+  assert.equal(s.calls.at(-1).idempotencyKey, null);
+  const bad = await s.request('/searches', { method: 'POST', headers: { ...headers, 'Idempotency-Key': 'x'.repeat(129) }, body: '{}' });
+  assert.equal(bad.res.status, 400);
+});

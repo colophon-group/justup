@@ -45,3 +45,13 @@ test('deletion and cancellation invalidate running work and public view omits pr
   const next = tasks.enqueue(input()); assert.equal(tasks.cancel('b', next.id), false); assert.equal(tasks.cancel('a', next.id), true);
   assert.equal(tasks.get('a', next.id).payload, null);
 });
+
+test('safe transient task failures report retryable while validation and unknown failures do not', (t) => {
+  const { tasks } = setup(t), task = tasks.enqueue(input());
+  for (const code of ['provider_unavailable', 'provider_down', 'task_timeout', 'timeout', 'rate_limit', 'provider_rate_limit']) {
+    assert.equal(tasks.publicView({ ...task, status: 'failed', errorCode: code }).error.retryable, true);
+  }
+  for (const code of ['invalid_output', 'unsupported_requirements', 'provider_secret_value']) {
+    assert.equal(tasks.publicView({ ...task, status: 'failed', errorCode: code }).error.retryable, false);
+  }
+});

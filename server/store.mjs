@@ -1,5 +1,7 @@
 // Isolated demo SQLite storage and allowlisted imports. Read when changing the
 // snapshot format or its freshness/source-identity rules; never point at production.
+import { lstatSync, chmodSync, existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -89,9 +91,22 @@ function normalizedJob(raw, snapshotAt, verifiedAt) {
   };
   return { job, first, bodyText, textHash };
 }
-export function openStore(path = ':memory:') {
+export function openStore(path = ':memory:', { sharedState = false } = {}) {
+  const mode = sharedState ? 0o660 : 0o600;
+  if (path !== ':memory:') {
+    const directory = lstatSync(dirname(resolve(path)));
+    if (!directory.isDirectory() || directory.isSymbolicLink()
+        || (sharedState && ((directory.mode & 0o7777) !== 0o2770 || process.umask() !== 0o007))) throw new Error('Shared demo storage requires a setgid 02770 directory and umask 0007.');
+    for (const file of [path, `${path}-wal`, `${path}-shm`]) {
+      let info; try { info = lstatSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (!info.isFile() || info.isSymbolicLink()) throw new Error('Unsafe demo storage file.');
+      chmodSync(file, mode);
+    }
+  }
   const db = new DatabaseSync(path);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA max_page_count = 262144;');
+  if (path !== ':memory:') chmodSync(path, mode);
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA max_page_count = 262144;');
+  if (path !== ':memory:') for (const file of [`${path}-wal`, `${path}-shm`]) if (existsSync(file)) chmodSync(file, mode);
   const version = db.prepare('PRAGMA user_version').get().user_version;
   if (version > SCHEMA_VERSION) { db.close(); throw new Error('Unsupported demo database schema.'); }
   db.exec(`
