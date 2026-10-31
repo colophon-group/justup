@@ -16,7 +16,7 @@ Result lists have no footer or appended coverage panel, so reaching an end does 
 
 ## Marking new positions
 
-Use a small white **New** label beside the company name and a narrow white leading edge on the position. The label supplies the meaning; the edge helps scanning. The timestamp continues to mean when the backend first observed the posting.
+Use a small white **New** label beside the company name and a narrow white leading edge on the position. The label supplies the meaning; the edge helps scanning. The timestamp continues to mean when the server first observed the posting.
 
 Newness is relative to the current search, while Viewed belongs to the user and posting across searches. A newly created search starts with its initial result set; live arrivals are marked New. Proposed return-visit behavior is to mark positions delivered since the previous visit, retaining that cohort throughout the current visit. Define and persist the search visit boundary before implementation so reloads and tab changes cannot accidentally clear the cohort or mark all old matches New.
 
@@ -27,7 +27,7 @@ The entrance ends; the marker remains. Do not remove New merely because the anim
 | Interaction | Starting motion | Persistent result |
 | --- | --- | --- |
 | A visible new position | Content settles downward by 4 px over 220 ms, with opacity resolving to 1. Use `cubic-bezier(.2,.7,.3,1)`. The leading edge reveals over 180 ms. | New label and edge stay visible. |
-| An older match during infinite scroll | Use a proposed 450 ms cycle per job. Motion treatment is under review: Dock, Glide, or Ink. Complete the cycle before beginning the next job, including when the next match is already buffered. | Continuous job-by-job disclosure without visible backend page boundaries. |
+| An older match during infinite scroll | Use a proposed 450 ms cycle per job. Motion treatment is under review: Dock, Glide, or Ink. Complete the cycle before beginning the next job, including when the next match is already buffered. | Continuous job-by-job disclosure without visible server page boundaries. |
 | Arrival above the reader | Insert automatically above the viewport and compensate scroll position in the same rendering transaction. Animate no existing row. Update the small “N new ↑” navigation cue without rolling digits or pulsing. | The same position, text selection, and keyboard target remain in place. |
 | Opening a company posting | Change text to the muted brand color over 160 ms; reveal the eye indicator over 120 ms. | Viewed remains muted at the same font weight, size, line wrapping, and row height. |
 | Live connection | Only the small live dot breathes between 0.6 and 1 opacity on a 2.8 s cycle. An optional faint halo expands from the dot. | “Live edition” text stays steady. |
@@ -35,11 +35,11 @@ The entrance ends; the marker remains. Do not remove New merely because the anim
 
 Reserve a small indicator slot for the eye and New label so changing their visibility does not reflow company names or headings. Muting must preserve readable contrast; do not lower the opacity of the entire row. Company-mark opacity can soften while text uses an explicit muted color.
 
-Motion is local and functional. Use no springs, bounce, confetti, full-page fades, flashing rows, or repeated entrance effects on already shown positions. Fresh live arrivals are one update; any visible entrances share a short time window. Infinite scrolling uses its own deliberately paced, job-by-job reveal, described below. Keep the live-dot pulse subtle. The Hiring Wire is the additional continuous motion: a fixed-height text tape moving at roughly 27 px/s, carrying only selected WoW listing signals. A functional looking indicator runs only while matching work is active.
+Motion is local and functional. Use no springs, bounce, confetti, full-page fades, flashing rows, or repeated entrance effects on already shown positions. Fresh live arrivals are one update; any visible entrances share a short time window. Infinite scrolling uses its own deliberately paced, job-by-job reveal, described below. Keep the live-dot pulse subtle. The weekly company-news ribbon (Hiring Wire) is the additional continuous motion: a fixed-height text tape moving at roughly 27 px/s, carrying selected week-over-week changes in listed jobs. A functional looking indicator runs only while matching work is active.
 
 ## Infinite scroll: the reveal is the pacing mechanism
 
-The interface reveals individual jobs as the user scrolls down to them. Start a reveal only when the new row’s slot reaches the visible viewport; never consume or animate queued jobs below the screen. Background fetching may prepare matches without revealing them. Backend collection pages, candidate scan batches, and matching batches never appear as UI pages. A matched page arriving does not dump all its jobs onto the screen. A small ordered queue smooths irregular background loading.
+The interface reveals individual jobs as the user scrolls down to them. Start a reveal only when the new row’s slot reaches the visible viewport; never consume or animate queued jobs below the screen. Background fetching may prepare matches without revealing them. Server collection pages, candidate scan batches and matching batches never appear as pages in the interface. A matched page arriving does not dump all its jobs onto the screen. A small ordered queue smooths irregular background loading.
 
 The animation itself imposes a deliberate consumption interval, including when data is already ready. The current proposed cycle is **450 ms per job**, with 350 ms and 550 ms comparisons available. The next job cannot begin until the current cycle completes and another ordered match is ready. This is purposeful browsing cadence, rather than an animation applied after a whole page was already disclosed.
 
@@ -51,39 +51,39 @@ Three whole-row treatments are under review:
 
 Dock and Glide use `cubic-bezier(.18,.8,.25,1)` for their settling movement. None scans a mask through individual lines of text. Each treatment has the same consumption deadline, ordering, matching states, and reduced-motion pacing.
 
-Fetching and JEV evaluation run alongside the reveal. They can take longer than a cycle: the UI waits for the next real match rather than inventing a position or resetting its animation. Older matches disclosed through scrolling do not receive the live-arrival New label.
+Fetching and the optional extra AI-based matching step run alongside the reveal. They can take longer than a cycle: the interface waits for the next real match rather than inventing a position or resetting its animation. Older matches disclosed through scrolling do not receive the live-arrival New label.
 
 ### Three continuation states
 
 | State | Meaning | Visible behavior |
 | --- | --- | --- |
 | Revealing | At least one match is ready in chronological order. | Reveal one row per cycle. Existing rows keep their position, identity, and focus. |
-| Looking | The matched queue is empty, but candidates remain, a continuation is active, or JEV decisions are pending. | Hold a stable continuation area with **Looking for more matches…** and a quiet indeterminate ink rule. Show no percentage or made-up remaining count. |
+| Looking | The matched queue is empty, but candidates remain, a continuation is active, or extra AI-based matching decisions are pending. | Hold a stable continuation area with **Looking for more matches…** and a quiet indeterminate ink rule. Show no percentage or made-up remaining count. |
 | End | No candidates remain in the eligible range, every pending evaluation has resolved, the matched queue is drained, and the last reveal has completed. | Stop the looking indicator and show **You’ve reached the back page.** Follow it with **No more matches in the last 14 days. Live updates stay on.** Coverage remains limited to the companies we monitor. Keep the company-request action available through the catalogue header. |
 
-An empty filtered backend page is a Looking state, not an End state. Neither a timeout, failed JEV evaluation, scan budget pause, nor disconnection proves exhaustion. If work has stopped, show a truthful paused or retry state with a next action, rather than animating “Looking” indefinitely. A real account access limit requires its explicit access message.
+An empty filtered server page is a Looking state, not an End state. A timeout, failed AI-based matching decision, scan pause or disconnection does not prove there are no more matches. If work has stopped, show a truthful paused or retry state with a next action, rather than animating “Looking” indefinitely. A real account access limit requires its explicit access message.
 
 ### Buffering, work limits, and ordering
 
 Proposed initial limits are a small queue of up to six ready matches, a refill trigger around two remaining matches, and at most one continuation request in flight for the current search revision. Final values require latency and cost measurement. Do not preload the whole search. A bounded candidate scan can yield its cursor when matching is expensive; resuming does not restart the scan or re-evaluate completed candidates.
 
-Work refills the buffer according to actual consumption and proximity to the loaded end. Stop consuming new rows and refilling when the user leaves that area, changes the search, or backgrounds the tab. Finish the current visible row so no half-revealed text remains. Do not turn the loader's animation loop into repeated requests. Each continuation has a backend work budget as well as the deliberate frontend reveal cadence.
+Work refills the buffer according to actual consumption and proximity to the loaded end. Stop consuming new rows and refilling when the user leaves that area, changes the search, or backgrounds the tab. Finish the current visible row so no half-revealed text remains. Do not turn the loader's animation loop into repeated requests. Each continuation has a server work limit as well as the deliberate browser reveal cadence.
 
-JEV may complete out of order. Emit matches only when all more-recent candidates have been resolved, keeping a stable first-observed timestamp and posting-identity ordering. Buffer later accepted candidates behind that decision boundary. This preserves newest-first order without inserting a late decision into the middle of rows someone is reading.
+Extra AI-based matching decisions may finish out of order. Emit matches only when all more-recent candidates have been resolved, keeping a stable first-observed timestamp and posting-identity ordering. Buffer later accepted candidates behind that decision boundary. This preserves newest-first order without inserting a late decision into the middle of rows someone is reading.
 
 Retain existing rows as new rows are appended below them. Do not animate the height of the existing list, apply scroll resistance, or hijack wheel and touch input. If a user focuses a partly revealed row, complete its visual reveal immediately so the target is visible; the cadence deadline for disclosing the next job remains in force. Do not let the pagination loader become a scroll anchor that pulls the reader downward.
 
 ### Reduced motion keeps the same cadence
 
-With reduced motion, a ready job appears without a wipe, translation, or fade, and the next job still waits for the same per-job cycle deadline. The looking indicator is static with the same status text. Reduced motion changes the visual treatment, while preserving the designed consumption pacing and backend work limits.
+With reduced motion, a ready job appears without a wipe, translation, or fade, and the next job still waits for the same per-job cycle deadline. The looking indicator is static with the same status text. Reduced motion changes the visual treatment, while preserving the designed consumption pacing and server work limits.
 
-The infinite-scroll study simulates continued proximity to the loaded end. Its three scenarios show buffered matching jobs, a zero-yield candidate batch followed by more JEV matches, and confirmed exhaustion. It does not make real requests.
+The infinite-scroll study simulates continued proximity to the loaded end. Its three scenarios show buffered matching jobs, a candidate batch with no matches followed by more AI-matched jobs, and confirmed exhaustion. It does not make real requests.
 
 ## Protecting reading and interaction
 
 New matching positions are added automatically in first-observed order. The count is a navigation shortcut to positions already inserted; it is never an “apply updates” gate.
 
-When results are the reader’s current context, retain the visible position’s offset from the viewport. Preserve existing DOM nodes, focus, text selection, and pointer targets. While someone edits the search or reads the header, keep that field or header stable instead of scrolling the document to maintain a result below it. Do not auto-scroll to the newest position.
+When results are the reader’s current context, retain the visible position’s offset from the viewport. Preserve the same browser page elements (DOM nodes), focus, text selection and pointer targets. While someone edits the search or reads the header, keep that field or header stable instead of scrolling the document to maintain a result below it. Do not auto-scroll to the newest position.
 
 Avoid changing the list during an active drag, touch scroll, or text selection. Coalesce events during the gesture and apply them once it settles, with the same reading anchor. Do not wait for a button click. Events for a superseded search revision cannot appear in the edited search.
 
@@ -120,4 +120,4 @@ The first-search screen has no result reveal or live insertion until submission.
 
 ## Hiring Wire
 
-Keep a fixed-height strip under the masthead, with continuously moving company links, short headlines, percentages and small sparklines. The underlying comparison is WoW, with no visible title, WoW label or contextual panel. A visual duplicate enables seamless looping; it is hidden from assistive technology and excluded from keyboard order. Use no pause controls. Keep motion running through pointer hover and clicks. Hold it while a dialog is open or the document is hidden. Keyboard navigation switches to a static, horizontally scrollable view so every focused link stays visible. Reduced motion freezes the tape and permits manual horizontal scrolling, without losing any stories. Avoid aria-live announcements of the repeating text.
+Keep a fixed-height strip under the masthead, with continuously moving company links, short headlines, percentages and small trend charts. Each change compares the current seven days with the previous seven days, with no visible title, comparison label or contextual panel. A visual duplicate enables seamless looping; it is hidden from assistive technology and excluded from keyboard order. Use no pause controls. Keep motion running through pointer hover and clicks. Hold it while a dialog is open or the document is hidden. Keyboard navigation switches to a static, horizontally scrollable view so every focused link stays visible. Reduced motion freezes the tape and permits manual horizontal scrolling, without losing any stories. Avoid aria-live announcements of the repeating text.
