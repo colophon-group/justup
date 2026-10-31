@@ -188,11 +188,23 @@ async function fetchResults(state) {
   } catch (error) { if (validFeed(state)) state.error = error; }
   finally { if (validFeed(state)) { state.loading = false; renderFeedStatus(); maybeAdvance(); } }
 }
+function salaryText(salary) {
+  if (!salary || typeof salary !== 'object') return '';
+  const validAmount = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const min = validAmount(salary.min) ? salary.min : null, max = validAmount(salary.max) ? salary.max : null;
+  if (min === null && max === null) return '';
+  const format = value => new Intl.NumberFormat('en', { maximumFractionDigits: 20 }).format(value);
+  const amount = min !== null && max !== null ? min === max ? format(min) : `${format(min)}–${format(max)}` : format(min ?? max);
+  const currency = typeof salary.currency === 'string' ? salary.currency.trim() : '';
+  const period = typeof salary.period === 'string' ? salary.period.trim() : '';
+  const bound = min === null ? 'Up to ' : max === null ? 'From ' : '';
+  return `${bound}${currency ? currency + ' ' : ''}${amount}${period ? ' / ' + period : ''}`;
+}
 function appendJob(job, animated) {
-  const company = job.company;
+  const company = job.company, pay = salaryText(job.salary);
   const facts = [job.locations?.map(location => location.name).filter(Boolean).join(', '), [...new Set((job.locations || []).map(location => location.workplace).filter(Boolean))].join(', '), job.employmentTypes?.map(value => value.replaceAll('_', ' ')).join(', ')].filter(Boolean).map((value, index) => `<span>${index === 0 ? '<span aria-hidden="true">⌖ </span>' : ''}${escapeHTML(value)}</span>`).join('');
   const slot = document.createElement('div'); slot.className = 'job-slot';
-  slot.innerHTML = `<article class="job list-row clickable-row${job.viewed ? ' viewed' : ''}${job.isNew ? ' is-new' : ''}" data-job="${escapeHTML(job.id)}"><div class="job-age">${job.isNew ? '<span class="new-badge">New</span>' : ''}<time datetime="${escapeHTML(job.firstObserved)}" title="First observed ${escapeHTML(dateText(job.firstObserved))}">${ageText(job.firstObserved)}</time></div><div class="job-story"><h2 class="job-title"><a class="posting-link row-link" href="${escapeHTML(sourceURL(job.sourceUrl))}" target="_blank" rel="noopener noreferrer">${escapeHTML(job.title)}</a></h2><div class="job-facts">${facts}</div>${job.salary ? `<span class="job-salary"><span aria-hidden="true">¤ </span>${escapeHTML(typeof job.salary === 'string' ? job.salary : job.salary.text || '')}</span>` : ''}</div><div class="job-employer"><a class="job-company" href="#company/${encodeURIComponent(company.id)}">${companyMark(company)}<span>${escapeHTML(company.name)}</span></a><p class="job-source">Direct from employer</p></div><span class="open-posting" aria-hidden="true">↗</span></article>`;
+  slot.innerHTML = `<article class="job list-row clickable-row${job.viewed ? ' viewed' : ''}${job.isNew ? ' is-new' : ''}" data-job="${escapeHTML(job.id)}"><div class="job-age">${job.isNew ? '<span class="new-badge">New</span>' : ''}<time datetime="${escapeHTML(job.firstObserved)}" title="First observed ${escapeHTML(dateText(job.firstObserved))}">${ageText(job.firstObserved)}</time></div><div class="job-story"><h2 class="job-title"><a class="posting-link row-link" href="${escapeHTML(sourceURL(job.sourceUrl))}" target="_blank" rel="noopener noreferrer">${escapeHTML(job.title)}</a></h2><div class="job-facts">${facts}</div>${pay ? `<span class="job-salary"><span aria-hidden="true">¤ </span>${escapeHTML(pay)}</span>` : ''}</div><div class="job-employer"><a class="job-company" href="#company/${encodeURIComponent(company.id)}">${companyMark(company)}<span>${escapeHTML(company.name)}</span></a><p class="job-source">Direct from employer</p></div><span class="open-posting" aria-hidden="true">↗</span></article>`;
   const row = slot.firstElementChild;
   row.addEventListener('click', event => {
     if (event.target.closest('.job-company')) return;

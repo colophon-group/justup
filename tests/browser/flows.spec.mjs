@@ -178,3 +178,21 @@ test('logout and deletion mutations send the JSON object required by the HTTP bo
     const call = calls.find(item => item.key === key); expect(call, key).toBeTruthy(); expect(call.headers['content-type']).toBe('application/json'); expect(call.body).toEqual({}); expect(call.headers['x-csrf-token']).toBe('test-only-csrf');
   }
 });
+
+test('reported salary ranges retain their currency, bounds and disclosed period while unknown pay is omitted', async ({ page }) => {
+  const cases = [
+    { salary: { min: 80000, max: 110000, currency: 'USD', period: 'year' }, expected: 'USD 80,000–110,000 / year' },
+    { salary: { min: 6000, max: null, currency: 'CHF', period: 'month' }, expected: 'From CHF 6,000 / month' },
+    { salary: { min: null, max: 45.5, currency: 'EUR', period: 'hour' }, expected: 'Up to EUR 45.5 / hour' },
+    { salary: { min: 300000, max: null, currency: 'JPY', period: null }, expected: 'From JPY 300,000' },
+    { salary: { min: 400, max: 500, currency: 'GBP', period: 'fortnight' }, expected: 'GBP 400–500 / fortnight' },
+    { salary: null, expected: null },
+    { salary: { min: null, max: null, currency: 'USD', period: 'year' }, expected: null },
+  ];
+  await page.setViewportSize({ width: 1280, height: 2400 }); await mockApi(page, { ...saved, 'GET /searches/search-1/results': completed(cases.map((item, index) => ({ ...job(index), salary: item.salary }))) }); await page.goto('/');
+  for (const [index, item] of cases.entries()) {
+    const row = page.locator(`[data-job="job-${index}"]`); await expect(row).toBeVisible();
+    if (item.expected) await expect(row.locator('.job-salary')).toHaveText('¤ ' + item.expected);
+    else { await expect(row.locator('.job-salary')).toHaveCount(0); await expect(row).not.toContainText('Salary not listed'); }
+  }
+});
