@@ -1,8 +1,8 @@
-# JustUp development and release process
+# Justup development and release process
 
 Status: proposed starting policy, 31 October 2026
 
-This process applies to JustUp. Keep the policy small enough that every check has a clear purpose and owner. Add guidelines when a real review failure or recurring defect justifies one.
+This process applies to Justup. Keep the policy small enough that every check has a clear purpose and owner. Add guidelines when a real review failure or recurring defect justifies one.
 
 ## 1. Branch and release contract
 
@@ -18,7 +18,7 @@ An urgent hotfix starts from `main`, runs the release gate for the affected cand
 
 Release PRs use a merge commit, with current `main` an ancestor of the candidate. Record the candidate's Git tree hash. Before production promotion, compare the merged `main` tree hash with the verified candidate's tree hash; a mismatch blocks promotion and requires a new candidate and gate. The merge commit SHA may differ while its source tree is identical. This rule keeps previewed artifacts tied to the released source.
 
-For JustUp's planned Cloudflare frontend and Hetzner API/runner, the release candidate preview must include compatible versions of **all three**, an isolated database and non-production credentials. Verify the immutable preview deployment and its API/runner artifact identities. After promotion, smoke-test production and retain the prior deployable artifacts and a database recovery path. A frontend-only preview cannot establish that the service works.
+For Justup's planned Cloudflare frontend and Hetzner API/runner, the release candidate preview must include compatible versions of **all three**, an isolated database and non-production credentials. Verify the immutable preview deployment and its API/runner artifact identities. After promotion, smoke-test production and retain the prior deployable artifacts and a database recovery path. A frontend-only preview cannot establish that the service works.
 
 ## 2. Contribution quality
 
@@ -98,12 +98,12 @@ The production deploy is an explicit release action, not an automatic build on e
 
 Before the first live release, decide who may merge into `dev` and `main`, who owns each suite, and who can approve production promotion. Require PRs, current green checks and resolved review comments. Code owners or a second reviewer should inspect security, billing, migration and deploy changes. Restrict CI credentials to the minimum scope and keep preview and production secrets separate.
 
-The current private GitHub repository does not expose branch-rule enforcement under the account's present plan (the rules API returns a plan restriction). Until enforcement is available, the release owner records the exact candidate SHA, check links and approval in the release PR and performs the merge manually. Treat this as a launch prerequisite to resolve, not as an already enforced safeguard. Do not create an always-green placeholder CI check.
+The public GitHub repository has no branch protection or required checks configured yet. Until they are implemented, the release owner records the exact candidate SHA, check links and approval in the release PR and performs the merge manually. Treat protection and required checks as launch prerequisites, not as already enforced safeguards. Do not create an always-green placeholder CI check.
 
 ## 7. Adoption
 
 1. **Now:** agree on this policy, use the PR checklist, define the initial suite manifest and critical journeys when the application code is scaffolded.
-2. **Before JustUp launch:** implement the CI selector and always-running decision check, release preview, immutable artifact promotion, recovery test and available branch protections. Set AI and production-health pass thresholds. Measure and publish baseline CI duration and release verification time.
+2. **Before Justup launch:** implement the CI selector and always-running decision check, release preview, immutable artifact promotion, recovery test and available branch protections. Set AI and production-health pass thresholds. Measure and publish baseline CI duration and release verification time.
 
 ## References
 

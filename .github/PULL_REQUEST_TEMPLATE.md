@@ -4,7 +4,7 @@ What changes, and why? Link the issue or decision when one exists.
 
 ## Quality checklist
 
-Check every item. After the dash, replace `Applied` with `N/A` where appropriate and replace the placeholder with one short explanation or evidence. See the [quality and testing guidelines](https://github.com/colophon-group/fresh-jobs-ui/blob/main/docs/development-process.md).
+Check every item. After the dash, replace `Applied` with `N/A` where appropriate and replace the placeholder with one short explanation or evidence. See the [quality and testing guidelines](https://github.com/colophon-group/justup/blob/main/docs/development-process.md).
 
 - [ ] Q1 Focus and maintainability — Applied: <explanation or evidence>
 - [ ] Q2 Contracts and failure behavior — Applied: <explanation or evidence>
