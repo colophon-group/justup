@@ -1,11 +1,12 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { errorText } from "../../api/client.ts";
 import type { ApiClient } from "../../api/client.ts";
-import type { Session } from "../../api/types.ts";
+import type { CompanyRequestPrefill, Session } from "../../api/types.ts";
 import { Dialog } from "../../shared/Dialog.tsx";
 import { LandingOverview } from "./LandingOverview.tsx";
 import { ResultFeed } from "./ResultFeed.tsx";
 import { TypingExample } from "./TypingExample.tsx";
+import { SearchWarning } from "./SearchWarning.tsx";
 import { useWorkspace } from "./useWorkspace.ts";
 interface Props {
   client: ApiClient;
@@ -14,6 +15,7 @@ interface Props {
   reducedMotion: boolean;
   onSignIn: (reason?: string) => void;
   dialogOpen: boolean;
+  onCompanyRequest: (prefill: CompanyRequestPrefill) => void;
 }
 export function SearchWorkspace({
   client,
@@ -22,6 +24,7 @@ export function SearchWorkspace({
   reducedMotion,
   onSignIn,
   dialogOpen,
+  onCompanyRequest,
 }: Props) {
   const workspace = useWorkspace(client, session, () =>
     onSignIn(
@@ -227,7 +230,11 @@ export function SearchWorkspace({
                     </p>
                   ))}
                 {state.proposal.warnings.map((warning, index) => (
-                  <p key={index}>{warning.message}</p>
+                  <SearchWarning
+                    key={index}
+                    warning={warning}
+                    onCompanyRequest={onCompanyRequest}
+                  />
                 ))}
                 <button
                   className="button outline"
@@ -252,9 +259,11 @@ export function SearchWorkspace({
                 </p>
               ))}
             {search?.warnings.map((warning, index) => (
-              <p className="model-warning" key={index}>
-                {warning.message}
-              </p>
+              <SearchWarning
+                key={index}
+                warning={warning}
+                onCompanyRequest={onCompanyRequest}
+              />
             ))}
           </div>
         </div>

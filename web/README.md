@@ -44,6 +44,8 @@ Account, query, draft and request state remains in memory or on the server, neve
 
 The account form requires reviewed same-origin policy URLs/version and explicit server login/registration availability. Invalid credentials do not revoke a valid session. Passwords and invitation fields clear when submitted or dismissed; account deletion requires a password and confirmed server completion. Cancellation prevents a late operation from changing another account's interface.
 
+Search warnings can offer an editable company-request lead. Opening it sends no request; only form submission starts discovery. Unverified imported results are cleared and paused with the source reason and a manual retry, rather than reported as a completed empty search.
+
 Company requests use stable request keys and server task identities. A network interruption or polling timeout can resume the same pending work. Clarification and exact candidate confirmation remain explicit; a recorded identity never claims that career-page collection has started.
 
 ## Verify behavior

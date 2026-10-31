@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClient, errorText, isAbortError } from "../api/client.ts";
-import type { Session } from "../api/types.ts";
+import type { CompanyRequestPrefill, Session } from "../api/types.ts";
 import { AccountControls } from "../features/account/AccountControls.tsx";
 import type { AccountDialog } from "../features/account/AccountControls.tsx";
 import { CompaniesPage } from "../features/companies/CompaniesPage.tsx";
@@ -18,6 +18,13 @@ export function App() {
     [notice, setNotice] = useState("Connecting to the edition…"),
     [connecting, setConnecting] = useState(true),
     [epoch, setEpoch] = useState(0);
+  const [companyPrefill, setCompanyPrefill] =
+    useState<CompanyRequestPrefill | null>(null);
+  const consumePrefill = useCallback(() => setCompanyPrefill(null), []);
+  const requestCompany = useCallback((prefill: CompanyRequestPrefill) => {
+    setCompanyPrefill(prefill);
+    location.hash = "request";
+  }, []);
   const [dialog, setDialog] = useState<AccountDialog>(null),
     [signInReason, setSignInReason] = useState("Sign in to save your edition.");
   const [reducedMotion, setReducedMotion] = useState(
@@ -38,6 +45,7 @@ export function App() {
     client.setSession(null);
     sessionRef.current = null;
     setSession(null);
+    setCompanyPrefill(null);
     setEpoch((value) => value + 1);
     setDialog(null);
   }, [client]);
@@ -64,8 +72,10 @@ export function App() {
       if (
         sessionRef.current?.user &&
         sessionRef.current.user.id !== next.user?.id
-      )
+      ) {
         setEpoch((value) => value + 1);
+        setCompanyPrefill(null);
+      }
       sessionRef.current = next;
       client.setSession(next);
       setSession(next);
@@ -226,6 +236,7 @@ export function App() {
             reducedMotion={reducedMotion}
             onSignIn={openSignIn}
             dialogOpen={dialog !== null}
+            onCompanyRequest={requestCompany}
           />
           <CompaniesPage
             key={`companies-${epoch}`}
@@ -247,6 +258,8 @@ export function App() {
             active={route.page === "request"}
             onSignIn={openSignIn}
             accountEpoch={epoch}
+            prefill={companyPrefill}
+            onPrefillConsumed={consumePrefill}
           />
           {route.page === "invalid" ? (
             <section>

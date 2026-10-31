@@ -1,10 +1,10 @@
 // Keep task identity and idempotency together so a pending lookup can resume safely.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type ApiClient, errorText, isAbortError } from '../../api/client';
 import { pollTask, TaskFailure } from '../../api/tasks';
 import type { CompanyRequest, RequestSubmission } from '../../api/types';
 
-interface PendingLookup { input: string; key: string; submission?: RequestSubmission }
+interface PendingLookup { input: string; scope: string | null; key: string; submission?: RequestSubmission }
 export function useCompanyRequest(client: ApiClient, active: boolean, accountEpoch: number) {
   const [request, setRequest] = useState<CompanyRequest | null>(null);
   const [error, setError] = useState('');
@@ -26,13 +26,14 @@ export function useCompanyRequest(client: ApiClient, active: boolean, accountEpo
     const id = ++generation.current; setBusy(true); setError('');
     return { abort, valid: () => mounted.current && id === generation.current && !abort.signal.aborted };
   }
-  async function resolveLookup(input: string) {
+  async function resolveLookup(input: string, scope: string | null = null) {
     if (!input.trim()) return;
     const operation = begin();
-    if (pending.current?.input !== input) pending.current = { input, key: crypto.randomUUID() };
+    if (pending.current?.input !== input || pending.current.scope !== scope)
+      pending.current = { input, scope, key: crypto.randomUUID() };
     const lookup = pending.current;
     try {
-      const submission = lookup.submission ?? await client.createCompanyRequest({ input, requestKey: lookup.key }, operation.abort.signal);
+      const submission = lookup.submission ?? await client.createCompanyRequest({ input, ...(scope === null ? {} : { scope }), requestKey: lookup.key }, operation.abort.signal);
       if (!operation.valid()) return;
       lookup.submission = submission; setRequest(submission.request);
       if (!submission.task) { pending.current = null; return; }
@@ -47,7 +48,7 @@ export function useCompanyRequest(client: ApiClient, active: boolean, accountEpo
     } finally { if (operation.valid()) setBusy(false); }
   }
   async function refresh() {
-    if (pending.current) { await resolveLookup(pending.current.input); return; }
+    if (pending.current) { await resolveLookup(pending.current.input, pending.current.scope); return; }
     if (!request) return;
     const current = request, operation = begin();
     try {
@@ -69,10 +70,10 @@ export function useCompanyRequest(client: ApiClient, active: boolean, accountEpo
     } catch (failure) { if (operation.valid() && !isAbortError(failure)) setError(errorText(failure)); }
     finally { if (operation.valid()) setBusy(false); }
   }
-  function reset() {
+  const reset = useCallback(() => {
     generation.current++; controller.current?.abort(); pending.current = null; acceptance.current = null;
     setRequest(null); setError(''); setBusy(false);
-  }
+  }, []);
   async function reject() {
     if (!request) { reset(); return; }
     const operation = begin();

@@ -8,7 +8,9 @@ interface Feed {
   jobs: Job[];
   continuation: ResultPage["continuation"];
   ai: ResultPage["ai"];
-  hidden?: ResultPage["hidden"];
+  hidden: ResultPage["hidden"];
+  coverage: ResultPage["coverage"];
+  bufferVersion: number;
   loading: boolean;
   error: string | null;
 }
@@ -17,6 +19,9 @@ const emptyFeed = (key: string): Feed => ({
   jobs: [],
   continuation: { state: "open", cursor: null, retryAfterMs: null },
   ai: { status: "not_required" },
+  hidden: undefined,
+  coverage: undefined,
+  bufferVersion: 0,
   loading: false,
   error: null,
 });
@@ -61,6 +66,33 @@ export function useFeed(
           throw new Error(
             "The service returned results for an unexpected search revision. Refresh to continue.",
           );
+        const unavailable =
+          page.coverage?.stale === true ||
+          page.coverage?.state === "import_unavailable";
+        if (unavailable) {
+          seenIds.current.clear();
+          seenCursors.current.clear();
+          setFeed((current) =>
+            current.key === key
+              ? {
+                  ...current,
+                  jobs: [],
+                  hidden: undefined,
+                  coverage: page.coverage,
+                  bufferVersion: current.bufferVersion + 1,
+                  continuation: {
+                    ...page.continuation,
+                    state: "paused",
+                    cursor: null,
+                  },
+                  ai: page.ai,
+                  loading: false,
+                  error: null,
+                }
+              : current,
+          );
+          return;
+        }
         const next = page.continuation.cursor;
         if (
           next &&
@@ -83,7 +115,8 @@ export function useFeed(
                 jobs: [...current.jobs, ...fresh],
                 continuation: page.continuation,
                 ai: page.ai,
-                ...(page.hidden ? { hidden: page.hidden } : {}),
+                hidden: page.hidden,
+                coverage: page.coverage,
                 loading: false,
                 error: null,
               }
