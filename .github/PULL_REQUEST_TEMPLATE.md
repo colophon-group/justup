@@ -22,6 +22,10 @@ Check every item. After the dash, replace `Applied` with `N/A` where appropriate
 
 Name added or changed tests, their suites and the failure or edge case they cover. List commands, CI checks, preview URL or manual steps used. State any verification that remains for the release gate.
 
+## Prerelease preview (release PRs only)
+
+Record the candidate SHA, `main` base OID and tree hash, immutable preview URL and deployment IDs, frontend/API/runner artifact digests, `Preview / verified` report, and release-owner review. Ordinary PRs may remove this section.
+
 ## Release impact
 
 Note migrations, flags, deployment order, rollback steps or monitoring changes. Write `None` with a reason if none apply.

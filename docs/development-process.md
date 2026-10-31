@@ -49,7 +49,7 @@ Each PR also completes the four testing guidelines below. For a change with no a
 
 Use table-driven cases when several inputs exercise the same invariant. Prefer small fixtures with only the facts a test needs; avoid broad snapshots of rendered pages or provider responses unless the snapshot itself is the contract. Name tests by input condition and expected outcome so failures identify the broken behavior.
 
-Prioritize integration cases where boundaries create risk: search revisions and stale responses, entitlement changes, SSE reconnect, idempotent billing and company requests, AI-decision invalidation, and stored-state migrations across old and new API/runner versions. Keep a small browser set for the critical user journeys; do not duplicate every unit scenario in a browser. Test data and fixtures are owned alongside their suites, with changes to shared fixtures widening CI selection.
+Prioritize integration cases where boundaries create risk: search revisions and stale responses, entitlement changes, SSE reconnect, idempotent billing and company requests, AI-decision invalidation, and stored-state migrations across old and new API/runner versions. Keep a small browser set for the critical user journeys; do not duplicate every unit scenario in a browser. Start that suite with Playwright for the new web application; Selenium is also viable if a concrete browser or team need warrants it. Use semantic selectors and observable outcomes rather than sleeps or broad page snapshots. Test data and fixtures are owned alongside their suites, with changes to shared fixtures widening CI selection.
 
 Every suite has an owner, purpose, expected runtime and CI lane. Track failures and duration. Quarantine a flaky test only with an owner, issue, expiry and replacement signal during quarantine; fix or delete it before expiry. A removed test must follow removed behavior or be replaced by evidence at a better level. Review test additions that materially increase suite time or repeat an existing invariant.
 
@@ -67,13 +67,32 @@ Define AI evaluation pass/fail thresholds from representative baselines before t
 
 The release PR from the frozen candidate to `main` must record a named release owner, changelog, migration and rollback steps, feature flags, known limitations and candidate SHA. Its gate is:
 
-1. Full static, build, unit, integration, browser, migration and AI evaluation suites pass on the exact candidate with the current `main` base.
-2. Deploy the candidate's versioned frontend, API and runner artifacts to an isolated preview. Record immutable deployment URLs and artifact digests.
-3. Run scripted critical journeys against that preview: sign-in and entitlement, search planning and result correctness, AI narrowing and honest failure states, SSE reconnect, company request, Hiring Wire, billing callback, and data handoff where relevant. Verify both an ordinary and a failure path. Keep the journey set small and expand it only when a release escapes with an uncovered failure.
+1. Full static, build, unit, contract, integration, migration and AI evaluation suites pass on the exact candidate with the current `main` base. The browser suite runs once against the deployed preview in step 3.
+2. Build the frontend, API and runner once; deploy those versioned artifacts to an isolated preview. Record the exact candidate SHA, current `main` base OID, tree hash, immutable frontend deployment URL and artifact digests.
+3. Run the automated preview gate described below. Verify both ordinary and failure paths, then attach its report to the release PR.
 4. Confirm backups, forward-compatible migrations, rollback steps, monitoring and alert readiness. Rehearse a restore/rollback before the first live release and after material data-contract changes.
-5. Merge only the verified candidate. Verify the merged `main` tree hash matches the candidate, tag the exact `main` commit, promote the same artifacts, and run production smoke checks. Watch error rate, latency, queue lag and business-critical results for a defined observation window. Define observation thresholds before launch; roll back or disable a feature if the release fails them.
+5. Immediately before merging, compare the candidate SHA and `main` base OID with the preview report; rerun the gate if either changed. Verify the merged `main` tree hash matches the candidate, tag the exact `main` commit, deploy the retained identical artifacts, and run production smoke checks. Watch error rate, latency, queue lag and business-critical results for a defined observation window. Define observation thresholds before launch; roll back or disable a feature if the release fails them.
 
-The production deploy should be triggered by an explicit promotion of the tested release, not an automatic deploy of every `main` push. If the hosting integration cannot preserve artifact identity, the release workflow must prove source and build identity and rerun verification after any rebuild.
+### Automated prerelease preview gate
+
+The release PR gets one `Preview / verified` result tied to its exact candidate SHA and `main` base OID. Unprivileged jobs build and test the candidate; a trusted deploy job uploads their recorded artifacts without running candidate-supplied scripts. It deploys a release-specific preview of the Cloudflare frontend, Hetzner API and runner, with an isolated database/queue, seeded test data and preview-only credentials. Run one candidate at a time if preview infrastructure is shared; never let a later deployment change the backend behind an earlier tested URL. Keep deployment credentials out of ordinary PR jobs and never execute unreviewed PR workflow code with production secrets.
+
+After deployment, CI waits for readiness and confirms the frontend deployment ID, API version, runner version, schema version and artifact digests match the candidate manifest. Test the immutable deployment URL, not a branch alias. Preview routes are protected from public access and indexing; fixtures and callbacks cannot send real email, charge real payment methods or modify production data.
+
+Run a small Playwright suite through that URL for user-visible, cross-service behavior. Use API/worker checks for the deeper state and failure permutations that a browser would make slow or obscure. Start with these release-blocking checks:
+
+| Check | Primary level | Observable proof |
+| --- | --- | --- |
+| Account and access | Browser + API | Visitor and paid journeys show the right data; trial and expired states and protected API responses enforce entitlement. |
+| Search | Browser + API | A query becomes the expected criteria and fresh results; an invalid normalization leaves the prior search intact. |
+| AI narrowing | Browser + API | One successful and one honest failure journey render correctly; API checks distinguish rejected, insufficient-evidence and provider-failure states. |
+| Live results | Browser + API | SSE arrival and reconnect work through Cloudflare; API checks reject duplicates and stale revisions. |
+| Background work | Worker/API + browser result | A synthetic runner task completes once; company request deduplication and a published Hiring Wire edition are visible. |
+| Billing and data | API/migration + browser result | A signed sandbox callback and replay produce one entitlement change; the browser reflects it and migration of representative prior state succeeds. |
+
+Use deterministic provider fixtures for broad journeys and a bounded real-provider contract check where that provider is required for release. Run the browser smoke set in desktop Chromium and one mobile browser profile on release; add more browsers only for a supported compatibility promise or a demonstrated defect. Assertions check behavior and state, with screenshots or traces retained for diagnosis. Set test and readiness timeouts. The gate fails on a missing deployment, identity mismatch, failed journey, unavailable required provider, or missing result. Publish a concise report with the candidate SHA, base OID, deployment IDs, digests, test counts and sanitized failure traces. Keep a successful preview available for release-owner review, then destroy it after the release decision. On failed or cancelled runs, an always-run finalizer captures diagnostics and cleans up. Enforce an independent expiry for abandoned previews; alert the release owner and block another candidate if cleanup fails.
+
+The production deploy is an explicit release action, not an automatic build on every `main` push. Same-byte frontend deployment requires runtime configuration or stable relative routes for API/auth origins and environment-specific public keys. This is a launch prerequisite: preview-specific values embedded at build time invalidate the tested artifact and block promotion until the deployment contract is fixed and reverified. If Cloudflare Pages is chosen, CI can use Wrangler Direct Upload to publish the retained prebuilt frontend bytes as a **new** production deployment; disable automatic production builds in a Git-integrated Pages project. A Pages preview cannot itself be promoted or used as a production rollback target. Verify the production asset hash and backend digests before smoke testing. If another hosting path rebuilds artifacts, prove source and output identity and repeat verification after any mismatch.
 
 ## 6. Ownership and enforcement
 
@@ -89,5 +108,6 @@ The current private GitHub repository does not expose branch-rule enforcement un
 ## References
 
 - [GitHub required-check troubleshooting](https://docs.github.com/en/enterprise-cloud@latest/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks) and [protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
-- [Cloudflare Pages preview deployments](https://developers.cloudflare.com/pages/configuration/preview-deployments/) and [deployment controls](https://developers.cloudflare.com/api/resources/pages/index.html).
+- [Cloudflare Pages preview deployments](https://developers.cloudflare.com/pages/configuration/preview-deployments/), [CI Direct Upload](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/) and [rollback limits](https://developers.cloudflare.com/pages/configuration/rollbacks/).
 - [GitHub deployment environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
+- [Playwright CI](https://playwright.dev/docs/ci) and [trace viewer](https://playwright.dev/docs/trace-viewer/).
