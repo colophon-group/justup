@@ -11,21 +11,23 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+import stat
 import sys
 import tarfile
 
 NODE_VERSION = '24.22.2'
 NODE_ARCHIVE_SHA256 = 'eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8'
-CODEX_VERSION = '0.143.0'
+CODEX_VERSION = '0.159.2'
 CODEX_TARGET = 'aarch64-unknown-linux-musl'
-CODEX_ARCHIVE_SHA256 = '2f030c213f48545198e1268b00bad60a8f33c511bc26ea4a11f10266819e79bf'
-CODEX_ARCHIVE_INTEGRITY = 'sha512-1TMx1a/YBEY0SBhPGn8z9HjOpaDssw+WJiIi/+r0CB5uZf6qnALN02TrZTZl2PSUI8olnBf/VccjnwVCrzR38w=='
+CODEX_ARCHIVE_SHA256 = '1c4756c2f67f1310ffb03234d61d540ad85916cef5383e46e0e7851f1721c142'
+CODEX_ARCHIVE_INTEGRITY = 'sha512-Pm0W2PnFeTEqPx+AOIwgOVB4dBtY24cuD0tx1hjCor60CbSAT7WBPZVNUINSrTCDrMndvQC67p71ZEz+gmPPkA=='
+MAX_CODEX_ARCHIVE_BYTES = 192 * 1024 ** 2  # Off-host input only; bundle/host ceilings stay unchanged.
 CODEX_ENTRYPOINT = 'runtime/codex/bin/codex'
 CODEX_FILES = {
-    CODEX_ENTRYPOINT: '4a993c6bf8202ebca2272ec49b51947aab23941f763e7697ba2a5addc5948ad3',
+    CODEX_ENTRYPOINT: '113aa5d5952a6fd3950a88323219747d0c91978ebee948509a540c8a460e59a3',
     'runtime/codex/codex-resources/bwrap': 'c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4',
-    'runtime/codex/codex-package.json': 'eb21843e9ad49ea809f9aa9250051ba8c8b14551513d2578c8ac5a4458fe97b9',
-    'runtime/codex/package.json': 'aebf98ce680bd723a8fb01286a25caa10c6604adf088ff7239eb4da1d482ecd4',
+    'runtime/codex/codex-package.json': 'd408845280e8ffe021b53343eb51aeda5ce641b851682be2362c2ecf5e306da0',
+    'runtime/codex/package.json': 'dd308d68cf5659e804b7409cb4851150ac58d4498f03a979446c22c1d22023f6',
     'runtime/codex/LICENSE': 'd17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc',
 }
 EXECUTABLES = {'runtime/bin/node', CODEX_ENTRYPOINT, 'runtime/codex/codex-resources/bwrap'}
@@ -50,12 +52,28 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
+def read_host_plan(base):
+    """Read non-secret root-owned installation identity; never take it from caller JSON."""
+    path = Path(base) / '.preview-install.json'
+    meta = path.lstat()
+    if (path.resolve(strict=True) != path or not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0
+            or meta.st_nlink != 1 or meta.st_mode & 0o022 or meta.st_size > 4096):
+        raise ValueError('Installed host plan identity is unavailable or unsafe.')
+    value = json.loads(path.read_text())
+    if (not isinstance(value, dict) or set(value) != {'formatVersion', 'planSha256'}
+            or type(value['formatVersion']) is not int or value['formatVersion'] != 1
+            or not isinstance(value['planSha256'], str) or not SHA.fullmatch(value['planSha256'])):
+        raise ValueError('Installed host plan identity differs from its receipt schema.')
+    return value['planSha256']
+
+
 def allowed(path):
     parts = PurePosixPath(path).parts
     return (not path.startswith('/') and '..' not in parts and '\\' not in path
             and (path in {'runtime/bin/node', 'runtime/LICENSE'} or path in CODEX_FILES or
                  (path.startswith('app/server/') and path.endswith('.mjs') and not path.endswith('.test.mjs')) or
-                 path in {'app/scripts/import-demo-jobs.py', 'app/server/model-schemas/intent.schema.json', 'app/server/model-schemas/company.schema.json'}))
+                 path in {'app/scripts/import-demo-jobs.py', 'app/server/model-schemas/intent.schema.json',
+                          'app/server/model-schemas/company.schema.json', 'app/server/model-schemas/company-domain-proposal.schema.json'}))
 
 
 def identity(manifest):
@@ -78,7 +96,8 @@ def validate_manifest(manifest):
             or manifest.get('codexEntrypoint') != CODEX_ENTRYPOINT
             or any(files.get(name) != checksum for name, checksum in CODEX_FILES.items())):
         raise ValueError('Artifact does not contain the pinned native Codex distribution.')
-    for module, schema in [('intent.mjs', 'intent.schema.json'), ('companies.mjs', 'company.schema.json')]:
+    for module, schema in [('intent.mjs', 'intent.schema.json'), ('companies.mjs', 'company.schema.json'),
+                          ('companies.mjs', 'company-domain-proposal.schema.json')]:
         if 'app/server/' + module in files and 'app/server/model-schemas/' + schema not in files:
             raise ValueError('Runtime module is missing its immutable model schema asset.')
     if any(not allowed(path) or not isinstance(value, str) or not SHA.fullmatch(value) for path, value in files.items()):
@@ -172,10 +191,10 @@ def build(root, commit, node_archive, codex_archive, output):
             if not member.isfile() or member.size > MAX_BYTES:
                 raise ValueError('Invalid runtime archive member.')
             files[target] = archive.extractfile(member).read()
-    if Path(codex_archive).stat().st_size > 128 * 1024 ** 2:
+    if Path(codex_archive).stat().st_size > MAX_CODEX_ARCHIVE_BYTES:
         raise ValueError('Codex archive exceeds the off-host input ceiling.')
     native = Path(codex_archive).read_bytes()
-    if (len(native) > 128 * 1024 ** 2 or sha(native) != CODEX_ARCHIVE_SHA256
+    if (len(native) > MAX_CODEX_ARCHIVE_BYTES or sha(native) != CODEX_ARCHIVE_SHA256
             or 'sha512-' + base64.b64encode(hashlib.sha512(native).digest()).decode() != CODEX_ARCHIVE_INTEGRITY):
         raise ValueError('Codex archive differs from its pinned npm distribution integrity.')
     prefix = f'package/vendor/{CODEX_TARGET}/'

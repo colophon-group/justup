@@ -17,6 +17,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 import uuid
 
 sys.dont_write_bytecode = True
@@ -115,13 +116,41 @@ class ArtifactContracts(unittest.TestCase):
     def test_runtime_source_and_manifest_identity_are_mandatory(self):
         original, _ = payload()
         for key, value in [('sourceCommit', 'dev'), ('nodeVersion', '22'), ('platform', 'linux-x64'), ('buildIdentity', '0' * 64),
-                           ('codexVersion', '0.159.2'), ('codexTarget', 'x86_64-unknown-linux-musl'),
+                           ('codexVersion', '0.143.0'), ('codexTarget', 'x86_64-unknown-linux-musl'),
                            ('codexArchiveSha256', 'f' * 64), ('codexEntrypoint', 'runtime/bin/arbitrary')]:
             with self.subTest(key=key):
                 candidate = deepcopy(original)
                 candidate[key] = value
                 with self.assertRaises(ValueError):
                     artifact.validate_manifest(candidate)
+
+    def test_host_plan_identity_requires_a_real_root_controlled_receipt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            marker = base / '.preview-install.json'
+            marker.write_text(json.dumps({'formatVersion': 1, 'planSha256': 'f' * 64}))
+            marker.chmod(0o644)
+            original_lstat = Path.lstat
+            owner = 0
+            def metadata(path):
+                actual = original_lstat(path)
+                if path == marker:
+                    return SimpleNamespace(st_mode=actual.st_mode, st_uid=owner,
+                                           st_nlink=actual.st_nlink, st_size=actual.st_size)
+                return actual
+            with patch.object(Path, 'lstat', metadata):
+                self.assertEqual(artifact.read_host_plan(base), 'f' * 64)
+                owner = 1234
+                with self.assertRaises(ValueError):
+                    artifact.read_host_plan(base)
+                owner = 0
+                marker.chmod(0o666)
+                with self.assertRaises(ValueError):
+                    artifact.read_host_plan(base)
+                marker.chmod(0o644)
+                marker.write_text(json.dumps({'formatVersion': 1, 'planSha256': 'caller-selected'}))
+                with self.assertRaises(ValueError):
+                    artifact.read_host_plan(base)
 
     def test_streamed_staging_preserves_exact_native_bytes_and_executable_modes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -140,6 +169,20 @@ class ArtifactContracts(unittest.TestCase):
             self.assertEqual(artifact.verify_directory(release)['buildIdentity'], result['staged'])
             _, retained = artifact.read_bundle(bundle_path, checksum, retain_files=False)
             self.assertEqual(retained, {})
+
+    def test_company_runtime_requires_both_final_and_private_domain_schema_assets(self):
+        manifest, files = payload()
+        files['app/server/companies.mjs'] = b'export {};'
+        files['app/server/model-schemas/company.schema.json'] = b'{}'
+        manifest['files'] = {name: artifact.sha(data) for name, data in files.items()}
+        manifest['buildIdentity'] = artifact.identity(manifest)
+        with self.assertRaisesRegex(ValueError, 'model schema asset'):
+            artifact.validate_manifest(manifest)
+        name = 'app/server/model-schemas/company-domain-proposal.schema.json'
+        manifest['files'][name] = artifact.sha(b'{}')
+        manifest['buildIdentity'] = artifact.identity(manifest)
+        self.assertTrue(artifact.allowed(name))
+        self.assertEqual(artifact.validate_manifest(manifest)['buildIdentity'], manifest['buildIdentity'])
 
     def test_deployed_inventory_is_readonly_complete_and_not_a_moving_link(self):
         manifest, files = payload()
@@ -329,16 +372,36 @@ class BoundaryContracts(unittest.TestCase):
         model = load('preview-model-run')
         manifest, _ = payload()
         release = Path('/srv/justup_preview/releases') / manifest['buildIdentity']
-        config = {'enabled': True, 'cliVersion': '0.143.0', 'codexPath': str(release / artifact.CODEX_ENTRYPOINT),
+        config = {'enabled': True, 'cliVersion': artifact.CODEX_VERSION, 'codexPath': str(release / artifact.CODEX_ENTRYPOINT),
                   'protectedAuthHome': '/srv/justup_preview/model/credentials',
                   'invocationRoot': '/srv/justup_preview/model/invocations', 'taskCwd': '/srv/justup_preview/model/task-cwd'}
         self.assertEqual(model.validate_configuration(config, release, manifest), config)
-        for change in ({'codexPath': '/usr/local/bin/codex'}, {'cliVersion': '0.159.2'},
-                       {'protectedAuthHome': '/root/.codex'}, {'taskCwd': '/srv/justup_preview/state'}, {'command': 'sh'}):
+        for change in ({'codexPath': '/usr/local/bin/codex'}, {'cliVersion': '0.143.0'},
+                       {'protectedAuthHome': '/root/.codex'}, {'taskCwd': '/srv/justup_preview/state'}, {'command': 'sh'},
+                       {'buildIdentity': manifest['buildIdentity']}, {'hostPlanSha256': 'f' * 64}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 model.validate_configuration({**config, **change}, release, manifest)
         with self.assertRaises(ValueError):
-            model.validate_attestation({'approved': True})
+            model.validate_attestation({'approved': True}, manifest, 'f' * 64)
+
+    def test_stale_model_attestation_and_inherited_identity_cannot_match_current_release(self):
+        model = load('preview-model-run')
+        manifest, _ = payload()
+        report = {'approved': True, 'cliVersion': artifact.CODEX_VERSION, 'model': 'gpt-6-luna',
+                  'executorBoundary': 'dedicated_uid_broker', 'socketPath': '/srv/justup_preview/broker/model.sock',
+                  'deniedPathsVerified': True, 'retentionVerified': True, 'toolCatalogSha256': model.EMPTY_TOOL_CATALOG_SHA256,
+                  'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': 'f' * 64}
+        model.validate_attestation(report, manifest, 'f' * 64)
+        for change in ({'buildIdentity': 'e' * 64}, {'hostPlanSha256': 'e' * 64}, {'approved': 1},
+                       {'cliVersion': '0.143.0'}, {'toolCatalogSha256': 'c' * 64}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                model.validate_attestation({**report, **change}, manifest, 'f' * 64)
+        with patch.dict(os.environ, {'JUSTUP_DEMO_BUILD_ID': 'untrusted', 'JUSTUP_DEMO_HOST_PLAN_SHA256': 'untrusted', 'TYPESAFE_AI_TOKEN': 'private'}):
+            env = model.child_environment(manifest, 'f' * 64, 1234)
+        self.assertEqual(env['JUSTUP_DEMO_BUILD_ID'], manifest['buildIdentity'])
+        self.assertEqual(env['JUSTUP_DEMO_HOST_PLAN_SHA256'], 'f' * 64)
+        self.assertEqual(env['LISTEN_PID'], '1234')
+        self.assertNotIn('TYPESAFE_AI_TOKEN', env)
 
     def test_api_environment_excludes_operator_credentials_and_fixes_storage(self):
         manifest, _ = payload()
@@ -379,19 +442,30 @@ class BoundaryContracts(unittest.TestCase):
         manifest, _ = payload()
         config = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
                   'runnerStatusPath': '/srv/justup_preview/state/runner-status.json',
-                  'sourceCommit': manifest['sourceCommit'], 'buildIdentity': manifest['buildIdentity'],
                   'jev': {'enabled': True, 'cumulativeBudget': {'path': str(queue.LEDGER_PATH),
                            'excludedDirectories': ['/srv/justup_preview/state', '/srv/justup_preview/state/backups']}}}
         self.assertIs(queue.validate_configuration(config, manifest), config)
-        for change in ({'sourceCommit': 'c' * 40}, {'sharedState': False}, {'dbPath': '/private/production.sqlite'},
+        model = {'enabled': True, 'cliVersion': artifact.CODEX_VERSION, 'isolationVerified': True,
+                 'socketPath': '/srv/justup_preview/broker/model.sock',
+                 'attestationPath': '/srv/justup_preview/broker/isolation-reviewed.json',
+                 'toolCatalogSha256': queue.EMPTY_TOOL_CATALOG_SHA256}
+        queue.validate_configuration({**config, 'model': model}, manifest)
+        with self.assertRaises(ValueError):
+            queue.validate_configuration({**config, 'model': {**model, 'toolCatalogSha256': 'c' * 64}}, manifest)
+        for change in ({'sourceCommit': manifest['sourceCommit']}, {'buildIdentity': manifest['buildIdentity']},
+                       {'hostPlanSha256': 'f' * 64}, {'model': {'buildIdentity': manifest['buildIdentity']}},
+                       {'sharedState': False}, {'dbPath': '/private/production.sqlite'},
                        {'model': {'socketPath': '/tmp/other.sock'}}, {'command': 'arbitrary'},
                        {'jev': {'enabled': True, 'cumulativeBudget': {'path': '/srv/justup_preview/state/ledger'}}}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 queue.validate_configuration({**config, **change}, manifest)
         with patch.dict(os.environ, {'TYPESAFE_AI_TOKEN': 'private', 'OPENAI_API_KEY': 'private', 'DOPPLER_TOKEN': 'private'}):
-            env = queue.child_environment()
+            env = queue.child_environment(manifest, 'f' * 64)
         self.assertFalse({'TYPESAFE_AI_TOKEN', 'OPENAI_API_KEY', 'DOPPLER_TOKEN'} & env.keys())
         self.assertEqual(env['JUSTUP_DEMO_RUNNER_CONFIG'], str(queue.CONFIG_PATH))
+        self.assertEqual(env['JUSTUP_DEMO_SOURCE_COMMIT'], manifest['sourceCommit'])
+        self.assertEqual(env['JUSTUP_DEMO_BUILD_ID'], manifest['buildIdentity'])
+        self.assertEqual(env['JUSTUP_DEMO_HOST_PLAN_SHA256'], 'f' * 64)
 
     def test_queue_requires_existing_private_ledger_and_never_creates_or_repairs_it(self):
         with tempfile.TemporaryDirectory() as temp:
