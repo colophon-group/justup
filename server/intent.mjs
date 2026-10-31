@@ -57,7 +57,11 @@ export function intentModelInput({query,prior,capabilities,repair}){
 export function intentCapabilities(jobs, aiAvailable = false) {
   const values = (items) => [...new Set(items.filter(Boolean))].sort();
   const companies = new Map(), seniors = new Map();
-  for(const j of jobs) { companies.set(j.companyId,{id:j.companyId,name:j.companyName,aliases:[j.companyName,j.companySlug].filter(Boolean)}); if(j.seniority?.id) seniors.set(j.seniority.id,{id:j.seniority.id,name:j.seniority.name,aliases:[j.seniority.name].filter(Boolean)}); }
+  for(const j of jobs) {
+    const existing=companies.get(j.companyId),aliases=[j.companyName,j.companySlug].filter(Boolean);
+    if(existing)existing.aliases=[...new Set([...existing.aliases,...aliases])];else companies.set(j.companyId,{id:j.companyId,name:j.companyName,aliases});
+    if(j.seniority?.id)seniors.set(j.seniority.id,{id:j.seniority.id,name:j.seniority.name,aliases:[j.seniority.name].filter(Boolean)});
+  }
   return { schemaVersion:1, operators:{ companyInclude:'any canonical company ID',companyExclude:'exclude every canonical company ID',titleAny:'case-insensitive substring OR',bodyAll:'case-insensitive substring AND; missing text unknown',bodyNone:'exclude substring OR; missing text unknown',locations:'observed label or unambiguous city/country suffix OR; country suffix includes all observed labels; no remote eligibility inference',workplaces:'known workplace OR',employmentTypes:'known employment type OR',postingLanguages:'known posting language OR',seniority:'known seniority ID OR' },
     values:{companies:[...companies.values()].sort((a,b)=>a.id.localeCompare(b.id)),locations:values(jobs.flatMap(j=>j.locations.map(l=>l.name))),workplaces:values(jobs.flatMap(j=>j.locations.map(l=>l.workplace))),employmentTypes:values(jobs.flatMap(j=>j.employmentTypes)),postingLanguages:values(jobs.flatMap(j=>j.locales)),seniority:[...seniors.values()].sort((a,b)=>a.id.localeCompare(b.id))},
     aiAvailable, unknownEvidence:'Unknown never proves a requirement; location labels do not prove cross-border remote eligibility.' };
@@ -140,6 +144,21 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
   const row=(owner,id)=>db.prepare('SELECT * FROM demo_searches WHERE owner_id=? AND id=?').get(owner,id);
   const executionAvailable=()=>typeof model?.interpretIntent==='function'&&(typeof model.available!=='function'||model.available('search_intent'));
   const available=()=>typeof availability==='function'?availability()===true:executionAvailable();
+  function catalogueCapabilities(){
+    const aiAvailable=Boolean(matching?.available?.()??config.aiMatchingAvailable);
+    if(!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='demo_jobs'").get())return intentCapabilities(feed.eligibleJobs({viewer:{account:{id:'catalogue'}}}),aiAvailable);
+    // The bounded imported metadata catalogue is independent of result eligibility.
+    // SQL projects only canonical fields: no posting identity/title/body is read.
+    const rows=db.prepare(`SELECT company_id AS companyId,
+      json_extract(data_json,'$.companyName') AS companyName,json_extract(data_json,'$.companySlug') AS companySlug,
+      json_extract(data_json,'$.locations') AS locations_json,json_extract(data_json,'$.employmentTypes') AS employment_json,
+      json_extract(data_json,'$.locales') AS locales_json,json_extract(data_json,'$.seniority') AS seniority_json
+      FROM demo_jobs ORDER BY first_seen_at DESC,company_id LIMIT 1001`).all();
+    if(rows.length>1000)throw err('dependency_unavailable',503,'The imported catalogue exceeds its bound.');
+    return intentCapabilities(rows.map(r=>({companyId:r.companyId,companyName:r.companyName,companySlug:r.companySlug,
+      locations:JSON.parse(r.locations_json??'[]'),employmentTypes:JSON.parse(r.employment_json??'[]'),
+      locales:JSON.parse(r.locales_json??'[]'),seniority:r.seniority_json==null?null:JSON.parse(r.seniority_json)})),aiAvailable);
+  }
   function publicSearch(r) {
     if(!r) return null;
     const accepted=r.accepted_json?JSON.parse(r.accepted_json):{id:r.id,revision:0,query:JSON.parse(r.draft_json)?.query??'',title:'New search',description:'',configuration:null,requirements:[],warnings:[],status:'pending'};
@@ -169,7 +188,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     const source=feed.coverage();if(source.stale||!source.verifiedAt)return {status:'failed',errorCode:'dependency_unavailable'};
     if(!executionAvailable()) return {status:'failed',errorCode:'dependency_unavailable'};
     const accepted=r.accepted_json?JSON.parse(r.accepted_json):null;
-    const caps=intentCapabilities(feed.eligibleJobs({viewer:{account:{id:task.ownerId}}}),Boolean(matching?.available?.()??config.aiMatchingAvailable));
+    const caps=catalogueCapabilities();
     let result,previous;
     for(let attempt=0;attempt<2;attempt++) {
       if(signal?.aborted) return {status:'failed',errorCode:'task_timeout'};
@@ -291,5 +310,5 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     }
     return null;
   }
-  return {capabilities:()=>({search:available()}),compilerCapabilities:()=>intentCapabilities(feed.eligibleJobs({viewer:{account:{id:'capabilities'}}}),Boolean(matching?.available?.()??config.aiMatchingAvailable)),route,taskResult,deleteAccountData,runTask};
+  return {capabilities:()=>({search:available()}),compilerCapabilities:catalogueCapabilities,route,taskResult,deleteAccountData,runTask};
 }
