@@ -6,7 +6,9 @@ labels: "resource-request, blocked"
 assignees: ""
 ---
 
-<!-- Title: Area: desired outcome. Keep this issue separate from the implementation issue. -->
+<!-- Title: Area: desired outcome. Keep this issue separate from the implementation issue. Use a unique slug of short lowercase words joined by hyphens; keep it stable. Search open and closed issues before filing. Use plain words and define necessary project terms. -->
+
+Slug: replace-with-unique-words
 
 ## Motivation and current context
 

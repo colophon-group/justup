@@ -1,6 +1,11 @@
+---
+summary: Current credential stores, local setup and safe service access.
+read_when: Setting up local credentials or changing how a service uses them.
+---
+
 # Secrets and contributor setup
 
-Doppler holds secret values. Git tracks project names, configuration selection and instructions only. The Justup prototype is static and needs no application secrets. The checked-in `doppler.yaml` preselects `justup-runtime/dev` for `doppler setup` and contains no token.
+Doppler is the credential manager for this project. Git tracks project names, configuration selection and instructions, while Doppler holds secret values. The Justup prototype is static and needs no application secrets. The checked-in `doppler.yaml` preselects `justup-runtime/dev` for local setup and contains no token.
 
 ## Current stores
 
@@ -35,7 +40,7 @@ Never inject secret values into a frontend bundle, browser, `NEXT_PUBLIC_*` or `
 
 ## Access and operation
 
-Use a separate read-only service token for each consumer and configuration. Keep the token in that consumer's protected secret settings, never in Git, chat, command arguments or shared shell profiles. A server receives runtime access; a deployment job receives deployment access. No routine process should receive administration, dormant or quarantine access.
+Use a separate read-only service token (a scoped machine credential) for each consumer and configuration. Keep it in that consumer's protected secret settings, never in Git, chat, command arguments or shared shell profiles. A server receives runtime access; a deployment job receives deployment access. No routine process should receive administration, dormant or quarantine access.
 
 Root SSH keys, database-owner credentials, provider management tokens and certificate signing keys belong in administration. Routine deployment uses a dedicated restricted identity. Do not run coding agents with an administrator configuration injected into their environment.
 
