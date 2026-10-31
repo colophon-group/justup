@@ -80,6 +80,57 @@ Freeze the one stable callback hostname to one candidate during acceptance. Reco
 
 The smoke command has a 60-second budget, per-request timeout and maximum 200 assets. It uses GET only, validates reported source/config digests and downloads every declared public asset to compare actual bytes, checks both public policies/robots, and confirms noncached session/version JSON and health readiness. It does not sign in, create accounts, run AI tasks, send mail or change data. API/runner identity, reviewed policy content, access enforcement, SSE reconnect and browser journeys remain separate release-gate checks; a smoke pass alone cannot approve release.
 
+## Run the deployed browser journey
+
+The existing `JUSTUP_SMOKE_URL=https://<fixed-host> npm run test:browser` mode remains read-only. The separate acceptance mode below registers one disposable account and submits two search interpretations. Run it only after the release owner has recorded the fixed frontend/API/runner candidate, actual provider isolation and spend guard, reviewed policies, fresh imported data and an approved preview invite. A successful local build or this prepared harness is not deployed evidence.
+
+First run the exact-byte smoke above against the retained artifact. Then prepare a JSON configuration outside the checkout with these fields, replacing every placeholder with the recorded identity or reviewed real-source scenario:
+
+```json
+{
+  "origin": "https://<candidate-specific-owned-host>",
+  "frontend": {
+    "sourceSha": "<40-character source commit>",
+    "treeSha": "<40-character source tree>",
+    "assetsSha256": "<retained manifest hash>",
+    "workerSha256": "<retained manifest hash>",
+    "artifactSha256": "<retained manifest hash>",
+    "runtimeConfigSha256": "<configured runtime hash>"
+  },
+  "api": {
+    "sourceCommit": "<same source commit as frontend>",
+    "schemaVersion": 1,
+    "buildIdentity": "<fixed backend build identity>",
+    "runnerIdentity": "<fixed runner identity>",
+    "importGeneration": "<recorded snapshot generation UUID>"
+  },
+  "policies": {
+    "version": "<operator-reviewed policy version>",
+    "privacySha256": "<reviewed privacy.html byte hash>",
+    "usageSha256": "<reviewed usage.html byte hash>"
+  },
+  "scenario": {
+    "query": "<reviewed query yielding the selected real posting>",
+    "warnedQuery": "<reviewed edit requiring explicit limitations confirmation>",
+    "companyId": "<selected imported company id>",
+    "companyName": "<its unambiguous imported name>",
+    "sourceUrl": "https://<selected real employer posting>"
+  }
+}
+```
+
+Use a supported primary-filter query and a previously reviewed warned edit. Do not use personal search text, a new speculative company lead or an unbounded residual-matching scenario. Search interpretation can invoke the approved model, including its bounded repair; the known-company identity request must resolve immediately from the fixed imported catalogue without company research. The invitation is supplied as `JUSTUP_ACCEPTANCE_INVITE` by the protected process environment, never in this JSON, a command argument, a URL or source control. With that environment already set:
+
+```sh
+JUSTUP_ACCEPTANCE_CONFIG=/private/path/candidate-gate.json npm run test:browser
+```
+
+Missing configuration, invitation or matching identities fails closed. The read-only preflight checks the fixed frontend/API/runner/import identities, runner heartbeat, fresh snapshot, reviewed policy hashes and public URLs, registration/search/request availability, visitor private-route denial and 48-hour-to-14-day result bounds. Only then can registration start. The one 240-second browser journey registers a generated account, logs out/in, searches for the selected real source, preserves accepted rows and revision during a warned edit, explicitly confirms it, records the known company identity, and verifies wrong-password handling and its own account deletion. It rechecks fixed identities before the company request and at completion.
+
+The journey creates only its own random username/password and keeps them in memory. Cleanup verifies that session ownership matches that generated account before deleting it, and refuses foreign users or changed account ids. A transport failure can prevent cleanup; a failed cleanup requires private operator verification before rerunning. There are no automatic test retries. Live mode disables traces, screenshots, video, automatic error-context Markdown and persisted browser state; failures report a fixed stage label without request bodies, credentials or Playwright fill call logs. Record only sanitized pass/fail, candidate identities and the verified cleanup outcome in release evidence.
+
+This journey does not establish real provider-down recovery, ambiguous-company research, resource/load limits, physical retention/deletion, restore/rollback, SSE or unavailable product features. Those checks remain in the API/runner/operations and full release report. No `Preview / verified` status or runtime promotion is produced by this harness.
+
 ## Limits, observation and rollback
 
 Cloudflare's published Workers Free limits are 100,000 Worker requests/day and 10 ms CPU/request, with 128 MB memory; static assets have a 20,000-file and 25 MiB/file limit. See the official [limits](https://developers.cloudflare.com/workers/platform/limits/), [pricing](https://developers.cloudflare.com/workers/platform/pricing/) and [asset-routing](https://developers.cloudflare.com/workers/static-assets/binding/) references. Recheck the selected account's current plan before deployment. Because all requests run through this Worker for headers, conservatively count asset requests as Worker invocations in the budget; do not assume unlimited asset-only traffic applies to this path.
