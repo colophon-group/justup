@@ -1,0 +1,46 @@
+/* Public policy pages: local assets only, independent of signed-in application state. */
+:root {
+  --paper: #f28a60;
+  --cream: #f9e7d4;
+  --ink: #11100e;
+  --rule: #11100e55;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: light;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.75 var(--mono);
+  font-synthesis: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+a { color: inherit; text-underline-offset: 4px; }
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible { outline: 3px solid var(--ink); outline-offset: 5px; }
+[hidden] { display: none !important; }
+.policy-paper { max-width: 1120px; margin: auto; padding: 0 40px; }
+.policy-header { display: flex; justify-content: space-between; align-items: center; gap: 30px; padding: 26px 0; border-bottom: 4px solid var(--ink); }
+.policy-brand { font: 900 42px/1 Impact, "Arial Black", sans-serif; letter-spacing: -2px; text-decoration: none; }
+.policy-brand span { color: var(--cream); }
+nav { display: flex; gap: 22px; flex-wrap: wrap; font-size: 12px; font-weight: 700; }
+nav [aria-current] { text-decoration-thickness: 2px; }
+main { padding: 38px 0 50px; min-height: 62vh; }
+.eyebrow { margin: 0 0 10px; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; font-weight: 700; }
+h1 { font: 900 clamp(54px, 9vw, 100px)/1 Impact, "Arial Black", sans-serif; margin: 0 0 32px; text-transform: uppercase; letter-spacing: -1px; }
+.policy-status { max-width: 760px; background: var(--cream); border-left: 4px solid var(--ink); padding: 24px; margin-bottom: 24px; }
+.policy-status p { margin: 0; }
+.policy-status p + p { margin-top: 12px; }
+.policy-section { max-width: 780px; margin: 0 0 32px; }
+h2 { font-size: 18px; line-height: 1.5; margin: 0 0 10px; }
+.policy-section p { margin: 0 0 12px; white-space: pre-line; overflow-wrap: anywhere; }
+footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 20px; padding: 24px 0 36px; border-top: 1px solid var(--rule); font-size: 12px; font-weight: 700; }
+.skip-link:not(:focus) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
+.skip-link:focus { position: fixed; z-index: 2; top: 10px; left: 10px; background: var(--cream); padding: 12px; }
+@media (max-width: 650px) {
+  :root { font-size: 13px; }
+  .policy-paper { padding: 0 20px; }
+  .policy-header { align-items: flex-start; gap: 20px; }
+  .policy-brand { font-size: 32px; }
+  nav { justify-content: flex-end; gap: 10px 16px; font-size: 11px; }
+  main { padding-top: 28px; }
+  .policy-status { padding: 20px; }
+}
