@@ -5,7 +5,7 @@ read_when: Reviewing the demo installer, configuring runtime access, deploying a
 
 # Demo operations
 
-This is a prepared deployment contract, not evidence that a preview is running. The host allocation, actual namespace/cgroup proofs, credential delivery, model isolation, public routing and browser release verification remain required. Runtime promotion to `main` stays blocked by the existing release policy.
+The empty resource boundary has been allocated on the approved host; application services remain inactive. Review the current storage proof and any pending correction in [operations issue 35](https://github.com/colophon-group/justup/issues/35#issuecomment-6547490289) before applying commands. This runbook does not establish a running preview: actual namespace/tool proof, credentials, model readiness, public routing and browser release verification remain required. Runtime promotion to `main` stays blocked by the existing release policy.
 
 The implementation is limited to the approved former Murmur ARM64 machine and Cloudflare free allowance. It preserves the production `jobseek-lightpanda-renderer`, TCP 9443, existing containers, services, provider labels and `/mnt/murmur`. Renderer relocation is not a dependency and is not authorized by this runbook. Do not reclaim its capacity. Use the private host audit to select the one target; public reports contain no host IP or credential values.
 
@@ -30,7 +30,7 @@ Do not run installation while credentials or policy approval are being improvise
 
 ## Apply the resource boundary
 
-These are the concrete root commands for the reviewed files. They have not been applied. Use the documented SSH deploy identity and strict host-key checking; keep the target address in the private operator environment.
+These are the concrete root commands for an absent installation using the exact reviewed files. Do not rerun them over an allocated installation; use its current evidence and the explicitly reviewed cleanup/reinstall path below. Use the documented SSH deploy identity and strict host-key checking; keep the target address in the private operator environment.
 
 ```sh
 python3 /reviewed/checkout/scripts/preview-host.py install-slice \
@@ -46,14 +46,14 @@ systemd-run --unit=justup-preview-install --collect --wait --pipe \
   --reviewed-plan-sha "$JUSTUP_PREVIEW_PLAN_SHA"
 ```
 
-The first command installs only the new slice. The second must observe that slice's real kernel controls before allocating anything. It refuses existing image, mount, UID or unit paths. It exclusively creates `/var/lib/justup-preview.disk`, preallocates exactly 2 GiB, formats only that newly created regular file and mounts it at `/srv/justup_preview`. It requires at least 8 GiB free on root after allocation. It creates dedicated API, queue and model UIDs with no login shells. Only API and queue join `justup-preview-state`; only queue joins `justup-preview-model-client`; model joins neither. It prepares root-controlled broker/config directories, queue-private work and empty budget directories, installs immutable operational scripts and seeds the live UUID deletion generation. It creates no budget header, secrets, broker attestation or subscription authentication. It starts no API, runner or tunnel and enables no timer.
+The first command installs only the new slice. The second must observe that slice's real kernel controls before allocating anything. It refuses existing image, mount, UID or unit paths. It exclusively creates `/var/lib/justup-preview.disk`, preallocates exactly 2 GiB, formats only that newly created regular file with `mkfs.ext4 -E nodiscard`, verifies physical allocation remains at least its logical size and mounts it at `/srv/justup_preview` with online discard disabled. It requires at least 8 GiB free on root after allocation. It creates dedicated API, queue and model UIDs with no login shells. Only API and queue join `justup-preview-state`; only queue joins `justup-preview-model-client`; model joins neither. It prepares root-controlled broker/config directories, queue-private work and empty budget directories, installs immutable operational scripts and seeds the live UUID deletion generation. It creates no budget header, secrets, broker attestation or subscription authentication. It starts no API, runner or tunnel and enables no timer.
 
 | Resource | Aggregate boundary and proof |
 | --- | --- |
 | CPU | `CPUQuota=50%`, `CPUWeight=10`; read back `cpu.max` and `cpu.weight` in the parent slice. |
 | Memory | `MemoryHigh=768M`, `MemoryMax=1G`, `MemorySwapMax=0`; read back kernel values. |
 | Processes | `TasksMax=96` including threads; API UID additionally has `LimitNPROC=64`. |
-| Disk | New preallocated 2 GiB loop filesystem; verify exact backing file/mount/options and rejected over-limit allocation. |
+| Disk | New physically preallocated 2 GiB loop filesystem: `st_blocks * 512 >= st_size == 2147483648`. Format/mount with discard disabled; verify backing/mount/options and rejected over-limit allocation. |
 | Reserve | Root retains at least 8 GiB; preview retains at least 64 MiB. Refuse work and stop preview units if a minute guard fails. |
 | Work | API work, queue work and model invocation/auth-refresh directories together at most 512 MiB, included in the hard 2 GiB total. |
 | Diagnostics | Seven days; API at most 8 MiB per day, aggregate preview diagnostics at most 128 MiB, included in the image. |
@@ -67,7 +67,26 @@ systemd-run --unit=justup-preview-proof --collect --wait --pipe \
   /usr/bin/python3 /srv/justup_preview/ops/preview-host.py prove
 ```
 
+Every storage/guard check verifies actual allocated blocks, not only logical file size. External trim/hole-punching stops the preview; tooling never reallocates automatically. The existing host trim timer was inspected read-only: its first nonempty fstab list excludes this systemd-only preview mount. Do not change global trim services or add a preview fstab entry without reviewing that behavior. Manual trimming of the preview filesystem can release its physical reservation even with online discard disabled.
+
 Check the installed units with target-host `systemd-analyze verify` and inspect effective sandbox properties. The metadata checks do not establish that unsupported kernel/systemd features work. Verify the API UID cannot open Docker sockets, administrator/renderer paths or write application bytes. Prove that all preview child processes remain in the one slice. Record the protected renderer's health before and after this work. If installation fails partway, stop and inspect only the newly created paths; the installer deliberately does not overwrite or format them on retry.
+
+## Recreate an empty boundary after a failed storage proof
+
+This is an explicit operator recovery, not an automatic retry. It requires a newly reviewed corrected source/plan and readback that the old installation contains only the generated deletion seed, known operational scripts and installation marker. Database, backups, current/previous links, releases, API/queue/model configuration, authentication, attestation, ledger/locks and invocation work must all be absent. Verify the old marker, installed script/unit hashes, exact loop backing and host identity against its private approved record; confirm application/timer/socket units inactive, dedicated UIDs have no processes and the protected renderer/Murmur mount are unchanged. Preserve the failed physical-allocation evidence.
+
+Stage the corrected plan files outside the image in a new protected root directory and verify every digest before cleanup. Use the **installed old tool** for the owned empty-install teardown; do not replace its marker or force the corrected installer over existing paths:
+
+```sh
+systemd-run --unit=justup-preview-teardown --collect --wait --pipe \
+  --slice=justup-preview.slice \
+  /usr/bin/python3 /srv/justup_preview/ops/preview-host.py teardown --erase-data \
+  --reviewed-plan-sha "$JUSTUP_PREVIEW_INSTALLED_PLAN_SHA"
+```
+
+After this exits, require absent image/mountpoint, dedicated UIDs/groups and preview unit files except the retained slice. Check the exact slice file digest against both reviewed plans, actual kernel ceilings and an empty cgroup. Verify the renderer, prior services and Murmur mount again. If any readback fails, stop for review; do not delete unexpected resources or silently repair them.
+
+The retained slice is deliberately unchanged. Skip `install-slice`, then run the corrected `install` from its staged source in a new capped transient unit with the **new** plan digest. Its existing-path checks remain intact. Repeat independent resource/physical-block/ENOSPC proof, unit syntax, disabled-service/empty-input checks and protected-workload readback. Remove only the verified staging files afterwards. A successful resource reinstall authorizes no runtime/data/model activation.
 
 ## Build and stage fixed bytes
 
@@ -216,7 +235,7 @@ A guard failure stops only the explicitly named preview API, runner, tunnel, mod
 
 For code rollback, retain the verified previous build and a usable deletion-safe backup. Stop preview writers, compare schema versions, select the exact retained build with `switch --build-identity`, then repeat readiness/identity/data/browser checks before reopening routing. A schema difference blocks the switch and requires separately reviewed recovery. Never restore an old snapshot merely to make old code start, overwrite the live deletion barrier or reactivate old sessions. A failed switch leaves the API stopped for inspection.
 
-For teardown, remove the frontend candidate route with its owner, remove Justup's scoped runtime/model/tunnel access (do not revoke the shared Jobseek JEV key), preserve/reconcile its cumulative ledger until matching is stopped and access is removed, then run `preview-host.py teardown` in the slice. It disables the preview guard timer, stops only the named preview units and uses a normal unmount. It retains the mode-0600 image by default for an explicit recovery/retention decision. `teardown --erase-data` removes only the owned image, empty mountpoint, dedicated preview UIDs/groups and preview mount/service/socket/timer files after marker/backing validation. It refuses a busy unmount, ambiguous marker or unexpected mountpoint content. It never uses forced/lazy unmount or wildcard cleanup. The small slice file is retained so the teardown process stays bounded; after it exits, the operator may stop/remove that specifically reviewed slice and reload systemd. Confirm released disk space and unchanged protected-renderer health.
+For teardown, use `--reviewed-plan-sha` with the exact installed marker identity. Remove the frontend candidate route with its owner, remove Justup's scoped runtime/model/tunnel access (do not revoke the shared Jobseek JEV key), preserve/reconcile its cumulative ledger until matching is stopped and access is removed, then run `preview-host.py teardown` in the slice. It disables the preview guard timer, stops only the named preview units and uses a normal unmount. It retains the mode-0600 image by default for an explicit recovery/retention decision. `teardown --erase-data` removes only the owned image, empty mountpoint, dedicated preview UIDs/groups and preview mount/service/socket/timer files after marker/backing validation. It refuses a busy unmount, mismatched/unsafe root-owned marker, nonprivate or aliased image, incorrect backing/mount/filesystem/options or unexpected mountpoint content. Only teardown's internal cleanup validation permits lost physical reservation so an owned sparse image can be normally unmounted and removed; proof, guard, install, stage and switch retain the strict allocation check. There is no general bypass flag. It never uses forced/lazy unmount or wildcard cleanup. The small slice file is retained so the teardown process stays bounded; after it exits, the operator may stop/remove that specifically reviewed slice and reload systemd. Confirm released disk space and unchanged protected-renderer health.
 
 No service in this package sends production mail, accepts billing, starts crawler onboarding or changes production schedules. Keep the complete runtime-to-`main` block until the real fixed frontend/API/runner release gate passes.
 

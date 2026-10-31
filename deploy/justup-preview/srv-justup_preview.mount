@@ -7,5 +7,5 @@ Before=justup-preview-api.service
 What=/var/lib/justup-preview.disk
 Where=/srv/justup_preview
 Type=ext4
-Options=loop,nodev,nosuid
+Options=loop,nodev,nosuid,nodiscard
 TimeoutSec=30

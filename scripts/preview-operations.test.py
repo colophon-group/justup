@@ -162,6 +162,95 @@ class ArtifactContracts(unittest.TestCase):
 
 
 class BoundaryContracts(unittest.TestCase):
+    def setUp(self):
+        # Isolated operator-owned fixture files belong to this test user; no
+        # privileged filesystem or user/service operation runs in the suite.
+        owner = patch.object(host, 'OPERATOR_UID', os.getuid())
+        owner.start()
+        self.addCleanup(owner.stop)
+
+    def test_exact_size_sparse_image_is_rejected_before_mount_or_reserve_checks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            image = Path(temp) / 'preview.disk'
+            with image.open('wb') as stream:
+                stream.truncate(host.DISK_LIMIT)
+            image.chmod(0o600)
+            self.assertEqual(image.stat().st_size, host.DISK_LIMIT)
+            self.assertLess(image.stat().st_blocks * 512, host.DISK_LIMIT)
+            with patch.object(host, 'IMAGE', image), patch.object(host, 'call', side_effect=AssertionError('must reject before mount commands')):
+                with self.assertRaisesRegex(ValueError, 'physically preallocated'):
+                    host.verify_storage()
+
+    def test_format_preserves_reservation_and_guard_rejects_later_discard_without_reallocation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            image = Path(temp) / 'preview.disk'
+            image.write_bytes(b'x' * 8192)
+            image.chmod(0o600)
+            def formatter(*args, **kwargs):
+                # Model the observed external utility: default discard releases
+                # allocated extents; nodiscard preserves them while writing metadata.
+                preserves_extents = '-E' in args and args[args.index('-E') + 1] == 'nodiscard'
+                if preserves_extents:
+                    with image.open('r+b') as stream:
+                        stream.write(b'formatted')
+                else:
+                    with image.open('wb') as stream:
+                        stream.truncate(8192)
+            with patch.object(host, 'IMAGE', image), patch.object(host, 'DISK_LIMIT', 8192), patch.object(host, 'call', side_effect=formatter):
+                self.assertGreaterEqual(host.format_image().st_blocks * 512, 8192)
+                # A later trim/hole punch keeps logical size but removes reservation.
+                with image.open('wb') as stream:
+                    stream.truncate(8192)
+                with patch.object(host, 'verify_caps', return_value={}), patch.object(host, 'stop_preview') as stopped:
+                    with self.assertRaisesRegex(ValueError, 'physically preallocated'):
+                        host.guard(stop_on_failure=True)
+                    stopped.assert_called_once()
+                self.assertLess(image.stat().st_blocks * 512, 8192)
+
+    def test_sparse_teardown_still_requires_owned_plan_private_image_and_valid_backing(self):
+        for condition in ('valid', 'wrong-plan', 'wrong-owner', 'public-image', 'wrong-backing'):
+            with self.subTest(condition=condition), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                base = root / 'mount'
+                base.mkdir()
+                marker = base / '.preview-install.json'
+                marker.write_text(json.dumps({'formatVersion': 1, 'planSha256': 'a' * 64}))
+                marker.chmod(0o644)
+                image = root / 'preview.disk'
+                with image.open('wb') as stream:
+                    stream.truncate(8192)
+                image.chmod(0o644 if condition == 'public-image' else 0o600)
+                mounted = True
+                def call(*args, **kwargs):
+                    nonlocal mounted
+                    if args == ('systemctl', 'stop', 'srv-justup_preview.mount'):
+                        # A normal unmount reveals the original empty mountpoint.
+                        base.rename(root / 'retained-filesystem')
+                        base.mkdir()
+                        mounted = False
+                backing_error = ValueError('Wrong loop backing file.') if condition == 'wrong-backing' else None
+                owner = os.getuid() + 1 if condition == 'wrong-owner' else os.getuid()
+                with patch.object(host, 'BASE', base), patch.object(host, 'IMAGE', image), patch.object(host, 'DISK_LIMIT', 8192), \
+                     patch.object(host, 'OPERATOR_UID', owner), patch.object(host.os, 'geteuid', return_value=0), \
+                     patch.object(host, 'verify_caps', return_value={}), \
+                     patch.object(host, '_mounted_image_size', return_value=8192, side_effect=backing_error), \
+                     patch.object(host, 'stop_preview') as stopped, patch.object(host, 'call', side_effect=call) as commands, \
+                     patch.object(host.os.path, 'ismount', side_effect=lambda path: path == base and mounted):
+                    if condition == 'valid':
+                        with self.assertRaisesRegex(ValueError, 'physically preallocated'):
+                            host.verify_storage()
+                        result = host.teardown(expected_plan='a' * 64)
+                        self.assertTrue(result['stopped'])
+                        self.assertTrue(result['imageRetained'])
+                        self.assertTrue(image.exists())
+                        self.assertFalse(mounted)
+                        stopped.assert_called_once()
+                    else:
+                        with self.assertRaises(ValueError):
+                            host.teardown(expected_plan=('b' if condition == 'wrong-plan' else 'a') * 64)
+                        stopped.assert_not_called()
+                        commands.assert_not_called()
+
     def cgroup(self, root, changed=None):
         values = {'cpu.max': '50000 100000', 'cpu.weight': '10', 'memory.high': str(768 * host.MIB),
                   'memory.max': str(host.GIB), 'memory.swap.max': '0', 'pids.max': '96'}
