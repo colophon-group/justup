@@ -16,7 +16,11 @@ for (const kind of ['privacy', 'usage']) {
     await expect(page.locator('.policy-status')).toContainText('No effective date has been set.');
     await expect(page.locator('body')).toHaveAttribute('data-policy-status', 'draft');
     await expect(page.locator('meta[name="justup-policy-status"]')).toHaveAttribute('content', 'draft');
-    await expect(page.locator('meta[name="justup-policy-version"]')).toHaveAttribute('content', 'demo-draft-1');
+    await expect(page.locator('meta[name="justup-policy-version"]')).toHaveAttribute('content', 'demo-draft-2');
+    await expect(page.locator('body')).toHaveAttribute('data-policy-version', 'demo-draft-2');
+    await expect(page.locator('.policy-status')).toContainText('Draft version: demo-draft-2.');
+    await expect(page.locator('main')).toContainText('Justup is operated by Viktor Shcherbakov');
+    await expect(page.getByRole('link', { name: 'business@colophon-group.org', exact: true })).toHaveAttribute('href', 'mailto:business@colophon-group.org');
     await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex,nofollow');
     await expect(page.getByRole('navigation').getByRole('link', { name: 'Privacy', exact: true })).toHaveAttribute('href', '/privacy.html');
     await expect(page.getByRole('navigation').getByRole('link', { name: 'Usage', exact: true })).toHaveAttribute('href', '/usage.html');
@@ -28,11 +32,10 @@ for (const kind of ['privacy', 'usage']) {
   });
 }
 
-test('privacy draft names unresolved operator and implementation facts without inventing them', async ({ page }) => {
+test('privacy draft identifies its operator while keeping unverified processing facts explicit', async ({ page }) => {
   await page.goto('/privacy.html');
   await expect(page.getByRole('heading', { name: 'Who runs Justup?' })).toBeVisible();
   for (const fact of [
-    'operator’s legal name and a monitored privacy contact have not yet been published',
     'login provider, exact permissions and account identifiers need to be confirmed',
     'search text and profile details are sent to an AI service',
     'Request visibility and retention have not yet been confirmed',
@@ -41,7 +44,7 @@ test('privacy draft names unresolved operator and implementation facts without i
     'provider copies and backups',
     'No deletion timing or outcome is promised by this draft',
   ]) await expect(page.locator('main')).toContainText(fact);
-  await expect(page.locator('a[href^="mailto:"]')).toHaveCount(0);
+  await expect(page.locator('a[href^="mailto:"]')).toHaveCount(1);
   await expect(page.getByRole('button')).toHaveCount(0);
 });
 
@@ -55,7 +58,7 @@ test('usage explains uncertainty and outside sources without granting unimplemen
     'not necessarily when the employer published it',
     'third-party pages with their own terms and privacy notices',
     'does not guarantee successful collection or a completion date',
-    'working operator contact and reporting route must be published',
+    'For questions or to report an incorrect match',
   ]) await expect(page.locator('main')).toContainText(fact);
 });
 

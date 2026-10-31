@@ -9,7 +9,7 @@ The public `/privacy.html` and `/usage.html` pages are static, English web pages
 
 These truthful draft pages may be integrated into `dev` as code preparation after normal review and checks. Code acceptance does not approve the notices, enable real registration/login, authorize deployment or public sharing, or complete `demo-privacy-usage`; the real inventory and operator review remain open acceptance work.
 
-The current revision is **`demo-draft-1`**, marked **draft — review incomplete** in visible copy, HTML metadata and body attributes. There is no effective date, approved operator identity, contact or implied legal approval. These pages deliberately describe missing facts rather than fill them with invented details. They must not be represented as a completed privacy notice or approved usage conditions.
+The current revision is **`demo-draft-2`**, marked **draft — review incomplete** in visible copy, HTML metadata and body attributes. The pages identify the operator as **Viktor Shcherbakov** and give **business@colophon-group.org** as the supplied contact. There is no effective date or implied legal approval. Remaining data-flow facts still require verification; supplying operator details does not approve the notices. They must not be represented as a completed privacy notice or approved usage conditions.
 
 ## Sign-in and publication gate
 
@@ -23,7 +23,7 @@ To approve a revision, replace draft language with confirmed, plain-language inf
 
 | Area | Required implementation evidence | Current review gap |
 | --- | --- | --- |
-| Operator | Actual legal name/controller and monitored contact route | Not supplied |
+| Operator | Actual legal name/controller and monitored contact route | Supplied: Viktor Shcherbakov, business@colophon-group.org. Review of the complete notices remains pending. |
 | Login | Actual authentication mechanism and identifiers retained; owned HTTPS pages and applicable login endpoints | Draft auth module uses local invite-only username/password; deployed integration not verified |
 | AI matching | Exact query/profile fields, purpose, recipient/model, excluded identifiers, provider retention/training/logging settings | API contract specifies bounded OpenAI/Luna interpretation and optional JEV matching; actual execution/provider handling remains unverified |
 | Company requests | Submitted fields, account association, visibility, recipients, confirmation/configuration behavior and enabled priority rules | Backend-owned; not confirmed |
@@ -67,7 +67,7 @@ The exact HTTP route behavior, AI recipients/regions, provider terms/settings, e
 
 ## Usage content and scope
 
-The usage draft explains AI uncertainty, incomplete coverage, first-observed timestamps, gaps or stale source availability, third-party application pages and non-guaranteed company discovery/configuration. It describes a temporary web preview with no payment collection, without granting billing or legacy-account benefits. Operator contact and problem reporting remain explicit review gaps. It does not describe mobile functionality or assert legal compliance.
+The usage draft explains AI uncertainty, incomplete coverage, first-observed timestamps, gaps or stale source availability, third-party application pages and non-guaranteed company discovery/configuration. It describes a temporary web preview with no payment collection, without granting billing or legacy-account benefits. The supplied contact is linked for questions and reports about incorrect matches, company identities, source links or access problems. Review of the complete usage text remains pending. It does not describe mobile functionality or assert legal compliance.
 
 ## Primary reference material
 
@@ -79,6 +79,6 @@ These sources guide the inventory and review. They do not establish compliance f
 
 ## Verification
 
-`tests/browser/policies.spec.mjs` checks signed-out public access with JavaScript disabled, draft status/version, unresolved operator/processing facts, usage limitations, policy navigation while APIs fail, local-only asset requests and narrow-screen keyboard navigation. Tests make no real provider calls and do not use accounts, tokens, a policy API fixture or production data.
+`tests/browser/policies.spec.mjs` checks signed-out public access with JavaScript disabled, draft status/version, the supplied operator/contact and unresolved processing facts, usage limitations, policy navigation while APIs fail, local-only asset requests and narrow-screen keyboard navigation. Tests make no real provider calls and do not use accounts, tokens, a policy API fixture or production data.
 
-Run `npx playwright test tests/browser/policies.spec.mjs` and `npm run test:syntax`. Operator identity, real data inventory, deletion behavior, owned domain/consent settings, final copy and approval remain deployment review requirements, not facts validated by these static browser tests.
+Run `npx playwright test tests/browser/policies.spec.mjs` and `npm run test:syntax`. Operator review of the complete pages, real data inventory, deletion behavior, owned domain/consent settings, final copy and approval remain deployment review requirements, not facts validated by these static browser tests.
