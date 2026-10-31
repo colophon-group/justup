@@ -16,6 +16,17 @@ ROOT = Path(__file__).resolve().parents[1]
 GUIDELINES = {f"Q{n}" for n in range(1, 12)} | {f"T{n}" for n in range(1, 5)}
 CHECK = re.compile(r"^\s*-\s*\[([ xX])\]\s*((?:Q|T)\d+)\b.*?—\s*(Applied|N/A):\s*(.*?)\s*$")
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+WORK_BRANCH = re.compile(r"^(?:work|hotfix)/[a-z0-9]+(?:-[a-z0-9]+)+$")
+RELEASE_BRANCH = re.compile(r"^release/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+
+
+def validate_branch_name(name: str) -> None:
+    if not (WORK_BRANCH.fullmatch(name) or RELEASE_BRANCH.fullmatch(name)):
+        raise ValueError(
+            "Name the branch for the work: work/<semantic-slug>, "
+            "hotfix/<semantic-slug>, or release/vX.Y.Z. "
+            "Do not use a contributor or agent prefix."
+        )
 
 
 def run(*command: str, capture: bool = False) -> str:
@@ -38,6 +49,7 @@ def validate_pr_body(body: str | None) -> None:
         if checked.lower() != "x":
             raise ValueError(f"Check {guideline} after giving its explanation.")
         cleaned = explanation.strip().strip("[]").lower()
+        without_links = MARKDOWN_LINK.sub("", explanation)
         if not cleaned or cleaned in {
             "explanation or evidence",
             "current behavior documented or specific n/a reason",
@@ -47,7 +59,7 @@ def validate_pr_body(body: str | None) -> None:
             "n/a",
             "yes",
             "done",
-        } or "[" in explanation or "]" in explanation:
+        } or "[" in without_links or "]" in without_links:
             raise ValueError(f"Replace the placeholder with a specific {disposition} explanation for {guideline}.")
     missing = GUIDELINES - seen
     if missing:
@@ -148,6 +160,7 @@ def append_summary(lines: list[str]) -> None:
 def run_pr(event_path: Path) -> None:
     event = json.loads(event_path.read_text(encoding="utf-8"))
     pr = event["pull_request"]
+    validate_branch_name(pr["head"]["ref"])
     base_branch = pr["base"]["ref"]
     paths = changed_paths(pr["base"]["sha"], pr["head"]["sha"])
     full_override = any(label.get("name") == "full-ci" for label in pr.get("labels", []))
@@ -201,6 +214,15 @@ def run_pr(event_path: Path) -> None:
 
 
 def selftest() -> None:
+    for name in ("work/neutral-branch-names", "work/fresh-job-workspace-browser-tests", "hotfix/restore-login", "release/v1.2.3"):
+        validate_branch_name(name)
+    for name in ("codex/product-design", "feature/fresh-job-workspace", "work/agent", "release/v1.2", "release/v01.2.3"):
+        try:
+            validate_branch_name(name)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Invalid branch name passed validation: {name}")
     assert select(["docs/README.md"], "dev", False)[:2] == (False, False)
     assert select(["prototype/app.js"], "dev", False)[:2] == (True, False)
     assert select(["prototype/app.js"], "main", False)[:2] == (True, True)
@@ -215,12 +237,23 @@ def selftest() -> None:
     assert select(browser_pr_paths, "dev", False)[:2] == (True, False)
     body = "\n".join(f"- [x] {guideline} Rule — N/A: no behavior in this guide" for guideline in sorted(GUIDELINES))
     validate_pr_body(body)
+    linked = body.replace(
+        "Q9 Rule — N/A: no behavior in this guide",
+        "Q9 Rule — Applied: dependency decision is in the [workflow issue](https://github.com/colophon-group/justup/issues/18)",
+    )
+    validate_pr_body(linked)
     try:
         validate_pr_body(body.replace("[x] Q1", "[ ] Q1"))
     except ValueError:
         pass
     else:
         raise AssertionError("An unchecked guideline must fail validation")
+    try:
+        validate_pr_body(body.replace("N/A: no behavior in this guide", "Applied: [explanation or evidence]", 1))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("A template placeholder must fail validation")
     print("CI selection and checklist self-tests passed.")
 
 
