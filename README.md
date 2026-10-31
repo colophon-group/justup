@@ -1,4 +1,4 @@
-# Justup — product design
+# Justup
 
 A new job discovery service built around fresh listings from company career pages, natural-language search, and compact structured results.
 
@@ -12,4 +12,4 @@ Start with the [product design document](docs/product-design.md). It distinguish
 
 The proposed [motion language](docs/motion-design.md) covers New markers, automatic arrivals, reading-position protection, Viewed transitions, and the live-dot pulse.
 
-A [complete interactive prototype](prototype/README.md) includes the scrollable job feed, company catalogue and two-step company requests. It runs as static HTML/CSS/JavaScript with fictional data; it does not select the production application stack.
+The [current browser interface](prototype/README.md) includes the scrollable job feed, company catalogue and two-step company requests. It runs as static HTML/CSS/JavaScript with fictional data and is the starting point for ongoing Justup application work.

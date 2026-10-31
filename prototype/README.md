@@ -1,11 +1,11 @@
 ---
-summary: Run and explore the browser-only Justup prototype with fictional data.
-read_when: Reviewing current prototype behavior or changing its browser code.
+summary: Run and explore Justup's current browser interface with fictional data.
+read_when: Reviewing current browser behavior or changing its browser code.
 ---
 
-# Justup interactive prototype
+# Justup browser interface
 
-A browser-only mockup of Justup's orange-and-ink design. It uses fictional job listings and 20 fictional companies, with one shared set of observations for the feed, company reports and weekly company-news ribbon (Hiring Wire). No API keys, build step, server or real requests are required. Map-drawing libraries are bundled locally.
+The current Justup interface is browser-only and lives in `prototype/` while application work continues. It uses fictional job listings and 20 fictional companies, with one shared set of observations for the feed, company reports and weekly company-news ribbon (Hiring Wire). No API keys, build step, application server or real requests are required yet. Map-drawing libraries are bundled locally.
 
 ## Run locally
 
@@ -17,7 +17,7 @@ python3 -m http.server 4173 --bind 127.0.0.1 --directory prototype
 
 Open [http://127.0.0.1:4173](http://127.0.0.1:4173).
 
-## Explore the prototype
+## Explore the interface
 
 | To... | Go to |
 | --- | --- |
@@ -25,7 +25,7 @@ Open [http://127.0.0.1:4173](http://127.0.0.1:4173).
 | Follow, inspect or request a company | [Browse and request companies](#browse-and-request-companies) |
 | Preview account limits or change language | [Preview accounts and language settings](#preview-accounts-and-language-settings) |
 | Review visual design and weekly company news | [Inspect the visual design and news ribbon](#inspect-the-visual-design-and-news-ribbon) |
-| Understand stored state and data limits | [Prototype limits](#prototype-limits) and [company-report data](#understand-data-limits-for-company-reports) |
+| Understand stored state and data limits | [Current limits](#current-limits) and [company-report data](#understand-data-limits-for-company-reports) |
 
 ## Search and manage positions
 
@@ -64,7 +64,7 @@ Open [http://127.0.0.1:4173](http://127.0.0.1:4173).
 
 For exact movement and reading-position rules, see the [motion guide](../docs/motion-design.md).
 
-## Prototype limits
+## Current limits
 
 Searches (including their followed-company scope), followed companies, viewed IDs, requests and confirmed company profiles are saved in this browser’s local storage (localStorage). Demo controls can reset them. There is no real sign-in, subscription billing, live server-pushed updates, company discovery, career-page monitoring or saved state across devices. The intended application framework remains undecided.
 
