@@ -26,6 +26,7 @@ To approve a revision, replace draft language with confirmed, plain-language inf
 | AI matching | Exact query/profile fields, purpose, recipient/model, excluded identifiers, provider retention/training/logging settings | API contract specifies bounded OpenAI/Luna interpretation and optional JEV matching; actual execution/provider handling remains unverified |
 | Company requests | Submitted fields, account association, visibility, recipients, confirmation/configuration behavior and enabled priority rules | Backend-owned; not confirmed |
 | Browser state | Actual cookie/local-storage keys, purpose, expiry, session duration and clearing behavior | Auth module defaults to seven-day fixed sessions; HTTP cookie and deployed configuration still need verification |
+| Company logos and other external assets | Actual imported logo URL origins, redirects, browser requests, proxy/cache delivery and external recipient behavior | Interface can render remote logos; no-referrer does not remove third-party asset requests |
 | Analytics and logs | Actual tools or explicit absence; request/security/application fields, purpose, recipients and duration | Hosting/API logging not confirmed |
 | Processors and locations | Hosting, auth, AI and support processors; destination countries and transfer/protection arrangements | Providers/regions not confirmed |
 | Retention | Account/search/request/session/log/provider/backup durations or criteria | API contract proposes bounded periods below; cleanup, backups and deployed values remain unverified |
@@ -58,7 +59,9 @@ The backend integration’s local `docs/demo-api.md` explicitly describes implem
 - Proposed application diagnostics include route category, status, request ID, duration, token/cost counts and redacted codes, excluding raw query/body, passwords, tokens and IP addresses. Hosting, reverse-proxy and Cloudflare logs need their own actual inventory; an application-log rule does not establish what those layers retain.
 - The contract gives accounts last-fourteen-day imported results and visitors a forty-eight-hour delay, with server access checks. It disables billing, production mail/crawler writes, follows, viewed state, preferences, SSE, hidden-match counts and Hiring Wire for the initial preview. Verify deployed capability/access flags before final usage copy.
 
-The exact HTTP route behavior, AI recipients/regions, provider terms/settings, storage/log fields, cleanup and account/request deletion remain release-review gaps. The final static pages must describe observed behavior rather than repeat unverified requirements.
+Company logo delivery also requires verification: the interface can render an API-provided `logoUrl` directly as a remote image with `referrerpolicy="no-referrer"`. If imported URLs use external origins, the browser still contacts those hosts, which can receive its IP address and other request metadata. Confirm actual logo origins/redirects, whether assets are proxied or cached, and any host logging/retention. The local-only property of the policy pages does not apply to every application asset.
+
+The exact HTTP route behavior, AI recipients/regions, provider terms/settings, external asset delivery, storage/log fields, cleanup and account/request deletion remain release-review gaps. The final static pages must describe observed behavior rather than repeat unverified requirements.
 
 ## Usage content and scope
 
