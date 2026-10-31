@@ -20,7 +20,7 @@ A pull request (PR) is a proposed change reviewed before it joins a branch. The 
 
 Application feature branches target `dev`. Browser-only application code follows the same tests and review path; it cannot merge into `main` just because it has no server yet. `main` receives release and urgent hotfix PRs; its full preview deployment gate must be implemented before a live release. Repository setup and policy changes may enter `main` through a reviewed PR with current checks while the first release is being prepared.
 
-Name ordinary branches `work/<semantic-slug>`, normally using the primary issue's slug. If one issue needs several branches at once, add a short work-scope suffix, such as `work/search-keep-valid-results-browser`. For an issue-free trivial correction, use a short purpose slug. Use `release/vX.Y.Z` for release candidates and `hotfix/<semantic-slug>` for urgent fixes. Branch names describe the work; never use a contributor or agent identity as a prefix or suffix.
+Name ordinary branches `work/<semantic-slug>`, normally using the primary issue's slug. If one issue needs several branches at once, add a short work-scope suffix, such as `work/search-keep-valid-results-browser`. For an issue-free trivial correction, use a short purpose slug of at least two words. Use `release/vX.Y.Z` for release candidates and `hotfix/<semantic-slug>` for urgent fixes. Branch names describe the work; never use a contributor or agent identity as a prefix or suffix.
 
 | Branch or ref | Purpose | Entry rule |
 | --- | --- | --- |
