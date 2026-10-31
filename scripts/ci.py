@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from urllib.parse import unquote, urlsplit
 
 
@@ -85,10 +86,12 @@ def classify(path: str) -> str:
         return "docs"
     if path.endswith(".md") and path.startswith(("prototype/", "apps/", "src/", "web/", "server/")):
         return "docs"
-    if path.startswith("deploy/frontend/") or (path.startswith("scripts/frontend-") and path.endswith(".mjs")):
+    if path.startswith(("deploy/frontend/", "deploy/justup-preview/", "scripts/preview-")) or (path.startswith("scripts/frontend-") and path.endswith(".mjs")):
         return "deployment"
-    if path in {"scripts/ci.py", "scripts/test-server.mjs", ".gitignore", ".github/CODEOWNERS"} or path.startswith(".github/workflows/"):
+    if path in {"scripts/ci.py", "scripts/test-server.mjs", "scripts/test-deployment.mjs", "scripts/test-python.py", ".gitignore", ".github/CODEOWNERS"} or path.startswith(".github/workflows/"):
         return "tooling"
+    if path == "scripts/import-demo-jobs.py" or (path.startswith("scripts/test_") and path.endswith(".py")):
+        return "app"
     if path in {"package.json", "package-lock.json", "npm-shrinkwrap.json", "scripts/check-syntax.mjs"}:
         return "app"
     if path.startswith(("prototype/", "tests/browser/", "server/")):
@@ -203,8 +206,16 @@ def run_pr(event_path: Path) -> None:
     selftest()
     run("npm", "ci")
     run(str(ROOT / "node_modules/.bin/playwright"), "install", "--with-deps", "chromium")
-    run("npm", "run", "test:full")
-    append_summary(["- Full suite: passed (syntax, deployment/server contracts and locked Playwright browser journeys)."])
+    scripts = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"]
+    for suite in ("syntax", "deployment", "server", "python", "browser"):
+        command = f"test:{suite}"
+        if command not in scripts:
+            raise ValueError(f"Registered full suite is missing {command}")
+        started = time.monotonic()
+        run("npm", "run", command)
+        seconds = time.monotonic() - started
+        append_summary([f"- {suite} runner: completed in {seconds:.2f}s; exact files and unavailable-suite reasons are in its log."])
+    append_summary(["- Full suite: passed (syntax, deployment/server/Python contracts and locked Playwright browser journeys)."])
 
 
 def selftest() -> None:
@@ -234,6 +245,9 @@ def selftest() -> None:
     assert select([".github/workflows/ci.yml"], "dev", False)[:2] == (True, False)
     assert classify("scripts/unregistered.mjs") == "unknown"
     assert classify("scripts/test-server.mjs") == "tooling"
+    assert select(["deploy/justup-preview/limits.test.mjs", "scripts/preview-install.sh"], "dev", False)[:2] == (True, False)
+    assert select(["scripts/import-demo-jobs.py", "scripts/test_import_demo_jobs.py"], "dev", False)[:2] == (True, False)
+    assert select(["scripts/import-demo-jobs.py"], "main", False)[:2] == (True, True)
     assert select(["server/auth.mjs", "server/auth.test.mjs"], "dev", False)[:2] == (True, False)
     assert select(["server/auth.mjs"], "main", False)[:2] == (True, True)
     browser_pr_paths = [

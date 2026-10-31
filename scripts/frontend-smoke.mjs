@@ -23,6 +23,9 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
   for (const key of ['sourceSha', 'treeSha', 'assetsSha256', 'workerSha256', 'artifactSha256']) assert.equal(version[key], release[key], `Wrong deployed ${key}`);
   assert.equal(version.runtimeConfigSha256, config.vars.RUNTIME_CONFIG_SHA256, 'Wrong runtime configuration');
   assert.ok(Array.isArray(release.assets) && release.assets.length <= 200, 'Asset count exceeds bounded smoke allowance');
+  const index = release.assets.find(asset => asset.path === 'index.html');
+  assert.ok(index, 'Missing root index identity');
+  assert.equal(digest(new Uint8Array(await (await get('/')).arrayBuffer())), index.sha256, 'Wrong root index bytes');
   for (const asset of release.assets) {
     assert.ok(!asset.path.startsWith('/') && !asset.path.split('/').some(part => part === '..'), 'Unsafe asset path');
     const result = await get(`/${asset.path.split('/').map(encodeURIComponent).join('/')}`);

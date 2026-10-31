@@ -43,13 +43,13 @@ test('artifact snapshots committed bytes, ignores dirty files, has stable digest
       if (path === '/__preview/version') return new Response(JSON.stringify(version), { headers });
       if (path.startsWith('/api/v1/')) return new Response(JSON.stringify({ user: null, access: { kind: 'guest' } }), { headers });
       if (path === '/robots.txt') return new Response('User-agent: *\nDisallow: /', { headers });
-      return new Response(await readFile(join(first, 'assets', path.slice(1))), { headers });
+      return new Response(await readFile(join(first, 'assets', path === '/' ? 'index.html' : path.slice(1))), { headers });
     };
     assert.equal((await smoke('https://preview.justup.test', first, fetchFixture)).result, 'passed');
     await verifyArtifact(first);
     await writeFile(join(first, 'assets/index.html'), 'drift');
     await assert.rejects(verifyArtifact(first), /bytes differ/);
-    await assert.rejects(smoke('https://preview.justup.test', first, fetchFixture), /Wrong asset bytes/);
+    await assert.rejects(smoke('https://preview.justup.test', first, fetchFixture), /Wrong root index bytes/);
     // Committed secret-looking files fail closed instead of silently joining the public upload.
     git('add', 'prototype/.env'); git('commit', '-qm', 'Unsafe fixture');
     await assert.rejects(prepare(git('rev-parse', 'HEAD'), join(temporary, 'unsafe'), repository), /Refusing public asset/);

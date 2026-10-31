@@ -43,7 +43,7 @@ The generated config disables bundling and additional-module discovery: the depe
 
 The current demo uses invite-only username/password accounts, with no OAuth provider or email. External-provider routing below is a transport contract for future use, not an enabled demo capability. SSE is likewise supported by the edge transport but unavailable in the first backend demo; use capability-controlled polling until end-to-end streaming exists.
 
-One Cloudflare Worker serves the existing static interface through its `ASSETS` binding. `run_worker_first=true` gives **every** response the noindex and privacy headers. Asset HTML handling is `none`, with no catch-all HTML fallback; `/privacy.html` and `/usage.html` remain independently fetchable without a session or API. `/robots.txt` disallows all crawling. Workers.dev and provider version preview URLs are disabled, and an unapproved request origin is rejected.
+One Cloudflare Worker serves the existing static interface through its `ASSETS` binding. `run_worker_first=true` gives **every** response the noindex and privacy headers. The root `/` explicitly serves `index.html`. Asset HTML handling is `none`, with no catch-all HTML fallback; `/privacy.html` and `/usage.html` remain independently fetchable without a session or API. `/robots.txt` disallows all crawling. Workers.dev and provider version preview URLs are disabled, and an unapproved request origin is rejected.
 
 | Route | Behavior |
 | --- | --- |
@@ -88,4 +88,4 @@ Retain the previous complete artifact and its config, deployment ID and browser/
 
 ## Test ownership
 
-Frontend hosting owns `deploy/frontend/*.test.mjs`: edge routing/privacy/stream contracts plus exact-commit packaging and remote-byte verification. The suite uses Node's built-in test runner, temporary Git repositories and fake fetch responses; no provider, credential, DNS or real deployment is required. Expected runtime is under five seconds, in the deployment-contract CI group. The integrated CI owner registers `deploy/frontend/**` and `scripts/frontend-*.mjs` in the central selector, with broad checks for deployment-contract changes. The explicit deployed smoke belongs to the release-verification issue rather than ordinary PR CI.
+Frontend hosting owns `deploy/frontend/*.test.mjs`: edge routing/privacy/stream contracts plus exact-commit packaging and remote-byte verification. The suite uses Node's built-in test runner, temporary Git repositories and fake fetch responses; no provider, credential, DNS or real deployment is required. Expected runtime is under five seconds, in the deployment-contract CI group. The integrated CI registers `deploy/frontend/**` and `scripts/frontend-*.mjs` in the central selector, with broad checks for deployment-contract changes. The explicit deployed smoke belongs to the release-verification issue rather than ordinary PR CI.

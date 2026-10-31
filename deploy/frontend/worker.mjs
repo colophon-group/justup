@@ -97,7 +97,9 @@ export function createHandler(fetchUpstream = globalThis.fetch) {
     }
     if (!['GET', 'HEAD'].includes(request.method)) return response(null, 405, { Allow: 'GET, HEAD' });
     try {
-      const asset = await env.ASSETS.fetch(request);
+      const assetUrl = new URL(request.url);
+      if (assetUrl.pathname === '/') assetUrl.pathname = '/index.html';
+      const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
       return response(asset.body, asset.status, asset.headers);
     } catch { return unavailable(); }
   };

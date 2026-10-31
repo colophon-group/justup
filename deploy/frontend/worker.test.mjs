@@ -108,3 +108,13 @@ test('release identity is whitelisted, noncached and unavailable until valid', a
   assert.equal(body.secret, undefined); assert.equal(body.API_ORIGIN, undefined);
   assert.equal((await handle(request('/__preview/version'), { ...environment(), RELEASE_JSON: '{}' })).status, 503);
 });
+
+
+test('root maps to the committed index without making unknown routes an HTML fallback', async () => {
+  const env = environment();
+  env.ASSETS.fetch = async value => new URL(value.url).pathname === '/index.html' ? new Response('index') : new Response('missing', { status: 404 });
+  const handle = createHandler();
+  const index = await handle(request('/'), env);
+  assert.equal(index.status, 200); assert.equal(await index.text(), 'index');
+  assert.equal((await handle(request('/missing'), env)).status, 404);
+});
