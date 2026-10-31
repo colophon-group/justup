@@ -8,6 +8,8 @@ secrets.env
 *.pem
 *.key
 
-# Local tooling
+# Local tooling and generated test output
 .DS_Store
 node_modules/
+playwright-report/
+test-results/
