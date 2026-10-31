@@ -1,0 +1,16 @@
+{
+  "name": "justup",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test:syntax": "node scripts/check-syntax.mjs",
+    "test:browser": "playwright test",
+    "test": "npm run test:syntax && npm run test:browser"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}
