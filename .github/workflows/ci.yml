@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - edited
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+
+jobs:
+  decision:
+    name: CI / decision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check pull request and run selected suites
+        run: python3 scripts/ci.py run --event "$GITHUB_EVENT_PATH"
