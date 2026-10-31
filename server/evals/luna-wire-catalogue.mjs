@@ -65,7 +65,8 @@ export function inspectWireCatalogue(body,{transport='responses_lite',model='gpt
       if(inventory!==undefined){
         if(!object(inventory))throw invalid();
         for(const namespace of Object.values(inventory)){
-          if(!object(namespace)||!object(namespace.functions))throw invalid();
+          known(namespace,new Set(['name','functions']));
+          if(typeof namespace.name!=='string'||!namespace.name||!object(namespace.functions))throw invalid();
           metadataToolCount+=Object.keys(namespace.functions).length;
         }
       }

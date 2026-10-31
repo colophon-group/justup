@@ -81,8 +81,9 @@ test('AdditionalTools, nested namespaces, inventory and unknown carriers cannot 
   const nested=base();nested.input[0].tools=[{type:'namespace',name:'one',tools:[{type:'namespace',name:'two',tools:[tool]}]}];
   const result=inspectWireCatalogue(nested);assert.equal(result.namespaceCount,2);assert.equal(result.toolCount,3);assert.equal(result.schemaHashes.length,3);
   const direct=base();direct.tools=[tool];
-  const inventory=base();inventory.client_metadata={'x-codex-turn-metadata':JSON.stringify({tool_namespaces_info:{hidden:{functions:{danger:{direct:false,deferred:true}}}}})};
-  for(const body of [nested,direct,inventory,{...base(),future_catalogue:[tool]},{...base(),input:[{type:'future_tools',tools:[tool]}]},{...base(),input:[{type:'message',role:'user',content:[],tools:[tool]}]},{...base(),input:[{type:'additional_tools',role:'developer',tools:[],future_tools:[tool]}]}])assert.throws(()=>assertEmptyWireCatalogue(body),{code:'unverified_catalogue'});
+  const inventory=base();inventory.client_metadata={'x-codex-turn-metadata':JSON.stringify({tool_namespaces_info:{hidden:{name:'hidden',functions:{danger:{direct:false,deferred:true}}}}})};
+  const unknownInventory=base();unknownInventory.client_metadata={'x-codex-turn-metadata':JSON.stringify({tool_namespaces_info:{hidden:{name:'hidden',functions:{},future_tools:[tool]}}})};
+  for(const body of [nested,direct,inventory,unknownInventory,{...base(),future_catalogue:[tool]},{...base(),input:[{type:'future_tools',tools:[tool]}]},{...base(),input:[{type:'message',role:'user',content:[],tools:[tool]}]},{...base(),input:[{type:'additional_tools',role:'developer',tools:[],future_tools:[tool]}]}])assert.throws(()=>assertEmptyWireCatalogue(body),{code:'unverified_catalogue'});
   const absent=base();delete absent.input[0].tools;assert.throws(()=>assertEmptyWireCatalogue(absent),{code:'unverified_catalogue'});
 });
 test('child environment excludes all inherited secret, proxy and runtime variables',()=>{
