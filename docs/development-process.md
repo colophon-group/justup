@@ -5,7 +5,7 @@ read_when: Filing an issue, committing, opening a pull request or preparing a re
 
 # Contributing and releasing Justup
 
-This guide applies to Justup contributions now. The repository is in design and prototype work; the application test runner, development branch, selected automated checks and release automation described below are not implemented yet. Activate their gates before the first live release, and update this guide when the repository state changes.
+This guide applies to Justup contributions now. All application work, including browser-only code, uses the same review and test path. The live service and the full prerelease preview gate are not implemented yet; no live release may proceed until that gate exists and passes. Update this guide when the repository state changes.
 
 A pull request (PR) is a proposed change reviewed before it joins a branch. The tables below use that short form.
 
@@ -18,14 +18,14 @@ A pull request (PR) is a proposed change reviewed before it joins a branch. The 
 
 ## 1. Branch and release requirements
 
-Until the development branch and automated release gates exist, open PRs for guide and prototype work against `main` or the active design branch. Those merges are preparation for the service, not product releases. Create the `dev` branch and activate the checks below before the first live release; the table then governs application changes.
+Application feature branches target `dev`, including work that began as a browser demonstration. A change cannot bypass tests or merge into `main` because its first version runs only in the browser. `main` receives release and urgent hotfix PRs; its full preview deployment gate must be implemented before a live release. Repository setup and policy changes may enter `main` through a reviewed PR with current checks while the first release is being prepared.
 
 | Branch or ref | Purpose | Entry rule |
 | --- | --- | --- |
 | Short-lived feature branch | One coherent change, based on `dev`. | PR into `dev`. |
 | `dev` | Integrated next version; never a production deployment source. | Selected PR checks and reviewed quality checklist pass. |
 | `release/vX.Y.Z` | Frozen candidate cut from an exact `dev` commit. | PR into `main`; full release gate passes on the candidate and current base. |
-| `main` | Source of released versions only. | Release PR or urgent hotfix PR; no direct pushes. |
+| `main` | Stable baseline and source of released versions. | Release or urgent hotfix PR; before launch, reviewed repository-setup or policy PR. No direct pushes. |
 | `vX.Y.Z` tag | Immutable production release identity. | Tag the tested `main` commit and record artifact digests. |
 
 An urgent hotfix starts from `main`, runs the release gate for the affected candidate, and is merged back into `dev` immediately. After each release, merge `main` back into `dev`. If `main` or the release candidate changes while verification is running, repeat the affected gate against the new exact commit. Do not promote a moving branch alias or rebuild different production bytes after preview verification.
@@ -88,7 +88,7 @@ Write guides around the task a reader is trying to complete, with steps before d
 
 ## 4. Test creation, structure and maintenance
 
-Each PR also completes the four testing guidelines below. For a change with no affected behavior or tests, give a specific N/A reason; a behavior change without an automated test needs an explicit exception, manual evidence and reviewer acceptance. A passing test command alone does not explain whether the right behavior was tested.
+Each PR also completes the four testing guidelines below. For a change with no affected behavior or tests, give a specific N/A reason; a behavior change without an automated test needs an explicit exception, manual evidence and reviewer acceptance. Browser-only application work does not qualify for an exception merely because it started as a demonstration. A passing test command alone does not explain whether the right behavior was tested.
 
 | ID | Guideline | Required practice |
 | --- | --- | --- |
@@ -105,11 +105,11 @@ Every suite has an owner, purpose, expected runtime and CI lane. Track failures 
 
 ## 5. Automated checks for pull requests
 
-The planned automated-check system (CI) gives each pull request one always-running `CI / decision` result. It reports which changed paths selected which test groups and why anything was skipped. It fails if a required group fails, does not report a result, or the selection script fails. An unfamiliar path runs the full suite and reports that fallback. Do not skip the entire required workflow based on paths: GitHub can leave a required result pending when its workflow never starts.
+Each pull request gets one always-running `CI / decision` result. It reports which changed paths selected which test groups and why anything was skipped. It fails if a required group fails, does not report a result, or the selection script fails. An unfamiliar path runs the full available suite and reports that fallback. Do not skip the entire required workflow based on paths: GitHub can leave a required result pending when its workflow never starts.
 
-Keep test ownership and impact rules in one reviewed map next to the selection script. Start with groups for website, server, background worker, database changes, search and AI checks, billing/access, and deployment. Selection compares changed files with the pull request's actual base and includes tests that depend on shared contracts. A `full-ci` override runs everything. Changes to the selector, workflows, dependency lockfiles, shared types, access control, billing, database schema, deployment contracts, model instructions, tool definitions or model versions receive broad or full coverage. Unfamiliar paths run the full suite. Test the selection script with representative change sets.
+Keep test ownership and impact rules in one reviewed map next to the selection script. The first application checks cover browser source syntax and the small browser journey suite. Add groups for server, background worker, database, search and AI checks, billing/access, and deployment as those parts are built. Selection compares changed files with the pull request's actual base and includes tests that depend on shared contracts. As suites grow, add an explicit override to run them all. Changes to the selector, workflows, dependency lockfiles, shared types, access control, billing, database schema, deployment contracts, model instructions, tool definitions or model versions need broad or full coverage. Unfamiliar paths run the full available suite. Test the selection script with representative change sets.
 
-Ordinary PRs run a fast baseline (format, lint/type checks for touched code, PR-template validation, and relevant build checks) plus selected behavioral suites against the proposed merge result with current `dev`, not only the feature head. Run the full suite on every release candidate and on a scheduled `dev` run so selection mistakes are detected before release. Keep the full run observable: record duration, failure rate and flaky tests. Set time budgets for each suite and review additions that make CI materially slower.
+Ordinary PRs run a fast baseline plus selected behavioral suites against the proposed merge result with current `dev`, not only the feature head. The first application lane checks browser-source syntax and critical browser journeys; add format, lint, type and build checks as their tools become part of the application. Run the full suite on every release candidate; add a scheduled full `dev` run before release so selection mistakes are detected. Keep the full run observable: record duration, failure rate and flaky tests. Set time budgets for each suite and review additions that make CI materially slower.
 
 Define AI evaluation pass/fail thresholds from representative baselines before the first live release; running an evaluation without an acceptance threshold does not make the release gate green.
 
@@ -148,7 +148,7 @@ The production deploy is an explicit release action, not an automatic build on e
 
 Before the first live release, decide who may merge into `dev` and `main`, who owns each suite, and who can approve production promotion. Require PRs, current green checks and resolved review comments. Code owners or a second reviewer should inspect security, billing, migration and deploy changes. Restrict CI credentials to the minimum scope and keep preview and production secrets separate.
 
-The public GitHub repository has no branch protection or required checks configured yet. Until they are implemented, the release owner records the exact candidate SHA, check links and approval in the release PR and performs the merge manually. Treat protection and required checks as launch prerequisites, not as already enforced safeguards. Do not create an always-green placeholder CI check.
+Keep `dev` and `main` protected against direct pushes and require current `CI / decision` results before merging. If a branch rule or required check is missing, stop the application merge and restore the gate. The full preview deployment and `Preview / verified` release check are not implemented yet; they must pass before a live release. Do not create an always-green placeholder check.
 
 ## References
 

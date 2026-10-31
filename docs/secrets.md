@@ -5,7 +5,7 @@ read_when: Setting up local credentials or changing how a service uses them.
 
 # Secrets and contributor setup
 
-Doppler is the credential manager for this project. Git tracks project names, configuration selection and instructions, while Doppler holds secret values. The Justup prototype is static and needs no application secrets. The checked-in `doppler.yaml` preselects `justup-runtime/dev` for local setup and contains no token.
+Doppler is the credential manager for this project. Git tracks project names, configuration selection and instructions, while Doppler holds secret values. The checked-in `doppler.yaml` preselects `justup-runtime/dev` for local setup and contains no token.
 
 ## Current stores
 
@@ -32,7 +32,7 @@ doppler login --scope .
 doppler setup
 ```
 
-Check the selected project and configuration before running a command. A local `.env.local` can contain production access; never copy it into this repository or treat it as a development fixture. The static prototype needs no `doppler run` command.
+Check the selected project and configuration before running a command. A local `.env.local` can contain production access; never copy it into this repository or treat it as a development fixture.
 
 For a service that uses Doppler, pass the explicit project/configuration and an allowlist of only the required keys. Use `--no-fallback` unless the service intentionally uses Doppler's encrypted fallback cache. Revoking a Doppler token does not erase cached provider credentials; rotate the provider credential if a cache may remain. On macOS, the CLI stores login credentials in the system Keychain.
 

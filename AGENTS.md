@@ -1,6 +1,6 @@
 # AGENTS.md — Justup
 
-Justup is a public job-discovery project. The default branch currently contains guides and templates; the interactive prototype is on a design branch. There is no application test runner or release automation yet.
+Justup is a public job-discovery project in development. Use this file to find the guide for the work at hand. The application, tests and release process evolve together; the guide states which gates are active.
 
 Start at [README.md](README.md), then use [docs/README.md](docs/README.md) to choose a guide. Read [docs/development-process.md](docs/development-process.md) before filing issues, committing, reviewing or releasing. Read [docs/secrets.md](docs/secrets.md) only when working with credentials.
 
