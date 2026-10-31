@@ -1,8 +1,24 @@
-# Justup development and release process
+---
+summary: How to record work, review changes, test and release Justup.
+read_when: Filing an issue, committing, opening a pull request or preparing a release.
+---
 
-This policy applies to Justup contributions now. The repository is in design and prototype work; the application test runner, `dev` branch, selected CI and release automation described below are not implemented yet. Activate their gates before the first live release, and update this document when the repository state changes.
+# Contributing and releasing Justup
+
+This guide applies to Justup contributions now. The repository is in design and prototype work; the application test runner, development branch, selected automated checks and release automation described below are not implemented yet. Activate their gates before the first live release, and update this guide when the repository state changes.
+
+A pull request (PR) is a proposed change reviewed before it joins a branch. The tables below use that short form.
+
+| I need to... | Go to |
+| --- | --- |
+| Record a bug, simplification or other discovery | [Issues and discoveries](#2-issues-discoveries-and-resource-approval) |
+| Prepare a change or review | [Contribution quality](#3-contribution-quality) and [test guidance](#4-test-creation-structure-and-maintenance) |
+| Understand what automated checks will run | [Pull request checks](#5-automated-checks-for-pull-requests) |
+| Prepare a release | [Branch requirements](#1-branch-and-release-requirements) and [release verification](#6-verify-a-release-before-it-goes-live) |
 
 ## 1. Branch and release requirements
+
+Until the development branch and automated release gates exist, open PRs for guide and prototype work against `main` or the active design branch. Those merges are preparation for the service, not product releases. Create the `dev` branch and activate the checks below before the first live release; the table then governs application changes.
 
 | Branch or ref | Purpose | Entry rule |
 | --- | --- | --- |
@@ -16,15 +32,24 @@ An urgent hotfix starts from `main`, runs the release gate for the affected cand
 
 Release PRs use a merge commit, with current `main` an ancestor of the candidate. Record the candidate's Git tree hash. Before production promotion, compare the merged `main` tree hash with the verified candidate's tree hash; a mismatch blocks promotion and requires a new candidate and gate. The merge commit SHA may differ while its source tree is identical. This rule keeps previewed artifacts tied to the released source.
 
-For Justup's planned Cloudflare frontend and Hetzner API/runner, the release candidate preview must include compatible versions of **all three**, an isolated database and non-production credentials. Verify the immutable preview deployment and its API/runner artifact identities. After promotion, smoke-test production and retain the prior deployable artifacts and a database recovery path. A frontend-only preview cannot establish that the service works.
+For Justup's planned Cloudflare-hosted website, Hetzner-hosted server interface (API) and background worker (runner), the prerelease preview must include compatible versions of **all three**, an isolated database and non-production credentials. Verify the fixed preview URL and the exact server and worker builds. After release, check the live service and retain the previous deployable builds and a database recovery path. A website-only preview cannot establish that the service works.
 
-## 2. Issues, commits and resource approval
+## 2. Issues, discoveries and resource approval
 
-Open one issue for each meaningful work item. Title it `<Area>: <desired outcome>` with a short area name and an outcome, for example `Search: preserve results after invalid interpretation` or `CI: select affected test suites`. Do not put type, priority, status or an issue number in the title; labels and GitHub state carry those. A pure typo or metadata correction may omit an issue if it has no enduring context to preserve.
+Open one issue for each meaningful work item. Give it a plain-language title in the form `<Area>: <desired outcome>`, such as `Search: keep results after a failed interpretation`. Choose a unique, stable slug of short lowercase words separated by hyphens, such as `search-keep-valid-results`. Put `Slug: search-keep-valid-results` at the top of the issue body. Search for a matching slug before creating an issue; if it exists, choose more specific words. The title may improve as the work becomes clearer, but keep the slug unchanged. A pure typo or metadata correction may omit an issue if it has no enduring context to preserve.
 
-The issue holds the motivation, current context, desired outcome, constraints, acceptance evidence and relevant links. Record material decisions and alternatives in its discussion. Keep implementation chronology out of code comments and product documentation; those files describe current behavior and contracts. A PR links its primary issue and documents the resulting changes and verification, without repeating the issue's rationale.
+If you notice a separate bug, possible simplification, maintenance task, documentation gap or other concern while working on code:
 
-Use an imperative commit subject with the issue reference visible in one-line file history: `Preserve valid search after model failure (refs #42)`. Every commit for that work item uses its issue number, including the final squash subject if squashing. Put secondary issue links in the commit body when necessary. `refs` links context without claiming automatic closure; close the issue when its desired outcome is accepted and link the merged PR. Do not rewrite older commits solely to adopt this convention.
+1. Note the observable behavior, affected file or area and why it matters. Do not include credentials or personal data.
+2. Search open and closed issues by behavior, file path and slug. If one already covers the same outcome, add the new evidence there.
+3. Otherwise open an issue with the [work-item template](../.github/ISSUE_TEMPLATE/work.md). Explain the motivation, current context, desired outcome and how to tell when it is addressed. Choose one type label from the table below; use `blocked` only while a decision or dependency is pending.
+4. Keep the current change focused. Address a finding in the current pull request only when it is needed for that request; otherwise leave the new issue for separate work.
+
+Write each issue so a reader understands it without opening another document: use ordinary words, define necessary project terms the first time they appear, and link files or evidence for detail. Record material decisions and rejected alternatives in the issue discussion. Code comments and product docs describe current behavior, without a timeline of earlier approaches.
+
+Use an imperative commit subject with the slug visible in one-line file history: `Keep valid search results after model failure (search-keep-valid-results)`. Every commit for the work uses that slug, including the final subject if commits are squashed. To find context for a file, inspect its Git history, take the slug from the relevant commit and search issue bodies for that exact `Slug:` line. Published older commits are kept intact.
+
+A pull request description links its primary issue and states the changes, verification and release impact in plain language. It should make sense on its own, without repeating the issue's motivation. Close the issue when its desired outcome is accepted.
 
 Use one type label and, only when needed, `blocked`:
 
@@ -46,17 +71,20 @@ Every PR completes the [PR template](../.github/PULL_REQUEST_TEMPLATE.md). For e
 | ID | Guideline | Review question |
 | --- | --- | --- |
 | Q1 | Focus and maintainability | Is the change cohesive, readable, and placed at a clear ownership boundary without avoidable duplication? |
-| Q2 | Contracts and failure behavior | Are inputs, outputs, errors, retries, concurrency and idempotency handled where relevant? |
+| Q2 | Contracts and failure behavior | Are inputs, outputs, errors, retries, concurrent work and safe repeated requests handled where relevant? |
 | Q3 | Verification | Does the PR name the tests and checks that prove the change, including a relevant failure or edge path, and explain any gap? |
 | Q4 | Security and privacy | Are authorization, secrets, dependency trust, personal data and data retention handled where touched? |
 | Q5 | Data and deployment safety | Are schema/data changes compatible with deployed versions, observable, and recoverable? |
 | Q6 | User experience | Are accessibility, language, loading, empty and error states handled where users see a change? |
 | Q7 | Current-state code and docs | Do code, comments, tests, examples and docs describe what exists now, with obsolete paths and historical narrative removed? |
 | Q8 | Transform before adding | Does the change reshape or replace the existing path where possible, removing superseded code, tests and docs instead of accumulating parallel versions? If temporary compatibility is needed, is its owner and removal condition clear? |
-| Q9 | Dependency budget | Are new direct and transitive dependencies avoided where a small existing solution suffices? If added, does the issue record alternatives and why the dependency reduces the total maintenance surface enough to justify upkeep, security and upgrade cost, while the PR names the actual dependency change? |
+| Q9 | Dependency budget | Are new packages and their indirect dependencies avoided where a small existing solution suffices? If added, does the issue record alternatives and why the package reduces the total code and systems to maintain enough to justify upgrades and security review, while the pull request names the actual package change? |
 | Q10 | Resource authorization | Does work needing a new external service or infrastructure spend link to a separate `resource-request` issue, with no provisioning before explicit human approval? |
+| Q11 | Clear navigation | Can a new reader understand the change without unexplained project terms, and do touched files or directories have short purpose and read-when summaries where useful? |
 
 Keep this checklist stable and version its IDs. A PR may mark a guideline N/A only with a specific reason; for example, “N/A: this changes only the search evaluation fixture, with no user-facing UI.” Claims such as “N/A: not needed” are incomplete. Reviewers request evidence when the explanation is doubtful. Mechanical rules belong in formatters, linters, type checks and CI rather than prose.
+
+Write guides around the task a reader is trying to complete, with steps before detailed reference. Start substantive Markdown guides with two short metadata fields: `summary` says what the guide covers, and `read_when` says when to open it. A directory README gives the same orientation for a group of files. A source file with a non-obvious purpose gets a brief top-of-file comment explaining its role and when to read it. Skip headers on tiny self-explanatory files, generated code, vendored libraries and data snapshots; their directory guide can cover them. Keep the root `AGENTS.md` short and use it to route agents to the appropriate guide rather than repeating the guides there. Update these summaries when file responsibilities change.
 
 ## 4. Test creation, structure and maintenance
 
@@ -67,27 +95,27 @@ Each PR also completes the four testing guidelines below. For a change with no a
 | T1 | Create meaningful tests | New behavior gets an assertion of an observable contract; a bug fix gets a reproducer that fails before the fix. Cover a relevant failure, boundary or state transition. Avoid duplicate cases, tests that only restate implementation, and test counts as a goal. |
 | T2 | Put tests at the right level | Use the cheapest level that proves the contract. Keep pure logic tests beside their module; put API/provider contracts, database/runner integration, migrations and browser journeys in named suites. Choose one primary suite for each behavior and register its shared dependencies in the CI impact manifest. |
 | T3 | Keep tests trustworthy | Use deterministic factories, fixed clocks/seeds and isolated state. Fake network calls by default; run real providers only in explicit integration or preview suites. Keep production secrets and personal data out of fixtures; preview tests use non-production credentials. Update tests when a reviewed contract changes, remove obsolete tests with an explanation, and never weaken assertions just to make CI green. |
-| T4 | Evaluate AI behavior | Version reviewed cases and a held-out set for search interpretation, matching, company identity and Hiring Wire facts. Run the relevant evaluations when prompts, models, tool schemas or routing change; report quality, latency and cost against defined thresholds. Keep stochastic variance visible rather than treating one lucky run as proof. |
+| T4 | Evaluate AI behavior | Version reviewed cases and a held-out set for search interpretation, matching, company identity and weekly company-activity facts. Run the relevant evaluations when prompts, models, tool schemas or routing change; report quality, latency and cost against defined thresholds. Keep stochastic variance visible rather than treating one lucky run as proof. |
 
 Use table-driven cases when several inputs exercise the same invariant. Prefer small fixtures with only the facts a test needs; avoid broad snapshots of rendered pages or provider responses unless the snapshot itself is the contract. Name tests by input condition and expected outcome so failures identify the broken behavior.
 
-Prioritize integration cases where boundaries create risk: search revisions and stale responses, entitlement changes, SSE reconnect, idempotent billing and company requests, AI-decision invalidation, and stored-state migrations across old and new API/runner versions. Keep a small browser set for the critical user journeys; do not duplicate every unit scenario in a browser. Start that suite with Playwright for the new web application; Selenium is also viable if a concrete browser or team need warrants it. Use semantic selectors and observable outcomes rather than sleeps or broad page snapshots. Test data and fixtures are owned alongside their suites, with changes to shared fixtures widening CI selection.
+Prioritize integration cases where boundaries create risk: search revisions and stale responses, access changes, reconnecting the live result stream (Server-Sent Events), billing and company requests that must take effect only once, invalidating old AI decisions, and moving stored state between old and new server/background-worker versions. Keep a small browser set for the critical user journeys; do not duplicate every unit scenario in a browser. Start that suite with Playwright for the new web application; Selenium is also viable if a concrete browser or team need warrants it. Use selectors based on visible labels and roles, and check observable outcomes rather than sleeps or broad page snapshots. Test data and fixtures are owned alongside their suites, with changes to shared fixtures widening the automated checks selected for a change.
 
 Every suite has an owner, purpose, expected runtime and CI lane. Track failures and duration. Quarantine a flaky test only with an owner, issue, expiry and replacement signal during quarantine; fix or delete it before expiry. A removed test must follow removed behavior or be replaced by evidence at a better level. Review test additions that materially increase suite time or repeat an existing invariant.
 
-## 5. CI that selects relevant tests
+## 5. Automated checks for pull requests
 
-One required, always-running `CI / decision` check owns the result of each PR. It reports the changed paths, selected suites, reasons for selection and reasons for any skip. It fails if a required suite fails, a selected suite does not report a result, or the selection script fails. An unknown path triggers the full suite and is reported as a fallback; a passing full run may clear the check. Do not path-filter the required workflow itself: GitHub can leave a required check pending when the whole workflow is skipped.
+The planned automated-check system (CI) gives each pull request one always-running `CI / decision` result. It reports which changed paths selected which test groups and why anything was skipped. It fails if a required group fails, does not report a result, or the selection script fails. An unfamiliar path runs the full suite and reports that fallback. Do not skip the entire required workflow based on paths: GitHub can leave a required result pending when its workflow never starts.
 
-Keep suite ownership and impact rules in one reviewed manifest next to the CI selector. Start with explicit groups for frontend, API, runner, database/migrations, search and AI evaluations, billing/access, and deployment/infrastructure. Selection uses the diff against the actual PR base, includes dependents of changed shared contracts, and can be expanded with a `full-ci` override. Changes to the selector, workflows, lockfiles, shared types, authentication/access, billing, database schema, deployment contracts, model prompts, tool schemas or model versions receive broad or full coverage. Unknown paths fail closed to the full suite. Test the selector with representative change sets.
+Keep test ownership and impact rules in one reviewed map next to the selection script. Start with groups for website, server, background worker, database changes, search and AI checks, billing/access, and deployment. Selection compares changed files with the pull request's actual base and includes tests that depend on shared contracts. A `full-ci` override runs everything. Changes to the selector, workflows, dependency lockfiles, shared types, access control, billing, database schema, deployment contracts, model instructions, tool definitions or model versions receive broad or full coverage. Unfamiliar paths run the full suite. Test the selection script with representative change sets.
 
 Ordinary PRs run a fast baseline (format, lint/type checks for touched code, PR-template validation, and relevant build checks) plus selected behavioral suites against the proposed merge result with current `dev`, not only the feature head. Run the full suite on every release candidate and on a scheduled `dev` run so selection mistakes are detected before release. Keep the full run observable: record duration, failure rate and flaky tests. Set time budgets for each suite and review additions that make CI materially slower.
 
 Define AI evaluation pass/fail thresholds from representative baselines before the first live release; running an evaluation without an acceptance threshold does not make the release gate green.
 
-## 6. Release gate
+## 6. Verify a release before it goes live
 
-The release PR from the frozen candidate to `main` must record a named release owner, changelog, migration and rollback steps, feature flags, known limitations and candidate SHA. Its gate is:
+The release pull request from the frozen version proposed for release (the candidate) to `main` must record a named release owner, changelog, data-migration and rollback steps, feature flags, known limitations and candidate Git commit ID. A commit ID (often called a SHA or OID) identifies exact source code; an artifact digest is a hash identifying a built file or image. In this section, the frontend is the website, the API is its server interface, and the runner is the background worker. The release gate is:
 
 1. Full static, build, unit, contract, integration, migration and AI evaluation suites pass on the exact candidate with the current `main` base. The browser suite runs once against the deployed preview in step 3.
 2. Build the frontend, API and runner once; deploy those versioned artifacts to an isolated preview. Record the exact candidate SHA, current `main` base OID, tree hash, immutable frontend deployment URL and artifact digests.
@@ -107,9 +135,9 @@ Run a small Playwright suite through that URL for user-visible, cross-service be
 | --- | --- | --- |
 | Account and access | Browser + API | Visitor and paid journeys show the right data; trial and expired states and protected API responses enforce entitlement. |
 | Search | Browser + API | A query becomes the expected criteria and fresh results; an invalid normalization leaves the prior search intact. |
-| AI narrowing | Browser + API | One successful and one honest failure journey render correctly; API checks distinguish rejected, insufficient-evidence and provider-failure states. |
-| Live results | Browser + API | SSE arrival and reconnect work through Cloudflare; API checks reject duplicates and stale revisions. |
-| Background work | Worker/API + browser result | A synthetic runner task completes once; company request deduplication and a published Hiring Wire edition are visible. |
+| AI narrowing (extra model-based filtering) | Browser + API | One successful and one honest failure journey render correctly; server checks distinguish rejected, insufficient-evidence and provider-failure states. |
+| Live results | Browser + API | New results and reconnection work through Cloudflare; server checks prevent duplicates and updates to an old search revision. |
+| Background work | Worker/API + browser result | A test worker task completes once; repeated company requests have one effect, and the weekly company-activity summary called Hiring Wire is visible. |
 | Billing and data | API/migration + browser result | A signed sandbox callback and replay produce one entitlement change; the browser reflects it and migration of representative prior state succeeds. |
 
 Use deterministic provider fixtures for broad journeys and a bounded real-provider contract check where that provider is required for release. Run the browser smoke set in desktop Chromium and one mobile browser profile on release; add more browsers only for a supported compatibility promise or a demonstrated defect. Assertions check behavior and state, with screenshots or traces retained for diagnosis. Set test and readiness timeouts. The gate fails on a missing deployment, identity mismatch, failed journey, unavailable required provider, or missing result. Publish a concise report with the candidate SHA, base OID, deployment IDs, digests, test counts and sanitized failure traces. Keep a successful preview available for release-owner review, then destroy it after the release decision. On failed or cancelled runs, an always-run finalizer captures diagnostics and cleans up. Enforce an independent expiry for abandoned previews; alert the release owner and block another candidate if cleanup fails.
