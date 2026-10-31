@@ -1,3 +1,15 @@
+# Secret values belong in Doppler. Only empty examples may be committed.
+.env
+.env.*
+!.env.example
+.doppler/
+secrets.json
+secrets.env
+*.pem
+*.key
+
+# Local tooling and generated test output
+.DS_Store
 node_modules/
 playwright-report/
 test-results/

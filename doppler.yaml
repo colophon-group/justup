@@ -1,0 +1,3 @@
+setup:
+  - project: justup-runtime
+    config: dev
