@@ -5,7 +5,7 @@ read_when: Preparing the demo host, inspecting its systemd units or rehearsing r
 
 # Preview host files
 
-These files prepare one explicitly reviewed Linux ARM64 host. They do not provision a provider resource, start the API, configure Cloudflare or provide a model runner. Follow the [operations guide](../../docs/demo-operations.md) before applying anything. No remote changes have been made by adding these files.
+These files prepare one explicitly reviewed Linux ARM64 host. They do not provision a provider resource, start the API, configure Cloudflare or supply model authentication. The disabled model socket/service prepare an isolation boundary; the trusted queue adapter is separate integration work. Follow the [operations guide](../../docs/demo-operations.md) before applying anything. No remote changes have been made by adding these files.
 
 `justup-preview.slice` caps the aggregate preview at half a CPU, low CPU weight, 768 MiB memory pressure/1 GiB maximum, no swap and 96 tasks. Every future runner, tunnel and maintenance process must use this same slice. A new 2 GiB regular-file loop filesystem at `/srv/justup_preview` bounds all application bytes, Node, persistent data, work, backups and diagnostics. The installer refuses existing image/mount/UID/unit paths. It never accepts a supplied device or modifies the existing Murmur volume.
 
@@ -20,3 +20,5 @@ The `scripts/preview-operations.test.mjs` wrapper registers the same Python asse
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/preview-operations.test.py
 ```
+
+The model broker uses systemd socket activation: root creates a mode-0660 socket in a root-owned mode-0750 directory, the queue is the sole client-group member and the API is excluded. The model UID has no API/state/JEV group. Its unit hides API/database/queue/host-private paths, permits writes only to bounded invocation/auth-refresh directories, and requires missing-by-default root-owned isolation review evidence. It starts no agent or auth flow during installation. Target-host filesystem, network and tool isolation must pass before attestation or activation.

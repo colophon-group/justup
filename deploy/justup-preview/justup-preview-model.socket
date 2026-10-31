@@ -1,0 +1,17 @@
+# Root creates the socket; only the trusted queue UID joins the client group.
+[Unit]
+Description=Justup isolated model broker socket
+Requires=srv-justup_preview.mount
+After=srv-justup_preview.mount
+ConditionPathExists=/srv/justup_preview/model/config/isolation-reviewed.json
+
+[Socket]
+ListenStream=/srv/justup_preview/broker/model.sock
+SocketUser=root
+SocketGroup=justup-preview-model-client
+SocketMode=0660
+DirectoryMode=0750
+Accept=no
+Backlog=4
+RemoveOnStop=yes
+Service=justup-preview-model.service

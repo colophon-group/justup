@@ -35,6 +35,24 @@ def generation(path):
     return value
 
 
+def stable_generation(path):
+    path = Path(path)
+    first = generation(path)
+    pending = path.with_name(path.name + '.pending')
+    # lstat distinguishes a missing marker from an unreadable/malformed one.
+    # Any existing object is a fail-closed transaction/recovery condition.
+    try:
+        pending.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError('A private deletion transaction is pending or needs crash recovery.')
+    second = generation(path)
+    if first != second:
+        raise ValueError('Deletion generation changed while checking transaction state.')
+    return second
+
+
 def fsync_directory(path):
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -85,7 +103,7 @@ def backup(database, folder, barrier, source_commit, build_identity, now=None):
     folder = check_folder(folder)
     if not re.fullmatch('[a-f0-9]{40}', source_commit) or not re.fullmatch('[a-f0-9]{64}', build_identity):
         raise ValueError('Backup needs the exact active source and build identity.')
-    start_generation = generation(barrier)
+    start_generation = stable_generation(barrier)
     now = time.time() if now is None else now
     name = 'backup-' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(now)) + '-' + str(uuid.uuid4()) + '.sqlite'
     target = folder / name
@@ -109,7 +127,7 @@ def backup(database, folder, barrier, source_commit, build_identity, now=None):
                 source.backup(destination, pages=128, progress=progress)
                 if destination.execute('PRAGMA integrity_check').fetchone() != ('ok',):
                     raise ValueError('Backup integrity check failed.')
-        if target.stat().st_size > MAX_BACKUP or generation(barrier) != start_generation:
+        if target.stat().st_size > MAX_BACKUP or stable_generation(barrier) != start_generation:
             raise ValueError('Deletion generation changed during backup; discard it.')
         fd = os.open(target, os.O_RDONLY)
         try:
@@ -128,7 +146,7 @@ def backup(database, folder, barrier, source_commit, build_identity, now=None):
             os.fsync(stream.fileno())
         fsync_directory(folder)
         # A deletion after this check purges these files under the core callback.
-        if generation(barrier) != start_generation:
+        if stable_generation(barrier) != start_generation:
             raise ValueError('Deletion generation changed before backup publication.')
         completed = True
         prune(folder, now)
@@ -145,7 +163,7 @@ def validate_restore(snapshot, barrier, now=None):
     check_folder(snapshot.parent)
     if not BACKUP_NAME.fullmatch(snapshot.name):
         raise ValueError('Restore only an owned preview backup name.')
-    current = generation(barrier)
+    current = stable_generation(barrier)
     info = json.loads(snapshot.with_suffix('.json').read_text())
     now = time.time() if now is None else now
     if info.get('formatVersion') != 1 or info.get('privateGeneration') != current:
@@ -166,7 +184,7 @@ def restore(snapshot, barrier, destination, prepare_command, now=None):
     info = validate_restore(snapshot, barrier, now)
     if destination.exists() or destination.is_symlink() or not prepare_command:
         raise ValueError('Restore requires a new destination and an explicit auth-owned preparation command.')
-    initial = generation(barrier)
+    initial = stable_generation(barrier)
     published = False
     try:
         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -184,7 +202,7 @@ def restore(snapshot, barrier, destination, prepare_command, now=None):
         receipt = json.loads(result.stdout)
         if receipt.get('schemaVersion') != 1 or receipt.get('sessionsInvalidated') is not True or receipt.get('remainingSessions') != 0 or type(receipt.get('sessionsDeleted')) is not int or receipt['sessionsDeleted'] < 0:
             raise ValueError('Auth-owned restore session invalidation was not confirmed.')
-        if generation(barrier) != initial:
+        if stable_generation(barrier) != initial:
             raise ValueError('Deletion generation changed during restore.')
         with readonly(destination) as target:
             if target.execute('PRAGMA integrity_check').fetchone() != ('ok',):

@@ -169,6 +169,28 @@ class BoundaryContracts(unittest.TestCase):
         with patch.object(Path, 'read_text', return_value='0::/justup.slice/justup-preview.slice/preview-test.service\n'):
             self.assertEqual(host.self_cgroup(), Path('/sys/fs/cgroup/justup.slice/justup-preview.slice'))
 
+    def test_model_membership_and_socket_keep_api_and_database_separate(self):
+        root = HERE.parent
+        plan = host.plan(root, 'a' * 64)
+        self.assertEqual(plan['groups'][host.STATE_GROUP], [host.USER, host.RUNNER_USER])
+        self.assertEqual(plan['groups'][host.CLIENT_GROUP], [host.RUNNER_USER])
+        self.assertTrue(all(host.MODEL_USER not in members for members in plan['groups'].values()))
+        unit = (root / 'deploy/justup-preview/justup-preview-model.service').read_text()
+        socket = (root / 'deploy/justup-preview/justup-preview-model.socket').read_text()
+        self.assertIn('User=justup-preview-model', unit)
+        self.assertIn('-/srv/justup_preview/state', unit)
+        self.assertIn('-/srv/justup_preview/config', unit)
+        self.assertIn('StandardOutput=null', unit)
+        self.assertIn('SocketUser=root', socket)
+        self.assertIn('SocketMode=0660', socket)
+        self.assertIn('DirectoryMode=0750', socket)
+        self.assertIn('ConditionPathExists=/srv/justup_preview/model/config/isolation-reviewed.json', socket)
+
+    def test_model_launcher_requires_systemd_fd_before_any_credential_read(self):
+        model = load('preview-model-run')
+        with patch.object(model.os, 'getuid', return_value=1234), patch.dict(os.environ, {'LISTEN_PID': 'wrong', 'LISTEN_FDS': '1'}), patch.object(Path, 'read_text', side_effect=AssertionError('must not read credentials')):
+            self.assertEqual(model.main(), 1)
+
     def test_api_environment_excludes_operator_credentials_and_fixes_storage(self):
         manifest, _ = payload()
         config = {'JUSTUP_DEMO_ORIGIN': 'https://preview.example', 'JUSTUP_DEMO_CSRF_SECRET': 'a' * 32,
@@ -240,11 +262,56 @@ class RecoveryContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'private deletion'):
                 recovery.validate_restore(snapshot, barrier, now=1001)
 
+    def test_backup_refuses_rotated_generation_until_sql_deletion_commits(self):
+        # Reproduce the real SQLite WAL timing: the barrier rotates before SQL
+        # commit, so readers can still see the deleted record under the NEW UUID.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            writer = sqlite3.connect(db)
+            writer.execute('PRAGMA journal_mode=WAL')
+            writer.execute('BEGIN IMMEDIATE')
+            pending = barrier.with_name(barrier.name + '.pending')
+            pending.write_text(str(uuid.uuid4()) + '\n')
+            barrier.write_text(str(uuid.uuid4()) + '\n')
+            writer.execute('DELETE FROM private_records')
+            with sqlite3.connect(db) as reader:
+                self.assertEqual(reader.execute('SELECT count(*) FROM private_records').fetchone()[0], 1)
+            with self.assertRaisesRegex(ValueError, 'transaction is pending'):
+                self.make_backup(db, folder, barrier)
+            self.assertEqual(list(folder.iterdir()), [])
+            writer.commit()
+            writer.close()
+            # Only the transaction owner removes/fsyncs this after COMMIT.
+            pending.unlink()
+            snapshot = self.make_backup(db, folder, barrier)
+            with sqlite3.connect(snapshot) as reader:
+                self.assertEqual(reader.execute('SELECT count(*) FROM private_records').fetchone()[0], 0)
+
+    def test_retained_pending_marker_blocks_backup_and_restore_after_crash(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            snapshot = self.make_backup(db, folder, barrier)
+            pending = barrier.with_name(barrier.name + '.pending')
+            pending.write_text(str(uuid.uuid4()) + '\n')
+            with self.assertRaisesRegex(ValueError, 'crash recovery'):
+                recovery.validate_restore(snapshot, barrier, now=1001)
+            with self.assertRaisesRegex(ValueError, 'crash recovery'):
+                self.make_backup(db, folder, barrier)
+
+    def test_generation_rotation_around_pending_absence_check_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            barrier = Path(temp) / 'private-generation'
+            with patch.object(recovery, 'generation', side_effect=[str(uuid.uuid4()), str(uuid.uuid4())]):
+                with self.assertRaisesRegex(ValueError, 'checking transaction state'):
+                    recovery.stable_generation(barrier)
+
     def test_generation_race_discards_snapshot_and_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             db, folder, barrier = self.fixture(root)
-            with patch.object(recovery, 'generation', side_effect=[str(uuid.uuid4()), str(uuid.uuid4())]):
+            with patch.object(recovery, 'stable_generation', side_effect=[str(uuid.uuid4()), str(uuid.uuid4())]):
                 with self.assertRaisesRegex(ValueError, 'changed during backup'):
                     self.make_backup(db, folder, barrier)
             self.assertEqual(list(folder.iterdir()), [])

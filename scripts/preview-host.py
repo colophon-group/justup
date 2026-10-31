@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import platform
 import pwd
+import grp
 import shutil
 import subprocess
 import sys
@@ -28,11 +29,17 @@ BASE = Path('/srv/justup_preview')
 IMAGE = Path('/var/lib/justup-preview.disk')
 SLICE = 'justup-preview.slice'
 UNITS = ('justup-preview.slice', 'srv-justup_preview.mount', 'justup-preview-api.service',
-         'justup-preview-guard.service', 'justup-preview-guard.timer')
-STOP_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service')
+         'justup-preview-guard.service', 'justup-preview-guard.timer',
+         'justup-preview-model.socket', 'justup-preview-model.service')
+STOP_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service',
+              'justup-preview-model.socket', 'justup-preview-model.service')
 ROOT_FLOOR = 8 * GIB
 DISK_LIMIT = 2 * GIB
 USER = 'justup-preview-api'
+RUNNER_USER = 'justup-preview-runner'
+MODEL_USER = 'justup-preview-model'
+STATE_GROUP = 'justup-preview-state'
+CLIENT_GROUP = 'justup-preview-model-client'
 
 
 def call(*args, capture=False):
@@ -60,7 +67,11 @@ def plan(root, host_fingerprint=None):
             'imageBytes': DISK_LIMIT, 'minimumRootFreeBytesAfterAllocation': ROOT_FLOOR,
             'slice': {'cpuQuota': '50%', 'cpuWeight': 10, 'memoryHigh': 768 * MIB,
                       'memoryMax': GIB, 'memorySwapMax': 0, 'tasksMax': 96},
-            'uid': USER, 'bind': '127.0.0.1:8787',
+            'uids': {'api': USER, 'queue': RUNNER_USER, 'model': MODEL_USER},
+            'groups': {STATE_GROUP: [USER, RUNNER_USER], CLIENT_GROUP: [RUNNER_USER]},
+            'modelSocket': 'root:' + CLIENT_GROUP + ' 0660; root-owned 0750 parent; inherited fd3',
+            'privateDeletionProtocol': 'pending marker held through SQL COMMIT/ROLLBACK; core integration required',
+            'bind': '127.0.0.1:8787',
             'protected': ['jobseek-lightpanda-renderer', '/mnt/murmur', 'all existing services and volumes'],
             'startAutomatically': False,
             'blocked': ['runner tool/credential isolation review', 'approved policy URLs/version',
@@ -169,11 +180,13 @@ def stop_preview():
 def guard(stop_on_failure=False):
     try:
         result = {'kernel': verify_caps(), 'storage': verify_storage()}
-        for directory, maximum in [('logs', 128 * MIB), ('state/work', 512 * MIB)]:
-            folder = BASE / directory
-            usage = sum(p.lstat().st_size for p in folder.rglob('*') if p.is_file() and not p.is_symlink())
+        groups = [(('logs',), 128 * MIB),
+                  (('state/work', 'model/invocations', 'model/credentials'), 512 * MIB)]
+        for directories, maximum in groups:
+            usage = sum(p.lstat().st_size for directory in directories for p in (BASE / directory).rglob('*')
+                        if p.is_file() and not p.is_symlink())
             if usage > maximum:
-                raise ValueError('Preview logs or workspace exceeded its sublimit.')
+                raise ValueError('Preview logs or aggregate workspace exceeded its sublimit.')
         for old in (BASE / 'logs').glob('*.jsonl'):
             if not old.is_symlink() and old.is_file() and old.stat().st_mtime < __import__('time').time() - 7 * 86400:
                 old.unlink()
@@ -206,12 +219,20 @@ def install(root, expected, host_fingerprint):
     for name in UNITS[1:]:
         if (Path('/etc/systemd/system') / name).exists():
             raise ValueError('A preview unit already exists; refuse to overwrite it.')
-    try:
-        pwd.getpwnam(USER)
-    except KeyError:
-        pass
-    else:
-        raise ValueError('Preview UID already exists; inspect it before reusing it.')
+    for user in (USER, RUNNER_USER, MODEL_USER):
+        try:
+            pwd.getpwnam(user)
+        except KeyError:
+            pass
+        else:
+            raise ValueError('A preview UID already exists; inspect it before reusing it.')
+    for group in (USER, RUNNER_USER, MODEL_USER, STATE_GROUP, CLIENT_GROUP):
+        try:
+            grp.getgrnam(group)
+        except KeyError:
+            pass
+        else:
+            raise ValueError('A preview group already exists; inspect it before reusing it.')
     # Exclusive creation is the only path to mkfs. No supplied device is accepted.
     fd = os.open(IMAGE, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     try:
@@ -227,14 +248,34 @@ def install(root, expected, host_fingerprint):
         target.chmod(0o644)
     call('systemctl', 'daemon-reload')
     call('systemctl', 'start', 'srv-justup_preview.mount')
-    call('useradd', '--system', '--user-group', '--no-create-home', '--home-dir', str(BASE / 'state'), '--shell', '/usr/sbin/nologin', USER)
+    for group in (STATE_GROUP, CLIENT_GROUP):
+        call('groupadd', '--system', group)
+    for user, groups in ((USER, STATE_GROUP), (RUNNER_USER, STATE_GROUP + ',' + CLIENT_GROUP), (MODEL_USER, None)):
+        argv = ['useradd', '--system', '--user-group', '--no-create-home', '--home-dir', '/nonexistent', '--shell', '/usr/sbin/nologin']
+        if groups:
+            argv += ['--groups', groups]
+        call(*argv, user)
     uid = pwd.getpwnam(USER)
+    model_uid = pwd.getpwnam(MODEL_USER)
     for path in ('releases', 'ops', 'config'):
         (BASE / path).mkdir(mode=0o755)
     for path in ('state', 'state/work', 'state/backups', 'logs'):
         folder = BASE / path
         folder.mkdir(mode=0o700)
         os.chown(folder, uid.pw_uid, uid.pw_gid)
+    state = BASE / 'state'
+    state.chmod(0o2770)
+    os.chown(state, uid.pw_uid, grp.getgrnam(STATE_GROUP).gr_gid)
+    broker = BASE / 'broker'
+    broker.mkdir(mode=0o750)
+    os.chown(broker, 0, grp.getgrnam(CLIENT_GROUP).gr_gid)
+    for path in ('model', 'model/config', 'model/task-cwd', 'model/invocations', 'model/credentials'):
+        folder = BASE / path
+        folder.mkdir(mode=0o750 if path in {'model', 'model/config'} else 0o700)
+        os.chown(folder, 0, model_uid.pw_gid)
+    (BASE / 'model/task-cwd').chmod(0o555)
+    for path in ('model/invocations', 'model/credentials'):
+        os.chown(BASE / path, model_uid.pw_uid, model_uid.pw_gid)
     generation = BASE / 'state/private-generation'
     generation.write_text(str(uuid.uuid4()) + '\n')
     generation.chmod(0o600)
@@ -354,7 +395,10 @@ def teardown(erase_data=False):
     if erase_data:
         IMAGE.unlink()
         BASE.rmdir()
-        call('userdel', USER)
+        for user in (USER, RUNNER_USER, MODEL_USER):
+            call('userdel', user)
+        for group in (STATE_GROUP, CLIENT_GROUP):
+            call('groupdel', group)
         for name in UNITS[1:]:
             (Path('/etc/systemd/system') / name).unlink()
         call('systemctl', 'daemon-reload')
@@ -364,7 +408,7 @@ def teardown(erase_data=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'prove', 'guard', 'stop', 'stage', 'switch', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
@@ -385,6 +429,8 @@ def main():
             result = proof()
         elif args.command == 'guard':
             result = guard(args.stop_on_failure)
+        elif args.command == 'resource-guard':
+            result = {'kernel': verify_caps(), 'storage': verify_storage()}
         elif args.command == 'stage':
             if args.bundle is None:
                 raise ValueError('Bundle path is required.')
