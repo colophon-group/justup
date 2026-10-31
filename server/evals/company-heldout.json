@@ -1,8 +1,8 @@
 {
-  "version": 2,
+  "version": 3,
   "purpose": "Held-out identity review inputs; deterministic service fixtures verify the trusted evidence boundary, not model accuracy.",
   "liveGate": {
-    "minimumCases": 14,
+    "minimumCases": 18,
     "correctUnambiguousIdentity": 0.95,
     "guessedAmbiguousIdentity": 0,
     "unverifiedCandidate": 0,
@@ -92,6 +92,29 @@
       "input": "Acme",
       "domain": "acme.com",
       "expected": "clarification/unresolved when retained evidence cannot support official identity; no careerboard metadata fabrication"
+    },
+    {
+      "id": "ui-url-only-brand-name",
+      "input": "https://official.example/about",
+      "scope": "Europe",
+      "expected": "one grounded call, no domain proposal; supported official brand may differ from URL tokens"
+    },
+    {
+      "id": "ui-bare-host-only",
+      "input": "official.example",
+      "scope": "Europe",
+      "expected": "explicit trusted website path, one grounded call; same URL/domain/evidence checks"
+    },
+    {
+      "id": "ui-private-or-ats-site",
+      "input": "https://127.0.0.1/private",
+      "expected": "no fetch/inference; honest clarification/rejection, likewise ATS-only host"
+    },
+    {
+      "id": "numeric-entity-company-name",
+      "input": "Caf\u00e9 M\u00fcller",
+      "domain": "official.example",
+      "expected": "valid decimal/hex Unicode entities ground the actual name; invalid/control/surrogate scalar entities cannot create identity text"
     }
   ],
   "policy": {

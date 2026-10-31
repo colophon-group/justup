@@ -8,6 +8,8 @@ import { performance } from 'node:perf_hooks';
 
 export const CODEX_VERSION='0.159.2';
 export const LUNA_MODEL='gpt-6-luna';
+// SHA256 of canonical JSON []; a matching nonempty catalogue is never approved.
+export const EMPTY_TOOL_CATALOG_SHA256='4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945';
 const fail=(code)=>Object.assign(new Error('The model task could not finish.'),{code});
 const plain=(v)=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&Object.getPrototypeOf(v)===Object.prototype;
 
@@ -58,8 +60,8 @@ export function codexEnvironment({codexHome,taskCwd}) {
   return {HOME:codexHome,CODEX_HOME:codexHome,TMPDIR:taskCwd,PATH:'/usr/bin:/bin',LANG:'C.UTF-8',LC_ALL:'C.UTF-8',NO_COLOR:'1'};
 }
 export function modelAttestationMatches(report,config={}, {company=false}={}) {
-  return plain(report)&&/^[a-f0-9]{64}$/.test(config.buildIdentity??'')&&/^[a-f0-9]{64}$/.test(config.hostPlanSha256??'')&&/^[a-f0-9]{64}$/.test(config.toolCatalogSha256??'')&&
-    report.cliVersion===CODEX_VERSION&&report.model===LUNA_MODEL&&report.buildIdentity===config.buildIdentity&&report.hostPlanSha256===config.hostPlanSha256&&report.toolCatalogSha256===config.toolCatalogSha256&&
+  return plain(report)&&/^[a-f0-9]{64}$/.test(config.buildIdentity??'')&&/^[a-f0-9]{64}$/.test(config.hostPlanSha256??'')&&config.toolCatalogSha256===EMPTY_TOOL_CATALOG_SHA256&&report.toolCatalogSha256===EMPTY_TOOL_CATALOG_SHA256&&
+    report.cliVersion===CODEX_VERSION&&report.model===LUNA_MODEL&&report.buildIdentity===config.buildIdentity&&report.hostPlanSha256===config.hostPlanSha256&&
     report.approved===true&&report.executorBoundary==='dedicated_uid_broker'&&report.socketPath===config.socketPath&&report.deniedPathsVerified===true&&report.retentionVerified===true&&
     (!company||config.companyResearchVerified===true&&report.companyResearchVerified===true);
 }
@@ -72,7 +74,7 @@ export function checkModelIsolation(config={}, {company=false}={}) {
     const socket=statSync(config.socketPath);
     if(!socket.isSocket()||socket.uid!==0||(socket.mode&0o007)!==0) return false;
     const parent=statSync(dirname(config.socketPath));if(!parent.isDirectory()||parent.uid!==0||(parent.mode&0o022)!==0)return false;
-    if(!/^[a-f0-9]{64}$/.test(config.toolCatalogSha256??'')||!isAbsolute(config.attestationPath)) return false;
+    if(config.toolCatalogSha256!==EMPTY_TOOL_CATALOG_SHA256||!isAbsolute(config.attestationPath)) return false;
     if(realpathSync(config.attestationPath)!==config.attestationPath) return false;
     const reportFile=statSync(config.attestationPath);
     if(!reportFile.isFile()||reportFile.uid!==0||(reportFile.mode&0o022)!==0||reportFile.size>16_384) return false;

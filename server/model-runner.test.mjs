@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync,readFileSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { codexArguments,codexEnvironment,checkModelIsolation,modelAttestationMatches,createCodexModel,executeCodex,validateModelData,CODEX_VERSION,LUNA_MODEL } from './model-runner.mjs';
+import { codexArguments,codexEnvironment,checkModelIsolation,modelAttestationMatches,createCodexModel,executeCodex,validateModelData,CODEX_VERSION,LUNA_MODEL,EMPTY_TOOL_CATALOG_SHA256 } from './model-runner.mjs';
 
 const messages=[{type:'thread.started',thread_id:'private'},{type:'turn.started'},{type:'item.completed',item:{id:'m',type:'agent_message',text:'{"ok":true}'}},{type:'turn.completed',usage:{input_tokens:123,cached_input_tokens:100,output_tokens:4}}];
 const lines=(events)=>events.map(e=>JSON.stringify(e)).join('\n')+'\n';
@@ -33,7 +33,7 @@ test('provider stays unavailable without actual isolation attestation or dedicat
   await assert.rejects(()=>m.interpretIntent({query:'hello'}),{code:'dependency_unavailable'});
 });
 test('approval binds exact current artifact and host plan, with separate company proof',()=>{
-  const config={buildIdentity:'a'.repeat(64),hostPlanSha256:'b'.repeat(64),toolCatalogSha256:'c'.repeat(64),socketPath:'/root-controlled/model.sock',companyResearchVerified:true};
+  const config={buildIdentity:'a'.repeat(64),hostPlanSha256:'b'.repeat(64),toolCatalogSha256:EMPTY_TOOL_CATALOG_SHA256,socketPath:'/root-controlled/model.sock',companyResearchVerified:true};
   const report={...config,cliVersion:CODEX_VERSION,model:LUNA_MODEL,approved:true,executorBoundary:'dedicated_uid_broker',deniedPathsVerified:true,retentionVerified:true};
   assert.equal(modelAttestationMatches(report,config),true);assert.equal(modelAttestationMatches(report,config,{company:true}),true);
   for(const patch of [{buildIdentity:'d'.repeat(64)},{hostPlanSha256:'e'.repeat(64)},{toolCatalogSha256:'f'.repeat(64)},{cliVersion:'0.143.0'},{approved:false},{deniedPathsVerified:false},{retentionVerified:false},{model:'other'}])assert.equal(modelAttestationMatches({...report,...patch},config),false);
@@ -41,6 +41,10 @@ test('approval binds exact current artifact and host plan, with separate company
   assert.equal(modelAttestationMatches({...report,companyResearchVerified:false},config),true);
   assert.equal(modelAttestationMatches({...report,companyResearchVerified:false},config,{company:true}),false);
   assert.equal(modelAttestationMatches(report,{...config,companyResearchVerified:false},{company:true}),false);
+  // Matching hashes alone do not approve a catalogue containing any tools.
+  const nonempty='c'.repeat(64);
+  assert.equal(modelAttestationMatches({...report,toolCatalogSha256:nonempty},{...config,toolCatalogSha256:nonempty}),false);
+  assert.equal(modelAttestationMatches(report,{...config,toolCatalogSha256:nonempty}),false);
 });
 test('fake Codex JSON parses only final schema data and actual usage counters',async()=>{
   const result=await fake(emit());assert.deepEqual(result.data,{ok:true});assert.deepEqual(result.usage,{inputTokens:123,cachedInputTokens:100,outputTokens:4,reasoningOutputTokens:0});assert.equal(result.toolCalls,0);assert.equal(Object.hasOwn(result,'trace'),false);

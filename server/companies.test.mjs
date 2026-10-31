@@ -3,7 +3,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { createCompanyService, validateCompanyUrl } from './companies.mjs';
+import { resolveCompanyIdentity } from './model-broker.mjs';
 
 const AT = Date.parse('2026-10-31T16:00:00Z');
 const COMPANY = { id: 'source-company', name: 'Known Company', websiteUrl: null,
@@ -105,6 +107,22 @@ test('new candidate requires trusted evidence and returns only a safe request pr
   assert.equal(JSON.stringify(sent).includes('owner-a'), false);
   assert.equal(f.service.taskResult(f.tasks.get('owner-a', task.id), { accountId: 'owner-b' }), null);
   assert.deepEqual(Object.keys(outcome.output).sort(), ['previewRevision', 'requestId']);
+});
+test('browser input/scope-only website submissions reach one grounded decision without a domain proposal',async t=>{
+  for(const raw of ['https://newcompany.com/about','newcompany.com']){
+    let inferences=0;
+    const f=fixture(t,{model:{resolveCompany(input){
+      assert.deepEqual(input,{input:raw,scope:'European roles',domain:null,careerUrl:null});
+      return resolveCompanyIdentity(input,{
+        fetchPage:async url=>{const text='<title>Cloud Collective</title><h1>Cloud Collective</h1>Official company website.';return {url,finalUrl:url,status:200,text,bytes:Buffer.byteLength(text),sha256:createHash('sha256').update(text).digest('hex')};},
+        executeStage:async({stage})=>{inferences++;assert.equal(stage,'grounded_decision');const result=candidate();result.data.candidate.name='Cloud Collective';result.data.candidate.evidenceUrls=['https://newcompany.com/'];return {data:result.data,usage:{inputTokens:100,cachedInputTokens:0,outputTokens:50,reasoningOutputTokens:0}};}
+      }).then(({data,evidenceVerified,evidenceProvenance})=>({data,evidenceVerified,evidenceProvenance}));
+    }}});
+    const created=await f.create({input:raw,scope:'European roles',requestKey:'ui-shaped'}),task=f.claim(created.body.task.id),outcome=await f.service.runTask(task);
+    assert.equal(outcome.status,'succeeded');assert.equal(inferences,1);
+    const result=f.service.taskResult(f.tasks.get('owner-a',task.id),{accountId:'owner-a'});
+    assert.equal(result.request.candidate.name,'Cloud Collective');assert.equal(result.request.input,raw);assert.equal(result.request.scope,'European roles');
+  }
 });
 
 test('ambiguous research returns a warning and clarification without a guessed candidate', async (t) => {

@@ -8,7 +8,7 @@ import { createConnection } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
-import { createModelBroker,createBrokerExecutor,brokerConfigurationReady,recoverBrokerScratch,publicIpv4,fetchCompanyEvidence,verifyPublicCompanyEvidence,resolveCompanyIdentity } from './model-broker.mjs';
+import { createModelBroker,createBrokerExecutor,brokerConfigurationReady,recoverBrokerScratch,publicIpv4,fetchCompanyEvidence,resolveCompanyIdentity } from './model-broker.mjs';
 const data=()=>({title:'Backend',configuration:{schemaVersion:1,filters:Object.fromEntries(['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'].map(k=>[k,k==='titleAny'?['backend']:null])),residualAi:null},requirements:[{id:'r',text:'backend',handling:'primary',reason:'Title evidence.',companyReference:null,bindings:[{field:'titleAny',values:['backend']}]} ]});
 const usage={inputTokens:100,cachedInputTokens:0,outputTokens:100,reasoningOutputTokens:0};
 async function fixture(t,execute,extra={}){
@@ -70,11 +70,37 @@ test('DNS rebinding/private results, redirects escaping origin, non-HTTPS and ov
   await assert.rejects(()=>fetchCompanyEvidence('http://acme.com/'),{code:'invalid_input'});
   await assert.rejects(()=>fetchCompanyEvidence('https://acme.com/',{resolveAddresses:async()=>['8.8.8.8'],request:fakeHttps([{body:'x'.repeat(131073)}])}),{code:'output_limit'});
 });
-test('identity verification requires fetched official-domain text and binds URL/hash provenance',async()=>{
-  const candidate={name:'Acme Labs',domain:'acme.com',evidenceUrls:['https://acme.com/about','https://unrelated.com/']},body='<h1>Acme Labs</h1>';
-  let calls=0;const verified=await verifyPublicCompanyEvidence(candidate,{fetchPage:async url=>{calls++;return {url,finalUrl:url,status:200,text:body,bytes:body.length,sha256:createHash('sha256').update(body).digest('hex')};}});
-  assert.equal(verified.verified,true);assert.equal(calls,1);assert.equal(verified.provenance[0].url,'https://acme.com/about');
-  assert.equal((await verifyPublicCompanyEvidence(candidate,{fetchPage:async()=>({status:200,text:'Different company',sha256:'a'.repeat(64)})})).verified,false);
+test('normal UI URL and bare-host input skip proposal and ground the name in supplied-site content',async()=>{
+  for(const input of ['https://acme.com/about','acme.com']){
+    const stages=[],fetched=[];
+    const result=await resolveCompanyIdentity(companyTask({input,domain:null,careerUrl:null,scope:'European roles'}),{
+      fetchPage:async url=>{fetched.push(url);return page(url,'<title>Cloud Collective</title><h1>Cloud Collective</h1>Official company website.');},
+      executeStage:async args=>{stages.push(args.stage);assert.match(args.prompt,/"websiteOnlyInput":true/);return {data:companyCandidate({name:'Cloud Collective'}),usage};}
+    });
+    assert.deepEqual(stages,['grounded_decision']);assert.ok(fetched.length<=2);assert.equal(result.evidenceVerified,true);assert.equal(result.data.candidate.name,'Cloud Collective');
+  }
+});
+test('UI website inputs reject ATS/private/unsafe addresses and conflicting explicit hints before inference',async()=>{
+  for(const input of ['https://boards.greenhouse.io/acme','boards.greenhouse.io','https://127.0.0.1/','127.0.0.1','https://private.internal/','https://user:pass@acme.com/','http://acme.com/']){
+    const result=await resolveCompanyIdentity(companyTask({input,domain:null}),{fetchPage:()=>assert.fail('Rejected website must not fetch.'),executeStage:()=>assert.fail('Rejected website must not infer.')});assert.equal(result.data.status,'clarification');assert.equal(result.evidenceVerified,false);
+  }
+  for(const extra of [{input:'https://other.com/',domain:'acme.com'},{input:'acme.com',domain:null,careerUrl:'https://other.com/jobs'}]){
+    const result=await resolveCompanyIdentity(companyTask(extra),{fetchPage:()=>assert.fail('Conflict must not fetch.'),executeStage:()=>assert.fail('Conflict must not infer.')});assert.equal(result.data.status,'clarification');
+  }
+});
+test('website anchoring does not permit an unfetched domain or a name unsupported by title/H1',async()=>{
+  for(const [body,candidate] of [
+    ['<title>Acme</title><h1>Acme</h1>',companyCandidate({domain:'other.com'})],
+    ['<title>Other Company</title><h1>Other Company</h1>Acme is a customer.',companyCandidate()]
+  ])await assert.rejects(()=>resolveCompanyIdentity(companyTask({input:'acme.com',domain:null}),{fetchPage:async url=>page(url,body),executeStage:async()=>({data:candidate,usage})}),{code:'invalid_output'});
+  await assert.rejects(()=>resolveCompanyIdentity(companyTask({input:'Acme',domain:'other.com'}),{fetchPage:async url=>page(url,'<title>Other Company</title><h1>Other Company</h1>'),executeStage:async()=>({data:companyCandidate({name:'Other Company',domain:'other.com',websiteUrl:'https://other.com/',evidenceUrls:['https://other.com/']}),usage})}),{code:'invalid_output'});
+});
+test('bounded Unicode numeric entities ground legitimate names and remove invalid/control/surrogate scalars',async()=>{
+  const result=await resolveCompanyIdentity(companyTask({input:'Café Müller'}),{
+    fetchPage:async url=>page(url,'<title>Caf&#233; M&#xFC;ller</title><h1>Caf&#233; M&#xFC;ller</h1>&#0;&#x1f;&#x7f;&#x80;&#xD800;&#x110000;&#x202e;&#9999999999999999;'),
+    executeStage:async args=>{assert.ok(args.prompt.includes('Café Müller'));assert.equal(/[\u0000\u001f\u007f\u0080\uD800\u202e]/u.test(args.prompt),false);assert.ok(Buffer.byteLength(args.prompt)<24_576);return {data:companyCandidate({name:'Café Müller'}),usage};}
+  });
+  assert.equal(result.evidenceVerified,true);assert.equal(result.data.candidate.name,'Café Müller');
 });
 test('explicit official domain uses one grounded inference and at most two trusted logical pages',async()=>{
   const fetched=[],stages=[];
