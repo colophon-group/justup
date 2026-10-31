@@ -13,7 +13,7 @@ const release = await verifyArtifact(artifact);
 const identity = Object.fromEntries(['sourceSha', 'treeSha', 'assetsSha256', 'workerSha256', 'artifactSha256'].map(key => [key, release[key]]));
 const runtime = { publicOrigin, apiOrigin, apiPrefix: '/api/v1' };
 const config = {
-  name: workerName, main: './worker.mjs', compatibility_date: '2026-10-31',
+  name: workerName, main: './worker.mjs', compatibility_date: '2026-10-30',
   workers_dev: false, preview_urls: false, no_bundle: true, find_additional_modules: false,
   assets: { directory: './assets', binding: 'ASSETS', run_worker_first: true, html_handling: 'none', not_found_handling: 'none' },
   routes: [{ pattern: new URL(publicOrigin).hostname, custom_domain: true }],

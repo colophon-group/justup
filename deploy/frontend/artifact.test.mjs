@@ -33,6 +33,7 @@ test('artifact snapshots committed bytes, ignores dirty files, has stable digest
     execFileSync(process.execPath, [new URL('scripts/frontend-configure.mjs', root).pathname, first, 'justup-preview-test', 'https://preview.justup.test', 'https://api.justup.test']);
     const config = JSON.parse(await readFile(join(first, 'wrangler.json'), 'utf8'));
     assert.equal(config.assets.run_worker_first, true);
+    assert.equal(config.compatibility_date, '2026-10-30');
     assert.equal(config.no_bundle, true); assert.equal(config.find_additional_modules, false);
     assert.equal(config.workers_dev, false); assert.equal(config.preview_urls, false);
     const version = { ...JSON.parse(config.vars.RELEASE_JSON), runtimeConfigSha256: config.vars.RUNTIME_CONFIG_SHA256 };
