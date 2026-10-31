@@ -12,6 +12,7 @@ read_when: You need to find a policy or setup guide.
 | Designing user-facing backend boundaries and AI work | [Backend design](backend-design.md) |
 | Choosing deployment placement, preview isolation or recovery | [Deployment plan](deployment-plan.md) |
 | Changing result arrivals, scrolling or motion | [Motion guide](motion-design.md) |
+| Preparing frontend delivery, an owned preview hostname or deployed byte verification | [Preview hosting guide](demo-preview-hosting.md) |
 | Filing a discovery, changing code, reviewing a pull request, or planning a release | [Development and release guide](development-process.md) |
 | Setting up local credentials or changing service access | [Secrets and contributor setup](secrets.md) |
 

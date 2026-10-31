@@ -77,7 +77,7 @@ def changed_paths(base: str, head: str) -> list[str]:
 
 
 def classify(path: str) -> str:
-    if path in {"README.md", "AGENTS.md", ".github/PULL_REQUEST_TEMPLATE.md", "scripts/README.md"}:
+    if path in {"README.md", "AGENTS.md", ".github/PULL_REQUEST_TEMPLATE.md", "scripts/README.md", "deploy/frontend/README.md"}:
         return "docs"
     if path.startswith("docs/") and path.endswith(".md"):
         return "docs"
@@ -85,6 +85,8 @@ def classify(path: str) -> str:
         return "docs"
     if path.endswith(".md") and path.startswith(("prototype/", "apps/", "src/", "web/", "server/")):
         return "docs"
+    if path.startswith("deploy/frontend/") or (path.startswith("scripts/frontend-") and path.endswith(".mjs")):
+        return "deployment"
     if path in {"scripts/ci.py", ".gitignore", ".github/CODEOWNERS"} or path.startswith(".github/workflows/"):
         return "tooling"
     if path in {"package.json", "package-lock.json", "npm-shrinkwrap.json", "scripts/check-syntax.mjs"}:
@@ -98,14 +100,16 @@ def classify(path: str) -> str:
 
 def select(paths: list[str], base_branch: str, full_override: bool) -> tuple[bool, bool, str]:
     kinds = {classify(path) for path in paths}
-    full = full_override or "unknown" in kinds or "app" in kinds or "tooling" in kinds
-    blocked_main = base_branch == "main" and bool(kinds & {"app", "unknown"})
+    full = full_override or "unknown" in kinds or "app" in kinds or "tooling" in kinds or "deployment" in kinds
+    blocked_main = base_branch == "main" and bool(kinds & {"app", "deployment", "unknown"})
     if full_override:
         reason = "full-ci label requested every available suite"
     elif "unknown" in kinds:
         reason = "unrecognized path requires the full suite"
+    elif "deployment" in kinds:
+        reason = "deployment contracts changed; run syntax, edge contracts and browser journeys"
     elif "app" in kinds:
-        reason = "application or test files require syntax and browser checks"
+        reason = "application or test files require syntax, deployment and browser checks"
     elif "tooling" in kinds:
         reason = "CI tooling changed; run every available suite"
     else:
@@ -181,21 +185,12 @@ def run_pr(event_path: Path) -> None:
         raise ValueError("Application or unrecognized changes cannot target main until the real release preview gate exists; target dev.")
 
     if not full:
-        print("Browser suite skipped: only guides and templates changed.")
-        append_summary(["- Browser suite: skipped; guides and templates only."])
+        print("Runtime suites skipped: only guides and templates changed.")
+        append_summary(["- Runtime suites: skipped; guides and templates only."])
         return
 
-    if any(classify(path) == "unknown" for path in paths):
-        if not full_script_present():
-            raise ValueError("An unrecognized path requires a registered test:full suite; add it or update the reviewed CI impact rules.")
-        selftest()
-        run("npm", "ci")
-        playwright = ROOT / "node_modules/.bin/playwright"
-        if playwright.is_file():
-            run(str(playwright), "install", "--with-deps", "chromium")
-        run("npm", "run", "test:full")
-        append_summary(["- Full suite: passed for unrecognized paths."])
-        return
+    if not full_script_present():
+        raise ValueError("A broad or unrecognized change requires a registered test:full suite; add it or update the reviewed CI impact rules.")
 
     if not browser_scripts_present():
         if not application_present() and not any(classify(path) in {"app", "unknown"} for path in paths):
@@ -207,10 +202,9 @@ def run_pr(event_path: Path) -> None:
 
     selftest()
     run("npm", "ci")
-    run("npm", "run", "test:syntax")
     run(str(ROOT / "node_modules/.bin/playwright"), "install", "--with-deps", "chromium")
-    run("npm", "run", "test:browser")
-    append_summary(["- Browser suite: passed with the repository's locked Playwright runner."])
+    run("npm", "run", "test:full")
+    append_summary(["- Full suite: passed (syntax, deployment contracts and locked Playwright browser journeys)."])
 
 
 def selftest() -> None:
@@ -229,6 +223,16 @@ def selftest() -> None:
     assert select(["mystery/file"], "dev", False)[:2] == (True, False)
     assert select(["scripts/ci.py"], "dev", False)[:2] == (True, False)
     assert classify("scripts/README.md") == "docs"
+    assert classify("deploy/frontend/README.md") == "docs"
+    assert select(["deploy/frontend/worker.mjs"], "dev", False)[:2] == (True, False)
+    assert select(["deploy/frontend/worker.mjs"], "main", False)[:2] == (True, True)
+    assert select(["scripts/frontend-smoke.mjs"], "main", False)[:2] == (True, True)
+    assert select(["prototype/privacy.html", "prototype/policies.css"], "dev", False)[:2] == (True, False)
+    assert select(["prototype/usage.html"], "main", False)[:2] == (True, True)
+    assert select(["docs/demo-preview-hosting.md"], "dev", True)[:2] == (True, False)
+    assert select(["new-server/runtime.go"], "main", False)[:2] == (True, True)
+    assert select([".github/workflows/ci.yml"], "dev", False)[:2] == (True, False)
+    assert classify("scripts/unregistered.mjs") == "unknown"
     browser_pr_paths = [
         ".gitignore", "package.json", "package-lock.json", "playwright.config.mjs",
         "scripts/check-syntax.mjs", "tests/browser/flows.spec.mjs",
