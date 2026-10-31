@@ -68,7 +68,8 @@ function renderSearchShell() {
   $('#followed-only').hidden = !capable('follows');
   $$('[data-posting-languages]').forEach(button => { button.hidden = !capable('preferences'); });
   $('[data-status=followed]').hidden = !capable('follows');
-  $('[data-status=requested]').hidden = !capable('companyRequests');
+  // Request submission does not imply a requested-companies catalogue endpoint.
+  $('[data-status=requested]').hidden = true;
   renderSearchAccounting(search); renderPostingLanguageControls(); syncSearchExample();
 }
 function renderSearchAccounting(search) {

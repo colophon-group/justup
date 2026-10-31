@@ -196,3 +196,9 @@ test('reported salary ranges retain their currency, bounds and disclosed period 
     else { await expect(row.locator('.job-salary')).toHaveCount(0); await expect(row).not.toContainText('Salary not listed'); }
   }
 });
+
+test('company-request submission capability does not advertise an unsupported requested catalogue filter', async ({ page }) => {
+  await mockApi(page); await page.goto('/#companies'); await expect(page.locator('#companies-page')).toBeVisible();
+  await expect(page.locator('[data-status=requested]')).toBeHidden(); await expect(page.getByRole('link', { name: 'Request a company +' })).toBeVisible();
+  await page.getByRole('link', { name: 'Request a company +' }).click(); await expect(page.getByRole('button', { name: 'Find company' })).toBeEnabled();
+});
