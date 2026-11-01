@@ -38,7 +38,7 @@ async function setup(t,{model,modelAvailable=true,companyModel,provider,residual
       identity=createVisitorIdentity(deps);
       const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
       matching=createMatchingService({...deps,...ownership,provider:{available:()=>true,classify:async args=>{providerCalls++;return provider?provider(args):{decisions:args.jobs.map(j=>({id:j.id,decision:j.id.includes('rejected')?'rejected':'accepted'}))};}}});
-      intent=createIntentService({...deps,...ownership,matching,onSearchCreated:event=>visitor.searchCreated(event),model:{available:()=>modelAvailable,interpretIntent:async args=>{modelCalls++;return model?model(args):interpretation({residual});}}});
+      intent=createIntentService({...deps,...ownership,matching,onSearchCreated:event=>visitor.searchCreated(event),onSearchDeleted:event=>visitor.searchDeleted(event),model:{available:()=>modelAvailable,interpretIntent:async args=>{modelCalls++;return model?model(args):interpretation({residual});}}});
       visitor=createVisitorService({...deps,identity,intent,matching});companies=createCompanyService({...deps,...ownership,model:{resolveCompany:async args=>{companyCalls++;return companyModel?companyModel(args):{status:'unresolved',candidate:null,clarification:'Synthetic unresolved company'};}}});return [intent,matching,visitor,companies];
     }]});
   const rows=[['hidden-accepted',1,'Engineer'],['hidden-rejected',1.2,'Engineer'],['hidden-primary-excluded',1.5,'Designer'],['visible-accepted',3,'Engineer'],['visible-rejected',4,'Engineer']];
@@ -96,13 +96,37 @@ test('search creation associates its exact saved new draft atomically and an ide
   assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);assert.equal(s.modelCalls(),0);
 });
 
+test('association trims only for comparison and preserves the raw saved text and whitespace-only unsent drafts',async t=>{
+  const s=await setup(t),c=s.client();await c.session();const raw='  Engineer   platform  ';
+  await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:raw}}});
+  const created=await c.request('/visitor/searches',{method:'POST',body:{query:raw.trim(),requestKey:'trim-only'}}),id=created.body.search.id;
+  assert.equal(created.status,202);assert.equal(created.body.search.query,raw.trim());assert.deepEqual((await c.request('/visitor/workspace')).body.state,{activeSearchId:id,drafts:{[id]:raw}});
+  const saved=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:2,activeSearchId:null,drafts:{[id]:raw,new:'   '}}});assert.equal(saved.status,200);
+  assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'   ',requestKey:'blank'}})).status,400);
+  assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Another query',requestKey:'keep-whitespace'}})).status,202);
+  assert.deepEqual((await c.request('/visitor/workspace')).body,saved.body);
+});
+
+test('a direct search without a saved draft records raw text and its created ID once, including a lost response',async t=>{
+  const s=await setup(t,{runtime:diskRuntime(t)}),c=s.client();await c.session();const prior=c.snapshot(),raw='  Direct   submitted text  ',body={query:raw,requestKey:'direct-lost'};
+  const created=await c.request('/visitor/searches',{method:'POST',body}),id=created.body.search.id;assert.equal(created.status,202);
+  c.restore(prior);const workspace=(await c.request('/visitor/workspace')).body;assert.equal(workspace.revision,1);assert.deepEqual(workspace.state,{activeSearchId:id,drafts:{[id]:raw}});
+  const retry=await c.request('/visitor/searches',{method:'POST',body});assert.equal(retry.body.search.id,id);assert.equal(retry.body.task.id,created.body.task.id);assert.deepEqual((await c.request('/visitor/workspace')).body,workspace);
+  assert.equal((await c.request('/visitor/searches')).body.items.length,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
+  // An unrelated later session read does not advance or reset a workspace CAS.
+  await c.session();assert.deepEqual((await c.request('/visitor/workspace')).body,workspace);
+  const other=await c.request('/visitor/searches',{method:'POST',body:{query:'Other tab request',requestKey:'keep-active'}});assert.equal(other.status,202);assert.deepEqual((await c.request('/visitor/workspace')).body,workspace);
+  await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:id,drafts:{[id]:raw,[other.body.search.id]:'Other unsent text',new:'Keep new text'}}});
+  assert.equal((await c.request(`/visitor/searches/${id}`,{method:'DELETE',body:{}})).status,200);const after=(await c.request('/visitor/workspace')).body;assert.equal(after.revision,3);assert.equal(after.state.activeSearchId,null);assert.deepEqual(after.state.drafts,{[other.body.search.id]:'Other unsent text',new:'Keep new text'});
+});
+
 test('a draft saved while a create request waits is preserved rather than associated with the older submitted query',async t=>{
-  const s=await setup(t),c=s.client();await c.session();await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Engineer'}}});
+  const s=await setup(t),c=s.client();await c.session();await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Engineer four day week'}}});
   const original=s.intent.route;let started,release;const waiting=new Promise(resolve=>started=resolve),hold=new Promise(resolve=>release=resolve);
   s.intent.route=async ctx=>{if(ctx.method==='POST'&&ctx.path==='/searches'){started();await hold;}return original(ctx);};
-  const creating=c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'concurrent'}});await waiting;
-  const newer=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:null,drafts:{new:'Engineer with a newer condition'}}});assert.equal(newer.status,200);release();assert.equal((await creating).status,202);
-  assert.deepEqual((await c.request('/visitor/workspace')).body,newer.body);assert.equal((await c.request('/visitor/searches')).body.items[0].draft.query,'Engineer');
+  const creating=c.request('/visitor/searches',{method:'POST',body:{query:'Engineer four day week',requestKey:'concurrent'}});await waiting;
+  const newer=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:null,drafts:{new:'  Engineer  four day week  '}}});assert.equal(newer.status,200);release();assert.equal((await creating).status,202);
+  assert.deepEqual((await c.request('/visitor/workspace')).body,newer.body);assert.equal((await c.request('/visitor/searches')).body.items[0].draft.query,'Engineer four day week');
 });
 
 test('a failed first draft write or search association rolls back every owner, task, submission and workspace effect',async t=>{
@@ -174,7 +198,7 @@ test('verified sign-in appends searches and transfers draft and viewed state ide
   const s=await setup(t),account=s.client();await account.session();await account.login('one');
   const existing=await account.request('/searches',{method:'POST',body:{query:'Existing account search',requestKey:'account-search'}});assert.equal(existing.status,202);await s.work('search_intent');
   const c=s.client();await c.session();const id=await s.create(c);const visitorToken=c.jar.get('__Host-justup_visitor');
-  await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{[id]:'Unsent refinement',new:'New draft'}}});await c.request('/visitor/viewed',{method:'POST',body:{jobId:'visible-accepted'}});
+  await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:id,drafts:{[id]:'Unsent refinement',new:'New draft'}}});await c.request('/visitor/viewed',{method:'POST',body:{jobId:'visible-accepted'}});
   const before=s.modelCalls(),login=await c.login('one');assert.equal(login.status,200);assert.equal(login.body.visitorHandoff.status,'complete');assert.equal(c.jar.get('__Host-justup_visitor'),'');assert.equal(s.modelCalls(),before);
   const list=await c.request('/searches');assert.equal(list.body.items.length,2);assert.equal(list.body.items.find(j=>j.id===id).configuration.schemaVersion,1);
   const workspace=await c.request('/workspace');assert.equal(workspace.body.state.drafts[id],'Unsent refinement');assert.equal(workspace.body.viewed[0].jobId,'visible-accepted');
@@ -208,7 +232,7 @@ test('workspace CAS preserves concurrent edits and durable sign-in draft recover
   const s=await setup(t),account=s.client();await account.session();await account.login('one');
   let accountWorkspace=(await account.request('/workspace')).body;
   await account.request('/workspace',{method:'PATCH',body:{expectedRevision:accountWorkspace.revision,activeSearchId:null,drafts:{new:'Member draft'}}});
-  const c=s.client();await c.session();await s.create(c);await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Visitor draft'}}});
+  const c=s.client();await c.session();await s.create(c);await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:null,drafts:{new:'Visitor draft'}}});
   const stale=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Stale tab draft'}}});assert.equal(stale.status,409);
   const beforeResponse=c.snapshot();const login=await c.login('one');assert.equal(login.status,200);assert(login.body.visitorHandoff.recoveredDraftId);assert(!Object.hasOwn(login.body.visitorHandoff,'draft'));
   // Simulate losing the entire credential response: the browser still holds its
@@ -223,7 +247,7 @@ test('workspace CAS preserves concurrent edits and durable sign-in draft recover
 
 test('a handoff failure rolls back visitor movement, task cancellation, workspace and session insertion',async t=>{
   const s=await setup(t),c=s.client();await c.session();const id=await s.create(c),token=c.jar.get('__Host-justup_visitor');
-  await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{[id]:'Unsent'}}});s.failHandoff();const failed=await c.login('one');assert.equal(failed.status,503);assert.equal(s.sessions.size,0);assert(s.identity.fromToken(token));
+  await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:id,drafts:{[id]:'Unsent'}}});s.failHandoff();const failed=await c.login('one');assert.equal(failed.status,503);assert.equal(s.sessions.size,0);assert(s.identity.fromToken(token));
   assert.equal(s.app.store.db.prepare('SELECT owner_id FROM justup_searches WHERE id=?').get(id).owner_id,s.identity.fromToken(token).visitor.id);
   assert.equal((await c.request('/visitor/workspace')).body.state.drafts[id],'Unsent');assert.equal((await c.login('one')).status,200);assert.equal((await c.request('/searches')).body.items[0].id,id);
 });
@@ -234,7 +258,7 @@ test('insufficient or unavailable hidden classification never claims a final cou
 });
 
 test('real password registration commits the visitor search and private draft in its auth transaction',async t=>{
-  const s=await setup(t,{realAuth:true}),c=s.client();await c.session();const id=await s.create(c);await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{[id]:'Keep this unsent draft'}}});
+  const s=await setup(t,{realAuth:true}),c=s.client();await c.session();const id=await s.create(c);await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:id,drafts:{[id]:'Keep this unsent draft'}}});
   const result=await c.request('/auth/register',{method:'POST',body:{username:'visitor-handoff',password:randomBytes(24).toString('base64url')}});assert.equal(result.status,201);assert.equal(result.body.visitorHandoff.status,'complete');assert.equal(result.body.access.fullAccess,false);assert.equal(result.body.user.expiresAt,null);
   const searches=await c.request('/searches');assert.equal(searches.body.items[0].id,id);assert.equal((await c.request('/workspace')).body.state.drafts[id],'Keep this unsent draft');
   const page=await c.request(`/searches/${id}/results?revision=1`);assert.deepEqual(page.body.items.map(j=>j.id),['visible-accepted','visible-rejected']);assert.deepEqual(page.body.hiddenMatches,{status:'exact',count:2});
@@ -262,14 +286,14 @@ test('verified handoff preserves confirmed visible and hidden classifier decisio
 });
 
 test('merged Unicode drafts round-trip through the workspace-only bounded body allowance',async t=>{
-  const s=await setup(t),c=s.client();await c.session();const id=await s.create(c),draft='界'.repeat(4000);const saved=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{[id]:draft,new:draft}}});assert.equal(saved.status,200);assert(Buffer.byteLength(JSON.stringify(saved.body.state))>16_384);
+  const s=await setup(t),c=s.client();await c.session();const id=await s.create(c),draft='界'.repeat(4000);const saved=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:id,drafts:{[id]:draft,new:draft}}});assert.equal(saved.status,200);assert(Buffer.byteLength(JSON.stringify(saved.body.state))>16_384);
   assert.equal((await c.login('one')).status,200);const moved=(await c.request('/workspace')).body;const again=await c.request('/workspace',{method:'PATCH',body:{expectedRevision:moved.revision,...moved.state}});assert.equal(again.status,200);assert.equal(again.body.state.drafts[id],draft);
 });
 
 test('a full recovery stash rejects the whole handoff and preserves both owners drafts',async t=>{
   const s=await setup(t),member=s.client();await member.session();await member.login('one');const state=(await member.request('/workspace')).body;await member.request('/workspace',{method:'PATCH',body:{expectedRevision:state.revision,activeSearchId:null,drafts:{new:'Member draft'}}});
   for(let i=0;i<100;i++)s.app.store.db.prepare('INSERT INTO justup_recovered_drafts VALUES(?,?,?,?)').run(`recovered-${i}`,'one',`Retained ${i}`,START);
-  const c=s.client();await c.session();await s.create(c);await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Visitor draft'}}});const reply=await c.login('one');assert.equal(reply.status,429);assert.equal(reply.body.error.code,'task_limit');assert.equal(s.sessions.size,1);
+  const c=s.client();await c.session();await s.create(c);await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:null,drafts:{new:'Visitor draft'}}});const reply=await c.login('one');assert.equal(reply.status,429);assert.equal(reply.body.error.code,'task_limit');assert.equal(s.sessions.size,1);
   assert.equal((await c.request('/visitor/workspace')).body.state.drafts.new,'Visitor draft');const still=(await member.request('/workspace')).body;assert.equal(still.state.drafts.new,'Member draft');assert.equal(still.recoveredDrafts.length,100);
 });
 
@@ -360,7 +384,7 @@ test('a valid unallocated hint is stable across session reads and a live owner s
   const other=s.client();await other.session();c.jar.set('__Host-justup_csrf',other.jar.get('__Host-justup_csrf'));
   const live=await c.session();assert(live.body.visitor);assert.equal(c.jar.get('__Host-justup_visitor'),liveHint);assert.equal(c.jar.get('__Host-justup_csrf'),other.jar.get('__Host-justup_csrf'));
   assert.deepEqual((await c.request('/visitor/searches')).body.items.map(search=>search.id),[id]);
-  assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{new:'Still my draft'}}})).status,200);
+  assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:id,drafts:{new:'Still my draft'}}})).status,200);
   await assertEmptyBootstrap(other);
 });
 
@@ -407,7 +431,7 @@ test('deleting the last search reclaims an empty visitor so discarded cookies ca
 test('last-search deletion preserves every nonempty draft, recovered record, viewed record and other owned work',async t=>{
   for(const kind of ['draft','recovery','viewed','other-task','other-table'])await t.test(kind,async t=>{
     const s=await setup(t,{visitor:{maxVisitors:2}}),c=s.client();await c.session();const id=await s.create(c),db=s.app.store.db,owner=db.prepare('SELECT owner_id FROM justup_searches WHERE id=?').get(id).owner_id;
-    if(kind==='draft')assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{new:'Keep this unsent draft'}}})).status,200);
+    if(kind==='draft')assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:id,drafts:{new:'Keep this unsent draft'}}})).status,200);
     if(kind==='recovery')db.prepare('INSERT INTO justup_recovered_drafts VALUES(?,?,?,?)').run('retained',owner,'Keep this recovered draft',START);
     if(kind==='viewed')assert.equal((await c.request('/visitor/viewed',{method:'POST',body:{jobId:'visible-accepted'}})).status,200);
     const otherTask=kind==='other-task'?s.app.tasks.enqueue({ownerId:owner,kind:'company_resolution',requestKey:'other-work',payload:{requestId:'retained'}}):null;
@@ -427,7 +451,8 @@ test('a draft saved while last-search deletion awaits completion prevents empty-
   const original=s.intent.route;let release,deleted;const afterDelete=new Promise(resolve=>deleted=resolve),hold=new Promise(resolve=>release=resolve);
   s.intent.route=async ctx=>{const result=await original(ctx);if(ctx.method==='DELETE'){deleted();await hold;}return result;};
   const removing=c.request(`/visitor/searches/${id}`,{method:'DELETE',body:{}});await afterDelete;
-  assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'A concurrent draft'}}})).status,200);release();assert.equal((await removing).status,200);
+  const current=(await c.request('/visitor/workspace')).body;
+  assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:current.revision,activeSearchId:null,drafts:{new:'A concurrent draft'}}})).status,200);release();assert.equal((await removing).status,200);
   assert(s.identity.principal(owner));assert.equal((await c.request('/visitor/workspace')).body.state.drafts.new,'A concurrent draft');
 });
 

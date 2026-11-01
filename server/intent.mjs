@@ -140,7 +140,7 @@ export function primaryMatches(job, {filters:f}) {
   return true;
 }
 
-export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability,ownerAuthority,visitorIdentity,readingPreferences,onSearchCreated}={}) {
+export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability,ownerAuthority,visitorIdentity,readingPreferences,onSearchCreated,onSearchDeleted}={}) {
   if(!db||!feed||!tasks) throw new TypeError('Search dependencies are required.');
   db.exec(`CREATE TABLE IF NOT EXISTS justup_searches(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,accepted_json TEXT,draft_json TEXT,task_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
     CREATE INDEX IF NOT EXISTS justup_searches_owner ON justup_searches(owner_id);
@@ -337,7 +337,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     }
     if(ctx.method==='DELETE'&&ctx.path===`/searches/${id}`) {
       if(typeof beforePrivateDelete!=='function') throw err('deletion_unavailable',503,'Deletion is temporarily unavailable.');
-      const remove=()=>{const barrier=beforePrivateDelete();if(barrier&&typeof barrier.then==='function') throw new TypeError('Deletion barrier must be synchronous.');purgeSearch(ownerOf(ctx),id);};
+      const remove=()=>{const barrier=beforePrivateDelete();if(barrier&&typeof barrier.then==='function') throw new TypeError('Deletion barrier must be synchronous.');purgeSearch(ownerOf(ctx),id);const result=onSearchDeleted?.({ownerId:ownerOf(ctx),searchId:id});if(result&&typeof result.then==='function')throw new TypeError('Search deletion hooks must be synchronous.');};
       if(withPrivateTransaction)withPrivateTransaction(remove);
       else try{tx(db,remove);}finally{if(!db.isTransaction)afterPrivateTransaction?.();}
       return {status:200,body:{deleted:true}};
@@ -387,7 +387,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
         }
         db.prepare('INSERT INTO justup_search_submissions VALUES(?,?,?,?,?)').run(ownerOf(ctx),requestKey,searchId,fingerprint,task.id);
         if(value)readingPreferences.saveOptions(ownerOf(ctx),searchId,value);
-        if(creating){const result=onSearchCreated?.({ownerId:ownerOf(ctx),searchId,query});if(result&&typeof result.then==='function')throw new TypeError('Search creation hooks must be synchronous.');}
+        if(creating){const result=onSearchCreated?.({ownerId:ownerOf(ctx),searchId,query,rawQuery:ctx.body.query});if(result&&typeof result.then==='function')throw new TypeError('Search creation hooks must be synchronous.');}
       });
       return {status:202,body:{search:publicSearch(row(ownerOf(ctx),searchId)),task:tasks.publicView(task)}};
     }

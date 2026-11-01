@@ -168,16 +168,24 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
       return {...opened,workspace:writeWorkspace(opened.principal.visitor.id,body)};
     });
   }
-  function searchCreated({ownerId,searchId,query}) {
+  function searchCreated({ownerId,searchId,query,rawQuery=query}) {
     if(!db.isTransaction)throw new TypeError('Search association requires its creation transaction.');
     const saved=db.prepare('SELECT state_json,revision FROM justup_workspaces WHERE owner_id=?').get(ownerId);
-    if(!saved)return;
-    const state=JSON.parse(saved.state_json),draft=state.drafts.new;
+    const state=saved?JSON.parse(saved.state_json):{activeSearchId:null,drafts:{}},draft=state.drafts.new;
     // A newer draft or tab selection belongs to the concurrent user action.
     // Replayed request keys never invoke this callback again.
-    if(typeof draft!=='string'||draft.trim()!==query)return;
-    const next={activeSearchId:state.activeSearchId??searchId,drafts:{...state.drafts,[searchId]:draft}};delete next.drafts.new;
-    const {json}=validateWorkspace(ownerId,{expectedRevision:saved.revision,...next});
+    if(draft!==undefined){if(typeof draft!=='string'||draft.trim()!==query)return;}
+    else if(state.activeSearchId!==null)return;
+    const next={activeSearchId:state.activeSearchId??searchId,drafts:{...state.drafts,[searchId]:draft??rawQuery}};delete next.drafts.new;
+    const revision=saved?.revision??0,{json}=validateWorkspace(ownerId,{expectedRevision:revision,...next});
+    db.prepare('INSERT INTO justup_workspaces(owner_id,state_json,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,revision=excluded.revision').run(ownerId,json,now(),revision+1);
+  }
+  function searchDeleted({ownerId,searchId}) {
+    if(!db.isTransaction)throw new TypeError('Search association requires its deletion transaction.');
+    const saved=db.prepare('SELECT state_json,revision FROM justup_workspaces WHERE owner_id=?').get(ownerId);if(!saved)return;
+    const state=JSON.parse(saved.state_json);if(!Object.hasOwn(state.drafts,searchId)&&state.activeSearchId!==searchId)return;
+    delete state.drafts[searchId];if(state.activeSearchId===searchId)state.activeSearchId=null;
+    const {json}=validateWorkspace(ownerId,{expectedRevision:saved.revision,...state});
     db.prepare('UPDATE justup_workspaces SET state_json=?,revision=revision+1,updated_at=? WHERE owner_id=? AND revision=?').run(json,now(),ownerId,saved.revision);
   }
   function recoveryBudget(owner) {
@@ -293,7 +301,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     }
     return null;
   }
-  return {identity,publicVisitor,cleanup,handoff,visitorRoute,route:stateRoute,deleteAccountData,emptyWorkspace,bootstrapWorkspace,searchCreated,
+  return {identity,publicVisitor,cleanup,handoff,visitorRoute,route:stateRoute,deleteAccountData,emptyWorkspace,bootstrapWorkspace,searchCreated,searchDeleted,
     currentSession(token,options){cleanup();return identity.fromToken(token,options);},sessionExists:token=>identity.fromToken(token,{allowUnavailable:true})!==null,
     tokenRetired:token=>identity.tokenRetired(token),issuanceEpoch:()=>identity.issuanceEpoch(),admitCreation:body=>intent.admitVisitorCreation(body),refreshAvailability:()=>identity.refreshAvailability(),
     discardEmptySession(token){const current=identity.fromToken(token,{allowUnavailable:true});if(current)reclaimEmptyVisitor(current.visitor.id);},
