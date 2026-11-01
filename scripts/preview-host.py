@@ -734,12 +734,15 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
             # rollback. Never restore it over unknown or partly replaced bytes.
             if os.path.lexists(marker):
                 raise ValueError('A receipt appeared during update publication; retain the pending lock for review.')
+            if add_feed:
+                # Qualification may have started a real receiver. Prove every
+                # dedicated identity idle before restoring files or a receipt.
+                require_idle_preview()
             if moved_new:
                 (BASE / 'ops').rename(history / 'rejected-ops')
             if moved_old:
                 (history / 'previous-ops').rename(BASE / 'ops')
             if add_feed:
-                call('systemctl', 'stop', FEED_UNITS[0])
                 for name in installed_feed_units:
                     target = UNIT_ROOT / name
                     owned_path(target)

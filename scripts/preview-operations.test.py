@@ -651,6 +651,25 @@ class OperatorUpgradeContracts(unittest.TestCase):
             self.assertEqual(list((fixture.base / '.preview-ops-updates').iterdir()), [])
             self.assert_private_state_unchanged(fixture)
 
+    def test_feed_rollback_retains_pending_state_if_receiver_identity_is_not_idle(self):
+        with self.installation(add_feed=True) as fixture:
+            def failed_probe():
+                process = fixture.proc / '123'
+                process.mkdir()
+                (process / 'status').write_text('Uid:\t' + '\t'.join([str(os.getuid())] * 4) + '\n')
+                raise ValueError('receiver did not finish')
+            with patch.object(host, 'qualify_feed_units', side_effect=failed_probe):
+                with self.assertRaisesRegex(ValueError, 'no running processes'):
+                    host.upgrade_feed(fixture.new, fixture.previous,
+                                      fixture.before['planSha256'], fixture.after['planSha256'], 'a' * 64)
+            self.assertFalse(fixture.marker.exists())
+            self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
+            self.assertTrue(all((fixture.units / name).exists() for name in host.FEED_UNITS))
+            self.assertTrue((fixture.base / 'ops/preview-feed.py').exists())
+            with self.assertRaisesRegex(ValueError, 'adoption is blocked'):
+                artifact.read_host_plan(fixture.base)
+            self.assert_private_state_unchanged(fixture)
+
     def test_feed_crash_after_unit_install_leaves_pending_receipt_withdrawn(self):
         class Crash(BaseException):
             pass
