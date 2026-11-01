@@ -37,7 +37,7 @@ function errorWith(code, status) {
   };
 }
 
-test('registration and case-insensitive login issue opaque sessions with demo-only access', async (t) => {
+test('registration and case-insensitive login issue opaque sessions with account access', async (t) => {
   const { db, auth, register } = fixture(t);
   const signedUp = await register('  TeStEr  ');
   assert.equal(signedUp.account.username, 'tester');
@@ -51,7 +51,7 @@ test('registration and case-insensitive login issue opaque sessions with demo-on
   assert.deepEqual(auth.session(signedIn.token), {
     account: signedUp.account,
     expiresAt: START + SEVEN_DAYS,
-    access: { kind: 'demo', fullAccess: true, legacy: false, billingEnabled: false, until: null },
+    access: { kind: 'account', fullAccess: true, legacy: false, billingEnabled: false, until: null },
   });
 
   const stored = db.prepare('SELECT * FROM auth_accounts').get();
@@ -259,7 +259,7 @@ test('auth can reopen the same schema and an explicitly configured session lifet
 
 test('invalid configuration fails before accepting authentication work', (t) => {
   for (const config of [{ maxAccounts: 0 }, { maxAccounts: 1.5 }, { sessionTtlMs: -1 },
-    { sessionTtlMs: Infinity }, { accountTtlMs: 0 }, { accountTtlMs: THIRTY_DAYS + 1 },
+    { sessionTtlMs: Infinity }, { accountTtlMs: 0 }, { accountExpiresAt: -1 }, { accountExpiresAt: Number.MAX_SAFE_INTEGER }, { requiresInvitation: 1 },
     { accountTtlMs: Infinity }, { inviteCode: true }, { inviteCode: 'x'.repeat(257) }]) {
     const db = new DatabaseSync(':memory:');
     t.after(() => db.close());
@@ -267,8 +267,8 @@ test('invalid configuration fails before accepting authentication work', (t) => 
   }
 });
 
-test('accounts deny login and session access at 30 days before cleanup, including in-flight login', async (t) => {
-  const { auth, db, register, setTime } = fixture(t);
+test('explicit temporary accounts deny access at their stored deadline, including in-flight login', async (t) => {
+  const { auth, db, register, setTime } = fixture(t, { config: { accountTtlMs: THIRTY_DAYS } });
   await register();
   setTime(START + THIRTY_DAYS - 1);
   const signedIn = await auth.login({ username: 'tester', password: PASSWORD });
@@ -369,4 +369,55 @@ test('registration state exposes only availability and reflects invitation, cap 
   setTime(START + 1000);
   auth.cleanup();
   assert.deepEqual(auth.registrationState(), { enabled: true, reason: null });
+});
+
+
+test('durable accounts survive session expiry, maintenance and changed deployment policy', async (t) => {
+  const { auth, db, register, setTime } = fixture(t);
+  const first = await register();
+  assert.equal(first.account.expiresAt, null);
+  setTime(START + 365 * 24 * 60 * 60 * 1000);
+  assert.equal(auth.session(first.token), null);
+  assert.deepEqual(auth.cleanup(), { accountsDeleted: 0, sessionsDeleted: 1 });
+  const reopened = createAuth({ db, now: () => START + 365 * 24 * 60 * 60 * 1000,
+    config: { requiresInvitation: false, accountTtlMs: 1000 } });
+  const signedIn = await reopened.login({ username: 'tester', password: PASSWORD });
+  assert.deepEqual(signedIn.account, first.account);
+  assert.equal(db.prepare('SELECT account_expires_at FROM auth_accounts').get().account_expires_at, null);
+  const temporary = await reopened.register({ username: 'temporary', password: PASSWORD });
+  assert.equal(temporary.account.expiresAt, new Date(START + 365 * 24 * 60 * 60 * 1000 + 1000).toISOString());
+});
+
+test('public registration ignores invitation data only when explicitly configured and still enforces the cap', async (t) => {
+  const { auth, db } = fixture(t, { config: { requiresInvitation: false, inviteCode: undefined, maxAccounts: 1 } });
+  assert.equal(auth.registrationState().enabled, true);
+  const registered = await auth.register({ username: 'public', password: PASSWORD });
+  assert.equal(auth.session(registered.token).account.id, registered.account.id);
+  await assert.rejects(auth.register({ username: 'second', password: PASSWORD, inviteCode: INVITE }), errorWith('account_limit', 403));
+  assert.equal(db.prepare('SELECT count(*) AS n FROM auth_accounts').get().n, 1);
+});
+
+test('absolute deployment deadline persists across policy removal and closes registration at expiry', async (t) => {
+  const { auth, db, register, setTime } = fixture(t, { config: { accountExpiresAt: START + 1000 } });
+  const first = await register();
+  assert.equal(first.expiresAt, START + 1000);
+  const reopened = createAuth({ db, now: () => START + 1000, config: { requiresInvitation: false } });
+  assert.equal(reopened.session(first.token), null);
+  assert.deepEqual(reopened.cleanup(), { accountsDeleted: 1, sessionsDeleted: 1 });
+  setTime(START + 1000);
+  assert.deepEqual(auth.registrationState(), { enabled: false, reason: 'registration_closed' });
+  await assert.rejects(register('second'), errorWith('registration_closed', 403));
+});
+
+test('legacy account migration preserves credentials, tokens and identity without inventing expiry', async (t) => {
+  const { db, register } = fixture(t);
+  const first = await register();
+  db.exec('DROP INDEX auth_accounts_deadline; ALTER TABLE auth_accounts DROP COLUMN account_expires_at');
+  const reopened = createAuth({ db, now: () => START, config: { inviteCode: INVITE, accountTtlMs: 1000 } });
+  assert.deepEqual(reopened.session(first.token).account, first.account);
+  reopened.invalidateAllSessions();
+  assert.equal(reopened.session(first.token), null);
+  const login = await reopened.login({ username: 'tester', password: PASSWORD });
+  assert.deepEqual(login.account, first.account);
+  assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
 });

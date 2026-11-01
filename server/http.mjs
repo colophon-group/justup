@@ -1,19 +1,19 @@
-// Same-origin demo HTTP boundary. All mutation, cookie, policy and private route
+// Same-origin application HTTP boundary. All mutation, cookie, policy and private route
 // checks are centralized here before feature service code receives a request.
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { problem, boundedJson } from './store.mjs';
 
-const DISABLED = { sse: false, follows: false, viewed: false, preferences: false, hiddenMatchCounts: false, hiringWire: false };
+const DISABLED = { sse: false, follows: false, viewed: false, preferences: false, hiddenMatchCounts: false };
 const GUEST_ACCESS = { kind: 'guest', fullAccess: false, legacy: false, billingEnabled: false, until: null };
 const SAFE_ERRORS = new Map([
   ['invalid_input', 'Invalid request.'], ['invalid_credentials', 'Invalid username, password or invite code.'],
-  ['registration_closed', 'Demo registration is closed.'], ['account_limit', 'The demo account limit has been reached.'],
+  ['registration_closed', 'Registration is closed.'], ['account_limit', 'The account limit has been reached.'],
   ['username_taken', 'That username is unavailable.'], ['unauthenticated', 'Sign in to continue.'],
-  ['policy_unavailable', 'Account access is unavailable until preview policies are approved.'],
+  ['policy_unavailable', 'Account access is unavailable until policies are approved.'],
   ['deletion_unavailable', 'Account access is temporarily unavailable.'],
   ['forbidden', 'This request is not allowed.'], ['invalid_json', 'Send a bounded JSON object.'],
   ['not_found', 'Not found.'], ['rate_limit', 'Too many requests. Try again later.'],
-  ['task_limit', 'The demo task limit has been reached.'], ['idempotency_conflict', 'This request key was already used.'],
+  ['task_limit', 'The task limit has been reached.'], ['idempotency_conflict', 'This request key was already used.'],
   ['stale_cursor', 'This feed changed. Reload it and try again.'], ['invalid_cursor', 'Invalid cursor.'],
   ['invalid_limit', 'Invalid page size.'], ['invalid_query', 'Invalid query.'],
   ['dependency_unavailable', 'This feature is temporarily unavailable.'],
@@ -58,8 +58,8 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   const origin = new URL(config.allowedOrigin ?? 'https://preview.justup.work');
   const insecure = config.allowInsecureLocalhost === true && origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);
   if (origin.origin !== (config.allowedOrigin ?? 'https://preview.justup.work') || (!insecure && origin.protocol !== 'https:')) throw new TypeError('Set one allowed HTTPS browser origin.');
-  const cookieName = insecure ? 'justup_demo_session' : '__Host-justup_demo_session';
-  const csrfCookie = insecure ? 'justup_demo_csrf' : '__Host-justup_demo_csrf';
+  const cookieName = insecure ? 'justup_session' : '__Host-justup_session';
+  const csrfCookie = insecure ? 'justup_csrf' : '__Host-justup_csrf';
   const secret = config.csrfSecret ?? randomBytes(32);
   if (Buffer.byteLength(secret) < 32) throw new TypeError('CSRF secret must contain at least 32 bytes.');
   const maxBodyBytes = config.maxBodyBytes ?? 16_384;
@@ -69,10 +69,10 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
     const reason = !policies.reviewed ? 'policy_unavailable'
       : config.deletionReady?.() === false ? 'deletion_unavailable'
       : typeof auth.cleanup !== 'function' || config.authMaintenanceReady?.() === false ? 'dependency_unavailable' : null;
-    const invite = typeof config.inviteCode === 'string' && config.inviteCode.length > 0 && config.inviteCode.length <= 256;
-    const registration = typeof auth.registrationState === 'function' ? auth.registrationState() : { enabled: invite };
-    return { loginEnabled: reason == null, registrationEnabled: reason == null && invite && registration.enabled,
-      method: 'username_password', reason, registrationReason: reason ?? (!invite ? 'registration_closed' : registration.reason ?? null) };
+    const requiresInvitation = config.requiresInvitation !== false;
+    const registration = typeof auth.registrationState === 'function' ? auth.registrationState() : { enabled: false, reason: 'registration_closed' };
+    return { loginEnabled: reason == null, registrationEnabled: reason == null && registration.enabled, requiresInvitation,
+      method: 'username_password', reason, registrationReason: reason ?? registration.reason ?? null };
   }
   const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
   const digest = (value) => createHmac('sha256', secret).update(value).digest('base64url');
@@ -93,12 +93,12 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
     if (++bucket.count > ceiling) throw Object.assign(problem('rate_limit', 429), { retryAfter: Math.max(1, Math.ceil((bucket.until - at) / 1000)) });
   }
   function capabilities() {
-    const result = { search: false, aiMatching: false, companyRequests: false };
+    const result = { search: false, aiMatching: false, companyRequests: false, hiringWire: false };
     for (const service of services) Object.assign(result, typeof service.capabilities === 'function' ? service.capabilities() : service.capabilities);
     return { ...result, ...DISABLED };
   }
   function sessionBody(viewer, token, guestToken) {
-    return { serverTime: new Date(now()).toISOString(), user: viewer?.account ?? null,
+    return { serverTime: new Date(now()).toISOString(), user: viewer?.account ?? null, expiresAt: viewer ? new Date(viewer.expiresAt).toISOString() : null,
       access: viewer?.access ?? GUEST_ACCESS, csrfToken: csrf(token, guestToken), capabilities: capabilities(),
       policies, authentication: authentication(), coverage: feed.coverage() };
   }
@@ -174,6 +174,12 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         runner: (typeof config.readiness === 'function' ? config.readiness().runner : null) ?? { ready: false, identity: null },
         importGeneration: feed.generation(),
       });
+      // Only explicit read-only public projections run without account ownership.
+      // The fixed runtime composes these services; mutations never use this hook.
+      if (method === 'GET') for (const service of services) {
+        const result = await service.publicRoute?.({ method, path, url, viewer, accountId: viewer?.account.id ?? null, requestId, db });
+        if (result != null) return finish(result.status ?? 200, result.body);
+      }
       if (!viewer) throw problem('unauthenticated', 401);
       const idempotencyKey = req.headers['idempotency-key'] ?? null;
       if (idempotencyKey !== null && (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(idempotencyKey))) throw problem('invalid_input');

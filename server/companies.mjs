@@ -150,7 +150,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
       return result(found, found.status === 'pending' ? 202 : 201);
     }
     if (db.prepare('SELECT count(*) AS n FROM demo_company_request_keys WHERE owner_id=?').get(ownerId).n >= maxPerOwner * 4) {
-      throw Object.assign(problem('task_limit', 429, 'The demo request limit has been reached.'), { retryAfter: 60 });
+      throw Object.assign(problem('task_limit', 429, 'The request limit has been reached.'), { retryAfter: 60 });
     }
     const fingerprint = createHash('sha256').update(JSON.stringify({ ...input, input: fold(input.input) })).digest('hex');
     const duplicate = db.prepare('SELECT * FROM demo_company_requests WHERE owner_id=? AND fingerprint=?').get(ownerId, fingerprint);
@@ -168,7 +168,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
       return result(duplicate, duplicate.status === 'pending' ? 202 : 201);
     }
     if (db.prepare('SELECT count(*) AS n FROM demo_company_requests WHERE owner_id=?').get(ownerId).n >= maxPerOwner) {
-      throw Object.assign(problem('task_limit', 429, 'The demo request limit has been reached.'), { retryAfter: 60 });
+      throw Object.assign(problem('task_limit', 429, 'The request limit has been reached.'), { retryAfter: 60 });
     }
     const companies = feed.companies({ q: input.input }).items;
     const exact = companies.filter((company) => fold(company.name) === fold(input.input)).filter((company) => {

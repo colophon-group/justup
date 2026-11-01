@@ -1,4 +1,4 @@
-// Durable demo task queue, owner isolation and compare-and-set leases. This module
+// Durable task queue, owner isolation and compare-and-set leases. This module
 // stores bounded private data; HTTP exposes only a feature-specific projection.
 import { randomUUID } from 'node:crypto';
 import { boundedJson, problem, transaction, DAY_MS } from './store.mjs';
@@ -42,7 +42,7 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
       db.prepare('DELETE FROM demo_tasks WHERE updated_at<=? AND status IN (\'succeeded\',\'warning\',\'failed\',\'cancelled\')').run(now() - retentionMs);
       if (db.prepare('SELECT count(*) AS n FROM demo_tasks').get().n >= maxTasks
           || db.prepare('SELECT count(*) AS n FROM demo_tasks WHERE owner_id=? AND status IN (\'pending\',\'running\')').get(ownerId).n >= maxPendingPerOwner) {
-        throw Object.assign(problem('task_limit', 429, 'The demo task limit has been reached.'), { retryAfter: 60 });
+        throw Object.assign(problem('task_limit', 429, 'The task limit has been reached.'), { retryAfter: 60 });
       }
       const id = randomUUID(), at = now();
       db.prepare('INSERT INTO demo_tasks (id,owner_id,kind,request_key,payload_json,status,created_at,updated_at) VALUES (?,?,?,?,?,\'pending\',?,?)').run(id, ownerId, kind, requestKey, json, at, at);

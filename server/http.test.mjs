@@ -4,11 +4,12 @@ import { createServer } from 'node:http';
 import { createHandler } from './http.mjs';
 const ORIGIN = 'https://preview.example.org';
 async function setup(t, options = {}) {
-  const token = 'a'.repeat(43), account = { id: 'account-a', username: 'tester' };
+  const token = 'a'.repeat(43), account = { id: 'account-a', username: 'tester', expiresAt: null };
   let signedIn = false, mutations = 0;
   const auth = {
     cleanup: () => ({}),
-    session: (value) => value === token && signedIn ? { account, expiresAt: Date.now() + 60_000, access: { kind: 'demo', fullAccess: true, legacy: false, billingEnabled: false, until: null } } : null,
+    registrationState: () => options.registrationState ?? { enabled: true, reason: null },
+    session: (value) => value === token && signedIn ? { account, expiresAt: Date.now() + 60_000, access: { kind: 'account', fullAccess: true, legacy: false, billingEnabled: false, until: null } } : null,
     register: async () => { signedIn = true; mutations++; return { account, token, expiresAt: Date.now() + 60_000 }; },
     login: async () => { signedIn = true; mutations++; return { account, token, expiresAt: Date.now() + 60_000 }; },
     logout: () => { signedIn = false; mutations++; },
@@ -42,7 +43,7 @@ test('session and auth set opaque host-only secure cookies and honest capabiliti
   assert.equal(s.guest.body.capabilities.hiddenMatchCounts, false);
   const result = await s.login(); assert.equal(result.res.status, 200);
   const cookie = result.res.headers.getSetCookie()[0];
-  assert.match(cookie, /^__Host-justup_demo_session=[A-Za-z0-9_-]{43};/);
+  assert.match(cookie, /^__Host-justup_session=[A-Za-z0-9_-]{43};/);
   for (const flag of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/']) assert.ok(cookie.includes(flag));
   assert.ok(!cookie.includes('Domain=')); assert.equal(result.body.user.username, 'tester');
   assert.equal(result.res.headers.get('cache-control'), 'private, no-store');
@@ -113,4 +114,32 @@ test('feature idempotency comes only from the bounded HTTP header and request cl
   assert.equal(s.calls.at(-1).idempotencyKey, null);
   const bad = await s.request('/searches', { method: 'POST', headers: { ...headers, 'Idempotency-Key': 'x'.repeat(129) }, body: '{}' });
   assert.equal(bad.res.status, 400);
+});
+
+test('registration availability comes from backend state and public mode remains subject to Origin and CSRF', async (t) => {
+  const s = await setup(t, { config: { requiresInvitation: false, inviteCode: undefined } });
+  assert.equal(s.guest.body.authentication.requiresInvitation, false);
+  assert.equal(s.guest.body.authentication.registrationEnabled, true);
+  const headers = { Origin: ORIGIN, 'X-CSRF-Token': s.guest.body.csrfToken, Cookie: s.guestCookie, 'Content-Type': 'application/json' };
+  assert.equal((await s.request('/auth/register', { method:'POST', headers:{...headers, Origin:'https://evil.example'}, body:'{}' })).res.status,403);
+  assert.equal((await s.request('/auth/register', { method:'POST', headers:{...headers, 'X-CSRF-Token':'bad'}, body:'{}' })).res.status,403);
+  assert.equal(s.mutations(),0);
+  const registered = await s.request('/auth/register', {method:'POST',headers,body:'{}'});
+  assert.equal(registered.res.status,201); assert.equal(registered.body.user.expiresAt,null);
+  assert.ok(Number.isFinite(Date.parse(registered.body.expiresAt)));
+  const denied = await setup(t, {config:{requiresInvitation:false}, registrationState:{enabled:false,reason:'account_limit'}});
+  const refused = await denied.request('/auth/register', {method:'POST',headers:{Origin:ORIGIN,'X-CSRF-Token':denied.guest.body.csrfToken,Cookie:denied.guestCookie,'Content-Type':'application/json'},body:'{}'});
+  assert.equal(refused.res.status,403); assert.equal(refused.body.error.code,'account_limit'); assert.equal(denied.mutations(),0);
+  assert.equal((await setup(t)).guest.body.authentication.requiresInvitation,true);
+});
+
+test('explicit public edition reads can report capability while public writes remain denied', async (t) => {
+  let reads=0;
+  const s=await setup(t,{services:[{capabilities:{hiringWire:true},publicRoute:ctx=>{
+    if(ctx.path!=='/hiring-wire')return null;reads++;return {body:{edition:{period:'2026-10-26'}}};
+  }}]});
+  assert.equal(s.guest.body.capabilities.hiringWire,true);
+  assert.equal((await s.request('/hiring-wire')).body.edition.period,'2026-10-26');
+  const denied=await s.request('/hiring-wire',{method:'POST',headers:{Origin:ORIGIN,'X-CSRF-Token':s.guest.body.csrfToken,Cookie:s.guestCookie,'Content-Type':'application/json'},body:'{}'});
+  assert.equal(denied.res.status,401);assert.equal(reads,1);
 });
