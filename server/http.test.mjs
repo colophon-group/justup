@@ -17,7 +17,7 @@ async function setup(t, options = {}) {
     deleteAccount: async () => { if (options.deleteError) throw Object.assign(new Error('safe'), { code: 'invalid_credentials', status: 401 }); signedIn = false; mutations++; return { deleted: true }; },
   };
   const calls = [], logs = [];
-  const feed = { coverage: () => ({ kind: 'imported_snapshot', verifiedAt: null, stale: true }), generation: () => null,
+  const feed = options.feed ?? { coverage: () => ({ kind: 'imported_snapshot', verifiedAt: null, stale: true }), generation: () => null,
     list: ({ viewer }) => ({ items: [{ id: viewer ? 'preview' : 'public' }] }), companies: () => ({ items: [] }), company: () => ({ id: 'co' }) };
   const task = { id: 'task-a', status: 'succeeded', kind: 'search_intent', payload: { secret: 'private' }, output: { hiddenJob: 'never-serialize' } };
   const tasks = { get: (owner, id) => owner === account.id && id === task.id ? task : null, publicView: (row, result) => ({ id: row.id, status: row.status, result }) };
@@ -49,6 +49,25 @@ test('session and auth set opaque host-only secure cookies and honest capabiliti
   assert.ok(!cookie.includes('Domain=')); assert.equal(result.body.user.username, 'tester');
   assert.equal(result.res.headers.get('cache-control'), 'private, no-store');
   const session = await s.request('/session', { headers: { Cookie: result.cookie } }); assert.equal(session.body.csrfToken, result.body.csrfToken);
+});
+
+test('public catalogue passes bounded pagination without viewer state and rejects private projections', async t => {
+  const calls = [], feed = { coverage: () => ({}), companies: args => { calls.push(args); return { items: [], coverage: {}, nextCursor: null }; } };
+  const s = await setup(t, { feed });
+  const result = await s.request('/companies?q=Example&limit=50&cursor=opaque');
+  assert.equal(result.res.status, 200);
+  assert.deepEqual(calls.pop(), { q: 'Example', limit: 50, cursor: 'opaque' });
+  assert.equal(result.res.headers.get('set-cookie'), null);
+  await s.request('/companies');
+  assert.deepEqual(calls.pop(), { q: '', limit: 20, cursor: null });
+  for (const query of ['scope=followed', 'ownerId=private', 'requested=true', 'q=a&q=b']) {
+    const denied = await s.request(`/companies?${query}`);
+    assert.equal(denied.res.status, 400);
+    assert.equal(denied.body.error.code, 'invalid_query');
+  }
+  for (const limit of ['0', '51', '1.5', '01', '']) {
+    assert.equal((await s.request(`/companies?limit=${limit}`)).res.status, 400);
+  }
 });
 test('policy and invite gates close both login and registration before auth code', async (t) => {
   const s = await setup(t, { config: { policiesReviewed: false } });

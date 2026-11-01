@@ -141,7 +141,7 @@ The composed runtime implements follows, viewed observations, interface preferen
 
 | Route | Input or result |
 | --- | --- |
-| `GET /companies?q=…` | Bounded catalogue of imported identities and accepted company-request identities. |
+| `GET /companies?q=…&limit=20&cursor=…` | Public catalogue page `{items,coverage,nextCursor}` of imported identities and accepted company-request identities. |
 | `GET /companies/:id` | Public canonical identity/source evidence; absent history remains unavailable. |
 | `GET /company-requests` | Account-owned requests and current state. |
 | `POST /company-requests` | `{input,domain?,careerUrl?,scope?,requestKey}` → known candidate or bounded identity-resolution task. |
@@ -149,6 +149,8 @@ The composed runtime implements follows, viewed observations, interface preferen
 | `DELETE /company-requests/:id` | Remove the account's request, preview and associated task data. |
 
 A request contains `{id,input,scope,status,candidate,companyId,previewRevision,clarification,taskId,createdAt}`. Status is pending/candidate/clarification/unresolved/accepted. A candidate contains `{id,companyId,name,domain,websiteUrl,evidenceUrls,coverage}`. Its exact-preview ID differs from the canonical catalogue `companyId`, which is null until known or accepted. Imported identities keep their original IDs; new accepted identities share a catalogue record by validated official domain and retain `coverage.state:"requested"`. Public identity/evidence has no requester ID and survives private request/account deletion. Material ambiguity returns a short clarification with candidate null. Search known identities before invoking Codex Luna. Treat provided pages as untrusted evidence, restrict tools and validate output URLs and sizes.
+
+The public catalogue accepts only `q`, `limit` and `cursor`, once each. `q` is at most 100 characters; matching trims it and ignores letter case. `limit` defaults to 20 and accepts integers 1–50. Followed and private requested views use their existing account routes; public catalogue reads never depend on cookies or a viewer. Ordering is company name in English collation, then canonical company ID. Preserve `q` on continuation links. `nextCursor:null` means the filtered catalogue is exhausted. Signed ten-minute cursors bind public scope, normalized filter, imported generation and published catalogue content. Malformed, tampered or wrong-scope cursors return `400 invalid_cursor`; expired cursors or changed catalogue/filter return `409 stale_cursor` and require restarting without a cursor. Invalid limits return `400 invalid_limit`; unknown, repeated or private-scope parameters return `400 invalid_query`. Coverage remains the current import freshness projection even when stale; a catalogue identity alone does not establish monitored hiring activity.
 
 A known immediate identity returns `201 {request}`; queued resolution returns `202 {request,task}`. Acceptance returns `200 {request}` with status accepted and references the exact server-held candidate and preview revision. Requirements use `{id,text,handling,reason}` and warnings use `{code,message,requirementIds}`; `handling` is primary/ai/preference/unsatisfied.
 

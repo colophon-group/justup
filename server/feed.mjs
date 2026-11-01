@@ -1,6 +1,6 @@
 // Public projections and time/access filtering for the isolated imported feed.
 // Search implementations must use eligibleJobs, then project with publicJob.
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { DAY_MS, problem } from './store.mjs';
 import { initializeCompanyIdentities,canonicalCompanyId } from './company-identities.mjs';
 
@@ -86,20 +86,44 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
       evidence: [...(known?.evidence??[]),{ source: 'jobseek_public', url: typeof job.companySlug === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(job.companySlug)
         ? `https://jseek.co/en/company/${job.companySlug}` : 'https://jseek.co/' }] };
   }
-  function companies({ q = '' } = {}) {
-    if (typeof q !== 'string' || q.length > 100) throw problem('invalid_query');
-    const needle = q.trim().toLocaleLowerCase('en');
+  function catalogue() {
     const found = new Map();
     for (const row of companyRows()) {
       const j = JSON.parse(row.data_json);
       const id=canonicalId(j.companyId),dto=companyDto(j);
-      if (!found.has(id) && dto.name.toLocaleLowerCase('en').includes(needle)) found.set(id,dto);
+      if (!found.has(id)) found.set(id,dto);
     }
     for(const row of db.prepare('SELECT data_json FROM justup_requested_companies').all()) {
       const company=JSON.parse(row.data_json);
-      if(!found.has(company.id)&&company.name.toLocaleLowerCase('en').includes(needle))found.set(company.id,company);
+      if(!found.has(company.id))found.set(company.id,company);
     }
-    return { items: [...found.values()].sort((a, b) => a.name.localeCompare(b.name, 'en') || a.id.localeCompare(b.id)).slice(0, 50), coverage: coverage() };
+    return [...found.values()].sort((a, b) => a.name.localeCompare(b.name, 'en') || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+  function companies({ q = '', cursor = null, limit = 20 } = {}) {
+    if (typeof q !== 'string' || q.length > 100 || /[\u0000-\u001f\u007f]/u.test(q)) throw problem('invalid_query');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw problem('invalid_limit');
+    const needle = q.trim().toLocaleLowerCase('en'), all = catalogue(), at = now();
+    // Accepted public identities can change between imports. Bind the cursor to
+    // both the import and the allowlisted catalogue, never to account state.
+    const generation = createHash('sha256').update(JSON.stringify([latest()?.generation ?? null, all])).digest('hex');
+    let position = null;
+    if (cursor != null) {
+      if (typeof cursor !== 'string' || cursor.length > 2048) throw problem('invalid_cursor');
+      const [data, signature, extra] = cursor.split('.');
+      if (!data || !signature || extra) throw problem('invalid_cursor');
+      const actual = Buffer.from(signature), expected = Buffer.from(sign(data));
+      if (actual.length !== expected.length || !timingSafeEqual(expected, actual)) throw problem('invalid_cursor');
+      try { position = JSON.parse(Buffer.from(data, 'base64url').toString('utf8')); } catch { throw problem('invalid_cursor'); }
+      if (position?.v !== 1 || position.scope !== 'public_companies' || typeof position.id !== 'string'
+          || typeof position.q !== 'string' || !Number.isSafeInteger(position.createdAt)) throw problem('invalid_cursor');
+      if (position.generation !== generation || position.q !== needle || at - position.createdAt >= cursorTtlMs || position.createdAt > at) throw problem('stale_cursor', 409);
+    }
+    const matching = all.filter(company => company.name.toLocaleLowerCase('en').includes(needle));
+    const start = position ? matching.findIndex(company => company.id === position.id) + 1 : 0;
+    if (position && !start) throw problem('invalid_cursor');
+    const items = matching.slice(start, start + limit), more = matching.length > start + limit;
+    return { items, coverage: coverageAt(at), nextCursor: more ? encode({ v: 1, scope: 'public_companies',
+      generation, q: needle, createdAt: position?.createdAt ?? at, id: items.at(-1).id }) : null };
   }
   function company(id) {
     id=canonicalId(id);

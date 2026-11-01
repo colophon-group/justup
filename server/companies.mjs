@@ -171,7 +171,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     if (db.prepare('SELECT count(*) AS n FROM demo_company_requests WHERE owner_id=?').get(ownerId).n >= maxPerOwner) {
       throw Object.assign(problem('task_limit', 429, 'The request limit has been reached.'), { retryAfter: 60 });
     }
-    const companies = feed.companies({ q: input.input }).items;
+    const companies = feed.companies({ q: input.input, limit: 50 }).items;
     const exact = companies.filter((company) => fold(company.name) === fold(input.input)).filter((company) => {
       if (!input.domain && !input.careerUrl) return true;
       try {
