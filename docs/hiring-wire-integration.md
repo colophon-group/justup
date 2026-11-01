@@ -65,10 +65,13 @@ becomes terminal. A completed, cancelled, deleted, expired or replaced lease
 cannot be resurrected by a late pause. Publication checks the abort signal and
 live lease before committing, so a preempted attempt publishes nothing.
 
-Native shared-slot cleanup requires the Sol protocol's cancellation acknowledgement;
-queue-only fake cleanup tests do not establish that native boundary. Release must
-include that transport contract and its fake native-protocol tests before claiming
-running-turn preemption is fully qualified. No scheduler is activated by this PR.
+The Sol transport waits for an explicit cancellation acknowledgement or a terminal
+reply marked `cleanup:"complete"`, emitted after native close/reap, process-group
+absence, private invocation cleanup and shared-slot release. An early socket close,
+malformed reply, missing proof or five-second acknowledgement deadline reports
+`cleanup_unproven`. Local fake native-protocol tests exercise these contracts;
+they do not independently qualify a deployed native runtime. No scheduler is
+activated by this PR.
 
 If the trusted transport reports `cleanup_unproven`, the runner inserts one durable
 `hiring_wire_cleanup_halt` row using its exact live system-task lease, retains the
