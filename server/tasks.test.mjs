@@ -89,6 +89,11 @@ test('active and stored ceilings keep recent receipts and recover after retentio
 });
 test('a full ordinary history admits termination while only a proved billing result releases its receipt', t => {
   const {tasks,db}=setup(t);
+  const release=(owner,id,proof)=>{
+    db.exec('BEGIN');
+    try { const result=tasks.releaseCleanupReceipt(owner,id,proof); db.exec('COMMIT'); return result; }
+    catch(error) { db.exec('ROLLBACK'); throw error; }
+  };
   const seed=db.prepare(`INSERT INTO justup_tasks
     (id,owner_id,kind,request_key,payload_json,status,created_at,updated_at)
     VALUES (?,?, 'search_intent', ?,?,'succeeded',100000,100000)`);
@@ -99,7 +104,7 @@ test('a full ordinary history admits termination while only a proved billing res
   const termination=tasks.enqueue(input({ownerId:'closing-owner',kind:'billing_terminate',requestKey:'termination:1',payload:{operationId:'operation-1'}}));
   assert.equal(termination.status,'pending');
   assert.equal(tasks.delete('closing-owner',termination.id),false);
-  assert.equal(tasks.releaseCleanupReceipt('closing-owner',termination.id,()=>true),false);
+  assert.equal(release('closing-owner',termination.id,()=>true),false);
   const lease=tasks.claim({workerId:'worker'});
   assert.equal(lease.id,termination.id);
   db.exec('CREATE TABLE billing_proof (task_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, operation_id TEXT NOT NULL, result TEXT NOT NULL) STRICT');
@@ -112,16 +117,17 @@ test('a full ordinary history admits termination while only a proved billing res
   // The handler may commit its canonical result before the runner records
   // completion. Its proof must not remove a task that the runner still owns.
   db.prepare('INSERT INTO billing_proof VALUES (?,?,?,?)').run(termination.id,'closing-owner','operation-1','settled');
-  assert.equal(tasks.releaseCleanupReceipt('closing-owner',termination.id,absorbed),false);
+  assert.equal(release('closing-owner',termination.id,absorbed),false);
   assert.equal(tasks.complete(termination.id,lease.leaseToken,{status:'succeeded'}),true);
   db.prepare('DELETE FROM billing_proof WHERE task_id=?').run(termination.id);
-  assert.equal(tasks.releaseCleanupReceipt('closing-owner',termination.id,absorbed),false);
-  assert.throws(()=>tasks.releaseCleanupReceipt('closing-owner',termination.id,true),TypeError);
-  assert.throws(()=>tasks.releaseCleanupReceipt('closing-owner',termination.id,async()=>true),TypeError);
+  assert.equal(release('closing-owner',termination.id,absorbed),false);
+  assert.throws(()=>tasks.releaseCleanupReceipt('closing-owner',termination.id,absorbed),TypeError);
+  assert.throws(()=>release('closing-owner',termination.id,true),TypeError);
+  assert.throws(()=>release('closing-owner',termination.id,async()=>true),TypeError);
   db.prepare('INSERT INTO billing_proof VALUES (?,?,?,?)').run(termination.id,'closing-owner','operation-1','settled');
-  assert.equal(tasks.releaseCleanupReceipt('other-owner',termination.id,absorbed),false);
-  assert.equal(tasks.releaseCleanupReceipt('closing-owner',termination.id,absorbed),true);
-  assert.equal(tasks.releaseCleanupReceipt('closing-owner',termination.id,absorbed),false);
+  assert.equal(release('other-owner',termination.id,absorbed),false);
+  assert.equal(release('closing-owner',termination.id,absorbed),true);
+  assert.equal(release('closing-owner',termination.id,absorbed),false);
   assert.equal(tasks.get('closing-owner',termination.id),null);
   assert.equal(tasks.enqueue(input({ownerId:'owner-0',requestKey:'request-0'})).id,ordinaryRetry.id);
   assert.equal(tasks.enqueue(input({ownerId:'second-owner',kind:'billing_terminate',requestKey:'termination:2',payload:{operationId:'operation-2'}})).status,'pending');
