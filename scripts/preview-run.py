@@ -27,6 +27,7 @@ CONFIG_KEYS = {
     'JUSTUP_SERVICES_ENABLED',
     'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_MAX_ACCOUNTS', 'JUSTUP_SESSION_TTL_MS',
     'JUSTUP_ACCOUNT_TTL_MS', 'JUSTUP_ACCOUNT_EXPIRES_AT',
+    'JUSTUP_EMAIL_VERIFICATION_ENABLED',
 }
 CATEGORIES = {'unknown', 'auth', 'mutation', 'health', 'read'}
 ROUTES = {'session', 'auth', 'jobs', 'searches', 'tasks', 'companies', 'company-requests', 'account', 'health', 'version'}
@@ -157,7 +158,7 @@ def child_environment(config, manifest):
     if not isinstance(config, dict) or set(config) - CONFIG_KEYS or any(not isinstance(value, str) for value in config.values()):
         raise ValueError('Only the documented API configuration keys are accepted.')
     origin = urlsplit(config.get('JUSTUP_ORIGIN', ''))
-    for key in ('JUSTUP_SERVICES_ENABLED', 'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_POLICIES_REVIEWED'):
+    for key in ('JUSTUP_SERVICES_ENABLED', 'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_POLICIES_REVIEWED', 'JUSTUP_EMAIL_VERIFICATION_ENABLED'):
         if key in config and config[key] not in {'true', 'false'}:
             raise ValueError('Runtime switches must be true or false.')
     for key in ('JUSTUP_MAX_ACCOUNTS', 'JUSTUP_SESSION_TTL_MS', 'JUSTUP_ACCOUNT_TTL_MS', 'JUSTUP_ACCOUNT_EXPIRES_AT'):

@@ -22,7 +22,7 @@ export function readRunnerStatus({config={},now=Date.now}={}){
     const status=JSON.parse(readFileSync(path,'utf8'));
     if(status.schemaVersion!==1||status.sourceCommit!==config.sourceCommit||status.buildIdentity!==config.buildIdentity||typeof status.identity!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(status.identity)||typeof status.ready!=='boolean'||typeof status.updatedAt!=='string')return absent;
     const at=Date.parse(status.updatedAt);if(!Number.isFinite(at)||at>now()+1000||now()-at>30_000)return absent;
-    const c=status.capabilities;if(!c||Object.keys(c).sort().join(',')!=='aiMatching,companyRequests,search'||Object.values(c).some(v=>typeof v!=='boolean'))return absent;
+    const c=status.capabilities;if(!c||!['aiMatching','companyRequests','search'].every(key=>typeof c[key]==='boolean')||Object.keys(c).some(key=>!['aiMatching','companyRequests','search','emailVerification'].includes(key))||Object.values(c).some(v=>typeof v!=='boolean'))return absent;
     return {ready:status.ready,identity:status.identity,sourceCommit:status.sourceCommit,buildIdentity:status.buildIdentity,lastHeartbeat:status.updatedAt,capabilities:status.ready?{...c}:disabled()};
   }catch{return absent;}
 }
