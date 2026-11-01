@@ -342,3 +342,8 @@ input[type=checkbox]:checked::after { content: ''; width: 4px; height: 8px; bord
 
 .settings-language { display: grid; gap: 8px; margin: 22px 0; font-weight: 600; }
 .settings-language select { width: min(100%, 320px); min-height: 44px; border: 1.5px solid; background: var(--cream); color: var(--ink); font: inherit; padding: 10px; }
+
+/* Live arrivals retain a navigation slot and do not reflow existing indicator columns. */
+.new-results-slot { min-height: 24px; }
+.new-edge { position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--cream); pointer-events: none; }
+#new-results { font-size: 11px; }

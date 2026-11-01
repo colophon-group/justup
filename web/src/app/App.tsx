@@ -356,6 +356,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
             onAccount={() => setDialog("settings")}
             onPersistenceReady={persistenceReady}
             onVisitorRebootstrap={rebootstrapVisitor}
+            onLiveInvalidated={() => { void refreshSession(); }}
           /> : null}
           {interactive || route.page === "companies" ? <CompaniesPage
             key={`companies-${epoch}`}

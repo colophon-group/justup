@@ -13,6 +13,8 @@ The canonical search snapshot uses the same primary filters, search options, cur
 
 ## Events and reconciliation
 
+The browser opens a stream only when the session advertises `capabilities.sse`, a search revision is accepted and selected, and the document is visible with no open dialog. It uses same-origin fetch streaming with an explicit `Last-Event-ID` header, a 1 MiB frame bound, a 20-second header deadline and a 45-second idle deadline. Closing a dialog or resuming the document reuses the last accepted identity for the same owner, revision and locale. Session quarantine immediately cancels the stream; old chunks cannot cross the authority barrier. Transient failures retry up to eight times, at one to eight seconds, before requiring the explicit check action. No public preview flag is enabled by this consumer.
+
 An event has `event: snapshot`, an opaque 43-character `id`, and JSON data:
 
 ```json
@@ -36,11 +38,17 @@ An event has `event: snapshot`, an opaque 43-character `id`, and JSON data:
 }
 ```
 
+Opening snapshots use `initial`, `resumed` or `recovery`; normal subsequent changes use `changed`.
+
 `searches` covers only the explicitly selected search. Its absence says nothing about inactive tabs. `items` contains the currently deliverable newest-first resolved prefix, limited to 96 public postings. Reconcile these by stable posting identity, preserving existing row nodes, reading anchor, selection and focus. An item's first-observed timestamp and ID determine its order. Duplicate events or reconnects do not create duplicate rows or mark existing rows as new arrivals.
 
 The prefix is not a replacement for every previously loaded row. `reconciliation.retainedItemIds` is a removal-only enumeration of currently accepted, eligible, exact-evidence identities throughout the canonical search scope, including older accepted rows behind a newer unresolved candidate. It cannot create arrivals. When `complete:true`, remove previously displayed IDs absent from this enumeration. `complete` describes enumeration coverage, independently of whether AI work remains pending. When `complete:false`, absence cannot remove an unknown previously displayed row. Never infer removal from the limited `items` prefix. A deleted or revised active search closes the connection with `search_changed`; reload accepted search state before opening a new revision.
 
 No withheld posting identity, URL, title or body enters either collection. Closed, reserved, expired, access-excluded and changed-evidence rows cannot be retained. Fresh exhausted zero, pending classification and paused import/provider states stay distinct. Missing or stale coverage cannot claim that zero matches is authoritative.
+
+The browser keeps its ordinary HTTP pagination cursor separate from the snapshot prefix. A stale cursor restarts canonical pagination without removing existing rows or interpreting the query. The first complete accepted-ID enumeration establishes an in-memory visit baseline; only a later prefix identity absent from a complete preceding baseline becomes New. Initial snapshots, prefix expansion, buffered pagination and repeated identities do not establish New. An incomplete preceding enumeration conservatively creates no new cohort. The baseline is scoped to the current mounted owner/search/revision; persistent return-visit newness is not implemented. Viewed removes the marker. The navigation cue targets already inserted arrivals.
+
+Existing row keys, focus and selection survive reconciliation. The browser captures a visible row before changing results and compensates its offset before paint; editor/header contexts retain their document position. Active pointer/touch gestures and scrolling coalesce updates until settling. Live arrivals enter immediately; older buffered rows remain gated by their actual visible slot and the 450 ms reveal cadence, including reduced motion.
 
 ## Reconnect and authorization
 
@@ -52,4 +60,4 @@ The HTTP boundary reloads the actual session or visitor cookie before each poll 
 
 The process shares a one-second SQLite change poll and one current snapshot per connected owner/search/revision. Time/access/provider transitions force reconciliation within five seconds even without a database write. Heartbeat comments run every 15 seconds. Defaults allow 16 connections globally, two per owner, five minutes per connection and at most 1 MiB per event. Oversize projections fail closed with `dependency_unavailable`. A blocked response queues no additional frame and is destroyed if it has not drained within five seconds. Disconnects release state; resume metadata is limited to 1,024 opaque identities for ten minutes and contains no posting payload. Application shutdown closes services and their timers before closing HTTP and SQLite. No private deletion transaction or barrier is held for the duration of a connection.
 
-`node --test server/live-results.test.mjs` checks incremental localhost HTTP chunks, reconnect identities, current SQLite imports, late accepted decisions, access and revision changes, closure/expiry, visitor protection, bounded connections and slow-reader cleanup. These local tests do not establish deployed Cloudflare delivery, browser anchor/focus preservation or production latency. The release gate must verify first event and reconnect through the actual approved streaming route using exact frontend/API/runner artifacts. An accountless Cloudflare Quick Tunnel cannot provide SSE; use the separately reviewed streaming-capable route.
+`node --test server/live-results.test.mjs` checks incremental localhost HTTP chunks, reconnect identities, current SQLite imports, late accepted decisions, access and revision changes, closure/expiry, visitor protection, bounded connections and slow-reader cleanup. Browser contracts in `tests/browser/live-results.spec.mjs` exercise real incremental local HTTP frames, reconnect headers, reader anchors, node identity, selection, focus, duplicate/revision rejection, removal evidence and document/dialog pause. These local tests do not establish deployed Cloudflare delivery or production latency. The release gate must verify first event and reconnect through the actual approved streaming route using exact frontend/API/runner artifacts. An accountless Cloudflare Quick Tunnel cannot provide SSE; use the separately reviewed streaming-capable route.

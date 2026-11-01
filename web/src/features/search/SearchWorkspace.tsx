@@ -20,6 +20,7 @@ interface Props {
   onAccount: () => void;
   onPersistenceReady: (bridge: { flush: (signal?: AbortSignal) => Promise<void> } | null) => void;
   onVisitorRebootstrap: () => Promise<void>;
+  onLiveInvalidated: () => void;
 }
 export function SearchWorkspace({
   client,
@@ -32,6 +33,7 @@ export function SearchWorkspace({
   onAccount,
   onPersistenceReady,
   onVisitorRebootstrap,
+  onLiveInvalidated,
 }: Props) {
   const { t, notice, locale } = useInterfaceLocale();
   const workspace = useWorkspace(client, session, onVisitorRebootstrap);
@@ -312,11 +314,12 @@ export function SearchWorkspace({
           client={client}
           search={search}
           active={active}
-          paused={state.busy}
+          paused={state.busy || dialogOpen || pendingDelete !== null || pendingDiscard !== null}
           reducedMotion={reducedMotion}
           session={session}
           onSignIn={onSignIn}
           onAccount={onAccount}
+          onLiveInvalidated={onLiveInvalidated}
           viewed={workspace.viewed}
           onViewed={session?.capabilities.viewed ? workspace.markViewed : undefined}
         />

@@ -18,6 +18,7 @@ import {
   record,
 } from "./decode.ts";
 import type { RegistrationAcceptance, SavedWorkspaceState, SearchScope, Session } from "./types.ts";
+import { liveResultsPath, readLiveResults, validEventId, type EventFrame } from "./liveResults.ts";
 import { sessionOwner } from './sessionOwner.ts';
 export class ApiError extends Error {
   readonly status: number;
@@ -267,6 +268,25 @@ export class ApiClient {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
     }
+  }
+  async streamResults(scope: SearchScope, searchId: string, revision: number, locale: InterfaceLocale,
+    lastEventId: string | null, signal: AbortSignal, receive: (frame: EventFrame) => void): Promise<void> {
+    if (this.suspended || signal.aborted) throw new DOMException('Session is being checked', 'AbortError');
+    if (lastEventId !== null && !validEventId(lastEventId)) throw new TypeError('Invalid live event identity.');
+    const controller = new AbortController(), version = this.sessionVersion;
+    this.privateRequests.add(controller);
+    const abort = () => controller.abort(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+    const headersDeadline = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetcher(liveResultsPath(scope, searchId, revision, locale), {
+        credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'text/event-stream', ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}) }, signal: controller.signal,
+      });
+      clearTimeout(headersDeadline);
+      await readLiveResults(response, controller.signal, frame => {
+        if (!controller.signal.aborted && !this.suspended && version === this.sessionVersion) receive(frame);
+      });
+    } finally { clearTimeout(headersDeadline); signal.removeEventListener('abort', abort); this.privateRequests.delete(controller); }
   }
   getSession(signal?: AbortSignal) {
     return this.request("/session", decodeSession, { signal });
