@@ -15,7 +15,9 @@ const motion = page => page.locator('.wire-track').evaluate(node => getComputedS
 test.beforeEach(async ({ page }) => { await page.clock.install({ time: new Date('2026-10-27T12:00:00.000Z') }); });
 
 test('published facts move past hover and click while company links stay internal and accessible', async ({ page }) => {
-  const calls = await mockApi(page, { 'GET /hiring-wire': published() });
+  const edition = published();
+  edition.edition.items[0].company.url = 'https://example.com/about/company/';
+  const calls = await mockApi(page, { 'GET /hiring-wire': edition });
   await page.goto('/');
   const wire = page.getByRole('region', { name: /Company listing activity/ });
   await expect(wire).toBeVisible();

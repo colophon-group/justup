@@ -112,13 +112,15 @@ export function decodeHiringWire(value: unknown): HiringWire {
   };
   const homepage = (value: unknown) => {
     const result = bounded(value, "news company URL", 2048);
+    if (/[\u0000-\u0020\u007f\\?#]/u.test(result) || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/iu.test(result)
+      || /^https:\/\/[^/]*@/iu.test(result)) fail("news company URL");
     let url: URL;
     try { url = new URL(result); } catch { return fail("news company URL"); }
     return url.protocol === "https:" && !url.username && !url.password && !url.port
-      && !url.search && !url.hash && url.pathname === "/" && url.href === result
+      && !url.search && !url.hash && url.href === result && url.hostname.length <= 253
       && /^[a-z0-9.-]+\.[a-z]{2,}$/u.test(url.hostname)
-      && !/(?:^|\.)(?:localhost|local|internal|invalid|test)$/u.test(url.hostname)
-      && url.hostname.split(".").every(part => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(part))
+      && !/(?:^|\.)(?:localhost|local|localdomain|internal|invalid|test|home|lan|private|corp|intranet|arpa|onion)$/u.test(url.hostname)
+      && url.hostname.split(".").every(part => part.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(part))
       ? result : fail("news company URL");
   };
   const period = record(edition.period, "news comparison period");

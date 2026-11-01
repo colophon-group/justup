@@ -16,6 +16,9 @@ test("public editions retain published comparison facts and honest unavailable s
   const zero = published();
   zero.edition.items[0]!.activity = { current: 3, previous: 0, change: 3, percentageChange: null };
   assert.equal(decodeHiringWire(zero).edition?.items[0]?.activity.percentageChange, null);
+  const homepage = published();
+  homepage.edition.items[0]!.company.url = "https://example.com/about/company/";
+  assert.equal(decodeHiringWire(homepage).edition?.items[0]?.company.url, "https://example.com/about/company/");
 });
 test("malformed news dates, identities, URLs and inconsistent numbers never render as facts", () => {
   const mutations = [
@@ -28,7 +31,7 @@ test("malformed news dates, identities, URLs and inconsistent numbers never rend
     (v: ReturnType<typeof published>) => { v.edition.items[0]!.company.id = "../private"; },
     (v: ReturnType<typeof published>) => { v.edition.items[0]!.company.url = "javascript:alert(1)"; },
     (v: ReturnType<typeof published>) => { v.edition.items[0]!.company.url = "https://127.0.0.1/"; },
-    (v: ReturnType<typeof published>) => { v.edition.items[0]!.company.url = "https://example.com/path"; },
+    (v: ReturnType<typeof published>) => { v.edition.items[0]!.company.url = "https://example.com/path?source=jobs"; },
     (v: ReturnType<typeof published>) => { v.edition.items[0]!.activity.current = -1; },
     (v: ReturnType<typeof published>) => { v.edition.items[0]!.activity.change = 900; },
     (v: ReturnType<typeof published>) => { v.edition.items[0]!.activity.percentageChange = 500; },
@@ -37,6 +40,11 @@ test("malformed news dates, identities, URLs and inconsistent numbers never rend
     (v: ReturnType<typeof published>) => { v.edition.items = []; },
   ];
   for (const mutate of mutations) { const value = published(); mutate(value); assert.throws(() => decodeHiringWire(value), /invalid/); }
+  for (const url of ["http://example.com/about/", "https://user:password@example.com/about/", "https://office.home/about/",
+    "https://example.com/about/#team", "https://example.com/about/?", "https://example.com/about/#", "https://example.com/%0apath"]) {
+    const value = published(); value.edition.items[0]!.company.url = url;
+    assert.throws(() => decodeHiringWire(value), /invalid/);
+  }
   assert.throws(() => decodeHiringWire({ state: "unavailable", edition: published().edition }), /invalid/);
   assert.throws(() => decodeHiringWire({ state: "pending", edition: null }), /invalid/);
 });
