@@ -37,11 +37,14 @@ function label(value) {
   return value;
 }
 function companyUrl(value) {
+  if(typeof value!=='string'||value.length>2048||/[\u0000-\u0020\u007f\\?#]/u.test(value)
+    ||/%(?:0[0-9a-f]|1[0-9a-f]|7f)/iu.test(value)||!/^https:\/\//iu.test(value)
+    ||/^https:\/\/[^/]*@/iu.test(value))throw wireError('invalid_output');
   let url; try { url = new URL(value); } catch { throw wireError('invalid_output'); }
-  if (typeof value!=='string' || value.length>2048 || url.hostname.length>253 || url.protocol !== 'https:' || url.username || url.password || url.port || url.hash || url.search || url.pathname !== '/' || isIP(url.hostname)
-    || !/^[a-z0-9.-]+\.[a-z]{2,}$/u.test(url.hostname) || /(?:^|\.)(?:localhost|local|internal|invalid|test)$/u.test(url.hostname)
-    || url.hostname.split('.').some(part => part.length>63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(part)) || value !== url.href) throw wireError('invalid_output');
-  return value;
+  if (url.href.length>2048 || url.hostname.length>253 || url.protocol !== 'https:' || url.username || url.password || url.port || url.hash || url.search || isIP(url.hostname)
+    || !/^[a-z0-9.-]+\.[a-z]{2,}$/u.test(url.hostname) || /(?:^|\.)(?:localhost|local|localdomain|internal|invalid|test|home|lan|private|corp|intranet|arpa|onion)$/u.test(url.hostname)
+    || url.hostname.split('.').some(part => part.length>63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(part))) throw wireError('invalid_output');
+  return url.href;
 }
 export function periodFor(periodEnd) {
   const end = iso(periodEnd);
@@ -59,17 +62,17 @@ export function compileWireSnapshot(input, {periodEnd, now = Date.now()} = {}) {
   if (!Array.isArray(value.companies) || value.companies.length > 500 || !Array.isArray(value.scopes) || value.scopes.length > 2000 || !Array.isArray(value.postings) || value.postings.length > 100_000) throw wireError('invalid_output');
   const companies = new Map(), scopes = new Map(), suppressed = [];
   for (const company of value.companies) {
-    exact(company, ['id','name','url']); token(company.id); label(company.name); companyUrl(company.url);
+    exact(company, ['id','name','url']); token(company.id); label(company.name);
     if (companies.has(company.id)) throw wireError('invalid_output');
-    companies.set(company.id, company);
+    companies.set(company.id, {...company,url:companyUrl(company.url)});
   }
   for (const scope of value.scopes) {
     exact(scope, ['id','companyId','revision','trackedSince','lastVerifiedAt','coverage']);
     token(scope.id); token(scope.revision);
     if (!companies.has(scope.companyId) || scopes.has(scope.id) || !Array.isArray(scope.coverage) || scope.coverage.length > 128) throw wireError('invalid_output');
-    const tracked = iso(scope.trackedSince), verified = iso(scope.lastVerifiedAt);
-    if (tracked > end || verified > generatedAt || tracked > verified) throw wireError('invalid_output');
-    let reason = tracked > start ? 'new_scope' : verified < end ? 'stale_scope' : null;
+    const tracked = iso(scope.trackedSince), verified = scope.lastVerifiedAt===null?null:iso(scope.lastVerifiedAt);
+    if (tracked > end || verified!==null&&(verified > generatedAt || tracked > verified)) throw wireError('invalid_output');
+    let reason = verified===null?'never_verified_scope':tracked > start ? 'new_scope' : verified < end ? 'stale_scope' : null;
     let cursor = start;
     for (const interval of scope.coverage) {
       exact(interval,['start','end','state']); const a=iso(interval.start), b=iso(interval.end);
