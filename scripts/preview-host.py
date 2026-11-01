@@ -680,6 +680,7 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
         verify_operator_units(candidate['files'])
         if add_feed:
             qualify_feed_units()
+            require_idle_preview()
         guard()
         publish_receipt(marker, history / 'new-receipt.tmp',
                         (json.dumps({'formatVersion': 1, 'planSha256': expected}) + '\n').encode())
