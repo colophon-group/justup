@@ -40,6 +40,7 @@ export function useFeed(
     controller = useRef<AbortController | null>(null);
   const seenIds = useRef(new Set<string>()),
     seenCursors = useRef(new Set<string>());
+  const interrupted = useRef<{ cursor: string | null } | null>(null);
   const feedRef = useRef(feed);
   feedRef.current = feed;
   const load = useCallback(
@@ -125,6 +126,7 @@ export function useFeed(
             : current,
         );
       } catch (error) {
+        if (isAbortError(error) && epoch === generation.current && !request.signal.aborted) interrupted.current = { cursor };
         if (epoch === generation.current && !isAbortError(error))
           setFeed((current) =>
             current.key === key
@@ -145,6 +147,7 @@ export function useFeed(
     controller.current?.abort();
     inFlight.current = false;
     initialized.current = false;
+    interrupted.current = null;
     seenIds.current.clear();
     seenCursors.current.clear();
     setFeed(emptyFeed(key));
@@ -158,6 +161,11 @@ export function useFeed(
   useEffect(() => {
     if (active && key && !initialized.current) void load(null);
   }, [active, key, load]);
+  useEffect(() => client.onSessionResumed(() => {
+    if (!active || !interrupted.current) return;
+    const pending = interrupted.current; interrupted.current = null;
+    void load(pending.cursor);
+  }), [client, active, load]);
   const next = useCallback(() => {
     const value = feedRef.current;
     if (
