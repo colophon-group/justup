@@ -9,6 +9,16 @@ The operator approved the final Privacy and Usage wording on 1 November 2026 and
 
 English pages are `/privacy.html` and `/usage.html`; German, French, Italian and Spanish pages use the matching `.de.html`, `.fr.html`, `.it.html` and `.es.html` suffixes. All five locale pairs have aligned reviewed copy. English is the authoritative drafting source where law permits; each translated Privacy page remains a complete local notice. Every admitted locale must be bound to its own exact deployed page hashes. A fallback is not inferred from a language choice.
 
+The approved source build produced these exact SHA-256 notice hashes. They identify the candidate text and layout; the release gate must compare the public HTTPS responses with these same bytes before account admission. Any policy wording or renderer change requires a new table and proof.
+
+| Locale | Privacy SHA-256 | Usage SHA-256 |
+| --- | --- | --- |
+| en | `487d4d8aaab1a36bda7db794b99905ffa2b09e334a693fdff239f2d1c91452de` | `e40fe5500f7f0b902c3eb004c112a874b47aa6ea8947808642c4afe8a148e5a9` |
+| de | `f27304d93de10e59e24e4c6d2f0e4180e5a9a79534d5e94b69b43ebfae119d1d` | `a5b10fcfc90d140c447d8105b2fd24bb27000db4915d55a1c6a9ea51bc9dcf69` |
+| fr | `1f64f7787c0cfa7c935432bd998fb5afd7e20fef5d0f9c05b9e96da677c95d2d` | `29e149c92873ece127b923b00f46bd490426a290099af01460f951154c646cfa` |
+| it | `17dc3ab55bfff839f3133ab2fe19ad12fb362c28f14a8677d6f94c49167c8aa0` | `5ead257226c7ae03df8d5906cdaf3e1778204e2d029fb26eadb3cc69c18297fd` |
+| es | `0a9ec9d93f6448c80b503c99869784e1588dc77ffc46af67eaaa945d04e7db4a` | `494e97528cb79b12e5c437d8f37963f24f9e615017797fee218ce4f5122c16c4` |
+
 The common facts, section inventory and English copy live in [policy content](../web/policies/content.ts). Typed German, French, Italian and Spanish copy must contain every key with the same shared-fact placeholders. The [renderer](../web/policies/render.ts) uses one escaped, script-free layout and common version/operator/review metadata. The [Vite plugin](../web/policies/vite.ts) serves these exact documents during development and emits ten HTML assets during a public client build, alongside local [policy CSS](../web/public/policies.css). It emits no notices into private SSR bundles. Brand, navigation and footer search links retain the notice language: `/#jobs` for English and `/{de,fr,it,es}/#jobs` for the other locales. Source remains under `web/` so credential-free frontend snapshots include it; generated `web/dist` files must not be committed. These checks establish source completeness and exact delivery; they do not establish deployed feature readiness.
 
 The notices describe durable service behavior separately from temporary deployment settings. Account invitations, registration capacity, an optional temporary account deadline, snapshot availability and preview expiry are deployment constraints. They must not become product entitlements or imply that an unavailable product capability is complete. The published postal address and personal operator identity come from the operator. Do not infer a corporation or provider handling guarantee.
