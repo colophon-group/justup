@@ -116,6 +116,7 @@ class ArtifactContracts(unittest.TestCase):
                      'app/server/demo-composition.mjs', 'app/server/demo-runner-adapter.mjs',
                      'app/server/hiring-wire-fixtures.mjs', 'app/server/hiring-wire-evals-v1.json',
                      'app/scripts/hiring-wire/arbitrary.mjs', 'app/scripts/hiring-wire/../enqueue.mjs',
+                     'app/scripts/company-requests/arbitrary.mjs', 'app/scripts/company-requests/../setup.mjs',
                      'app/server/evals/luna-wire-catalogue.mjs',
                      'app/server/./evals/luna-wire-catalogue.mjs', 'app/server//evals/luna-wire-catalogue.mjs',
                      'runtime/codex/bin/codex-code-mode-host', 'runtime/codex/codex-path/rg', 'runtime/codex/codex-resources/zsh/bin/zsh'):
@@ -124,7 +125,8 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_wire_catalogue_and_fixed_operator_scripts_are_bounded_runtime_assets(self):
         manifest, _ = payload()
-        for name in ('app/scripts/hiring-wire/enqueue.mjs', 'app/scripts/hiring-wire/check-snapshot.mjs'):
+        for name in ('app/scripts/hiring-wire/enqueue.mjs', 'app/scripts/hiring-wire/check-snapshot.mjs',
+                     'app/scripts/company-requests/setup.mjs'):
             self.assertTrue(artifact.allowed(name))
         manifest['files']['app/server/hiring-wire-codex.mjs'] = artifact.sha(b'export {};')
         manifest['files'].update({name: artifact.sha(b'export {};') for name in artifact.WIRE_MODULES})

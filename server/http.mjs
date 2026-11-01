@@ -14,6 +14,7 @@ const SAFE_ERRORS = new Map([
   ['policy_unavailable', 'Processing is unavailable until policies are approved for this language.'],
   ['deletion_unavailable', 'Account access is temporarily unavailable.'],
   ['forbidden', 'This request is not allowed.'], ['invalid_json', 'Send a bounded JSON object.'],
+  ['access_denied','Current premium access is required for company priority.'],
   ['identity_unverified','Verify your account to activate the free period.'], ['free_period_unavailable','The free period is unavailable.'],
   ['not_found', 'Not found.'], ['rate_limit', 'Too many requests. Try again later.'],
   ['task_limit', 'The task limit has been reached.'], ['idempotency_conflict', 'This request key was already used.'],
