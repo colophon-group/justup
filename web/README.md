@@ -5,7 +5,7 @@ read_when: Changing the interface, connecting the API or checking compiled front
 
 # Justup web application
 
-The browser application uses React and strict TypeScript, built by Vite. Its source lives in `src/`; `policies/` contains aligned Privacy and Usage drafts and their static generator; `public/` contains local assets such as policy CSS. Generated `dist/` public assets and the private `worker-dist/` bundle are ignored by Git. The application calls the authoritative same-origin `/api/v1` service for account access, accepted searches, job evidence and company requests.
+The browser application uses React and strict TypeScript, built by Vite. Its source lives in `src/`; `policies/` contains aligned approved Privacy and Usage notices and their static generator; `public/` contains local assets such as policy CSS. Generated `dist/` public assets and the private `worker-dist/` bundle are ignored by Git. The application calls the authoritative same-origin `/api/v1` service for account access, accepted searches, job evidence and company requests.
 
 ## Develop and build
 
