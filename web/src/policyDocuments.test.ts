@@ -46,8 +46,11 @@ test("ten public notices retain common draft/operator identity, sections, local 
       assert.doesNotMatch(html, /<script|<iframe|<form|\{\{|https?:\/\//i);
       assert.equal([...html.matchAll(/<link /g)].length, 1);
       assert.match(html, /<link rel="stylesheet" href="\/policies.css">/);
+      assert.ok(html.includes('class="policy-document"'));
+      assert.equal([...html.matchAll(/<li><a href="#/g)].length, SECTIONS[kind].length);
       for (const [id, , paragraphs] of SECTIONS[kind]) {
         assert.ok(html.includes(`aria-labelledby="${id}"`), `${locale}: ${kind}: ${id}`);
+        assert.ok(html.includes(`href="#${id}"`), `${locale}: ${kind}: section index targets ${id}`);
         for (const key of paragraphs) assert.ok(html.includes(`data-copy="${key}"`), key);
       }
       assert.equal([...html.matchAll(/data-copy=/g)].length, SECTIONS[kind].reduce((sum, [, , paragraphs]) => sum + paragraphs.length, 0));
