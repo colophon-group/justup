@@ -270,6 +270,14 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
           if(config.authMaintenanceReady?.()===false)throw problem('dependency_unavailable',503);
         }
         let ownerToken=visitorToken,opened;
+        if((path==='/visitor/workspace'&&['GET','PATCH'].includes(method)||path==='/visitor/searches'&&method==='GET')&&!viewer&&!visitorService.currentSession(ownerToken,{locale:interfaceLocale})){
+          const epoch=visitorService.issuanceEpoch();
+          if(epoch==null||ownerToken!==visitorHint(guestToken,epoch)||visitorService.tokenRetired(ownerToken))throw problem('unauthenticated',401);
+          if(method==='GET')return finish(200,path==='/visitor/searches'?{items:[]}:visitorService.emptyWorkspace());
+          const saved=visitorService.bootstrapWorkspace(ownerToken,{locale:interfaceLocale,issuanceEpoch:epoch},body);
+          if(saved.principal)res.setHeader('Set-Cookie',cookie(visitorCookie,ownerToken,saved.principal.expiresAt));
+          return finish(200,saved.workspace);
+        }
         if(method==='POST'&&path==='/visitor/searches'&&!viewer&&!visitorService.currentSession(ownerToken,{locale:interfaceLocale})){
           visitorService.admitCreation(body);
           const epoch=visitorService.issuanceEpoch();

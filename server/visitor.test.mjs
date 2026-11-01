@@ -12,14 +12,18 @@ import { mkdtempSync,mkdirSync,writeFileSync,rmSync,unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAccessReader } from './entitlements.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 const START=Date.parse('2026-10-31T12:00:00Z'),DAY=86_400_000,ORIGIN='https://preview.example.org';
+const EMPTY_WORKSPACE={revision:0,state:{activeSearchId:null,drafts:{}},viewed:[],recoveredDrafts:[]};
+async function assertEmptyBootstrap(c){const workspace=await c.request('/visitor/workspace'),searches=await c.request('/visitor/searches');assert.equal(workspace.status,200);assert.deepEqual(workspace.body,EMPTY_WORKSPACE);assert.equal(searches.status,200);assert.deepEqual(searches.body,{items:[]});}
+function diskRuntime(t){const dir=mkdtempSync(join(tmpdir(),'justup-visitor-workspace-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),privateGenerationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(privateGenerationPath,'00000000-0000-4000-8000-000000000000\n');return {dbPath:join(dir,'state.sqlite'),privateGenerationPath,backupDir};}
 const FILTERS=['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'];
 function interpretation({residual=false,filters={titleAny:['engineer']}}={}) {
   const bindings=Object.entries(filters).map(([field,values])=>({field,values}));
   return {title:'Engineering',configuration:{schemaVersion:1,filters:{...Object.fromEntries(FILTERS.map(k=>[k,null])),...filters},residualAi:residual?{condition:'A documented four day working week.',requirementIds:['ai']}:null},requirements:[{id:'role',text:Object.values(filters).flat().join(' ')||'Any job',handling:'primary',reason:'Stated criteria.',bindings,companyReference:null},...(residual?[{id:'ai',text:'A documented four day working week.',handling:'ai',reason:'Needs posting evidence.',bindings:[],companyReference:null}]:[])]};
 }
-async function setup(t,{model,companyModel,provider,residual=false,visitor:visitorConfig,policiesReviewed=true,realAuth=false,runtime={}}={}) {
+async function setup(t,{model,modelAvailable=true,companyModel,provider,residual=false,visitor:visitorConfig,policiesReviewed=true,realAuth=false,runtime={}}={}) {
   let time=START,modelCalls=0,providerCalls=0,companyCalls=0,failNextHandoff=false;
   const accounts=new Map(['one','two'].map(id=>[id,{id,username:`test-${id}`,expiresAt:null,access:{kind:'paid',fullAccess:true,legacy:false,premium:false,billingEnabled:false,until:null}}]));
   const sessions=new Map();let identity,intent,matching,visitor,companies;
@@ -34,7 +38,7 @@ async function setup(t,{model,companyModel,provider,residual=false,visitor:visit
       identity=createVisitorIdentity(deps);
       const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
       matching=createMatchingService({...deps,...ownership,provider:{available:()=>true,classify:async args=>{providerCalls++;return provider?provider(args):{decisions:args.jobs.map(j=>({id:j.id,decision:j.id.includes('rejected')?'rejected':'accepted'}))};}}});
-      intent=createIntentService({...deps,...ownership,matching,model:{interpretIntent:async args=>{modelCalls++;return model?model(args):interpretation({residual});}}});
+      intent=createIntentService({...deps,...ownership,matching,onSearchCreated:event=>visitor.searchCreated(event),model:{available:()=>modelAvailable,interpretIntent:async args=>{modelCalls++;return model?model(args):interpretation({residual});}}});
       visitor=createVisitorService({...deps,identity,intent,matching});companies=createCompanyService({...deps,...ownership,model:{resolveCompany:async args=>{companyCalls++;return companyModel?companyModel(args):{status:'unresolved',candidate:null,clarification:'Synthetic unresolved company'};}}});return [intent,matching,visitor,companies];
     }]});
   const rows=[['hidden-accepted',1,'Engineer'],['hidden-rejected',1.2,'Engineer'],['hidden-primary-excluded',1.5,'Designer'],['visible-accepted',3,'Engineer'],['visible-rejected',4,'Engineer']];
@@ -52,6 +56,85 @@ async function setup(t,{model,companyModel,provider,residual=false,visitor:visit
   const results=(c,id,suffix='')=>c.request(`/visitor/searches/${id}/results?revision=1${suffix}`);
   return {app,config,client,work,create,results,time:()=>time,identity,intent,matching,visitor,accounts,sessions,advance:ms=>time+=ms,modelCalls:()=>modelCalls,providerCalls:()=>providerCalls,companyCalls:()=>companyCalls,failHandoff:()=>failNextHandoff=true};
 }
+
+test('fresh workspace and search hydration plus empty or invalid saves allocate no private state',async t=>{
+  const s=await setup(t),c=s.client(),session=await c.session();assert.equal(session.body.visitor,null);assert.equal(session.body.user,null);assert.equal(session.body.capabilities.visitorSearch,true);
+  await assertEmptyBootstrap(c);
+  for(const drafts of [{},{new:''}]){const saved=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts}});assert.equal(saved.status,200);assert.deepEqual(saved.body,EMPTY_WORKSPACE);}
+  for(const body of [{expectedRevision:1,activeSearchId:null,drafts:{new:'Unsent'}},{expectedRevision:0,activeSearchId:'unknown',drafts:{new:'Unsent'}},{expectedRevision:0,activeSearchId:null,drafts:{unknown:'Unsent'}},{expectedRevision:0,activeSearchId:null,drafts:{new:'x'.repeat(4001)}},{expectedRevision:0,activeSearchId:null,drafts:{new:'Invalid\u0000text'}}])assert.notEqual((await c.request('/visitor/workspace',{method:'PATCH',body})).status,200);
+  for(const headers of [{Origin:'https://elsewhere.example'},{'X-CSRF-Token':'x'.repeat(43)}])assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Unsent'}},headers})).status,403);
+  for(const table of ['justup_visitors','justup_workspaces','justup_tasks','justup_searches'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+  assert.equal(s.modelCalls(),0);assert.equal(s.providerCalls(),0);
+  c.jar.set('__Host-justup_visitor','x'.repeat(43));assert.equal((await c.request('/visitor/workspace')).status,401);assert.equal((await c.request('/visitor/searches')).status,401);
+});
+
+test('an unsent draft saves and transfers without models; a lost first PATCH recovers one owner under ordinary CAS',async t=>{
+  const s=await setup(t,{runtime:diskRuntime(t),modelAvailable:false}),c=s.client(),session=await c.session();assert.equal(session.body.capabilities.search,false);assert.equal(session.body.capabilities.visitorSearch,true);
+  const before=c.snapshot(),body={expectedRevision:0,activeSearchId:null,drafts:{new:'  Unsent 界 draft  '}};
+  const saved=await c.request('/visitor/workspace',{method:'PATCH',body});assert.equal(saved.status,200);assert.equal(saved.body.revision,1);
+  const other=s.client();await other.session();await other.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Other draft'}}});assert.equal((await other.request('/visitor/session',{method:'DELETE',body:{}})).status,200);
+  for(let i=0;i<2;i++){c.restore(before);assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body})).status,409);assert.deepEqual((await c.request('/visitor/workspace')).body,saved.body);}
+  assert.equal((await c.session()).body.visitor!==null,true);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);
+  assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'outage'}})).status,503);
+  assert.equal((await c.request('/visitor/workspace')).body.state.drafts.new,body.drafts.new);
+  assert.equal((await c.login('one')).body.visitorHandoff.status,'complete');assert.equal((await c.request('/workspace')).body.state.drafts.new,body.drafts.new);
+  const accountWorkspace=(await c.request('/workspace')).body,emptyEdit=await c.request('/workspace',{method:'PATCH',body:{expectedRevision:accountWorkspace.revision,activeSearchId:null,drafts:{new:''}}});assert.equal(emptyEdit.body.revision,accountWorkspace.revision+1);assert.deepEqual(emptyEdit.body.state.drafts,{new:''});
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,0);assert.equal(s.modelCalls(),0);assert.equal(s.providerCalls(),0);
+});
+
+test('search creation associates its exact saved new draft atomically and an identical request key never moves another draft',async t=>{
+  const runtime=diskRuntime(t),s=await setup(t,{runtime}),c=s.client();await c.session();await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Engineer'}}});
+  const prior=c.snapshot(),body={query:'Engineer',requestKey:'lost-create'},reader=new DatabaseSync(runtime.dbPath,{readOnly:true});t.after(()=>reader.close());
+  const associate=s.visitor.searchCreated;let observed;
+  s.visitor.searchCreated=event=>{observed={tasks:reader.prepare('SELECT count(*) n FROM justup_tasks').get().n,searches:reader.prepare('SELECT count(*) n FROM justup_searches').get().n,workspace:reader.prepare('SELECT revision FROM justup_workspaces').get().revision};associate(event);};
+  const created=await c.request('/visitor/searches',{method:'POST',body}),id=created.body.search.id;assert.equal(created.status,202);assert.deepEqual(observed,{tasks:0,searches:0,workspace:1});
+  assert.deepEqual({tasks:reader.prepare('SELECT count(*) n FROM justup_tasks').get().n,searches:reader.prepare('SELECT count(*) n FROM justup_searches').get().n,workspace:reader.prepare('SELECT revision FROM justup_workspaces').get().revision},{tasks:1,searches:1,workspace:2});
+  const workspace=(await c.request('/visitor/workspace')).body;assert.equal(workspace.revision,2);assert.deepEqual(workspace.state,{activeSearchId:id,drafts:{[id]:'Engineer'}});
+  c.restore(prior);const retry=await c.request('/visitor/searches',{method:'POST',body});assert.equal(retry.body.search.id,id);assert.equal(retry.body.task.id,created.body.task.id);assert.equal((await c.request('/visitor/searches')).body.items.length,1);
+  await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:2,activeSearchId:null,drafts:{[id]:'A refinement',new:'A different new draft'}}});
+  const latest=(await c.request('/visitor/workspace')).body;await c.request('/visitor/searches',{method:'POST',body});assert.deepEqual((await c.request('/visitor/workspace')).body,latest);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);assert.equal(s.modelCalls(),0);
+});
+
+test('a draft saved while a create request waits is preserved rather than associated with the older submitted query',async t=>{
+  const s=await setup(t),c=s.client();await c.session();await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Engineer'}}});
+  const original=s.intent.route;let started,release;const waiting=new Promise(resolve=>started=resolve),hold=new Promise(resolve=>release=resolve);
+  s.intent.route=async ctx=>{if(ctx.method==='POST'&&ctx.path==='/searches'){started();await hold;}return original(ctx);};
+  const creating=c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'concurrent'}});await waiting;
+  const newer=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:null,drafts:{new:'Engineer with a newer condition'}}});assert.equal(newer.status,200);release();assert.equal((await creating).status,202);
+  assert.deepEqual((await c.request('/visitor/workspace')).body,newer.body);assert.equal((await c.request('/visitor/searches')).body.items[0].draft.query,'Engineer');
+});
+
+test('a failed first draft write or search association rolls back every owner, task, submission and workspace effect',async t=>{
+  const s=await setup(t,{runtime:diskRuntime(t)}),c=s.client();await c.session();const db=s.app.store.db,draft={expectedRevision:0,activeSearchId:null,drafts:{new:'Engineer'}};
+  db.exec("CREATE TRIGGER reject_workspace BEFORE INSERT ON justup_workspaces BEGIN SELECT RAISE(ABORT,'synthetic failure'); END");
+  assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:draft})).status,500);for(const table of ['justup_visitors','justup_workspaces','justup_tasks'])assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+  db.exec('DROP TRIGGER reject_workspace');assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:draft})).status,200);
+  db.exec("CREATE TRIGGER reject_association BEFORE UPDATE ON justup_workspaces BEGIN SELECT RAISE(ABORT,'synthetic failure'); END");
+  assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'atomic-failure'}})).status,500);
+  for(const table of ['justup_tasks','justup_searches','justup_search_submissions'])assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+  assert.equal(db.prepare('SELECT submissions FROM justup_visitors').get().submissions,0);assert.equal((await c.request('/visitor/workspace')).body.state.drafts.new,'Engineer');
+});
+
+test('clearing the only draft reclaims visitor capacity and revokes old pairs while other private work remains protected',async t=>{
+  const s=await setup(t,{visitor:{maxVisitors:2}}),c=s.client();
+  for(let i=0;i<3;i++){
+    await c.session();assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:' '}}})).status,200);const old=c.snapshot();
+    const cleared=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:null,drafts:{new:''}}});assert.equal(cleared.status,200);assert.deepEqual(cleared.body,EMPTY_WORKSPACE);
+    for(const table of ['justup_visitors','justup_workspaces','justup_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+    c.restore(old);assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Must rebootstrap'}}})).status,401);
+  }
+  await c.session();await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Keep viewed ownership'}}});await c.request('/visitor/viewed',{method:'POST',body:{jobId:'visible-accepted'}});
+  const cleared=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:null,drafts:{}}});assert.equal(cleared.body.revision,2);assert.equal(cleared.body.viewed.length,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);
+});
+
+test('draft bootstrap and clearing require current policy and the real deletion barrier even during a model outage',async t=>{
+  const runtime=diskRuntime(t),s=await setup(t,{runtime,modelAvailable:false}),c=s.client();await c.session();const body={expectedRevision:0,activeSearchId:null,drafts:{new:'Private unsent draft'}};
+  s.config.policiesReviewed=false;assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body})).status,503);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+  s.config.policiesReviewed=true;s.identity.refreshAvailability();assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body})).status,200);
+  writeFileSync(runtime.privateGenerationPath+'.pending','foreign marker');assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:null,drafts:{}}})).status,503);
+  assert.equal(JSON.parse(s.app.store.db.prepare('SELECT state_json FROM justup_workspaces').get().state_json).drafts.new,body.drafts.new);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);unlinkSync(runtime.privateGenerationPath+'.pending');assert.equal(s.modelCalls(),0);
+});
 
 test('visitor submits, edits and retries its own search with filtered exact hidden count',async t=>{
   const s=await setup(t),a=s.client(),b=s.client();const session=await a.session();await b.session();
@@ -96,7 +179,7 @@ test('verified sign-in appends searches and transfers draft and viewed state ide
   const list=await c.request('/searches');assert.equal(list.body.items.length,2);assert.equal(list.body.items.find(j=>j.id===id).configuration.schemaVersion,1);
   const workspace=await c.request('/workspace');assert.equal(workspace.body.state.drafts[id],'Unsent refinement');assert.equal(workspace.body.viewed[0].jobId,'visible-accepted');
   assert.deepEqual(s.app.withPrivateTransaction(()=>s.visitor.handoff(visitorToken,{db:s.app.store.db,accountId:'one'})),{status:'complete'});assert.deepEqual(s.app.withPrivateTransaction(()=>s.visitor.handoff(visitorToken,{db:s.app.store.db,accountId:'two'})),{status:'none'});
-  assert.equal(s.identity.fromToken(visitorToken),null);await c.request('/session/logout',{method:'POST',body:{}});assert.equal((await c.session()).body.visitor,null);assert.equal((await c.request('/visitor/searches')).status,401);assert.equal((await c.request('/visitor/workspace')).status,401);
+  assert.equal(s.identity.fromToken(visitorToken),null);await c.request('/session/logout',{method:'POST',body:{}});assert.equal((await c.session()).body.visitor,null);await assertEmptyBootstrap(c);
 });
 
 test('sign-in cancels pending anonymous inference and a late reply cannot recreate or change state',async t=>{
@@ -260,11 +343,11 @@ test('deleted and reclaimed ownership cookies cannot recreate or read a future p
     assert.equal((await old.session()).body.visitor,null);
     assert.notEqual(old.jar.get('__Host-justup_visitor'),legitimateHint);
     assert.notEqual(old.jar.get('__Host-justup_csrf'),legitimateSeed);
-    for(const path of ['/visitor/searches','/visitor/workspace',`/visitor/searches/${future.body.search.id}/results?revision=0`])assert.equal((await old.request(path)).status,401);
+    await assertEmptyBootstrap(old);assert.equal((await old.request(`/visitor/searches/${future.body.search.id}/results?revision=0`)).status,401);
     const missing=s.client();missing.restore(beforeDelete);missing.jar.delete('__Host-justup_visitor');
     assert.equal((await missing.session()).body.visitor,null);
     assert.notEqual(missing.jar.get('__Host-justup_visitor'),legitimateHint);assert.notEqual(missing.jar.get('__Host-justup_csrf'),legitimateSeed);
-    assert.equal((await missing.request('/visitor/workspace')).status,401);
+    await assertEmptyBootstrap(missing);
     assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_searches').get().n,1);
   });
 });
@@ -278,7 +361,7 @@ test('a valid unallocated hint is stable across session reads and a live owner s
   const live=await c.session();assert(live.body.visitor);assert.equal(c.jar.get('__Host-justup_visitor'),liveHint);assert.equal(c.jar.get('__Host-justup_csrf'),other.jar.get('__Host-justup_csrf'));
   assert.deepEqual((await c.request('/visitor/searches')).body.items.map(search=>search.id),[id]);
   assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{new:'Still my draft'}}})).status,200);
-  assert.equal((await other.request('/visitor/workspace')).status,401);
+  await assertEmptyBootstrap(other);
 });
 
 test('an unallocated hint invalidated by unrelated deletion requires session bootstrap without creating private state',async t=>{

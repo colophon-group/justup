@@ -40,7 +40,7 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
         || typeof requestKey !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(requestKey)
         || (kind === WIRE_KIND) !== (ownerId === WIRE_OWNER)) throw problem('invalid_input');
     const json = boundedJson(payload, 16_384);
-    return transaction(db, () => {
+    const work=() => {
       const existing = db.prepare('SELECT * FROM justup_tasks WHERE owner_id=? AND kind=? AND request_key=?').get(ownerId, kind, requestKey);
       if (existing) {
         if (existing.payload_json !== json) throw problem('idempotency_conflict', 409, 'This request key was already used.');
@@ -54,7 +54,8 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
       const id = randomUUID(), at = now();
       db.prepare('INSERT INTO justup_tasks (id,owner_id,kind,request_key,payload_json,status,created_at,updated_at) VALUES (?,?,?,?,?,\'pending\',?,?)').run(id, ownerId, kind, requestKey, json, at, at);
       return byId(id);
-    });
+    };
+    return db.isTransaction?work():transaction(db,work);
   }
   function recoverWithinTransaction() {
     if(halted())return;
