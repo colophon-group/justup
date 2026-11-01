@@ -67,6 +67,95 @@ test('credentials wait for an in-flight older save and then flush the latest uns
   expect(calls.filter(call => /^(POST|PATCH) \/(?:visitor\/)?searches/.test(call.key))).toHaveLength(0);
 });
 
+test('sign-in reconciles a committed workspace save whose response was lost without interpreting again', async ({ page }) => {
+  await page.clock.install();
+  const visitor = stored({ ...empty(), revision: 1, state: { activeSearchId: 'search-1', drafts: { new: 'Another unsent draft' } } }), member = stored();
+  let signedIn = false, writes = 0;
+  const calls = await mockApi(page, {
+    'GET /session': () => signedIn ? session() : guest(),
+    'GET /visitor/searches': { items: [search()] }, 'GET /visitor/searches/search-1/results': completed([visibleJob(1)]),
+    'GET /visitor/workspace': visitor.read,
+    'PATCH /visitor/workspace': call => { const reply = visitor.save(call); return ++writes === 1 ? { abort: true } : reply; },
+    'POST /auth/login': () => { signedIn = true; member.replace(visitor.read()); return session(); },
+    'GET /searches': { items: [search()] }, 'GET /workspace': member.read, 'PATCH /workspace': member.save,
+    'GET /searches/search-1/results': completed([visibleJob(1)]),
+  });
+  await page.goto('/'); await expect(page.locator('#query')).toHaveValue('Remote library jobs');
+  await page.locator('#query').fill('Library roles without night shifts'); await page.clock.runFor(1000);
+  await expect(page.locator('#workspace-sync-status')).toContainText('The service is unavailable');
+  expect(visitor.read().state).toEqual({ activeSearchId: 'search-1', drafts: { new: 'Another unsent draft', 'search-1': 'Library roles without night shifts' } });
+  await page.locator('#header-sign-in').click(); await credentials(page);
+  await expect(page.locator('#header-sign-in')).toBeHidden();
+  await expect(page.locator('#query')).toHaveValue('Library roles without night shifts');
+  await expect(page.locator('#workspace-conflict')).toHaveCount(0);
+  expect(member.read().state).toEqual(visitor.read().state);
+  expect(calls.filter(call => call.key === 'PATCH /visitor/workspace')).toHaveLength(2);
+  expect(calls.filter(call => call.key === 'POST /auth/login')).toHaveLength(1);
+  expect(calls.some(call => /^(POST|PATCH) \/(?:visitor\/)?searches/.test(call.key))).toBe(false);
+});
+
+test('reconciling an earlier lost save preserves and flushes typing made while its authoritative read is held', async ({ page }) => {
+  await page.clock.install();
+  const visitor = stored(), member = stored(); let signedIn = false, writes = 0, reads = 0;
+  let release; const held = new Promise(resolve => { release = resolve; });
+  const calls = await mockApi(page, {
+    'GET /session': () => signedIn ? session() : guest(), 'GET /visitor/searches': { items: [] },
+    'GET /visitor/workspace': async () => { if (++reads === 2) await held; return visitor.read(); },
+    'PATCH /visitor/workspace': call => { const reply = visitor.save(call); return ++writes === 1 ? { abort: true } : reply; },
+    'POST /auth/login': () => { signedIn = true; member.replace(visitor.read()); return session(); },
+    'GET /workspace': member.read, 'PATCH /workspace': member.save,
+  });
+  await page.goto('/'); await page.locator('#query').fill('An earlier unsent museum search'); await page.clock.runFor(1000);
+  await expect(page.locator('#workspace-sync-status')).toContainText('The service is unavailable');
+  await page.locator('#retry-workspace').click(); await expect.poll(() => reads).toBe(2);
+  await page.locator('#query').fill('My latest museum search with no night shifts');
+  await page.locator('#header-sign-in').click(); await credentials(page);
+  await expect(page.locator('#auth-submit')).toBeDisabled();
+  expect(calls.filter(call => call.key === 'POST /auth/login')).toHaveLength(0);
+  release();
+  await expect(page.locator('#header-sign-in')).toBeHidden();
+  await expect(page.locator('#query')).toHaveValue('My latest museum search with no night shifts');
+  expect(member.read().state.drafts.new).toBe('My latest museum search with no night shifts');
+  const saved = calls.findIndex(call => call.key === 'PATCH /visitor/workspace' && call.body.drafts.new === 'My latest museum search with no night shifts');
+  const auth = calls.findIndex(call => call.key === 'POST /auth/login');
+  expect(saved).toBeGreaterThan(-1); expect(auth).toBeGreaterThan(saved);
+  expect(calls.filter(call => call.key === 'PATCH /visitor/workspace')).toHaveLength(3);
+  expect(calls.filter(call => call.key === 'POST /auth/login')).toHaveLength(1);
+  expect(calls.some(call => /^(POST|PATCH) \/(?:visitor\/)?searches/.test(call.key))).toBe(false);
+});
+
+for (const divergence of ['draft', 'selection']) {
+  test(`a lost workspace save still requires review when its remote ${divergence} differs`, async ({ page }) => {
+    await page.clock.install();
+    const visitor = stored({ ...empty(), revision: 1, state: { activeSearchId: 'search-1', drafts: {} } }); let writes = 0;
+    const calls = await mockApi(page, {
+      'GET /session': guest(), 'GET /visitor/searches': { items: [search()] }, 'GET /visitor/searches/search-1/results': completed([visibleJob(1)]),
+      'GET /visitor/workspace': visitor.read,
+      'PATCH /visitor/workspace': call => {
+        if (++writes !== 1) return visitor.save(call);
+        visitor.save(call);
+        const current = visitor.read();
+        visitor.replace({ ...current, revision: current.revision + 1, state: divergence === 'draft'
+          ? { ...current.state, drafts: { 'search-1': 'A genuine edit in another tab' } }
+          : { ...current.state, activeSearchId: null } });
+        return { abort: true };
+      },
+    });
+    await page.goto('/'); await expect(page.locator('#query')).toHaveValue('Remote library jobs');
+    await page.locator('#query').fill('My latest library edit'); await page.clock.runFor(1000);
+    await expect(page.locator('#workspace-sync-status')).toContainText('The service is unavailable');
+    await page.locator('#header-sign-in').click(); await credentials(page);
+    await expect(page.locator('#auth-status')).toContainText('Review');
+    expect(calls.filter(call => call.key === 'POST /auth/login')).toHaveLength(0);
+    await page.getByRole('button', { name: 'Close sign in', exact: true }).click();
+    await expect(page.locator('#workspace-conflict')).toBeVisible();
+    await expect(page.locator('#query')).toHaveValue('My latest library edit');
+    expect(visitor.read().state.activeSearchId).toBe(divergence === 'selection' ? null : 'search-1');
+    expect(visitor.read().state.drafts['search-1']).toBe(divergence === 'draft' ? 'A genuine edit in another tab' : 'My latest library edit');
+    expect(calls.some(call => /^(POST|PATCH) \/(?:visitor\/)?searches/.test(call.key))).toBe(false);
+  });
+}
+
 test('search handoff preserves a visitor company lead without starting discovery', async ({ page }) => {
   let signedIn = false;
   const calls = await mockApi(page, {

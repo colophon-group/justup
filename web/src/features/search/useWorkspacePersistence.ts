@@ -121,6 +121,17 @@ export function useWorkspacePersistence({ client, scope, owner, state, current, 
             const [remote, searches] = await Promise.all([client.getWorkspace(scope, signal), client.listSearches(signal, scope)]);
             if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
             const held = { remote, searches, base: base.current };
+            const known = new Set(searches.map(search => search.id));
+            if (error.status === 409 && fingerprint(remote.state) === fingerprint(next)
+              && (next.activeSearchId === null || known.has(next.activeSearchId))
+              && Object.keys(next.drafts).every(id => id === "new" || known.has(id))
+              && !deletedSearchDrafts(held, current.current).length) {
+              // A save can commit before its reply is lost. A retry then has an
+              // old revision even though its complete payload is already stored.
+              // Advance only the saved base; newer typing still needs its flush.
+              noteSnapshot(remote); base.current = remote.state; setSyncError("");
+              return;
+            }
             // A removed search can fail ownership validation before the server
             // reaches its revision check. Only turn that error into a conflict
             // when the authoritative list actually confirms a missing search.
