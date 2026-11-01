@@ -11,6 +11,7 @@ from contextlib import contextmanager, closing
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -177,7 +178,10 @@ def validate_restore(snapshot, barrier, now=None):
     now = time.time() if now is None else now
     if info.get('formatVersion') != 1 or info.get('privateGeneration') != current:
         raise ValueError('Snapshot predates a private deletion or lacks its current independent barrier.')
-    age = now - info.get('createdAtUnix', 0)
+    created_at = info.get('createdAtUnix')
+    if type(created_at) not in (int, float) or not math.isfinite(created_at):
+        raise ValueError('Snapshot creation time is invalid.')
+    age = now - created_at
     if age < 0 or age > MAX_AGE:
         raise ValueError('Snapshot is expired or from the future.')
     if snapshot.stat().st_size > MAX_BACKUP or file_digest(snapshot) != info.get('databaseSha256'):
@@ -190,6 +194,41 @@ def validate_restore(snapshot, barrier, now=None):
         if db.execute('PRAGMA integrity_check').fetchone() != ('ok',):
             raise ValueError('Snapshot integrity check failed.')
     return info
+
+
+def backup_status(folder, barrier, source_commit, build_identity, max_age_seconds, now=None):
+    """Read-only health proof for the retained, deletion-safe backup set."""
+    folder = check_folder(folder)
+    if type(max_age_seconds) is not int or not 0 < max_age_seconds <= MAX_AGE:
+        raise ValueError('Backup freshness limit must be within the retention period.')
+    now = time.time() if now is None else now
+    snapshots = []
+    for entry in folder.iterdir():
+        if entry.suffix == '.sqlite' and BACKUP_NAME.fullmatch(entry.name):
+            snapshots.append(entry)
+        elif entry.suffix == '.json' and BACKUP_NAME.fullmatch(entry.with_suffix('.sqlite').name):
+            if not entry.with_suffix('.sqlite').exists():
+                raise ValueError('Backup metadata has no snapshot.')
+        else:
+            raise ValueError('Backup directory contains an unreviewed file.')
+    if not 1 <= len(snapshots) <= 2:
+        raise ValueError('Backup count is outside the reviewed retention limit.')
+    initial_generation = stable_generation(barrier)
+    latest = None
+    for snapshot in snapshots:
+        info = validate_restore(snapshot, barrier, now)
+        if info.get('sourceCommit') != source_commit or info.get('buildIdentity') != build_identity:
+            raise ValueError('Backup identity differs from the active immutable artifact.')
+        if latest is None or info['createdAtUnix'] > latest[1]['createdAtUnix']:
+            latest = snapshot, info
+    if now - latest[1]['createdAtUnix'] > max_age_seconds:
+        raise ValueError('Latest usable backup exceeds the freshness limit.')
+    if stable_generation(barrier) != initial_generation:
+        raise ValueError('Deletion generation changed while checking backup health.')
+    free = os.statvfs(folder)
+    return {'healthy': True, 'latestBackup': latest[0].name,
+            'latestAgeSeconds': int(now - latest[1]['createdAtUnix']),
+            'snapshotCount': len(snapshots), 'availableBytes': free.f_bavail * free.f_frsize}
 
 
 def restore(snapshot, barrier, destination, prepare_command, now=None, migrate_v1=False):
@@ -240,7 +279,7 @@ def restore(snapshot, barrier, destination, prepare_command, now=None, migrate_v
                 Path(str(destination) + suffix).unlink(missing_ok=True)
 
 
-def operational_context(paths, build_identity=None):
+def operational_context(paths, build_identity=None, *, cleanup_logs=True):
     base = Path('/srv/justup_preview')
     state = base / 'state'
     expected = {state / 'preview.sqlite', state / 'private-generation', state / 'backups'}
@@ -253,7 +292,7 @@ def operational_context(paths, build_identity=None):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
-    load('preview-host').guard()
+    load('preview-host').guard(cleanup_logs=cleanup_logs)
     if build_identity is not None and not re.fullmatch('[a-f0-9]{64}', build_identity):
         raise ValueError('Migration requires an exact retained target build identity.')
     release = (base / 'releases' / build_identity).resolve(strict=True) if build_identity else (base / 'current').resolve(strict=True)
@@ -326,6 +365,10 @@ def main():
     check = sub.add_parser('check-restore')
     check.add_argument('--snapshot', type=Path, required=True)
     check.add_argument('--generation', type=Path, required=True)
+    status = sub.add_parser('backup-status')
+    status.add_argument('--backup-dir', type=Path, required=True)
+    status.add_argument('--generation', type=Path, required=True)
+    status.add_argument('--max-age-seconds', type=int, required=True)
     use = sub.add_parser('restore')
     use.add_argument('--snapshot', type=Path, required=True)
     use.add_argument('--generation', type=Path, required=True)
@@ -342,7 +385,9 @@ def main():
     args = parser.parse_args()
     try:
         paths = [getattr(args, key) for key in ('database', 'backup_dir', 'generation', 'snapshot', 'destination') if hasattr(args, key)]
-        manifest, prepare_command = operational_context(paths, getattr(args, 'build_identity', None) if args.command in {'migrate', 'restore'} else None)
+        manifest, prepare_command = operational_context(
+            paths, getattr(args, 'build_identity', None) if args.command in {'migrate', 'restore'} else None,
+            cleanup_logs=args.command != 'backup-status')
         if args.command == 'backup':
             if args.source_commit != manifest['sourceCommit'] or args.build_identity != manifest['buildIdentity']:
                 raise ValueError('Backup identity differs from the active immutable artifact.')
@@ -366,6 +411,9 @@ def main():
         elif args.command == 'check-restore':
             validate_restore(args.snapshot, args.generation)
             result = {'eligible': True, 'activated': False, 'sessionsStillRequireInvalidation': True}
+        elif args.command == 'backup-status':
+            result = backup_status(args.backup_dir, args.generation, manifest['sourceCommit'],
+                                   manifest['buildIdentity'], args.max_age_seconds)
         else:
             result = prune(args.backup_dir)
         print(json.dumps(result, sort_keys=True))

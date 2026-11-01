@@ -1037,6 +1037,25 @@ assert.equal(configFromEnv(input.child).stripeBilling.enabled,true);
             self.assertEqual(stops, [('systemctl', 'stop', unit) for unit in host.STOP_UNITS])
             self.assertFalse(any('jobseek' in str(item) or '*' in str(item) for item in call.call_args_list))
 
+    def test_read_only_guard_keeps_old_logs_and_still_validates_boundaries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            logs = base / 'logs'
+            logs.mkdir()
+            old = logs / 'api-20000101.jsonl'
+            old.write_text('old diagnostic')
+            os.utime(old, (0, 0))
+            with patch.object(host, 'BASE', base), \
+                 patch.object(host, 'verify_caps', return_value={'checked': True}) as caps, \
+                 patch.object(host, 'verify_storage', return_value={'checked': True}) as storage, \
+                 patch.object(host.shutil, 'disk_usage', return_value=SimpleNamespace(free=128 * host.MIB)):
+                self.assertEqual(host.guard(cleanup_logs=False)['kernel'], {'checked': True})
+                self.assertTrue(old.exists())
+                caps.assert_called_once()
+                storage.assert_called_once()
+                host.guard()
+                self.assertFalse(old.exists())
+
     def test_stop_refuses_to_switch_if_a_preview_writer_remains_running(self):
         def response(*args, **kwargs):
             return 'loaded' if '--property=LoadState' in args else 'active'
@@ -1725,6 +1744,75 @@ class RecoveryContracts(unittest.TestCase):
             (folder / 'nested').mkdir()
             with self.assertRaisesRegex(ValueError, 'flat'):
                 self.make_backup(db, folder, barrier)
+
+    def test_backup_status_proves_latest_usable_snapshot_and_retained_set(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            with self.assertRaisesRegex(ValueError, 'count'):
+                recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=1000)
+            older = self.make_backup(db, folder, barrier, now=1000)
+            newer = self.make_backup(db, folder, barrier, now=2000)
+            before = {path.name: path.read_bytes() for path in folder.iterdir()}
+            status = recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=2001)
+            self.assertEqual(status['latestBackup'], newer.name)
+            self.assertEqual(status['latestAgeSeconds'], 1)
+            self.assertEqual(status['snapshotCount'], 2)
+            self.assertGreater(status['availableBytes'], 0)
+            self.assertEqual({path.name: path.read_bytes() for path in folder.iterdir()}, before)
+            with self.assertRaisesRegex(ValueError, 'freshness'):
+                recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=6001)
+            with self.assertRaisesRegex(ValueError, 'identity'):
+                recovery.backup_status(folder, barrier, 'a' * 40, 'c' * 64, 3600, now=2001)
+            metadata = older.with_suffix('.json')
+            report = json.loads(metadata.read_text())
+            metadata.write_text(json.dumps({**report, 'createdAtUnix': 'unknown'}))
+            with self.assertRaisesRegex(ValueError, 'creation time'):
+                recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=2001)
+            metadata.write_text(json.dumps(report))
+            older.write_bytes(b'corrupt')
+            with self.assertRaisesRegex(ValueError, 'digest'):
+                recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=2001)
+
+    def test_backup_status_fails_closed_across_deletion_and_incomplete_publication(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            self.make_backup(db, folder, barrier, now=1000)
+            orphan = folder / ('backup-20000101T000000Z-' + str(uuid.uuid4()) + '.json')
+            orphan.write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'metadata'):
+                recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=1001)
+            orphan.unlink()
+            # The CLI must not consider a backup healthy if deletion is pending.
+            pending = barrier.with_name(barrier.name + '.pending')
+            pending.write_text(str(uuid.uuid4()) + '\n')
+            with self.assertRaisesRegex(ValueError, 'pending'):
+                recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=1001)
+            pending.unlink()
+            barrier.write_text(str(uuid.uuid4()) + '\n')
+            with self.assertRaisesRegex(ValueError, 'private deletion'):
+                recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=1001)
+
+    def test_backup_status_cli_exits_nonzero_without_usable_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _, folder, barrier = self.fixture(root)
+            argv = ['preview-recovery.py', 'backup-status', '--backup-dir', str(folder),
+                    '--generation', str(barrier), '--max-age-seconds', '3600']
+            manifest = {'sourceCommit': 'a' * 40, 'buildIdentity': 'b' * 64}
+            with patch.object(recovery, 'operational_context', return_value=(manifest, [])) as context, \
+                 patch.object(recovery.sys, 'argv', argv), patch.object(recovery.sys, 'stderr', io.StringIO()):
+                self.assertEqual(recovery.main(), 1)
+                context.assert_called_once_with([folder, barrier], None, cleanup_logs=False)
+            db = root / 'preview.sqlite'
+            self.make_backup(db, folder, barrier, now=1000)
+            with patch.object(recovery, 'operational_context', return_value=(manifest, [])) as context, \
+                 patch.object(recovery.sys, 'argv', argv), patch.object(recovery.time, 'time', return_value=1001), \
+                 patch.object(recovery.sys, 'stdout', io.StringIO()) as output:
+                self.assertEqual(recovery.main(), 0)
+                context.assert_called_once_with([folder, barrier], None, cleanup_logs=False)
+                self.assertTrue(json.loads(output.getvalue())['healthy'])
 
 
 class SchemaOperationsContracts(unittest.TestCase):

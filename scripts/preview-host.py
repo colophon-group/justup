@@ -230,7 +230,7 @@ def stop_preview():
             raise ValueError('A preview writer did not stop; refuse the state change.')
 
 
-def guard(stop_on_failure=False):
+def guard(stop_on_failure=False, *, cleanup_logs=True):
     try:
         result = {'kernel': verify_caps(), 'storage': verify_storage()}
         groups = [(('logs',), 128 * MIB),
@@ -240,9 +240,10 @@ def guard(stop_on_failure=False):
                         if p.is_file() and not p.is_symlink())
             if usage > maximum:
                 raise ValueError('Preview logs or aggregate workspace exceeded its sublimit.')
-        for old in (BASE / 'logs').glob('*.jsonl'):
-            if not old.is_symlink() and old.is_file() and old.stat().st_mtime < __import__('time').time() - 7 * 86400:
-                old.unlink()
+        if cleanup_logs:
+            for old in (BASE / 'logs').glob('*.jsonl'):
+                if not old.is_symlink() and old.is_file() and old.stat().st_mtime < __import__('time').time() - 7 * 86400:
+                    old.unlink()
         if shutil.disk_usage(BASE).free < 64 * MIB:
             raise ValueError('Preview filesystem has less than 64 MiB headroom.')
         return result
