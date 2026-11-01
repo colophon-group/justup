@@ -3,7 +3,7 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { problem, boundedJson } from './store.mjs';
 
-const DISABLED = { sse: false, follows: false, preferences: false };
+const DISABLED = { sse: false };
 const GUEST_ACCESS = { kind: 'guest', fullAccess: false, legacy: false, billingEnabled: false, until: null };
 const SAFE_ERRORS = new Map([
   ['invalid_input', 'Invalid request.'], ['invalid_credentials', 'Invalid username, password or invite code.'],
@@ -98,7 +98,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   function capabilities() {
     const result = { search: false, aiMatching: false, companyRequests: false, hiringWire: false };
     for (const service of services) Object.assign(result, typeof service.capabilities === 'function' ? service.capabilities() : service.capabilities);
-    return { viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED, visitorSearch:policies().reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
+    return { follows:false,preferences:false,viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED, visitorSearch:policies().reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
   }
   function sessionBody(viewer, token, guestToken, visitor=null) {
     return { serverTime: new Date(now()).toISOString(), user: viewer?.account ?? null, expiresAt: viewer ? new Date(viewer.expiresAt).toISOString() : null,
@@ -128,7 +128,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       const sessionToken = viewer ? token : null;
       const guestToken = parsedCookies[csrfCookie] ?? randomBytes(32).toString('base64url');
       const visitorToken=parsedCookies[visitorCookie]??null;
-      const visitorRoute=Boolean(visitorService)&&/^\/visitor\/(?:searches(?:\/[^/]+(?:\/(?:confirm|results))?)?|tasks\/[^/]+|workspace(?:\/recovered-drafts\/[^/]+)?|viewed|session)$/.test(path);
+      const visitorRoute=Boolean(visitorService)&&/^\/visitor\/(?:searches(?:\/[^/]+(?:\/(?:confirm|results|options))?)?|search-options|tasks\/[^/]+|workspace(?:\/recovered-drafts\/[^/]+)?|viewed|session)$/.test(path);
       const authRoute = method === 'POST' && ['/auth/register', '/auth/login'].includes(path);
       const mutation = method !== 'GET';
       category = authRoute ? 'auth' : mutation ? 'mutation' : path === '/health' || path === '/version' ? 'health' : 'read';

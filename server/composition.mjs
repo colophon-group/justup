@@ -6,6 +6,7 @@ import { createIntentService } from './intent.mjs';
 import { createCompanyService } from './companies.mjs';
 import { createMatchingService } from './matching.mjs';
 import { createVisitorIdentity,createVisitorService } from './visitor.mjs';
+import { createReadingPreferencesService } from './reading-preferences.mjs';
 
 const disabled=()=>({search:false,companyRequests:false,aiMatching:false});
 export function runnerStatusPath(config){return config.runnerStatusPath??(typeof config.dbPath==='string'&&isAbsolute(config.dbPath)?join(dirname(config.dbPath),'runner-status.json'):null);}
@@ -31,10 +32,11 @@ export function createApiServices(deps){
   const apiConfig={maxCompanyRequestsPerOwner:config.maxCompanyRequestsPerOwner,matching:config.matching,visitor:config.visitor};
   const identity=createVisitorIdentity({...deps,config:{...apiConfig,dbPath:config.dbPath??':memory:',sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity,policyVersion:config.policyVersion,privateGenerationPath:config.privateGenerationPath}});
   const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
+  const readingPreferences=createReadingPreferencesService({...deps,ownerAuthority:identity.principal});
   const heartbeat=()=>readRunnerStatus({config:{dbPath:config.dbPath,runnerStatusPath:config.runnerStatusPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},now}).capabilities;
-  const matching=createMatchingService({...deps,...ownership,config:apiConfig,readOnlyProvider:true,availability:()=>heartbeat().aiMatching});
-  const intent=createIntentService({...deps,...ownership,config:apiConfig,model:undefined,matching,availability:()=>heartbeat().search});
-  const companies=createCompanyService({...deps,config:apiConfig,model:undefined,availability:()=>heartbeat().companyRequests});
+  const matching=createMatchingService({...deps,...ownership,readingPreferences,config:apiConfig,readOnlyProvider:true,availability:()=>heartbeat().aiMatching});
+  const intent=createIntentService({...deps,...ownership,readingPreferences,config:apiConfig,model:undefined,matching,availability:()=>heartbeat().search});
+  const companies=createCompanyService({...deps,readingPreferences,config:apiConfig,model:undefined,availability:()=>heartbeat().companyRequests});
   const visitor=createVisitorService({...deps,config:apiConfig,identity,intent,matching});
-  return [intent,companies,matching,visitor];
+  return [intent,companies,matching,visitor,readingPreferences];
 }

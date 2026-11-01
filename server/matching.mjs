@@ -17,7 +17,7 @@ const order = (a, b) => Date.parse(b.firstObserved) - Date.parse(a.firstObserved
 const terminal = (t) => !t || ['succeeded', 'warning', 'failed', 'cancelled'].includes(t.status);
 
 export function createMatchingService({ db, feed, tasks, config = {}, now = Date.now, provider,
-  availability, readOnlyProvider = false, ownerAuthority, revisionIsCurrent, taskAdmission } = {}) {
+  availability, readOnlyProvider = false, ownerAuthority, revisionIsCurrent, taskAdmission, readingPreferences } = {}) {
   if (!db || !feed?.eligibleJobs || !feed?.publicJob || !tasks?.enqueue || !tasks?.get || !tasks?.complete) throw new TypeError('Matching dependencies are required.');
   if (typeof readOnlyProvider !== 'boolean' || (availability != null && typeof availability !== 'function')) throw new TypeError('Invalid matching role configuration.');
   provider ??= createJevClient({ db, config: config.jev ?? {}, now });
@@ -60,7 +60,8 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     if(!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='demo_searches'").get())return false;
     const r=db.prepare('SELECT accepted_json FROM demo_searches WHERE owner_id=? AND id=? AND revision=?').get(scan.owner_id,scan.search_id,scan.revision);
     if(!r?.accepted_json)return false;
-    return sha({configuration:JSON.parse(r.accepted_json).configuration,cohort:scan.cohort})===scan.config_hash;
+    const search=JSON.parse(r.accepted_json),configuration=readingPreferences?.configurationForSearch(scan.owner_id,search)??search.configuration;
+    return sha({configuration,cohort:scan.cohort})===scan.config_hash;
   }
   function currentJobs(scan,viewer) { return scan.cohort==='hidden'?(viewer.access?.fullAccess===true?[]:feed.restrictedLatestJobs?.()??[]):feed.eligibleJobs({viewer}); }
   const scanById = (id) => db.prepare('SELECT * FROM demo_match_scans WHERE id=?').get(id);
@@ -152,7 +153,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     return token;
   }
   function pageInternal({ ownerId, searchId, revision, configuration, jobs, viewer, cursor = null, limit = 12,
-    coverage = feed.coverage(), generation = feed.generation() } = {}, hidden=false) {
+    coverage = feed.coverage(), generation = feed.generation() } = {}, hidden=false,snapshot=false) {
     const sessionDeadline = typeof viewer?.expiresAt === 'number' ? viewer.expiresAt : Date.parse(viewer?.expiresAt);
     const suppliedOwner=viewer?.visitor?.id??viewer?.account?.id;
     if (!suppliedOwner || (viewer.expiresAt != null && (!Number.isFinite(sessionDeadline) || sessionDeadline <= now()))) throw err('unauthenticated', 401);
@@ -162,7 +163,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     if (typeof searchId !== 'string' || !searchId || searchId.length > 128 || !Number.isSafeInteger(revision) || revision < 1
         || !Array.isArray(jobs) || jobs.length > 1000 || (generation != null && (typeof generation !== 'string' || generation.length > 128))) throw err('invalid_input');
     generation ??= 'unavailable';
-    if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw err('invalid_limit');
+    if (!Number.isInteger(limit) || limit < 1 || limit > (snapshot?1000:50)) throw err('invalid_limit');
     let condition;
     try { condition = canonicalCondition(configuration?.residualAi?.condition); } catch { throw err('invalid_input'); }
     const configHash = sha({configuration,cohort}), conditionHash = sha(condition), accessHash = accessHashFor(ownerId,viewer);
@@ -170,7 +171,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     const currentPool=new Map((hidden?(viewer.access?.fullAccess===true?[]:feed.restrictedLatestJobs?.()??[]):feed.eligibleJobs({viewer})).map(j=>[j.id,j]));
     const eligible=jobs.filter(j=>currentPool.has(j.id)&&fingerprint(currentPool.get(j.id))===fingerprint(j)).sort(order);
     const membershipHash=sha(eligible.map(j=>[j.id,fingerprint(j)]));
-    let scan, position = 0;
+    let scan, position = 0,createdScan=false;
     if (cursor != null) {
       if (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(cursor)) throw err('invalid_cursor');
       const c = db.prepare('SELECT * FROM demo_match_cursors WHERE token_hash=?').get(sha(cursor));
@@ -188,6 +189,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
         .get(ownerId, searchId, revision, configHash, version, generation, accessHash);
       if(scan&&!coverage.stale&&scan.membership_hash!==membershipHash){deleteScan(scan);scan=null;}
       if (!scan) {
+        createdScan=true;
         if (db.prepare('SELECT count(*) AS n FROM demo_match_scans').get().n >= 96
             || db.prepare('SELECT count(*) AS n FROM demo_match_scans WHERE owner_id=?').get(ownerId).n >= 16) throw err('task_limit', 429);
         const id = randomUUID(), seen = new Set();
@@ -211,7 +213,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
       const current=new Map(currentJobs(scan,viewer).map(j=>[j.id,j]));
       const accepted=rows(scan.id).filter(r=>r.decision==='accepted'&&current.has(r.job_id)&&fingerprint(current.get(r.job_id))===r.evidence_hash).length;
       const unresolved=rows(scan.id).some(r=>r.decision==null||r.decision==='insufficient_evidence');
-      if(!coverage.stale)schedule(scan);
+      if(!coverage.stale&&(!snapshot||createdScan))schedule(scan);
       return coverage.stale?{status:'unavailable',count:null}:!unresolved?{status:'exact',count:accepted}:accepted?{status:'lower_bound',count:accepted}:rows(scan.id).every(r=>r.decision==null)?{status:available()?'pending':'unavailable',count:null}:{status:'lower_bound',count:0};
     }
     const current = new Map((hidden?(viewer.access?.fullAccess===true?[]:feed.restrictedLatestJobs?.()??[]):feed.eligibleJobs({ viewer })).map((j) => [j.id, j]));
@@ -226,9 +228,9 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
           && fingerprint(primary) === row.evidence_hash) items.push(feed.publicJob(j));
       if (items.length >= limit) break;
     }
-    db.prepare('UPDATE demo_match_scans SET delivered=max(delivered,?),updated_at=? WHERE id=?').run(next, now(), scan.id);
+    if(!snapshot)db.prepare('UPDATE demo_match_scans SET delivered=max(delivered,?),updated_at=? WHERE id=?').run(next, now(), scan.id);
     scan = scanById(scan.id);
-    if (!coverage.stale) schedule(scan);
+    if (!coverage.stale&&(!snapshot||createdScan)) schedule(scan);
     scan = scanById(scan.id);
     const all = rows(scan.id), remaining = all.filter((r) => r.position >= next), pending = remaining.some((r) => r.decision == null);
     let state, status, retryAfterMs = null;
@@ -239,7 +241,11 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     else if (scan.state === 'paused' && scan.retry_at > now()) { state = 'paused'; status = scan.pause_code; retryAfterMs = scan.retry_at - now(); }
     else { state = 'pending'; status = 'matching'; retryAfterMs = 1000; }
     return { searchId, revision, asOf: new Date(now()).toISOString(), items,
-      continuation: { cursor: state === 'exhausted' ? null : cursorFor(scan.id, next), state, retryAfterMs }, ai: { status }, coverage };
+      continuation: { cursor: snapshot||state === 'exhausted' ? null : cursorFor(scan.id, next), state, retryAfterMs }, ai: { status }, coverage,
+      ...(snapshot?{reconciliation:{complete:!coverage.stale,retainedItemIds:all.filter(r=>{
+        const j=current.get(r.job_id),primary=supplied.get(r.job_id);
+        return r.decision==='accepted'&&j&&primary&&fingerprint(j)===r.evidence_hash&&fingerprint(primary)===r.evidence_hash;
+      }).map(r=>r.job_id)}}:{}) };
   }
   function taskLive(task) {
     const actual = tasks.get(task.ownerId, task.id);
@@ -335,7 +341,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
   }
   const page=args=>pageInternal(args);
   const hiddenCount=args=>pageInternal({...args,cursor:null},true);
-  return { available, page, hiddenCount, runTask,transferOwner, deleteSearchData, deleteAccountData, cleanup,
+  return { available, page, hiddenCount, snapshot:args=>pageInternal({...args,cursor:null,limit:96},false,true),snapshotHiddenCount:args=>pageInternal(args,true,true),runTask,transferOwner, deleteSearchData, deleteAccountData, cleanup,
     capabilities: () => ({ aiMatching: available() }), readiness: () => {
       const ready = available();
       return { ...provider.readiness?.(), available: ready, reason: ready ? null : 'dependency_unavailable',

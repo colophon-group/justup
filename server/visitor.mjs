@@ -180,10 +180,14 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
   async function visitorRoute(ctx) {
     if(!ctx.path.startsWith('/visitor/'))return null;
     if(ctx.viewer?.account)throw problem('forbidden',403);
+    if(ctx.method==='GET'&&ctx.path==='/visitor/search-options'){
+      if(!identity.processingAvailable())throw problem('dependency_unavailable',503);
+      return intent.route({...ctx,path:'/search-options'});
+    }
     const viewer=identity.fromToken(ctx.visitorToken,{allowUnavailable:ctx.method==='DELETE'});if(!viewer)throw problem('unauthenticated',401);
     const ownerId=viewer.visitor.id,path=ctx.path.slice('/visitor'.length);
     const privateCtx={...ctx,path,url:new URL(ctx.url),viewer,ownerId,accountId:null};
-    if(/^\/searches(?:\/|$)/.test(path))return intent.route(privateCtx);
+    if(/^\/searches(?:\/|$)/.test(path)||path==='/search-options')return intent.route(privateCtx);
     if(ctx.method==='GET'&&/^\/tasks\/[^/]+$/.test(path)){
       const task=tasks.get(ownerId,path.split('/')[2]);if(!task)throw problem('not_found',404);
       return {status:200,body:tasks.publicView(task,intent.taskResult(task,privateCtx)??null)};
