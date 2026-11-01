@@ -285,6 +285,9 @@ export function decodeSession(value: unknown): Session {
         auth.registrationEnabled,
         "registration availability",
       ),
+      requiresInvitation: auth.requiresInvitation === undefined
+        ? true
+        : flag(auth.requiresInvitation, "invitation requirement"),
       reason: nullableText(auth.reason, "authentication reason"),
     },
     policies: {

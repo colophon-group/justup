@@ -13,7 +13,7 @@ function fixture() {
   const policy = Buffer.from('reviewed policy fixture');
   const config = {
     origin: 'https://candidate.example',
-    frontend: { sourceSha: 'a'.repeat(40), treeSha: 'b'.repeat(40), assetsSha256: 'c'.repeat(64), workerSha256: 'd'.repeat(64), artifactSha256: 'e'.repeat(64), runtimeConfigSha256: 'f'.repeat(64) },
+    frontend: { deploymentMode: 'preview', sourceSha: 'a'.repeat(40), treeSha: 'b'.repeat(40), assetsSha256: 'c'.repeat(64), workerSha256: 'd'.repeat(64), artifactSha256: 'e'.repeat(64), runtimeConfigSha256: 'f'.repeat(64) },
     api: { sourceCommit: 'a'.repeat(40), schemaVersion: 1, buildIdentity: 'build-fixed', runnerIdentity: 'runner-fixed', importGeneration: '00000000-0000-4000-8000-000000000000' },
     policies: { version: 'reviewed-v1', privacySha256: createHash('sha256').update(policy).digest('hex'), usageSha256: createHash('sha256').update(policy).digest('hex') },
     scenario: { query: 'Reviewed query', warnedQuery: 'Reviewed query plus unsupported requirement', companyId: 'company-fixed', companyName: 'Company', sourceUrl: 'https://employer.example/careers/one' },
@@ -21,7 +21,7 @@ function fixture() {
   const coverage = { kind: 'imported_snapshot', stale: false, verifiedAt: new Date(now - 1000).toISOString() };
   const runner = { ready: true, identity: 'runner-fixed', sourceCommit: config.api.sourceCommit, buildIdentity: config.api.buildIdentity, lastHeartbeat: new Date(now - 1000).toISOString() };
   const data = {
-    '/__preview/version': { status: 200, json: { ...config.frontend } },
+    '/__release/version': { status: 200, json: { ...config.frontend } },
     '/api/v1/version': { status: 200, json: { ...config.api, runner: { ...runner } } },
     '/api/v1/health': { status: 200, json: { ready: true, runner: { ...runner }, coverage } },
     '/api/v1/session': { status: 200, json: { user: null, access: { fullAccess: false, billingEnabled: false }, serverTime: new Date(now).toISOString(), authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true }, policies: { reviewed: true, version: 'reviewed-v1', privacyUrl: 'https://candidate.example/privacy.html', usageUrl: 'https://candidate.example/usage.html' }, capabilities: { search: true, companyRequests: true }, coverage } },
@@ -37,8 +37,11 @@ test('invalid configuration and mismatched deployed evidence fail before the reg
   const mutations = [
     f => { f.config.origin = 'http://candidate.example'; },
     f => { f.config.frontend.sourceSha = 'moving-branch'; },
+    f => { delete f.config.frontend.deploymentMode; },
+    f => { f.config.frontend.deploymentMode = 'production'; },
+    f => { f.data['/__release/version'].json.deploymentMode = 'production'; },
     f => { f.config.api.sourceCommit = 'b'.repeat(40); },
-    f => { f.data['/__preview/version'].json.artifactSha256 = '0'.repeat(64); },
+    f => { f.data['/__release/version'].json.artifactSha256 = '0'.repeat(64); },
     f => { f.data['/api/v1/version'].json.buildIdentity = 'other'; },
     f => { f.data['/api/v1/health'].json.runner.lastHeartbeat = new Date(now - 31_000).toISOString(); },
     f => { f.data['/api/v1/session'].json.authentication.registrationEnabled = false; },
