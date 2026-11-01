@@ -151,7 +151,7 @@ test('acceptance requires the exact candidate, revision and idempotency key and 
   assert.deepEqual(retry, accepted);
   assert.deepEqual(accepted.body.request.candidate.coverage, { state: 'imported_snapshot' });
   await assert.rejects(accept(acceptBody, 'accept-2'), rejectCode('idempotency_conflict', 409));
-  assert.equal(f.db.prepare("SELECT count(*) AS n FROM demo_company_requests WHERE status='accepted'").get().n, 1);
+  assert.equal(f.db.prepare("SELECT count(*) AS n FROM justup_company_requests WHERE status='accepted'").get().n, 1);
 });
 
 test('public URL validation rejects private and executable URLs and ATS official domains', async (t) => {
@@ -203,7 +203,7 @@ test('new request key retries unresolved research and deletion purges every atte
   const first=await f.create(body('first'));await f.service.runTask(f.claim(first.body.task.id));down=false;
   const retry=await f.create(body('retry'));assert.equal(retry.status,202);assert.equal(retry.body.request.id,first.body.request.id);assert.notEqual(retry.body.task.id,first.body.task.id);
   await f.service.runTask(f.claim(retry.body.task.id));assert.equal((await f.service.route(f.ctx('GET'))).body.items[0].previewRevision,2);
-  await f.service.route(f.ctx('DELETE',`/company-requests/${retry.body.request.id}`));assert.equal(f.records.size,0);assert.equal(f.db.prepare('SELECT count(*) n FROM demo_company_request_tasks').get().n,0);
+  await f.service.route(f.ctx('DELETE',`/company-requests/${retry.body.request.id}`));assert.equal(f.records.size,0);assert.equal(f.db.prepare('SELECT count(*) n FROM justup_company_request_tasks').get().n,0);
 });
 test('direct company deletion holds the injected private transaction through the barrier',async t=>{
   const f=fixture(t),created=await f.create(body());let released=0;
@@ -223,7 +223,7 @@ test('request deletion purges private tasks and a late model response cannot rec
   resolve(candidate());
   assert.equal((await pending).errorCode, 'preview_conflict');
   assert.deepEqual((await f.service.route(f.ctx('GET'))).body, { items: [] });
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM demo_company_request_keys').get().n, 0);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM justup_company_request_keys').get().n, 0);
 });
 
 test('expired or superseded leases cannot apply a candidate', async (t) => {

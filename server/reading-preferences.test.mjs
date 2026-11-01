@@ -41,7 +41,7 @@ function fixture(t,{rows=[['a-en','alpha',['en']],['a-fr','alpha',['fr']],['a-un
   const route=(method,path,body,owner)=>intent.route(ctx(method,path,body,owner));
   const follow=(companyId,followed,expectedRevision,owner)=>reading.route(ctx('PATCH',`/follows/${companyId}`,{followed,expectedRevision},owner)).body;
   async function run(kind='search_intent') {const task=tasks.claim({workerId:'test-runner',kinds:[kind]});assert(task);const result=await (kind==='search_intent'?intent:kind==='ai_match'?matching:companies).runTask(task);if(!result.committed)tasks.complete(task.id,task.leaseToken,result);return {task,result};}
-  async function create(options) {const response=await route('POST','/searches',{query:'Engineer work',requestKey:`create-${interpretations}-${db.prepare('SELECT count(*) n FROM demo_searches').get().n}`,...(options?{options}:{})});await run();return (await route('GET','/searches')).body.items.find(s=>s.id===response.body.search.id);}
+  async function create(options) {const response=await route('POST','/searches',{query:'Engineer work',requestKey:`create-${interpretations}-${db.prepare('SELECT count(*) n FROM justup_searches').get().n}`,...(options?{options}:{})});await run();return (await route('GET','/searches')).body.items.find(s=>s.id===response.body.search.id);}
   return {store,db,feed,tasks,reading,matching,intent,companies,ctx,route,follow,run,create,owners,interpretations:()=>interpretations};
 }
 
@@ -87,7 +87,7 @@ test('language OR sets and followed-only intersect text filters before residual 
   assert.deepEqual(classified,['a-en','a-fr']);assert.deepEqual(page.items.map(j=>j.id),['a-en','a-fr']);
   const calls=f.interpretations();
   const options=await f.route('PATCH',`/searches/${search.id}/options`,{expectedRevision:1,followedOnly:false,postingLanguages:[]});
-  assert.equal(options.body.search.revision,2);assert.equal(f.interpretations(),calls);assert.equal(f.db.prepare('SELECT count(*) n FROM demo_match_scans').get().n,0);
+  assert.equal(options.body.search.revision,2);assert.equal(f.interpretations(),calls);assert.equal(f.db.prepare('SELECT count(*) n FROM justup_match_scans').get().n,0);
   await assert.rejects(()=>f.route('GET',`/searches/${search.id}/results?revision=1&cursor=${first.continuation.cursor}`),{status:409});
 });
 
@@ -123,7 +123,7 @@ test('follow and option changes fence late interpretation, matching pages and cl
   const running=f.run('ai_match');await Promise.resolve();assert(finishClassify);
   const changed=f.follow('alpha',false,1);assert.deepEqual(changed.invalidatedSearchIds,[search.id]);
   finishClassify({decisions:[{id:'a-en',decision:'accepted'}]});await running;
-  assert.equal(f.db.prepare('SELECT count(*) n FROM demo_match_cache').get().n,0);assert.equal(f.db.prepare('SELECT count(*) n FROM demo_match_scans').get().n,0);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM justup_match_cache').get().n,0);assert.equal(f.db.prepare('SELECT count(*) n FROM justup_match_scans').get().n,0);
   holdInterpret=true;const edit=await f.route('PATCH',`/searches/${search.id}`,{query:'New text',expectedRevision:2,requestKey:'new-text'}),interpreting=f.run();await Promise.resolve();
   await f.route('PATCH',`/searches/${search.id}/options`,{expectedRevision:2,followedOnly:false,postingLanguages:['fr']});
   finishInterpret(modelOutput());await interpreting;
@@ -187,9 +187,9 @@ test('a requested company keeps its public URL, follow and search identity when 
   assert.equal(f.feed.company(publicId).id,publicId);assert.equal(f.feed.company('source-uuid').id,publicId);assert.equal(f.feed.company(publicId).websiteUrl,'https://newcompany.com/');
   assert.equal(f.feed.companies({q:'New Company'}).items.length,1);assert.equal(f.feed.companies({q:'New Company'}).items[0].id,publicId);
   const result=(await f.route('GET',`/searches/${search.id}/results?revision=1`)).body;assert.deepEqual(result.items.map(j=>[j.id,j.company.id]),[['new-role',publicId]]);
-  const legacy=JSON.parse(f.db.prepare('SELECT accepted_json FROM demo_searches WHERE id=?').get(search.id).accepted_json);legacy.configuration.filters.companyInclude=['source-uuid'];f.db.prepare('UPDATE demo_searches SET accepted_json=? WHERE id=?').run(JSON.stringify(legacy),search.id);
+  const legacy=JSON.parse(f.db.prepare('SELECT accepted_json FROM justup_searches WHERE id=?').get(search.id).accepted_json);legacy.configuration.filters.companyInclude=['source-uuid'];f.db.prepare('UPDATE justup_searches SET accepted_json=? WHERE id=?').run(JSON.stringify(legacy),search.id);
   assert.deepEqual((await f.route('GET',`/searches/${search.id}/results?revision=1`)).body.items.map(j=>j.id),['new-role']);
-  assert.equal(f.db.prepare('SELECT company_id FROM job_source_identities WHERE id=?').get('new-role').company_id,'source-uuid');assert.equal(JSON.parse(f.db.prepare('SELECT data_json FROM demo_jobs WHERE id=?').get('new-role').data_json).companyId,'source-uuid');
+  assert.equal(f.db.prepare('SELECT company_id FROM job_source_identities WHERE id=?').get('new-role').company_id,'source-uuid');assert.equal(JSON.parse(f.db.prepare('SELECT data_json FROM justup_jobs WHERE id=?').get('new-role').data_json).companyId,'source-uuid');
   assert(f.intent.compilerCapabilities().values.companies.some(c=>c.id===publicId&&c.aliases.includes('source-uuid')));
   const unfollow=f.follow('source-uuid',false,1);assert.deepEqual(unfollow.items,[]);assert.equal(f.db.prepare('SELECT company_id FROM justup_company_follows WHERE owner_id=?').get('alice').company_id,publicId);
   f.db.prepare('INSERT INTO justup_company_follows VALUES(?,?,1,?)').run('alice','source-uuid',AT);assert.deepEqual(f.reading.follows('alice').items,[]); // canonical explicit unfollow also wins legacy alias rows.
@@ -219,28 +219,28 @@ test('versioned multilingual qualification cases preserve source queries and int
 
 test('live snapshots share canonical filtering without cursors, scroll advancement or speculative refill and retain older accepted rows behind new pending work',async t=>{
   const f=fixture(t,{model:()=>modelOutput({ai:true})}),search=await f.create();
-  const first=await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM demo_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});
+  const first=await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});
   assert.equal(first.searches[0].continuation.cursor,null);assert.equal(first.searches[0].reconciliation.complete,true);
-  const taskCount=()=>f.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
-  const pendingCount=taskCount();await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM demo_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});assert.equal(taskCount(),pendingCount);
-  await f.run('ai_match');const accepted=await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM demo_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});
-  assert.equal(accepted.searches[0].items.length,4);assert.equal(accepted.searches[0].reconciliation.complete,true);assert.equal(f.db.prepare('SELECT delivered FROM demo_match_scans').get().delivered,0);
-  for(const table of ['demo_search_cursors','demo_search_delegate_cursors','demo_match_cursors'])assert.equal(f.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0);
+  const taskCount=()=>f.db.prepare('SELECT count(*) n FROM justup_tasks').get().n;
+  const pendingCount=taskCount();await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});assert.equal(taskCount(),pendingCount);
+  await f.run('ai_match');const accepted=await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});
+  assert.equal(accepted.searches[0].items.length,4);assert.equal(accepted.searches[0].reconciliation.complete,true);assert.equal(f.db.prepare('SELECT delivered FROM justup_match_scans').get().delivered,0);
+  for(const table of ['justup_search_cursors','justup_search_delegate_cursors','justup_match_cursors'])assert.equal(f.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0);
   const next=snapshot([['a-en','alpha',['en']],['a-fr','alpha',['fr']],['a-unknown','alpha',[]],['b-en','beta',['en']]]),newJob=snapshot([['new','alpha',['en']]]).jobs[0];newJob.firstObserved=iso(AT-DAY_MS);next.jobs.push(newJob);f.store.importSnapshot(next);
-  const updated=await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM demo_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer}),state=updated.searches[0];
+  const updated=await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer}),state=updated.searches[0];
   assert.notEqual(updated.generation,accepted.generation);assert.equal(updated.revisionKey,JSON.stringify([[search.id,1]]));assert.deepEqual(state.items,[]);assert.equal(state.reconciliation.complete,true);assert.deepEqual(state.reconciliation.retainedItemIds,accepted.searches[0].items.map(j=>j.id));
-  const existingTasks=taskCount();await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM demo_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});assert.equal(taskCount(),existingTasks);assert.equal(f.db.prepare('SELECT delivered FROM demo_match_scans').get().delivered,0);
-  f.db.prepare("UPDATE demo_jobs SET active=0 WHERE id='a-fr'").run();const closed=await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM demo_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});assert.equal(closed.searches[0].reconciliation.retainedItemIds.includes('a-fr'),false);
+  const existingTasks=taskCount();await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});assert.equal(taskCount(),existingTasks);assert.equal(f.db.prepare('SELECT delivered FROM justup_match_scans').get().delivered,0);
+  f.db.prepare("UPDATE justup_jobs SET active=0 WHERE id='a-fr'").run();const closed=await f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(search.id).revision,viewer:f.ctx('GET','/searches').viewer});assert.equal(closed.searches[0].reconciliation.retainedItemIds.includes('a-fr'),false);
 });
 
 test('an awaited live snapshot rejects revision, source membership and authority changes before returning public rows',async t=>{
   const f=fixture(t,{model:()=>modelOutput({ai:true})}),search=await f.create();
   let release;f.matching.snapshot=()=>new Promise(resolve=>{release=()=>resolve({items:[],continuation:{cursor:null,state:'pending'},reconciliation:{complete:false,retainedItemIds:[]}});});
   const viewer=f.ctx('GET','/searches').viewer;
-  let pending=f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM demo_searches WHERE id=?').get(search.id).revision,viewer});await Promise.resolve();
+  let pending=f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(search.id).revision,viewer});await Promise.resolve();
   await f.route('PATCH',`/searches/${search.id}/options`,{expectedRevision:1,followedOnly:false,postingLanguages:['en']});release();await assert.rejects(()=>pending,{status:409});
-  pending=f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM demo_searches WHERE id=?').get(search.id).revision,viewer});await Promise.resolve();f.db.prepare("UPDATE demo_jobs SET active=0 WHERE id='a-en'").run();release();await assert.rejects(()=>pending,{status:409});
-  pending=f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM demo_searches WHERE id=?').get(search.id).revision,viewer});await Promise.resolve();f.owners.delete('alice');release();await assert.rejects(()=>pending,{status:409});
+  pending=f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(search.id).revision,viewer});await Promise.resolve();f.db.prepare("UPDATE justup_jobs SET active=0 WHERE id='a-en'").run();release();await assert.rejects(()=>pending,{status:409});
+  pending=f.intent.snapshot({ownerId:'alice',activeSearchId:search.id,activeRevision:f.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(search.id).revision,viewer});await Promise.resolve();f.owners.delete('alice');release();await assert.rejects(()=>pending,{status:409});
 });
 
 test('real HTTP exposes account preferences and visitor languages with CSRF, handoff and account isolation',async t=>{

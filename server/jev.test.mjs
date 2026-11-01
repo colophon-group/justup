@@ -61,7 +61,7 @@ test('ternary requests omit identities/URLs and response order does not change c
   assert(!JSON.stringify(sent).includes('private-')); assert(!JSON.stringify(sent).includes('sourceUrl'));
   assert.deepEqual(result.decisions.map((d) => d.id), ['private-id-1', 'private-id-2']);
   assert.equal(result.costNanodollars, 12600);
-  assert.equal(db.prepare("SELECT input_tokens FROM demo_jev_usage WHERE scope='project'").get().input_tokens, 300);
+  assert.equal(db.prepare("SELECT input_tokens FROM justup_jev_usage WHERE scope='project'").get().input_tokens, 300);
 });
 
 test('adaptive plans obey candidate/byte/token bounds and never truncate weak evidence', () => {
@@ -105,7 +105,7 @@ test('ambiguous retries retain reservations and require fresh capacity', async (
   const { db, client } = fixture(t, config, async () => { calls++; throw new Error('fake network interruption'); });
   await assert.rejects(client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] }), { code: 'budget_exhausted' });
   assert.equal(calls, 1);
-  const used = db.prepare("SELECT * FROM demo_jev_usage WHERE scope='project'").get();
+  const used = db.prepare("SELECT * FROM justup_jev_usage WHERE scope='project'").get();
   assert(used.input_tokens > 300); assert.equal(used.ambiguous, 1);
 });
 
@@ -124,9 +124,9 @@ test('deleting owner accounting retains anonymous project spend and cannot resur
   const { db, client } = fixture(t, configuration(), async (_url, options) => new Promise((resolve) => { finish = () => resolve(Response.json(response(JSON.parse(options.body)))); }));
   const promise = client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] });
   client.deleteAccountData('owner'); finish(); await promise;
-  assert.equal(db.prepare("SELECT count(*) AS n FROM demo_jev_usage WHERE scope='account'").get().n, 0);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM demo_jev_reservations').get().n, 0);
-  assert.equal(db.prepare("SELECT calls FROM demo_jev_usage WHERE scope='project'").get().calls, 1);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM justup_jev_usage WHERE scope='account'").get().n, 0);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM justup_jev_reservations').get().n, 0);
+  assert.equal(db.prepare("SELECT calls FROM justup_jev_usage WHERE scope='project'").get().calls, 1);
 });
 
 test('usage overruns retain measured charges and stop without returning a match', async (t) => {
@@ -135,7 +135,7 @@ test('usage overruns retain measured charges and stop without returning a match'
     return Response.json(result);
   });
   await assert.rejects(client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] }), { code: 'usage_overrun' });
-  const used = db.prepare("SELECT * FROM demo_jev_usage WHERE scope='project'").get();
+  const used = db.prepare("SELECT * FROM justup_jev_usage WHERE scope='project'").get();
   assert.equal(used.input_tokens, 63_000); assert.equal(used.cost_nano, 2_646_000); assert.equal(used.ambiguous, 0);
 });
 
@@ -147,7 +147,7 @@ test('already aborted requests do not reserve capacity and rate limits respect R
     fetch: async (_url, options) => { calls++; return calls === 1 ? new Response('{}', { status: 429, headers: { 'Retry-After': '2' } }) : Response.json(response(JSON.parse(options.body))); } });
   const controller = new AbortController(); controller.abort();
   await assert.rejects(client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()], signal: controller.signal }), { code: 'cancelled' });
-  assert.equal(db.prepare('SELECT count(*) AS n FROM demo_jev_usage').get().n, 0);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM justup_jev_usage').get().n, 0);
   const result = await client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] });
   assert.equal(calls, 2); assert.deepEqual(delays, [2000]); assert.equal(result.ambiguousAttempts, 1);
 });

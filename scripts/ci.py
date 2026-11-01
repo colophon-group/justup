@@ -90,7 +90,7 @@ def classify(path: str) -> str:
         return "deployment"
     if path in {"scripts/ci.py", "scripts/test-server.mjs", "scripts/test-deployment.mjs", "scripts/test-python.py", "scripts/test-web.mjs", ".gitignore", ".github/CODEOWNERS"} or path.startswith(".github/workflows/"):
         return "tooling"
-    if path == "scripts/import-demo-jobs.py" or (path.startswith("scripts/test_") and path.endswith(".py")):
+    if path == "scripts/import-jobs.py" or (path.startswith("scripts/test_") and path.endswith(".py")):
         return "app"
     if path in {"package.json", "package-lock.json", "npm-shrinkwrap.json", "vite.config.ts", "tsconfig.json"}:
         return "app"
@@ -242,7 +242,7 @@ def selftest() -> None:
     assert select(["scripts/frontend-smoke.mjs"], "main", False)[:2] == (True, True)
     assert select(["web/public/privacy.html", "web/public/policies.css"], "dev", False)[:2] == (True, False)
     assert select(["web/public/usage.html"], "main", False)[:2] == (True, True)
-    assert select(["docs/demo-preview-hosting.md"], "dev", True)[:2] == (True, False)
+    assert select(["docs/operations.md"], "dev", True)[:2] == (True, False)
     assert select(["new-server/runtime.go"], "main", False)[:2] == (True, True)
     assert select([".github/workflows/ci.yml"], "dev", False)[:2] == (True, False)
     assert classify("scripts/unregistered.mjs") == "unknown"
@@ -253,8 +253,8 @@ def selftest() -> None:
     assert select(["vite.config.ts", "tsconfig.json"], "dev", False)[:2] == (True, False)
     assert classify("web/README.md") == "docs"
     assert select(["deploy/justup-preview/limits.test.mjs", "scripts/preview-install.sh"], "dev", False)[:2] == (True, False)
-    assert select(["scripts/import-demo-jobs.py", "scripts/test_import_demo_jobs.py"], "dev", False)[:2] == (True, False)
-    assert select(["scripts/import-demo-jobs.py"], "main", False)[:2] == (True, True)
+    assert select(["scripts/import-jobs.py", "scripts/test_import_jobs.py"], "dev", False)[:2] == (True, False)
+    assert select(["scripts/import-jobs.py"], "main", False)[:2] == (True, True)
     assert select(["server/auth.mjs", "server/auth.test.mjs"], "dev", False)[:2] == (True, False)
     assert select(["server/auth.mjs"], "main", False)[:2] == (True, True)
     browser_pr_paths = [

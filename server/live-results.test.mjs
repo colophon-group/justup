@@ -61,7 +61,7 @@ async function setup(t, options = {}) {
     const accepted = { id, revision: 1, query: 'Engineer', title: 'Engineering', description: 'Engineer', requirements: [], warnings: [],
       configuration: { schemaVersion: 1, filters: { ...Object.fromEntries(FILTERS.map(k => [k, null])), titleAny: ['engineer'] },
         residualAi: residual ? { condition: 'A documented four day working week.', requirementIds: ['ai'] } : null } };
-    app.store.db.prepare('INSERT INTO demo_searches(id,owner_id,revision,accepted_json,created_at,updated_at) VALUES(?,?,1,?,?,?)').run(id, accounts.get(owner)?.account.id ?? owner, JSON.stringify(accepted), time, time);
+    app.store.db.prepare('INSERT INTO justup_searches(id,owner_id,revision,accepted_json,created_at,updated_at) VALUES(?,?,1,?,?,?)').run(id, accounts.get(owner)?.account.id ?? owner, JSON.stringify(accepted), time, time);
     return accepted;
   }
   async function connect(owner = 'a', { headers = {}, visitorToken, searchId = visitorToken ? 'visitor-search' : `search-${owner}`, revision = 1, locale,extraQuery='',...requestOptions } = {}) {
@@ -128,7 +128,7 @@ test('explicit stream locale requires one supported query value and binds replay
   assert.equal((await stream.next('unavailable')).data.reason,'dependency_unavailable');
   const resumed=await s.connect('a',{locale:'fr',headers:{'Last-Event-ID':first.id}});assert.equal((await resumed.next()).data.reason,'recovery');resumed.close();
   const headerOnly=await s.connect('a',{headers:{'X-Justup-Locale':'fr'}});assert.deepEqual(ids(await headerOnly.next()),['eligible']);headerOnly.close();
-  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_search_cursors').get().n,0);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_search_cursors').get().n,0);
 });
 
 test('closure, fourteen-day expiry and paid downgrade remove now-ineligible identities while fresh zero differs from outage', async t => {
@@ -145,18 +145,18 @@ test('closure, fourteen-day expiry and paid downgrade remove now-ineligible iden
 test('residual snapshots wait for newest resolution, retain older accepted matches and never move ordinary delivery', async t => {
   const s = await setup(t); s.importJobs([job('first', AT - 3 * DAY), job('second', AT - 4 * DAY), job('excluded', AT - 5 * DAY, 'Designer')]); s.search('a', 'search-a', true);
   const stream = await s.connect(); const pending = await stream.next(); assert.deepEqual(ids(pending), []); assert.equal(pending.data.searches[0].continuation.state, 'pending');
-  const scan = s.app.store.db.prepare("SELECT id FROM demo_match_scans WHERE cohort='visible'").get();
-  s.app.store.db.prepare("UPDATE demo_match_jobs SET decision='accepted' WHERE scan_id=? AND position=1").run(scan.id);
+  const scan = s.app.store.db.prepare("SELECT id FROM justup_match_scans WHERE cohort='visible'").get();
+  s.app.store.db.prepare("UPDATE justup_match_jobs SET decision='accepted' WHERE scan_id=? AND position=1").run(scan.id);
   // Seed the durable decision a completed older batch would commit, while the
   // newer candidate remains unresolved. Import reconciliation must reuse it.
-  s.app.store.db.prepare(`INSERT INTO demo_match_cache
+  s.app.store.db.prepare(`INSERT INTO justup_match_cache
     SELECT j.cache_key,s.owner_id,s.condition_hash,j.evidence_hash,s.classifier,'accepted',?,?
-    FROM demo_match_jobs j JOIN demo_match_scans s ON s.id=j.scan_id WHERE s.id=? AND j.position=1`).run(AT, AT + DAY, scan.id);
+    FROM justup_match_jobs j JOIN justup_match_scans s ON s.id=j.scan_id WHERE s.id=? AND j.position=1`).run(AT, AT + DAY, scan.id);
   const late = await stream.next(); assert.deepEqual(ids(late), []); assert(late.data.searches[0].reconciliation.retainedItemIds.includes('second'));
-  assert.equal(s.app.store.db.prepare('SELECT delivered FROM demo_match_scans WHERE id=?').get(scan.id).delivered, 0);
+  assert.equal(s.app.store.db.prepare('SELECT delivered FROM justup_match_scans WHERE id=?').get(scan.id).delivered, 0);
   await s.work(); const resolved = await stream.next(); assert.deepEqual(ids(resolved), ['first','second']);
-  assert(!JSON.stringify(resolved).includes('excluded')); assert.equal(s.app.store.db.prepare('SELECT delivered FROM demo_match_scans WHERE id=?').get(scan.id).delivered, 0);
-  assert.equal(s.app.store.db.prepare('SELECT count(*) AS n FROM demo_match_cursors').get().n, 0);
+  assert(!JSON.stringify(resolved).includes('excluded')); assert.equal(s.app.store.db.prepare('SELECT delivered FROM justup_match_scans WHERE id=?').get(scan.id).delivered, 0);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) AS n FROM justup_match_cursors').get().n, 0);
   s.importJobs([job('newest', AT - 2 * DAY), job('first', AT - 3 * DAY), job('second', AT - 4 * DAY)]);
   const refreshed = await stream.next(); assert.deepEqual(ids(refreshed), []);
   assert.equal(refreshed.data.searches[0].continuation.state, 'pending');
@@ -169,9 +169,9 @@ test('search revision, cross-owner identity and logout cannot authorize stale ro
   const a = await s.connect(), first = await a.next(); a.close();
   const b = await s.connect('b', { headers: { 'Last-Event-ID': first.id } }); const foreign = await b.next(); assert.equal(foreign.data.reason, 'recovery'); assert.equal(foreign.data.searches[0].searchId, 'search-b'); b.close();
   assert.equal((await s.connect('b', { searchId: 'search-a' })).res.status, 404);
-  const row = s.app.store.db.prepare('SELECT accepted_json FROM demo_searches WHERE id=?').get('search-a');
+  const row = s.app.store.db.prepare('SELECT accepted_json FROM justup_searches WHERE id=?').get('search-a');
   const accepted = JSON.parse(row.accepted_json); accepted.revision = 2; accepted.configuration.filters.titleAny = ['nonexistent'];
-  s.app.store.db.prepare('UPDATE demo_searches SET revision=2,accepted_json=? WHERE id=?').run(JSON.stringify(accepted), 'search-a');
+  s.app.store.db.prepare('UPDATE justup_searches SET revision=2,accepted_json=? WHERE id=?').run(JSON.stringify(accepted), 'search-a');
   const staleRequest = await s.connect('a', { headers: { 'Last-Event-ID': first.id } }); assert.equal(staleRequest.res.status, 409);
   const stale = await s.connect('a', { revision: 2, headers: { 'Last-Event-ID': first.id } }); const revised = await stale.next(); assert.equal(revised.data.reason, 'recovery'); assert.equal(revised.data.searches[0].revision, 2); assert.deepEqual(ids(revised), []);
   s.logout(); assert.equal((await stale.next('unavailable')).data.reason, 'authority_lost');
@@ -212,10 +212,10 @@ test('a newly pending private-deletion barrier stops an existing persistent HTTP
 test('an active revision change closes the stream and cannot initialize work for inactive saved tabs', async t => {
   const s = await setup(t); s.importJobs([job('eligible')]); s.search(); s.search('a', 'inactive-ai', true);
   const stream = await s.connect(); await stream.next();
-  assert.equal(s.app.store.db.prepare('SELECT count(*) AS n FROM demo_match_scans').get().n, 0);
-  s.app.store.db.prepare('DELETE FROM demo_searches WHERE id=?').run('search-a');
+  assert.equal(s.app.store.db.prepare('SELECT count(*) AS n FROM justup_match_scans').get().n, 0);
+  s.app.store.db.prepare('DELETE FROM justup_searches WHERE id=?').run('search-a');
   assert.equal((await stream.next('unavailable')).data.reason, 'search_changed');
-  assert.equal(s.app.store.db.prepare('SELECT count(*) AS n FROM demo_match_scans').get().n, 0);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) AS n FROM justup_match_scans').get().n, 0);
 });
 
 test('oversize canonical events close safely without publishing a partial snapshot', async t => {
@@ -225,8 +225,8 @@ test('oversize canonical events close safely without publishing a partial snapsh
 
 test('slow consumers retain one bounded frame and release their connection after the drain deadline', async t => {
   const db = new DatabaseSync(':memory:'); t.after(() => db.close());
-  db.exec('CREATE TABLE demo_searches(id TEXT,owner_id TEXT,revision INTEGER,accepted_json TEXT)');
-  db.exec("INSERT INTO demo_searches VALUES('search-a','a',1,'{}')");
+  db.exec('CREATE TABLE justup_searches(id TEXT,owner_id TEXT,revision INTEGER,accepted_json TEXT)');
+  db.exec("INSERT INTO justup_searches VALUES('search-a','a',1,'{}')");
   let reads = 0;
   const live = createLiveResultsService({ db, feed: { generation: () => null }, intent: { snapshot() { reads++; return { searches: [], generation: null, revisionKey: '[]' }; } },
     config: { liveResults: { pollMs: 10, drainMs: 20 } } }); t.after(() => live.close());

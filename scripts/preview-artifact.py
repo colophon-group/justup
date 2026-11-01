@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import base64
 import hashlib
 import io
@@ -12,6 +13,8 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import stat
+import sqlite3
+from urllib.parse import quote
 import sys
 import tarfile
 
@@ -60,7 +63,7 @@ def canonical(value):
 
 def read_host_plan(base):
     """Read non-secret root-owned installation identity; never take it from caller JSON."""
-    if os.path.lexists(Path(base) / '.preview-ops-upgrade.lock'):
+    if any(os.path.lexists(Path(base) / name) for name in ('.preview-ops-upgrade.lock', '.preview-schema-migration.lock')):
         raise ValueError('Operator scripts are being updated; runtime adoption is blocked.')
     path = Path(base) / '.preview-install.json'
     meta = path.lstat()
@@ -87,6 +90,41 @@ def allowed(path):
              and path.endswith('.mjs') and not path.endswith(('.test.mjs', '-fixtures.mjs'))))
 
 
+def check_database_schema(database, manifest, *, allow_missing=False):
+    """Protected launch/switch guard, including retained epoch-1 releases.
+
+    Inspect SQLite read-only before executing any artifact-owned application code.
+    Operator tools stay current when the selected application artifact changes.
+    """
+    database = Path(database)
+    expected = manifest['schemaVersion']
+    if type(expected) is not int or expected not in {1, 2}:
+        raise ValueError('Unsupported application schema epoch.')
+    try:
+        meta = database.lstat()
+    except FileNotFoundError:
+        if allow_missing and expected == 2:
+            return 0
+        raise ValueError('Application database is missing.')
+    if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 or database.is_symlink():
+        raise ValueError('Application database must be a regular file.')
+    try:
+        with closing(sqlite3.connect('file:' + quote(str(database.resolve()), safe='/') + '?mode=ro', uri=True)) as db:
+            epoch = db.execute('PRAGMA user_version').fetchone()[0]
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+            if allow_missing and expected == 2 and epoch == 0 and not tables:
+                return 0
+            prefix = 'justup_' if expected == 2 else 'demo_'
+            other = 'demo_' if expected == 2 else 'justup_'
+            if (epoch != expected or not {prefix + 'imports', prefix + 'jobs', 'job_source_identities'} <= tables
+                    or (expected == 2 and any(name.startswith('demo_') for name in tables))
+                    or any(other + name in tables for name in ('imports', 'jobs', 'tasks', 'searches', 'match_scans', 'jev_usage'))):
+                raise ValueError('Application database epoch differs from the selected immutable release; use reviewed forward recovery.')
+    except sqlite3.Error:
+        raise ValueError('Application database schema cannot be verified.') from None
+    return epoch
+
+
 def identity(manifest):
     return sha(canonical({key: value for key, value in manifest.items() if key != 'buildIdentity'}))
 
@@ -96,12 +134,14 @@ def validate_manifest(manifest):
         raise ValueError('Unsupported artifact format or runtime.')
     if not OID.fullmatch(manifest.get('sourceCommit', '')) or not OID.fullmatch(manifest.get('sourceTree', '')):
         raise ValueError('Artifact source must use exact Git commit and tree identities.')
-    if manifest.get('schemaVersion') != 1 or manifest.get('entrypoint') != 'app/server/main.mjs':
+    if type(manifest.get('schemaVersion')) is not int or manifest['schemaVersion'] not in {1, 2} or manifest.get('entrypoint') != 'app/server/main.mjs':
         raise ValueError('Artifact schema or executable entrypoint differs from the preview contract.')
     files = manifest.get('files')
     required = {'runtime/bin/node', 'runtime/LICENSE', 'app/scripts/import-jobs.py'} | {
         'app/server/' + name + '.mjs' for name in
         ('main', 'auth', 'http', 'store', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter', 'policies', 'processing-admission')}
+    if manifest['schemaVersion'] == 2:
+        required.add('app/server/schema.mjs')
     if not isinstance(files, dict) or not required <= files.keys():
         raise ValueError('Artifact is missing required runtime/application bytes.')
     if (manifest.get('codexVersion') != CODEX_VERSION or manifest.get('codexTarget') != CODEX_TARGET
@@ -233,6 +273,9 @@ def build(root, commit, node_archive, codex_archive, output):
     def git(*args):
         return subprocess.check_output(['git', '-C', str(root), *args])
     tree = git('rev-parse', commit + '^{tree}').decode().strip()
+    schema_source = git('show', f'{commit}:server/schema.mjs').decode()
+    if not re.search(r'^export const SCHEMA_VERSION = 2;$', schema_source, re.MULTILINE):
+        raise ValueError('Build source does not declare the current application database epoch.')
     files['runtime/codex/LICENSE'] = git('show', f'{commit}:deploy/justup-preview/codex-LICENSE')
     if sha(files['runtime/codex/LICENSE']) != CODEX_FILES['runtime/codex/LICENSE']:
         raise ValueError('Codex license differs from the pinned official source.')
@@ -247,7 +290,7 @@ def build(root, commit, node_archive, codex_archive, output):
             raise ValueError('Application source must contain regular files only.')
         files[target] = git('show', f'{commit}:{path}')
     manifest = {'formatVersion': 2, 'sourceCommit': commit, 'sourceTree': tree,
-                'schemaVersion': 1, 'nodeVersion': NODE_VERSION, 'platform': 'linux-arm64',
+                'schemaVersion': 2, 'nodeVersion': NODE_VERSION, 'platform': 'linux-arm64',
                 'nodeArchiveSha256': NODE_ARCHIVE_SHA256, 'entrypoint': 'app/server/main.mjs',
                 'codexVersion': CODEX_VERSION, 'codexTarget': CODEX_TARGET,
                 'codexArchiveSha256': CODEX_ARCHIVE_SHA256, 'codexEntrypoint': CODEX_ENTRYPOINT,
