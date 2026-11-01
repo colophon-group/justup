@@ -8,6 +8,7 @@ import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 const REAL_FILESYSTEM = Object.freeze({ lstat, open });
 
 export const SOURCE_COVERAGE_VERSION = 'jobseek-coverage-v1';
+export const SOURCE_COVERAGE_VERSIONS = Object.freeze([SOURCE_COVERAGE_VERSION, 'jobseek-coverage-v2']);
 // Current fail-closed caps; measure real exports before considering a higher bound.
 export const SOURCE_COVERAGE_LIMITS = Object.freeze({
   artifactBytes: 6 * 1024 * 1024,
@@ -62,7 +63,7 @@ async function protectedDirectory(directory, filesystem) {
   protectedMetadata(await filesystem.lstat(directory), 'directory');
 }
 
-function decodeSnapshot(envelope, periodEnd) {
+function decodeSnapshot(envelope, periodEnd, sourceVersion) {
   const validEnvelope = exact(envelope, ['artifactVersion', 'snapshotBytesBase64', 'sha256'])
     && envelope.artifactVersion === 1
     && typeof envelope.sha256 === 'string'
@@ -87,20 +88,21 @@ function decodeSnapshot(envelope, periodEnd) {
   }
   const validSnapshot = exact(snapshot, [
     'schemaVersion', 'sourceVersion', 'snapshotId', 'asOf', 'generatedAt', 'companies', 'scopes', 'postings'
-  ]) && snapshot.schemaVersion === 1 && snapshot.sourceVersion === SOURCE_COVERAGE_VERSION
+  ]) && snapshot.schemaVersion === (sourceVersion === 'jobseek-coverage-v2' ? 2 : 1) && snapshot.sourceVersion === sourceVersion
     && snapshot.asOf === periodEnd && Array.isArray(snapshot.companies)
     && Array.isArray(snapshot.scopes) && Array.isArray(snapshot.postings);
   if (!validSnapshot) throw failure();
   return snapshot;
 }
 
-function createReader({ directory } = {}, filesystem) {
-  if (typeof directory !== 'string' || !isAbsolute(directory) || resolve(directory) !== directory) {
+function createReader({ directory, sourceVersion = SOURCE_COVERAGE_VERSION } = {}, filesystem) {
+  if (typeof directory !== 'string' || !isAbsolute(directory) || resolve(directory) !== directory
+      || !SOURCE_COVERAGE_VERSIONS.includes(sourceVersion)) {
     throw failure('invalid_input');
   }
   return Object.freeze({
     authoritative: true,
-    version: SOURCE_COVERAGE_VERSION,
+    version: sourceVersion,
     async readSnapshot({ periodEnd, signal } = {}) {
       const date = periodDate(periodEnd);
       if (signal?.aborted) throw failure('task_timeout');
@@ -123,7 +125,7 @@ function createReader({ directory } = {}, filesystem) {
           }
           const bytes = Buffer.concat(chunks, total);
           const envelope = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-          return decodeSnapshot(envelope, periodEnd);
+          return decodeSnapshot(envelope, periodEnd, sourceVersion);
         } finally {
           await handle.close();
         }

@@ -29,8 +29,10 @@ The trusted launcher supplies build and host-plan identity independently;
 operator JSON cannot override either identity.
 
 The optional queue-only `sourceCoverage` is exactly
-`{directory,sourceVersion:"jobseek-coverage-v1"}`. The version must equal the
-reader's exported `SOURCE_COVERAGE_VERSION`. The directory is an absolute,
+`{directory,sourceVersion}`. The version explicitly selects `jobseek-coverage-v1`
+or `jobseek-coverage-v2`; the returned snapshot must match that selection. The
+[source consumer contract](source-coverage.md) defines schemas, immutable v1
+compatibility and approved public links. The directory is an absolute,
 normalized protected source-input path, separate from writable shared state.
 The fixed reader chooses the UTC period's artifact name. No request or editorial
 tool chooses an artifact path. Read the source reader's contract before preparing

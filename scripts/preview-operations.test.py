@@ -722,7 +722,9 @@ class BoundaryContracts(unittest.TestCase):
         manifest['files']['app/server/hiring-wire-sol-catalogue.json'] = model.WIRE_CATALOGUE_SHA256
         source = {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}
         runner_cases = [runner, {**runner, 'hiringWire': {'enabled': False}},
-                        {**runner, 'hiringWire': wire_config(), 'sourceCoverage': source}]
+                        {**runner, 'hiringWire': wire_config(), 'sourceCoverage': source},
+                        {**runner, 'hiringWire': wire_config(),
+                         'sourceCoverage': {**source, 'sourceVersion': 'jobseek-coverage-v2'}}]
         broker_cases = [broker, {**broker, 'hiringWire': {'enabled': False}}, {**broker, 'hiringWire': wire_config(private=True)}]
         with patch.object(queue.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1234)), patch.object(model.os, 'getuid', return_value=1234):
             for admitted in runner_cases:
@@ -731,6 +733,7 @@ class BoundaryContracts(unittest.TestCase):
                 model.validate_configuration(admitted, release, manifest)
         unsupported = [{'hiringWire': {'enabled': False, 'command': 'caller'}},
                        {'sourceCoverage': {**source, 'sourceVersion': 'caller-version'}}, {'modulePath': '/caller/module.mjs'}]
+        unsupported.extend({'sourceCoverage': {**source, 'sourceVersion': value}} for value in (None, 2, [], 'jobseek-coverage-v3'))
         for extra in unsupported:
             with self.subTest(extra=extra):
                 with self.assertRaises(ValueError):
@@ -810,6 +813,7 @@ process.stdout.write('actual_node_configuration_boundaries_match\n');
         manifest['files']['app/server/hiring-wire-sol-catalogue.json'] = model.WIRE_CATALOGUE_SHA256
         with patch.object(Path, 'read_text', side_effect=AssertionError('Configuration must not read source bytes')):
             queue.validate_configuration({**config, 'sourceCoverage': source}, manifest)
+            queue.validate_configuration({**config, 'sourceCoverage': {**source, 'sourceVersion': 'jobseek-coverage-v2'}}, manifest)
         with patch.object(queue.pwd, 'getpwnam', side_effect=AssertionError('Disabled Wire must not inspect a UID')):
             queue.validate_configuration({**config, 'hiringWire': {'enabled': False}}, manifest)
         for change in ({'directory': 'relative/source'}, {'directory': '/source/../other'}, {'directory': '/source//input'},

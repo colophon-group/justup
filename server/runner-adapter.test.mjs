@@ -34,6 +34,8 @@ test('queue admits only fixed Wire model and pinned source configuration without
   const sourceCoverage={directory:'/private/source-history',sourceVersion:'jobseek-coverage-v1'};
   const input={...config(),hiringWire,sourceCoverage},bound=bindRunnerConfig(input,env);
   assert.deepEqual(bound.hiringWire,hiringWire);assert.deepEqual(bound.sourceCoverage,sourceCoverage);
+  const v2={...sourceCoverage,sourceVersion:'jobseek-coverage-v2'};
+  assert.deepEqual(bindRunnerConfig({...input,sourceCoverage:v2},env).sourceCoverage,v2);
   assert.equal(bound.buildIdentity,env.JUSTUP_BUILD_ID);assert.equal(bound.hostPlanSha256,env.JUSTUP_HOST_PLAN_SHA256);
   assert.deepEqual(bindRunnerConfig({...config(),hiringWire:{enabled:false}},env).hiringWire,{enabled:false});
   for(const patch of [{hiringWire:{...hiringWire,buildIdentity:'e'.repeat(64)}},{hiringWire:{enabled:false,module:'/tmp/caller.mjs'}},

@@ -46,6 +46,14 @@ function companyUrl(value) {
     || url.hostname.split('.').some(part => part.length>63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(part))) throw wireError('invalid_output');
   return url.href;
 }
+function publicCareerLink(value, generatedAt) {
+  if (value === null) return;
+  exact(value, ['url','status','provenance','approvedAt']);
+  if (value.status !== 'approved' || !['employer-careers','ats-careers','reviewed-redirect'].includes(value.provenance)
+      || iso(value.approvedAt) > generatedAt || typeof value.url !== 'string'
+      || /[^\u0021-\u007e]|%/u.test(value.url) || companyUrl(value.url) !== value.url
+      || /(?:^|\.)example$/u.test(new URL(value.url).hostname)) throw wireError('invalid_output');
+}
 export function periodFor(periodEnd) {
   const end = iso(periodEnd);
   if (new Date(end).getUTCDay() !== 1 || end % DAY !== 0) throw wireError('invalid_input');
@@ -55,7 +63,8 @@ export function periodFor(periodEnd) {
 export function compileWireSnapshot(input, {periodEnd, now = Date.now()} = {}) {
   const value = bounded(input, 16 * 1024 * 1024), period = periodFor(periodEnd), end = iso(period.end), start = iso(period.previousStart);
   exact(value, ['schemaVersion','sourceVersion','snapshotId','asOf','generatedAt','companies','scopes','postings']);
-  if (value.schemaVersion !== 1 || value.asOf !== periodEnd) throw wireError('invalid_output');
+  const v2 = value.schemaVersion === 2 && value.sourceVersion === 'jobseek-coverage-v2';
+  if (!(v2 || value.schemaVersion === 1 && value.sourceVersion !== 'jobseek-coverage-v2') || value.asOf !== periodEnd) throw wireError('invalid_output');
   token(value.sourceVersion); token(value.snapshotId);
   const generatedAt = iso(value.generatedAt);
   if (generatedAt < end || generatedAt > now || now-generatedAt > DAY || generatedAt-end > DAY) throw wireError('dependency_unavailable');
@@ -67,7 +76,8 @@ export function compileWireSnapshot(input, {periodEnd, now = Date.now()} = {}) {
     companies.set(company.id, {...company,url:companyUrl(company.url)});
   }
   for (const scope of value.scopes) {
-    exact(scope, ['id','companyId','revision','trackedSince','lastVerifiedAt','coverage']);
+    exact(scope, ['id','companyId','revision','trackedSince','lastVerifiedAt','coverage',...(v2 ? ['publicLink'] : [])]);
+    if (v2) publicCareerLink(scope.publicLink, generatedAt);
     token(scope.id); token(scope.revision);
     if (!companies.has(scope.companyId) || scopes.has(scope.id) || !Array.isArray(scope.coverage) || scope.coverage.length > 128) throw wireError('invalid_output');
     const tracked = iso(scope.trackedSince), verified = scope.lastVerifiedAt===null?null:iso(scope.lastVerifiedAt);

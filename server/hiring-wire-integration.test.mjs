@@ -44,6 +44,25 @@ test('UTC schedule uses the most recent fixed Monday without local-time drift',(
   assert.equal(hiringWirePeriodEnd(Date.parse(END)),END);
   assert.equal(hiringWirePeriodEnd(Date.parse('2026-11-08T23:59:59.999Z')),END);
 });
+test('queue source selection binds explicit v2 and rejects a different returned source version',async t=>{
+  for(const wrongSnapshot of [false,true])await t.test(String(wrongSnapshot),async t=>{
+    const s=state(t),fake=fakes(),selected={...sourceCoverage,sourceVersion:'jobseek-coverage-v2'};
+    fake.factories.source=options=>{
+      assert.deepEqual(options,selected);
+      return {authoritative:true,version:options.sourceVersion,readSnapshot:async()=>{
+        const value=wireFixture();value.sourceVersion=wrongSnapshot?SOURCE_COVERAGE_VERSION:options.sourceVersion;
+        if(!wrongSnapshot){value.schemaVersion=2;for(const scope of value.scopes)scope.publicLink=null;}
+        return value;
+      }};
+    };
+    const {runner,api}=await composition(s,fake,{sourceCoverage:selected});
+    await runner.runOnce();
+    assert.equal(published(api).state,wrongSnapshot?'unavailable':'published');
+    assert.equal(fake.calls(),wrongSnapshot?0:1);
+  });
+  const s=state(t),fake=fakes();
+  await assert.rejects(composition(s,fake,{sourceCoverage:{...sourceCoverage,sourceVersion:'jobseek-coverage-v2'}}),TypeError);
+});
 test('default disabled runner schedules nothing and public reader ignores private configuration',async t=>{
   const s=state(t),deps={db:s.db,now:s.now};
   for(const key of ['hiringWire','sourceCoverage','buildIdentity','hostPlanSha256'])Object.defineProperty(deps,key,{get(){throw Error('private configuration read');}});
