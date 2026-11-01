@@ -264,7 +264,7 @@ Duplicate requests share the same company record and setup work while each reque
 
 “Request higher priority” attaches the user to the existing setup request and records their demand for that company. Any signed-in user can request a priority increase; requests made during an active free period or paid subscription receive preferential handling. Other requests remain in the ordinary queue. Show that the priority request was recorded and the current setup status. Repeated clicks by the same user must not create additional tasks or repeatedly increase priority. If configuration is already running, retain that work and record the user's interest without restarting it. Exact ordering among requests remains an operational decision.
 
-Let requesters see progress in the product and provide separate in-product updates when the company is catalogued and when monitoring becomes active. The first links to the catalogue entry; the second also links to its job search. Proposed request limits, queue ordering within each priority, and handling of free or paid access expiry while a request is pending must be defined before launch.
+Let requesters see progress in the product and provide separate in-product updates when the company is catalogued and when monitoring becomes active. The first links to the catalogue entry; the second also links to its job search. Set request limits and ordering within each priority before launch. A request accepted while free or paid priority access is active keeps that priority while pending, even if the access period ends; a new request after expiry uses the ordinary queue. Work already running is never interrupted to recalculate priority.
 
 ## 6. Compact structured results
 
@@ -312,7 +312,7 @@ When a result expires while the user is viewing it, remove its active content an
 | Signed in, free period ended without subscription | Searches remain saved; return to limited visitor results with an upgrade action. |
 | Cancelled subscription with time remaining | Full access until the paid-through time. |
 
-Active paid subscribers and users in either the ordinary free week or former-Jobseek welcome month receive the same priority handling for company requests. The request workflow remains available without active priority access. Define how a pending request changes when free or paid access expires before launch.
+Active paid subscribers and users in either the ordinary free week or former-Jobseek welcome month receive the same priority handling for company requests. The request workflow remains available without active priority access. An accepted request keeps its recorded priority after free or paid access expires; new requests use the access level active when they are accepted.
 
 Limited visitor results must still contain only jobs first observed by the backend less than 14 days ago. The proposed latest-results cutoff hides postings first observed within the most recent 48 hours; it is an experiment to validate, not a decided requirement. Sparse markets may have no unlocked matches. Show that honestly rather than weakening the freshness promise.
 
