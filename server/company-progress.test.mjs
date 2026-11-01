@@ -113,7 +113,7 @@ test('operator handoff bounds scopes and rows and orders current premium groups 
   assert.throws(()=>f.progress.pending({limit:51}),{code:'invalid_limit'});
 });
 
-test('published source aliases reuse the canonical priority relationship and shared setup identity',async t=>{
+test('shared website metadata keeps source-company priority separate from an earlier request',async t=>{
   const f=fixture(t);await f.accept();const iso=new Date(AT).toISOString();
   f.store.importSnapshot({schemaVersion:1,snapshotAt:iso,verifiedAt:iso,observations:[],unknownIds:[],companyIdentities:[{companyId:'source-alias',officialDomain:'shared.example.org'}],jobs:[{
     id:'source-job',companyId:'source-alias',companyName:'Shared Company',companySlug:'shared-company',title:'Engineer',sourceUrl:'https://shared.example.org/jobs/1',active:true,reserved:false,hasContent:true,
@@ -121,9 +121,10 @@ test('published source aliases reuse the canonical priority relationship and sha
     evidence:{source:'jobseek_public',metadataFetchedAt:iso,bodyFetchedAt:null,bodyUrl:null,bodySha256:null,textSha256:null,bodyBytes:0,normalizationVersion:1,truncated:false}
   }]});
   f.paid('alice');const first=(await f.priority('alias-key','alice','source-alias')).body.request;
-  assert.equal(first.companyId,f.id);assert.equal((await f.priority('alias-key')).body.request.id,first.id);
-  assert.equal((await f.priority('other-key','alice','source-alias')).body.request.id,first.id);assert.equal(f.progress.pending().items.length,1);
-  assert.equal(f.db.prepare('SELECT count(*) n FROM justup_company_setups').get().n,1);
+  assert.equal(first.companyId,'source-alias');assert.notEqual((await f.priority('parent-key')).body.request.id,first.id);
+  assert.equal((await f.priority('alias-key','alice','source-alias')).body.request.id,first.id);
+  assert.equal((await f.priority('other-key','alice','source-alias')).body.request.id,first.id);assert.equal(f.progress.pending().items.length,2);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM justup_company_setups').get().n,2);
   assert.equal(f.feed.company('source-alias').setup.state,'queued');assert.equal(f.feed.company('source-alias').coverage.state,'imported_snapshot');
 });
 

@@ -1,5 +1,5 @@
-// Verified source-company aliases preserve public request/follow IDs when a
-// later import names the same official identity with a different source UUID.
+// Persist official-host metadata against exact source company IDs. Hosts alone
+// never establish identity aliases; existing persisted mappings stay stable.
 import { validateCompanyUrl } from './companies.mjs';
 
 const invalid=()=>Object.assign(new Error('Invalid company identity evidence.'),{code:'invalid_import',status:400});
@@ -17,15 +17,11 @@ export function validateCompanyIdentities(values=[]) {
   }).sort((a,b)=>a.companyId.localeCompare(b.companyId));
 }
 export function recordCompanyIdentities(db,values,verifiedAt) {
-  const hasRequested=db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='justup_requested_companies'").get();
   for(const value of values){
     if(!db.prepare('SELECT 1 FROM job_source_identities WHERE company_id=? LIMIT 1').get(value.companyId))throw invalid();
     const previous=db.prepare('SELECT * FROM justup_company_aliases WHERE source_company_id=?').get(value.companyId);
     if(previous&&previous.official_domain!==value.officialDomain)throw conflict();
-    const requested=hasRequested?db.prepare('SELECT id FROM justup_requested_companies WHERE domain=?').get(value.officialDomain):null;
-    const shared=db.prepare('SELECT company_id FROM justup_company_aliases WHERE official_domain=? ORDER BY verified_at,source_company_id LIMIT 1').get(value.officialDomain);
-    const canonical=requested?.id??shared?.company_id??value.companyId;
-    if(previous&&previous.company_id!==canonical)throw conflict();
+    const canonical=previous?.company_id??value.companyId;
     db.prepare('INSERT INTO justup_company_aliases VALUES(?,?,?,?) ON CONFLICT(source_company_id) DO UPDATE SET verified_at=max(verified_at,excluded.verified_at)').run(value.companyId,canonical,value.officialDomain,verifiedAt);
   }
 }
