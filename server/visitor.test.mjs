@@ -157,7 +157,7 @@ test('real password registration commits the visitor search and private draft in
 test('the independent queue reader honors persisted paid and free periods and rechecks expiry after inference',async t=>{
   for(const kind of ['paid','free'])await t.test(kind,async t=>{
     const s=await setup(t,{realAuth:true,residual:true}),c=s.client();await c.session();const registration=await c.request('/auth/register',{method:'POST',body:{username:`current-${kind}`,password:randomBytes(24).toString('base64url')}});assert.equal(registration.status,201);const owner=registration.body.user.id,db=s.app.store.db;
-    if(kind==='paid')db.prepare('INSERT INTO access_subscriptions VALUES(?,?,?,?,?,?,?)').run('synthetic-subscription',owner,START,'active','weekly',START+1000,null);
+    if(kind==='paid')db.prepare('INSERT INTO access_subscriptions (subscription_hash,account_id,state_version,status,plan,paid_through_at,reconcile_pending) VALUES(?,?,?,?,?,?,?)').run('synthetic-subscription',owner,START,'active','weekly',START+1000,0);
     else db.prepare('INSERT INTO access_free_periods VALUES(?,?,?,?)').run(owner,'standard',START,START+1000);
     const created=await c.request('/searches',{method:'POST',body:{query:'Engineer four day week',requestKey:'persisted'}});await s.work('search_intent');const path=`/searches/${created.body.search.id}/results?revision=1`;const initial=await c.request(path);assert.equal(initial.status,200);
     await c.request('/viewed',{method:'POST',body:{jobId:'hidden-accepted'}});assert((await c.request('/workspace')).body.viewed.some(j=>j.jobId==='hidden-accepted'));
