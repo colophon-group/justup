@@ -25,8 +25,8 @@ FULL_SUITES = ("typecheck", "build", "web", "deployment", "server", "python", "b
 IMPACT = {
     "docs": (),
     "web": ("typecheck", "build", "web", "deployment", "browser"),
-    "server": ("server", "deployment", "python"),
-    "python": ("python", "deployment"),
+    "server": ("build", "server", "deployment", "python"),
+    "python": ("build", "python", "deployment"),
     "deployment": ("build", "deployment", "server", "python", "browser"),
     "tooling": FULL_SUITES,
     "unknown": FULL_SUITES,
@@ -234,6 +234,8 @@ def run_suites(selected: tuple[str, ...]) -> None:
     total_started = time.monotonic()
     if not selected or any(suite not in FULL_SUITES for suite in selected):
         raise ValueError("CI selected an empty or unrecognized runtime suite set.")
+    if "deployment" in selected and ("build" not in selected or selected.index("build") > selected.index("deployment")):
+        raise ValueError("Deployment contracts require the production build first.")
     if selected == FULL_SUITES and not full_script_present():
         raise ValueError("A full run requires a registered test:full suite.")
     package = ROOT / "package.json"
@@ -332,9 +334,19 @@ def selftest() -> None:
     assert select(["vite.config.ts", "tsconfig.json"], "dev", False)[:2] == (FULL_SUITES, False)
     assert classify("web/README.md") == "docs"
     assert select(["deploy/justup-preview/limits.test.mjs", "scripts/preview-install.sh"], "dev", False)[:2] == (("build", "deployment", "server", "python", "browser"), False)
-    assert select(["scripts/import-jobs.py", "scripts/test_import_jobs.py"], "dev", False)[:2] == (("deployment", "python"), False)
+    assert select(["scripts/import-jobs.py", "scripts/test_import_jobs.py"], "dev", False)[:2] == (("build", "deployment", "python"), False)
     assert select(["scripts/import-jobs.py"], "main", False)[:2] == (FULL_SUITES, True)
-    assert select(["server/auth.mjs", "server/auth.test.mjs"], "dev", False)[:2] == (("deployment", "server", "python"), False)
+    assert select(["server/auth.mjs", "server/auth.test.mjs"], "dev", False)[:2] == (("build", "deployment", "server", "python"), False)
+    for suites in IMPACT.values():
+        if "deployment" in suites:
+            assert "build" in suites and suites.index("build") < suites.index("deployment")
+    for invalid in (("deployment",), ("deployment", "build")):
+        try:
+            run_suites(invalid)
+        except ValueError as error:
+            assert "production build first" in str(error)
+        else:
+            raise AssertionError("Deployment without an earlier build must fail CI")
     assert select(["server/auth.mjs"], "main", False)[:2] == (FULL_SUITES, True)
     browser_pr_paths = [
         ".gitignore", "package.json", "package-lock.json", "playwright.config.mjs",
