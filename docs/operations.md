@@ -275,6 +275,17 @@ python3 /srv/justup_preview/ops/preview-recovery.py backup \
   --source-commit "$JUSTUP_PREVIEW_COMMIT" --build-identity "$JUSTUP_PREVIEW_BUILD_ID"
 ```
 
+The read-only `backup-status` command is a fail-closed input for the planned backup-age alert. Run it under the same preview slice with the maximum acceptable age from the reviewed cadence (seconds):
+
+```sh
+python3 /srv/justup_preview/ops/preview-recovery.py backup-status \
+  --backup-dir /srv/justup_preview/state/backups \
+  --generation /srv/justup_preview/state/private-generation \
+  --max-age-seconds "$JUSTUP_REVIEWED_BACKUP_MAX_AGE_SECONDS"
+```
+
+It requires one or two complete retained snapshots, checks each against the live deletion barrier, active immutable build, digest and SQLite integrity, and reports the newest age, count and available bytes. It exits unsuccessfully for stale or damaged snapshots, incomplete publication, changed deletion state or a failing host guard. Available bytes are an observation; the guard separately enforces preview free-space limits. No timer or alert delivery is activated by this command.
+
 SQLite's online backup API creates a consistent snapshot; copying the live WAL database with filesystem `cp` is not supported. A 30-second/page budget, integrity check, digest and before/after stable generation checks with an absent transaction-pending marker precede publication. Generation change discards the snapshot. Snapshots/metadata are flat regular files only, private and fsynced; the recorded database epoch must agree with the snapshot and verified active artifact. Oversized/expired/corrupt snapshots fail closed. Pruning runs after a successful backup or by the explicit `prune --backup-dir` command. Verify and prune before leaving a preview unattended; the guard does not silently create snapshots.
 
 The core owns the transaction-aware deletion barrier. Before rotating the generation, it must exclusively create and fsync `state/private-generation.pending`, then rotate/fsync `state/private-generation` and purge/fsync all backup files. The pending marker must remain through the actual SQLite COMMIT or ROLLBACK; only the transaction owner clears and fsyncs it afterwards. Two UUID reads alone are insufficient: a concurrent SQLite reader can see old committed records after the UUID rotates but before deletion commits. Operations therefore reads generation, checks pending absence, rereads the same generation before starting a snapshot, and repeats that stable check afterwards. A retained marker after a crash blocks backup and restore until verified recovery; tooling never clears it automatically. This cross-module pending-marker protocol is implemented by the core and remains a required restore verification. Barrier failure rolls back private SQL deletion; a later SQL rollback may invalidate extra backups safely. Keep the live generation independent of backups. Missing/mismatched generations always block restoration. Never replace it with a value from a snapshot.
