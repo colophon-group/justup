@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { ApiClient } from "../../api/client.ts";
-import type { Search } from "../../api/types.ts";
+import type { Search, Session } from "../../api/types.ts";
 import { useViewportReveal } from "../../shared/useViewportReveal.ts";
 import { JobRow } from "./JobRow.tsx";
 import { useFeed } from "./useFeed.ts";
@@ -10,6 +10,9 @@ interface Props {
   active: boolean;
   paused: boolean;
   reducedMotion: boolean;
+  session: Session | null;
+  onSignIn: (reason?: string) => void;
+  onAccount: () => void;
 }
 export function ResultFeed({
   client,
@@ -17,8 +20,11 @@ export function ResultFeed({
   active,
   paused,
   reducedMotion,
+  session,
+  onSignIn,
+  onAccount,
 }: Props) {
-  const { feed, next, retry } = useFeed(client, search, active && !paused),
+  const { feed, next, retry, refresh } = useFeed(client, search, active && !paused),
     tailRef = useRef<HTMLDivElement>(null);
   const canContinue =
     !feed.error &&
@@ -90,7 +96,10 @@ export function ResultFeed({
   return (
     <>
       <p id="live-status" className="small-print" role="status">
-        Live updates unavailable · refresh your search to check
+        Check the latest results without changing your search.{" "}
+        <button className="text-link" id="refresh-results" disabled={feed.loading || paused} onClick={refresh}>
+          Check for new positions
+        </button>
       </p>
       <div id="search-results">
         <div className="section-heading feed-heading">
@@ -98,6 +107,21 @@ export function ResultFeed({
           <span className="eyebrow">Last 14 days</span>
           <span className="feed-order">Newest first</span>
         </div>
+        {feed.hidden && feed.hidden.count > 0 ? (
+          <section id="hidden-matches" className="hidden-matches" aria-labelledby="hidden-matches-title">
+            <div className="compressed-matches" aria-hidden="true"><i /><i /><i /></div>
+            <div className="hidden-matches-prompt">
+              <div>
+                <span className="eyebrow">More in this edition</span>
+                <h2 id="hidden-matches-title">{feed.hidden.exact ? '' : 'At least '}{feed.hidden.count.toLocaleString('en')} recent {feed.hidden.count === 1 ? 'match' : 'matches'} hidden</h2>
+                <p>{session?.user ? 'Your current account access does not include these matches.' : 'Sign in to see the newest matches.'}</p>
+              </div>
+              <button className="button dark" onClick={() => session?.user ? onAccount() : onSignIn('Sign in to see the newest matches.')}>
+                {session?.user ? 'Account access ↗' : 'Sign in ↗'}
+              </button>
+            </div>
+          </section>
+        ) : null}
         <div className="column-labels" aria-hidden="true">
           <span>First seen</span>
           <span>Position</span>

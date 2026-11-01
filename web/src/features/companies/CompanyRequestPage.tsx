@@ -77,12 +77,12 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
                 value={scope} onChange={event => setScope(event.target.value)}
                 placeholder="A particular division or career page" />
             </div>
-            <p className="helper">Give us a lead. You’ll confirm the company before it joins the catalogue.</p>
+            <p className="helper">Give us a lead. You’ll confirm the company before we record your request.</p>
             <button className="button dark" type="submit" disabled={flow.busy || !canSubmit}>Find company ↗</button>
           </form>
-          {!canSubmit ? <p className="helper">Company requests are not available in this demo yet.</p> : null}
+          {!canSubmit ? <p className="helper">Company requests are unavailable right now. Please try again later.</p> : null}
         </> : request.status === 'pending' ? <>
-          <h2>Checking the lead.</h2><p>We’re looking for the right company. No company has been added yet.</p>
+          <h2>Checking the lead.</h2><p>We’re looking for the right company. You’ll confirm the match before we record it.</p>
           <button id="refresh-request" className="button outline" disabled={flow.busy} onClick={() => void flow.refresh()}>Check again</button>
           {flow.busy ? <span className="request-progress" role="status">Following your lead…</span> : null}
         </> : request.status === 'candidate' && candidate ? <>
@@ -99,7 +99,7 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
         </> : request.status === 'unresolved' ? <>
           <h2>No confirmed match.</h2><p>{request.reason || 'We couldn’t confidently identify this company. Try its website or full name.'}</p><button className="button outline" id="new-request" onClick={flow.reset}>Try another lead</button>
         </> : request.status === 'accepted' ? <>
-          <h2>On the record.</h2><p>{request.message || 'The company identity request is recorded. This does not start career-page setup.'}</p>
+          <h2>On the record.</h2><p>{request.message || 'Your company request is recorded. Career-page collection is not confirmed.'}</p>
           {request.company?.id ? <a className="button dark" href={`#company/${encodeURIComponent(request.company.id)}`}>View company ↗</a> : <a className="button outline" href="#companies">Company catalogue ↗</a>}
         </> : <><h2>Request unavailable.</h2><p>The service returned an unknown request state.</p><button className="button outline" onClick={flow.reset}>Start again</button></>}
         <p id="request-status" role="status">{flow.error || (!request && flow.busy ? 'Following your lead…' : '')}</p>

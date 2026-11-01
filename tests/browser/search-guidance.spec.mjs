@@ -182,6 +182,7 @@ test("a newly stale page clears visible jobs and discards unverified page items 
     "Imported listings need verification.",
   );
   await expect(page.locator("[data-job]")).toHaveCount(0);
+  await expect(page.locator("#hidden-matches")).toHaveCount(0);
   await expect(page.locator("#feed-status")).not.toContainText("repeated");
   await page.getByRole("button", { name: "Check again", exact: true }).click();
   await expect(page.locator("[data-job]")).toHaveCount(1);
