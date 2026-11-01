@@ -75,6 +75,8 @@ export async function createHiringWireRunner({db,tasks,now=Date.now,hiringWire,s
     } else if(schedule.task_id) {
       // A removed terminal task is not permission to recreate an old edition.
       return {state:'task_unavailable',periodEnd:end};
+    } else if(schedule.attempts>0&&schedule.outcome!=='task_limit') {
+      return {state:schedule.outcome,periodEnd:end};
     }
     if(schedule.attempts>=MAX_ATTEMPTS||at<schedule.next_attempt)return {state:schedule.outcome,periodEnd:end};
     // enqueuePeriod has its own immediate transaction. A crash before the
@@ -86,7 +88,7 @@ export async function createHiringWireRunner({db,tasks,now=Date.now,hiringWire,s
       return {state:task.status,periodEnd:end};
     } catch(error) {
       const outcome=error?.code==='task_limit'?'task_limit':'invalid_output';
-      db.prepare('UPDATE hiring_wire_schedule SET attempts=attempts+1,outcome=?,next_attempt=? WHERE period_end=?')
+      db.prepare('UPDATE hiring_wire_schedule SET attempts=min(3,attempts+1),outcome=?,next_attempt=? WHERE period_end=?')
         .run(outcome,at+(RETRY_MS[schedule.attempts+1]??LAG),end);
       return {state:outcome,periodEnd:end};
     }

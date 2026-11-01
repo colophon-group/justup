@@ -82,6 +82,7 @@ export function createHiringWireService({db,tasks=null,now=Date.now,source=null,
     let period,attempt;
     try {
       exact(task.payload,['periodEnd']);period=periodFor(task.payload.periodEnd);liveTask(task);
+      if(signal?.aborted)throw wireError('task_timeout');
       if(iso(period.end)>now() || now()-iso(period.end)>publicationLagMs)throw wireError('dependency_unavailable');
       const existing=row(period.id);
       if(existing?.status==='published')return tx(db,()=>{liveTask(task);const output={editionId:period.id};if(!tasks.complete(task.id,task.leaseToken,{status:'succeeded',output}))throw wireError('revision_conflict');return {status:'succeeded',output,committed:true};});
@@ -119,6 +120,7 @@ export function createHiringWireService({db,tasks=null,now=Date.now,source=null,
       if(execution.workspaceRevision!==usedWorkspace.revision || execution.workspaceSha256!==usedWorkspace.sha256)throw wireError('invalid_output');
       return tx(db,()=>{
         liveTask(task);
+        if(signal?.aborted)throw wireError('task_timeout');
         if(now()-iso(period.end)>publicationLagMs || canonical(previousEditions(period.end))!==canonical(previous) || db.prepare("SELECT 1 FROM hiring_wire_editions WHERE status='published' AND period_end>=?").get(period.end))throw wireError('revision_conflict');
         const publicEdition=bounded({id:period.id,title:'Hiring Wire',period:{start:period.start,end:period.end,previousStart:period.previousStart},snapshotAt:period.end,publishedAt:new Date(now()).toISOString(),expiresAt:new Date(iso(period.end)+7*DAY).toISOString(),methodology:METHOD,items:renderWireItems(selection,factSet.facts)},16_384);
         const output={editionId:period.id};
@@ -130,13 +132,14 @@ export function createHiringWireService({db,tasks=null,now=Date.now,source=null,
         return {status:'succeeded',output,committed:true};
       });
     } catch(error) {
-      const code=['dependency_unavailable','task_timeout','revision_conflict','invalid_output'].includes(error.code)?error.code:'invalid_output';
+      const preempted=signal?.aborted&&signal.reason?.code==='task_preempted';
+      const code=preempted?'task_preempted':['dependency_unavailable','task_timeout','revision_conflict','invalid_output'].includes(error.code)?error.code:'invalid_output';
       if(attempt)tx(db,()=>{
         db.prepare("UPDATE hiring_wire_executions SET outcome='failed',finished_at=?,error_code=? WHERE id=? AND outcome='running'").run(now(),code,attempt);
         db.prepare("UPDATE hiring_wire_editions SET publication_outcome=? WHERE period_id=? AND status='pending'").run(code,period.id);
         cleanup();
       });
-      return {status:'failed',errorCode:code};
+      return {status:preempted?'paused':'failed',errorCode:code};
     }
   }
   function cleanup() {
