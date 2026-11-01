@@ -15,7 +15,7 @@ Result lists have no footer or appended coverage panel, so reaching an end does 
 
 ## Marking new positions
 
-Use a small cream **New** label beside the company name and a narrow cream leading edge on the position. The label supplies the meaning; the edge helps scanning. The timestamp continues to mean when the server first observed the posting.
+Use a small cream **New** label in the publication-age column and a narrow cream leading edge on the position. The label supplies the meaning; the edge helps scanning. The timestamp continues to mean when the server first observed the posting.
 
 Newness is relative to the current search, while Viewed belongs to the user and posting across searches. A newly created search starts with its initial result set; live arrivals are marked New. Proposed return-visit behavior is to mark positions delivered since the previous visit, retaining that cohort throughout the current visit. Define and persist the search visit boundary before implementation so reloads and tab changes cannot accidentally clear the cohort or mark all old matches New.
 
@@ -105,7 +105,7 @@ For clickable rows, the surface highlight, arrow motion and focus outline provid
 
 The globe responds directly to wheel, drag and keyboard input, without a reveal sequence, automatic spin or inertial tail. Scrolling over the sphere rotates longitude; its scale remains fixed. Wheel input outside the sphere scrolls the page normally. Horizontal touch dragging rotates while vertical touch gestures scroll the page. Arrow keys rotate and Home restores the initial view. Rendering uses a single animation-frame update per frame, with no movement while idle.
 
-The first-search screen has no result reveal or live insertion until submission. Deleting the last search invalidates queued or pending results before showing that screen; a late response must not repopulate it. Example buttons prefill the input without starting a search.
+The first-search screen has no result reveal or live insertion until submission. Deleting the last search invalidates queued or pending results before showing that screen; a late response must not repopulate it. Decorative typing examples never become the input value or start a search. Focus stops them; leaving an empty field resumes them.
 
 ## Hiring Wire
 

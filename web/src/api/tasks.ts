@@ -1,7 +1,7 @@
 // Poll one server-owned task with a bounded schedule and cancellable waits.
 import { ApiError } from "./client.ts";
 import type { ApiClient } from "./client.ts";
-import type { TaskResult } from "./types.ts";
+import type { SearchScope, TaskResult } from "./types.ts";
 export class TaskFailure extends ApiError {
   readonly retryable: boolean;
   constructor(code: string, message: string, retryable: boolean) {
@@ -28,10 +28,11 @@ export async function pollTask(
   client: ApiClient,
   id: string,
   signal: AbortSignal,
+  scope: SearchScope = "account",
 ): Promise<TaskResult> {
   for (let attempt = 0; attempt < 16; attempt++) {
     if (signal.aborted) throw new DOMException("Task cancelled", "AbortError");
-    const task = await client.getTask(id, signal);
+    const task = await client.getTask(id, signal, scope);
     if (task.id !== id)
       throw new ApiError(
         409,

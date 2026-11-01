@@ -29,11 +29,11 @@ export default defineConfig({
     screenshot: 'off',
     video: 'off',
   },
-  webServer: live ? undefined : {
+  webServer: live ? undefined : [{
     command: `node node_modules/vite/bin/vite.js preview --config vite.config.ts --host 127.0.0.1 --port ${port} --strictPort`,
     url: baseURL,
     reuseExistingServer: false,
     stderr: 'ignore',
     timeout: 30_000,
-  },
+  }, { command: "node tests/browser/public-server.mjs", url: `http://127.0.0.1:${process.env.JUSTUP_PUBLIC_TEST_PORT || 4207}/`, reuseExistingServer: false, timeout: 30_000 }],
 });

@@ -29,7 +29,15 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
   assert.ok(Array.isArray(release.assets) && release.assets.length <= 200, 'Asset count exceeds bounded smoke allowance');
   const index = release.assets.find(asset => asset.path === 'index.html');
   assert.ok(index, 'Missing root index identity');
-  assert.equal(digest(new Uint8Array(await (await get('/')).arrayBuffer())), index.sha256, 'Wrong root index bytes');
+  const document = await (await get('/')).text();
+  assert.match(document, /<meta name="justup-public-document" content="v1">/, 'Missing shared public rendering proof');
+  assert.ok(document.includes(`<meta name="justup-source" content="${release.sourceSha}">`), 'Rendered document has wrong source identity');
+  assert.ok(document.includes(`<meta name="justup-runtime-config" content="${config.vars.RUNTIME_CONFIG_SHA256}">`), 'Rendered document has wrong runtime identity');
+  assert.ok(document.includes(`<link rel="canonical" href="${origin}/">`), 'Wrong public canonical');
+  assert.match(document, /<div id="root">[\s\S]*Beat the/, 'Landing document has no readable public content');
+  assert.match(document, /<template id="public-bootstrap" data-public=/, 'Missing inert public hydration data');
+  assert.doesNotMatch(document, /(?:csrfToken|proposalId|passwordHash|sessionToken|modelEvidence)/, 'Private state in public document');
+  for (const asset of release.assets.filter(asset => /^assets\/.*\.(?:js|css)$/.test(asset.path))) assert.ok(document.includes('/' + asset.path), `Public document does not use retained asset: ${asset.path}`);
   for (const asset of release.assets) {
     assert.ok(!asset.path.startsWith('/') && !asset.path.split('/').some(part => part === '..'), 'Unsafe asset path');
     const result = await get(`/${asset.path.split('/').map(encodeURIComponent).join('/')}`);
@@ -50,7 +58,7 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
       assert.ok(body.access && typeof body.access === 'object', 'Missing server-owned access');
     }
   }
-  return { deploymentMode, sourceSha: release.sourceSha, artifactSha256: release.artifactSha256, runtimeConfigSha256: version.runtimeConfigSha256, checkedAssets: release.assets.length, result: 'passed', scope: 'read-only frontend delivery; API/runner identities and authenticated journeys require separate release checks' };
+  return { deploymentMode, sourceSha: release.sourceSha, artifactSha256: release.artifactSha256, runtimeConfigSha256: version.runtimeConfigSha256, checkedAssets: release.assets.length, publicDocumentProof: 'semantic public HTML, runtime identity and retained asset references; rendered source facts are not immutable artifact bytes', result: 'passed', scope: 'read-only frontend delivery; API/runner identities and authenticated journeys require separate release checks' };
 }
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   if (process.argv.length !== 4) throw new Error('Usage: node scripts/frontend-smoke.mjs <approved-https-origin> <retained-artifact-directory>');

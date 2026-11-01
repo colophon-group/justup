@@ -1,3 +1,4 @@
+import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 import { useLayoutEffect, useRef, useState } from "react";
 import { errorText } from "../../api/client.ts";
 import type { ApiClient } from "../../api/client.ts";
@@ -17,6 +18,8 @@ interface Props {
   dialogOpen: boolean;
   onCompanyRequest: (prefill: CompanyRequestPrefill) => void;
   onAccount: () => void;
+  onPersistenceReady: (bridge: { flush: (signal?: AbortSignal) => Promise<void> } | null) => void;
+  onVisitorRebootstrap: () => Promise<void>;
 }
 export function SearchWorkspace({
   client,
@@ -27,22 +30,35 @@ export function SearchWorkspace({
   dialogOpen,
   onCompanyRequest,
   onAccount,
+  onPersistenceReady,
+  onVisitorRebootstrap,
 }: Props) {
-  const workspace = useWorkspace(client, session, () =>
-    onSignIn(
-      "Sign in to interpret and save your search. Your unsent text stays here.",
-    ),
-  );
+  const { t, notice, locale } = useInterfaceLocale();
+  const workspace = useWorkspace(client, session, onVisitorRebootstrap);
   const { state, search, query } = workspace;
+  useLayoutEffect(() => {
+    onPersistenceReady({ flush: workspace.flush });
+    return () => onPersistenceReady(null);
+  }, [onPersistenceReady, workspace.flush]);
   const [focused, setFocused] = useState(false),
     [pendingDelete, setPendingDelete] = useState<string | null>(null),
+    [pendingDiscard, setPendingDiscard] = useState<string | null>(null),
     [deleteError, setDeleteError] = useState(""),
     [deleting, setDeleting] = useState(false);
+  const [copiedDraft, setCopiedDraft] = useState<{ id: string; text: string; message: string } | null>(null);
+  const copyDraft = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedDraft({ id, text, message: "Copied. You can paste this text into a new search after loading the saved copy." });
+    } catch {
+      setCopiedDraft({ id, text, message: "Copying is unavailable. Select the text above and copy it before loading the saved copy." });
+    }
+  };
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
   const inputRef = useRef<HTMLTextAreaElement>(null),
     focusAfterDelete = useRef(false);
   useLayoutEffect(() => {
-    if (!active) setPendingDelete(null);
+    if (!active) { setPendingDelete(null); setPendingDiscard(null); }
     if (active && pendingDelete === null && focusAfterDelete.current) {
       focusAfterDelete.current = false;
       inputRef.current?.focus();
@@ -70,8 +86,8 @@ export function SearchWorkspace({
     >
       <div className="search-workspace">
         <div className="search-sidebar">
-          <span className="eyebrow">YOUR SEARCHES</span>
-          <div id="search-tabs" role="tablist" aria-label="Saved searches">
+          <span className="eyebrow">{t("YOUR SEARCHES")}</span>
+          <div id="search-tabs" role="tablist" aria-label={t("Saved searches")}>
             {state.searches.map((item, index) => (
               <div className="search-tab" key={item.id}>
                 <button
@@ -114,11 +130,11 @@ export function SearchWorkspace({
                   }}
                   onClick={() => workspace.select(item.id)}
                 >
-                  {item.title || "Saved search"}
+                  {item.title || t("Saved search")}
                 </button>
                 <button
                   className="tab-remove"
-                  aria-label={`Delete ${item.title || "search"}`}
+                  aria-label={t("Delete {title}", { title: item.title || t("search") })}
                   onClick={() => {
                     setDeleteError("");
                     setPendingDelete(item.id);
@@ -136,23 +152,16 @@ export function SearchWorkspace({
               workspace.newSearch();
               inputRef.current?.focus();
             }}
-          >
-            + New search
-          </button>
+          >{t("+ New search")}</button>
         </div>
         <div className="search-main">
           {search ? null : (
             <div className="search-intro" id="search-intro">
-              <span className="eyebrow">YOUR FIRST SEARCH</span>
-              <h1 id="search-intro-title">
-                Fresh jobs.
-                <br />
-                <span>No paid placement.</span>
+              <span className="eyebrow">{t("YOUR FIRST SEARCH")}</span>
+              <h1 id="search-intro-title">{t("Fresh jobs.")}<br />
+                <span>{t("No paid placement.")}</span>
               </h1>
-              <p>
-                Fresh listings from company career pages. See exactly which
-                companies are included.
-              </p>
+              <p>{t("Fresh listings from company career pages. See exactly which companies are included.")}</p>
             </div>
           )}
           <div className="search-compose">
@@ -164,7 +173,7 @@ export function SearchWorkspace({
               }}
             >
               <label htmlFor="query" id="query-label">
-                {search ? "Your search" : "What work are you looking for?"}
+                {search ? t("Your search") : t("What work are you looking for?")}
               </label>
               <div className="query-field">
                 <div className="query-editor">
@@ -172,6 +181,8 @@ export function SearchWorkspace({
                     ref={inputRef}
                     id="query"
                     rows={2}
+                    maxLength={4000}
+                    disabled={workspace.recovering}
                     spellCheck={false}
                     aria-describedby="search-guidance"
                     value={query}
@@ -180,7 +191,7 @@ export function SearchWorkspace({
                       workspace.beginEditing();
                       setFocused(true);
                     }}
-                    onBlur={() => setFocused(false)}
+                    onBlur={() => { setFocused(false); void workspace.flush().catch(() => {}); }}
                     onKeyDown={(event) => {
                       if (
                         event.key === "Enter" &&
@@ -203,35 +214,34 @@ export function SearchWorkspace({
                   disabled={
                     !session ||
                     state.busy ||
-                    (!!session.user && !session.capabilities.search)
+                    !session.capabilities.search ||
+                    (!session.user && !session.capabilities.visitorSearch)
                   }
-                >
-                  Search <span>↵</span>
+                >{t("Search")}{" "}<span>↵</span>
                 </button>
               </div>
             </form>
-            <p className="search-guidance" id="search-guidance">
-              Be as specific as you need. We’ll show how your requirements are
-              handled.
-            </p>
+            <p className="search-guidance" id="search-guidance">{t("Be as specific as you need. We’ll show how your requirements are handled.")}</p>
           </div>
           <div id="search-status" className="helper" role="status">
-            {state.status ||
-              (session?.user && !session.capabilities.search
-                ? "Search interpretation is unavailable right now. Your accepted searches remain available."
+            {notice(state.status) ||
+              (search?.draft?.status === "interrupted" ? t("Your earlier check was interrupted. Submit this text when you want to try again.")
+                : session && (!session.capabilities.search || (!session.user && !session.capabilities.visitorSearch))
+                ? t("Search interpretation is unavailable right now. Your accepted searches remain available.")
                 : "")}
+            {workspace.accountSuggested ? <button id="visitor-sign-in" className="text-link" onClick={() => onSignIn("Sign in to keep your searches and continue.")}>{t('Sign in to continue')}</button> : null}
             {state.proposal ? (
               <>
-                <strong>This search needs your decision.</strong>
+                <strong>{t("This search needs your decision.")}</strong>
                 <p>
                   {state.proposal.message ||
-                    "Some requirements cannot be applied."}
+                    t("Some requirements cannot be applied.")}
                 </p>
                 {state.proposal.requirements
                   .filter((item) => item.handling === "unsatisfied")
                   .map((item, index) => (
                     <p key={item.id ?? index}>
-                      {item.text}: {item.reason || "not supported"}
+                      {item.text}: {item.reason || t("not supported")}
                     </p>
                   ))}
                 {state.proposal.warnings.map((warning, index) => (
@@ -246,12 +256,34 @@ export function SearchWorkspace({
                   id="confirm-search-proposal"
                   disabled={state.busy}
                   onClick={() => void workspace.confirm()}
-                >
-                  Accept these limitations
-                </button>
+                >{t("Accept these limitations")}</button>
               </>
             ) : null}
           </div>
+          <div className="helper" id="workspace-sync-status" role="status">
+            {workspace.syncError ? <>{notice(workspace.syncError)}{" "}<button className="text-link" id="retry-workspace" disabled={workspace.loading || !!workspace.conflict} onClick={workspace.retry}>{t('Retry saving')}</button></> : null}
+          </div>
+          {workspace.conflict ? <section className="helper" id="workspace-conflict" aria-label={t('Review draft conflict')}>
+            <p>{t('This workspace changed in another tab. Your unsaved text is still in the search field.')}</p>
+            {workspace.deletedSearchDrafts.length ? <div id="deleted-search-drafts">
+              <p>{t('A search was deleted in another tab. Its edits cannot be saved to that search. Copy any text you want to keep before using the saved copy.')}</p>
+              {workspace.deletedSearchDrafts.map(draft => <div key={draft.id}>
+                <strong>{draft.title ?? t("Deleted search")}</strong>
+                <p style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap", userSelect: "text" }}>{draft.text || t("Empty draft")}</p>
+                <button className="text-link" onClick={() => void copyDraft(draft.id, draft.text)}>{t("Copy text from {title}", { title: draft.title ?? t("Deleted search") })}</button>
+                <p role="status">{copiedDraft?.id === draft.id && copiedDraft.text === draft.text ? notice(copiedDraft.message) : ""}</p>
+              </div>)}
+            </div> : null}
+            <details><summary>{t('Review the saved copy')}</summary>{Object.entries(workspace.conflict.remote.state.drafts).map(([id, text]) => <p key={id} style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{text || t("Empty draft")}</p>)}</details>
+            <div className="dialog-actions"><button className="button outline" id="keep-local-drafts" disabled={workspace.deletedSearchDrafts.length > 0} onClick={() => workspace.resolveConflict("local")}>{t('Keep my edits')}</button><button className="text-link" id="use-saved-drafts" onClick={() => workspace.resolveConflict("saved")}>{t('Use saved copy and discard these edits')}</button></div>
+          </section> : null}
+          {workspace.recoveredDrafts.length ? <details className="helper" id="recovered-drafts"><summary>{t(workspace.recoveredDrafts.length === 1 ? "{count} saved draft" : "{count} saved drafts", { count: workspace.recoveredDrafts.length.toLocaleString(locale) })}</summary>
+            {workspace.recoveredDrafts.map(draft => <div key={draft.id} data-recovered-draft={draft.id}>
+              <p style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{draft.text}</p>
+              <button className="text-link" disabled={workspace.recovering} onClick={() => void workspace.recover(draft.id, "use")}>{t('Use this draft')}</button>{" "}
+              <button className="text-link" disabled={workspace.recovering} onClick={() => setPendingDiscard(draft.id)}>{t('Discard this saved draft')}</button>
+            </div>)}
+          </details> : null}
           <div id="search-accounting">
             {search?.requirements
               .filter((item) =>
@@ -259,7 +291,7 @@ export function SearchWorkspace({
               )
               .map((item, index) => (
                 <p key={item.id ?? index}>
-                  <strong>Not met:</strong> {item.text}
+                  <strong>{t("Not met:")}</strong> {item.text}
                   {item.reason ? ` · ${item.reason}` : ""}
                 </p>
               ))}
@@ -284,8 +316,17 @@ export function SearchWorkspace({
           session={session}
           onSignIn={onSignIn}
           onAccount={onAccount}
+          viewed={workspace.viewed}
+          onViewed={session?.capabilities.viewed ? workspace.markViewed : undefined}
         />
       ) : null}
+      <Dialog id="discard-draft-dialog" open={pendingDiscard !== null && active} onClose={() => { if (!workspace.recovering) setPendingDiscard(null); }} labelledBy="discard-draft-title">
+        <h2 id="discard-draft-title">{t('Discard this saved draft?')}</h2>
+        <p>{t('This removes only the saved draft you selected. Your other searches and drafts stay saved.')}</p>
+        <div className="dialog-actions"><button className="button outline" disabled={workspace.recovering} onClick={() => setPendingDiscard(null)}>{t('Keep draft')}</button>
+          <button id="confirm-discard-draft" className="button dark" disabled={workspace.recovering} onClick={() => { if (pendingDiscard) void workspace.recover(pendingDiscard, "discard").then(saved => { if (saved) setPendingDiscard(null); }); }}>{t('Discard draft')}</button>
+        </div><p role="status">{notice(workspace.syncError)}</p>
+      </Dialog>
       <Dialog
         id="delete-search-dialog"
         open={pendingDelete !== null && active}
@@ -296,36 +337,31 @@ export function SearchWorkspace({
         describedBy="delete-search-description"
       >
         <div className="dialog-heading">
-          <span className="eyebrow">YOUR SEARCHES</span>
+          <span className="eyebrow">{t("YOUR SEARCHES")}</span>
           <button
             className="icon-close"
-            aria-label="Cancel deleting search"
+            aria-label={t("Cancel deleting search")}
             onClick={() => setPendingDelete(null)}
           >
             ×
           </button>
         </div>
-        <h2 id="delete-search-title">Delete this search?</h2>
+        <h2 id="delete-search-title">{t("Delete this search?")}</h2>
         <p id="delete-search-description">
-          {deleteError ||
-            "This saved search will be deleted from your account."}
+          {notice(deleteError) || t("This saved search will be deleted from your account.")}
         </p>
         <div className="dialog-actions">
           <button
             className="button outline"
             autoFocus
             onClick={() => setPendingDelete(null)}
-          >
-            Keep search
-          </button>
+          >{t("Keep search")}</button>
           <button
             className="button dark"
             id="confirm-delete-search"
             disabled={deleting}
             onClick={() => void deleteSearch()}
-          >
-            Delete search
-          </button>
+          >{t("Delete search")}</button>
         </div>
       </Dialog>
     </section>

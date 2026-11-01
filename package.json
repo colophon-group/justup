@@ -14,7 +14,7 @@
     "test:server": "node scripts/test-server.mjs",
     "test:python": "python3 scripts/test-python.py",
     "dev": "vite --config vite.config.ts",
-    "build": "npm run typecheck && vite build --config vite.config.ts",
+    "build": "npm run typecheck && vite build --config vite.config.ts && vite build --config vite.config.ts --ssr src/public/worker.ts",
     "preview": "vite preview --config vite.config.ts --host 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit",
     "test:web": "node scripts/test-web.mjs"
