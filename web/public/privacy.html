@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <meta name="justup-policy-status" content="draft">
-  <meta name="justup-policy-version" content="demo-draft-3">
+  <meta name="justup-policy-version" content="product-draft-4">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'">
   <title>Privacy — Justup</title>
-  <meta name="description" content="Draft privacy information for the Justup web preview. Operator review is incomplete.">
+  <meta name="description" content="Draft privacy information for Justup. Operator review is incomplete.">
   <link rel="stylesheet" href="/policies.css">
 </head>
-<body data-policy="privacy" data-policy-status="draft" data-policy-version="demo-draft-3">
+<body data-policy="privacy" data-policy-status="draft" data-policy-version="product-draft-4">
   <a class="skip-link" href="#main">Skip to privacy information</a>
   <div class="policy-paper">
     <header class="policy-header">
@@ -19,12 +19,12 @@
       <nav aria-label="Policy navigation"><a href="/privacy.html" aria-current="page">Privacy</a><a href="/usage.html">Usage</a><a href="/#jobs">Back to search ↗</a></nav>
     </header>
     <main id="main" tabindex="-1">
-      <p class="eyebrow">On the record · web preview</p>
+      <p class="eyebrow">On the record</p>
       <h1>Privacy.</h1>
       <aside class="policy-status" aria-labelledby="review-status">
         <h2 id="review-status">Draft — review incomplete</h2>
-        <p>This information has not been approved for real sign-in or public sharing. This draft describes prepared implementation and locally checked controls. Deployment settings, provider handling and the final text still need verification and operator review. Sign-in must remain disabled until the reviewed pages are published.</p>
-        <p>Draft version: <strong>demo-draft-3</strong>. No effective date has been set.</p>
+        <p>These notices are not approved for account access or public sharing. They describe the implemented service and identify deployment settings and provider handling that still need verification. Sign-in must remain disabled until the reviewed pages are published.</p>
+        <p>Draft version: <strong>product-draft-4</strong>. No effective date has been set.</p>
       </aside>
       <section class="policy-section" aria-labelledby="section-0">
         <h2 id="section-0">Who runs Justup?</h2>
@@ -33,27 +33,28 @@
       </section>
       <section class="policy-section" aria-labelledby="section-1">
         <h2 id="section-1">Accounts and private records</h2>
-        <p>The prepared preview uses invite-only local username/password accounts. Registration does not ask for an email address. There is no Google login, resume upload or payment collection.</p>
-        <p>The server checks your password and stores a salted password hash. It stores hashes of random session tokens rather than the tokens themselves. Sessions are valid for up to seven days, within a fixed account deadline of 30 days after registration; signing in does not extend that account deadline.</p>
+        <p>Account access uses a local username and password. Registration does not ask for an email address. The service currently has no Google login, resume upload or payment collection. Access restrictions for the temporary deployment are listed below.</p>
+        <p>The server checks your password and stores a salted password hash. It stores hashes of random session tokens rather than the tokens themselves. Sessions expire after at most seven days. Accounts are retained until you delete them unless an explicitly disclosed temporary account deadline is configured; a session cannot outlive such a deadline. Current deployment settings and cleanup limits are listed below.</p>
         <p>Your account, saved searches, company requests and their background tasks are private account records. The server checks ownership and protects changes against cross-site requests. Public job and company records are separate from these private records.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-2">
         <h2 id="section-2">Searches and AI</h2>
-        <p>Model-backed features remain disabled until their execution, data handling and quality checks are complete. The prepared search flow would send your search text, relevant prior accepted query and criteria, supported filter values and validation feedback to OpenAI to interpret your requirements.</p>
-        <p>If ordinary filters cannot express a requirement and AI matching is available, TypeSafe’s JEV service would receive that remaining condition and eligible public posting text and metadata to check the match. The application does not add your Justup account identifier, username, password, session token or billing identifiers to these model inputs.</p>
+        <p>When search interpretation is enabled, OpenAI receives your search text, relevant prior accepted query and criteria, supported filter values and validation feedback to interpret your requirements. Model-backed features remain disabled until execution, data handling and quality checks are complete.</p>
+        <p>If ordinary filters cannot express a requirement and AI matching is available, TypeSafe’s JEV service receives that remaining condition and eligible public posting text and metadata to check the match. The application does not add your Justup account identifier, username, password, session token or billing identifiers to these model inputs.</p>
         <p>What you type is still part of the input. Do not put sensitive personal information in a search or company request. Provider retention, training use, processing countries and transfer arrangements still require verification before these features can be enabled.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-3">
         <h2 id="section-3">Company requests</h2>
         <p>A submitted request stores the company name or website, any supplied scope, the proposed identity and confirmation state under your account. Opening a prefilled form does not submit it. Known imported companies can be identified without an AI call.</p>
-        <p>For an unfamiliar company, the prepared verification flow would fetch a limited amount of public official-site evidence and send your company input and that evidence to OpenAI. Public websites contacted by the server can receive ordinary request metadata. An uncertain identity must remain unresolved or ask for clarification; you confirm the exact proposed company before it is recorded.</p>
+        <p>When company verification is enabled, an unfamiliar company can require a limited amount of public official-site evidence. Your company input and that evidence go to OpenAI. Public websites contacted by the server can receive ordinary request metadata. An uncertain identity must remain unresolved or ask for clarification; you confirm the exact proposed company before it is recorded.</p>
+        <p>Company discovery is being configured to use OpenAI’s web search and browsing tools. Native-web discovery remains disabled until its search and browsing inputs, default request metadata and provider retention are verified and covered by reviewed notices.</p>
         <p>A confirmed request does not start career-page collection, follow a company or establish that Justup monitors it.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-4">
         <h2 id="section-4">Cookies, browser state and diagnostics</h2>
-        <p>The prepared HTTPS configuration uses essential host-only session and request-protection cookies, marked Secure, HttpOnly and SameSite=Lax. The session cookie lasts up to seven days; a signed-out request-protection cookie lasts one hour. Final deployed cookie settings still need to be checked.</p>
+        <p>The HTTPS service uses essential host-only session and request-protection cookies, marked Secure, HttpOnly and SameSite=Lax. Cookie lifetimes are listed below; their deployed values still need to be checked.</p>
         <p>The application keeps sensitive account, query, draft and request state in memory or on the server, not in browser localStorage. It includes no analytics or advertising tracker. This does not mean the hosting services keep no access or security logs.</p>
-        <p>Application diagnostics are restricted to request identifiers, route categories, status, duration, redacted error codes and bounded token/cost counts. They exclude raw searches, request bodies, usernames, passwords, tokens and IP addresses. Network-derived information is also used in memory to limit abusive request rates. Local diagnostic logs have a configured seven-day ceiling; actual host cleanup and hosting-layer logging remain under review.</p>
+        <p>Application diagnostics are restricted to request identifiers, route categories, status, duration, redacted error codes and bounded token/cost counts. They exclude raw searches, request bodies, usernames, passwords, tokens and IP addresses. Network-derived information is also used in memory to limit abusive request rates. Local diagnostic retention is bounded by the deployment settings below; actual host cleanup and hosting-layer logging remain under review.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-5">
         <h2 id="section-5">Hosting and outside websites</h2>
@@ -62,9 +63,14 @@
       </section>
       <section class="policy-section" aria-labelledby="section-6">
         <h2 id="section-6">Retention and deletion</h2>
-        <p>The implementation gives account access a 30-day deadline and removes expired private account data through cleanup while the API is running. Sessions and local matching decisions have seven-day limits. Recovery tooling is limited to two SQLite backups and a seven-day usable backup age; pruning happens after a successful backup or an explicit cleanup command. These controls and their deployed cleanup must be verified before approval.</p>
+        <p>Private records are removed when their retention deadline is reached through cleanup while the API is running. An access deadline does not prove physical deletion at that moment if the service is stopped. Recovery pruning runs after a successful backup or an explicit cleanup command; there is no automatic backup schedule. Current lifetimes and recovery limits are listed below and must be verified before approval.</p>
         <p>Password-confirmed account deletion removes the current account, sessions and its private searches, requests, tasks and matching data. Private deletion invalidates and purges recovery backups, and restoring a database revokes its sessions. These are logical and file-level controls: immediate secure erasure of storage remnants or copies already held by a provider is not promised.</p>
         <p>Use the contact above for questions about access, correction or deletion, including when an in-app control is unavailable.</p>
+      </section>
+      <section class="policy-section" aria-labelledby="deployment-settings">
+        <h2 id="deployment-settings">Temporary deployment settings</h2>
+        <p>The isolated preview uses invitation access. Its registration capacity, any temporary account deadline and deployment expiry must be verified and disclosed before invitations are issued. Accounts have no automatic expiry by default. A session lasts up to seven days, and a signed-out request-protection cookie lasts one hour.</p>
+        <p>Local matching decisions and diagnostic logs have seven-day limits. Recovery tooling permits at most two SQLite backups, with a seven-day usable backup age. These settings describe the temporary deployment, not a subscription or a permanent account-expiry promise. Any change to access, retention or recipients requires review of these notices before activation.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-7">
         <h2 id="section-7">What still needs review?</h2>
