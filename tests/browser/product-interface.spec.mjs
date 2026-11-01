@@ -10,7 +10,8 @@ test('account access and billing disclosures follow the session rather than a pr
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(page.locator('#account-access')).toHaveText('Your membership has expired.');
   await expect(page.locator('#settings-content')).not.toContainText('Payments are not enabled');
-  await expect(page.locator('.edition-note')).not.toContainText('Preview');
+  await expect(page.locator('.edition-note')).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: /^Interface language/ })).toBeVisible();
 });
 
 test('unknown source kinds remain transparent without being relabelled as an imported snapshot', async ({ page }) => {
