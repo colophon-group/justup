@@ -72,8 +72,7 @@ reply marked `cleanup:"complete"`, emitted after native close/reap, process-grou
 absence, private invocation cleanup and shared-slot release. An early socket close,
 malformed reply, missing proof or five-second acknowledgement deadline reports
 `cleanup_unproven`. Local fake native-protocol tests exercise these contracts;
-they do not independently qualify a deployed native runtime. No scheduler is
-activated by this PR.
+they do not independently qualify a deployed native runtime. A code change does not activate the scheduler; reviewed configuration and release evidence are required.
 
 If the trusted transport reports `cleanup_unproven`, the runner inserts one durable
 `hiring_wire_cleanup_halt` row for the previously claimed private system task.
@@ -125,6 +124,4 @@ after recovery or lease replacement and local closure if guard persistence fails
 
 These tests do not establish a live historical producer, complete source history,
 provider catalogue observation, independently reviewed Sol qualification or a
-deployed candidate. Those remain separate release evidence. This code performs
-no native model calls, scheduler activation, host changes, secret access, spend
-or infrastructure provisioning.
+deployed candidate. Those remain separate release evidence. The default configuration performs no native model call or scheduler work. Activation requires the separately reviewed source, native runtime, host and policy evidence.

@@ -119,7 +119,7 @@ The runtime never creates, truncates, resets, refunds or restores that ledger.
 
 ## Prepare the cumulative ledger after isolation review
 
-No active ledger or real key is initialized by this change. The operator must:
+The runtime never initializes an approved ledger or installs a real key. The operator must:
 
 1. Verify the recorded human authorization in
    `jev-evaluation-budget` and complete
@@ -215,13 +215,7 @@ migrates a header. The historical format remains supported while an authorized
 ledger needs its approval and spend history retained; its name is persisted
 accounting metadata, not a separate product or renewed budget.
 
-At the unverified catalog rate of 42 nanodollars/token, each full reservation is
-2,688,000 nanodollars ($0.002688); a $0.50 cap admits at most 186 attempts, including
-retries. This is a conditional arithmetic example, not an approved price, billing
-balance or promised evaluation count. The monotonic guarantee relies on keeping
-the queue ledger outside database restoration and on the protected operator never
-rewinding/replacing it. It does not protect against privileged filesystem tampering
-or incorrect provider pricing/usage; unexpected usage halts further execution.
+The monotonic guarantee relies on keeping the queue ledger outside database restoration and never rewinding or replacing it. It does not protect against privileged filesystem tampering or incorrect provider pricing or usage; unexpected usage halts further execution.
 
 ## Provider data and request limits
 
@@ -234,16 +228,7 @@ probability distributions, valid confidence and bounded integer usage. Replies
 are limited to 64 KiB and timeouts cover body reads. No heuristic classifier is
 used when JEV is unavailable.
 
-`jev-1.14.0` is the current model verified on 2026-10-31. Official TypeSafe
-[models](https://docs.typesafe.ai/models) list 64k tokens per request, 32k per
-question and $0.042 per million input tokens, with free output. The service leaves
-long context disabled. The [Choice reference](https://docs.typesafe.ai/primitives/choice)
-supports named options and probabilities; the exact three options are
-`accepted`, `rejected`, `insufficient_evidence`. The
-[API reference](https://docs.typesafe.ai/api/system-one) specifies the response
-envelope. [Request rules](https://docs.typesafe.ai/api/errors) additionally set a
-32 MiB HTTP body limit. Organization request/token rate limits and any negotiated
-pricing must be checked with the approved account before benchmarking.
+The transport pins `jev-1.14.0` and leaves long context disabled. Recheck the current TypeSafe [model limits](https://docs.typesafe.ai/models), [Choice behavior](https://docs.typesafe.ai/primitives/choice), [API envelope](https://docs.typesafe.ai/api/system-one) and [request rules](https://docs.typesafe.ai/api/errors) before benchmarking. Confirm organization limits and actual account pricing privately; public documentation does not approve spending.
 
 The local planner is stricter: at most 24 candidates, 28,000 UTF-8 request bytes,
 14,000 bytes for one question with shared state and a reservation of twice the
@@ -307,10 +292,7 @@ SQLite rows by the keyless API client while the anonymous cumulative ledger
 survives. Ledger tests cover restart/old-database restoration/account recreation,
 crash reservations, two-process reservation races at the cap, retry charging,
 corruption/partial writes, unsafe paths, unapproved configuration and durable
-usage-overrun halts. A separate local
-composition smoke exercised the actual core store/feed/tasks together with
-matching and a fake TypeSafe transport, including atomic lease completion and
-cleanup inside the core transaction. It did not run an HTTP server or deployment.
+usage-overrun halts. The broader server suite checks composition with the core store, feed and tasks using a fake TypeSafe transport. Local results do not qualify a deployed provider.
 
 The manually reviewed synthetic development/held-out cases are in
 `server/evals/matching-cases-v1.json`. They include explicit positive, explicit
@@ -318,16 +300,7 @@ negative, missing-evidence and embedded-instruction examples. Tests feed their
 expected labels through the fake protocol. They verify the harness and policy,
 and do not measure model accuracy.
 
-A deterministic scan with 120 candidates and the final 12 accepted measured:
-
-| Maximum candidates/request | Fake provider calls | Work cycles | Empty pages after work |
-| --- | ---: | ---: | ---: |
-| 5 | 24 | 6 | 5 |
-| 12 | 10 | 3 | 2 |
-| 24 | 5 | 2 | 1 |
-
-This supports a provisional 24-candidate default under the local byte/token
-limits. No real-provider latency, token cost, acceptance rate or accuracy has
+No real-provider latency, token cost, acceptance rate or accuracy has
 been measured. Before public sharing, reviewed queue-only delivery of the approved
 existing key, verified pricing and the initialized cumulative ledger must enable
 a bounded benchmark on the actual eligible job slice. Repeat
