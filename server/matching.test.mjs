@@ -18,7 +18,8 @@ function makeJob(i, extra = {}) {
 }
 function setup(t, { count = 10, decisions = () => 'accepted', matching = {}, provider: suppliedProvider } = {}) {
   const db = new DatabaseSync(':memory:'); db.exec('PRAGMA foreign_keys=ON;'); t.after(() => db.close());
-  let time = START, generation = 'import-1', stale = false;
+  let time = START, generation = 'import-1', stale = false,currentAccess=viewer.access;
+  const authority=id=>({account:{id},access:currentAccess});
   let jobs = Array.from({ length: count }, (_, i) => makeJob(i));
   let calls = 0;
   const tasksMap = new Map();
@@ -43,13 +44,13 @@ function setup(t, { count = 10, decisions = () => 'accepted', matching = {}, pro
   const provider = suppliedProvider ?? { available: () => true, classify: async ({ jobs: batch }) => { calls++;
     return { decisions: [...batch].reverse().map((j) => ({ id: j.id, decision: decisions(j) })),
       usage: { inputTokens: 100, outputTokens: 24 }, costNanodollars: 4200, attempts: 1, ambiguousAttempts: 0 }; } };
-  const service = createMatchingService({ db, feed, tasks, provider, config: { matching }, now: () => time });
+  const service = createMatchingService({ db, feed, tasks, provider, config: { matching }, ownerAuthority:authority,revisionIsCurrent:()=>true, now: () => time });
   const page = (overrides = {}) => service.page({ ownerId: owner, searchId: 'search-1', revision: 1,
     configuration, jobs: feed.eligibleJobs(), viewer, coverage: feed.coverage(), generation, ...overrides });
   const run = async () => { const task = tasks.claim(); assert(task, 'expected queued work'); return service.runTask(task); };
   return { db, service, page, run, tasks, tasksMap, provider, feed, calls: () => calls,
     time: () => time, advance: (ms) => { time += ms; }, setJobs: (value) => { jobs = value; },
-    jobs: () => jobs, setGeneration: (v) => { generation = v; }, setStale: (v) => { stale = v; } };
+    jobs: () => jobs,authority,setAccess:value=>currentAccess=value, setGeneration: (v) => { generation = v; }, setStale: (v) => { stale = v; } };
 }
 
 test('only supplied primary candidates are evaluated and public pages preserve newest-first order', async (t) => {
@@ -120,7 +121,7 @@ test('API heartbeat readiness queues without credentials and cannot enable provi
   let requests = 0, ready = true;
   t.mock.method(globalThis, 'fetch', async () => { requests++; throw new Error('HTTP forbidden in API role'); });
   const s = setup(t, { count: 2 });
-  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, now: s.time,
+  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, now: s.time,
     readOnlyProvider: true, availability: () => ready });
   const args = { ownerId: owner, searchId: 'api-search', revision: 1, configuration, jobs: s.jobs(), viewer };
   assert.equal(api.available(), true); assert.equal(api.readiness().executionAvailable, false);
@@ -141,10 +142,10 @@ test('API heartbeat readiness queues without credentials and cannot enable provi
     configuration: { ...configuration, residualAi: { condition: 'A different unresolved condition.' } } });
   assert.equal(paused.continuation.state, 'paused'); assert.equal(paused.ai.status, 'dependency_unavailable');
   assert.equal(api.available(), false);
-  const brokenHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,
+  const brokenHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true,
     readOnlyProvider: true, availability: () => { throw new Error('heartbeat unavailable'); } });
   assert.equal(brokenHeartbeat.available(), false);
-  const workerCannotBorrowHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,
+  const workerCannotBorrowHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true,
     provider: { available: () => false }, availability: () => true });
   assert.equal(workerCannotBorrowHeartbeat.available(), false);
 });
@@ -153,12 +154,12 @@ test('API role prohibits execution even if a provider is accidentally injected a
   let executed = 0;
   const s = setup(t, { count: 1 });
   // The default keyless API provider creates and cleans its accounting schema.
-  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, now: s.time,
+  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, now: s.time,
     readOnlyProvider: true, availability: () => true });
   s.db.prepare('INSERT INTO demo_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('account', owner, START, 1, 100, 10, 4200, 0);
   s.db.prepare('INSERT INTO demo_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('project', 'project', START, 1, 100, 10, 4200, 0);
   s.db.prepare('INSERT INTO demo_jev_reservations VALUES(?,?,?,?,?,?,?,?,?)').run('reservation', owner, 'project', START, 100, 10, 4200, 'reserved', START);
-  const guarded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, now: s.time,
+  const guarded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, now: s.time,
     readOnlyProvider: true, availability: () => true,
     provider: { available: () => true, classify: async () => { executed++; return { decisions: [] }; } } });
   guarded.page({ ownerId: owner, searchId: 'guarded', revision: 1, configuration, jobs: s.jobs(), viewer });
@@ -174,9 +175,10 @@ test('cursors bind owner, revision, condition, access, import generation and ten
   const s = setup(t); const result = s.page(); const cursor = result.continuation.cursor;
   assert(!cursor.includes('synthetic')); assert.equal(cursor.length, 43);
   for (const changes of [{ revision: 2 }, { configuration: { ...configuration, residualAi: { condition: 'Another requirement' } } },
-    { viewer: { ...viewer, access: { kind: 'demo', fullAccess: false } } }, { generation: 'import-2' }]) {
+ { generation: 'import-2' }]) {
     assert.throws(() => s.page({ ...changes, cursor }), { code: 'stale_cursor', status: 409 });
   }
+  s.setAccess({...viewer.access,fullAccess:false});assert.throws(()=>s.page({cursor}),{code:'stale_cursor'});s.setAccess(viewer.access);
   assert.throws(() => s.page({ ownerId: 'other', cursor }), { code: 'forbidden' });
   assert.throws(() => s.page({ viewer: null, cursor }), { code: 'unauthenticated' });
   s.advance(600_000); assert.throws(() => s.page({ cursor }), { code: 'stale_cursor', status: 409 });
@@ -185,7 +187,8 @@ test('cursors bind owner, revision, condition, access, import generation and ten
 test('delivery rechecks eligible/primary membership and evidence before serializing', async (t) => {
   const s = setup(t, { count: 4 }); const result = s.page(); await s.run();
   s.setJobs([s.jobs()[1], s.jobs()[2], { ...s.jobs()[3], bodyText: 'Changed evidence. '.repeat(30) }]);
-  const end = s.page({ cursor: result.continuation.cursor, jobs: [s.jobs()[0], s.jobs()[2]] });
+  assert.throws(()=>s.page({cursor:result.continuation.cursor,jobs:[s.jobs()[0],s.jobs()[2]]}),{code:'stale_cursor'});
+  const end = s.page({ jobs: [s.jobs()[0], s.jobs()[2]] });
   assert.deepEqual(end.items.map((j) => j.id), [makeJob(1).id]);
 });
 
@@ -195,7 +198,7 @@ test('exact decisions deduplicate repeated searches but invalidate changed condi
   s.page({ searchId: 'search-3', configuration: { ...configuration, residualAi: { condition: 'A different condition' } } }); await s.run(); assert.equal(s.calls(), 2);
   s.setJobs(s.jobs().map((j) => ({ ...j, bodyText: j.bodyText + ' New evidence.' })));
   s.page({ searchId: 'search-4' }); await s.run(); assert.equal(s.calls(), 3);
-  const upgraded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, provider: s.provider,
+  const upgraded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, provider: s.provider,
     now: s.time, config: { matching: { classifierVersion: 'test-next-classifier' } } });
   assert.equal(upgraded.page({ ownerId: owner, searchId: 'search-4', revision: 1, configuration, jobs: s.jobs(), viewer }).items.length, 0);
 });

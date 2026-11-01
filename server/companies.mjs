@@ -64,7 +64,7 @@ function resolutionData(wrapper) {
   if (!['candidate', 'clarification', 'unresolved'].includes(value.status) || typeof wrapper.evidenceVerified !== 'boolean') throw problem('invalid_input');
   if (value.status === 'candidate') {
     if (wrapper.evidenceVerified !== true || value.clarification !== null) throw problem('invalid_input');
-    const candidate={ id: randomUUID(), ...candidateData(value.candidate), coverage: { state: 'requested' } };
+    const candidate={ id: randomUUID(), companyId:null, ...candidateData(value.candidate), coverage: { state: 'requested' } };
     const provenance=wrapper.evidenceProvenance??[];
     if(!Array.isArray(provenance)||provenance.length>2)throw problem('invalid_input');
     for(const proof of provenance){exactKeys(proof,['url','finalUrl','status','bytes','sha256']);if(!candidate.evidenceUrls.includes(validateCompanyUrl(proof.url,{official:true}))||new URL(proof.url).origin!==new URL(validateCompanyUrl(proof.finalUrl,{official:true})).origin||proof.status!==200||!Number.isInteger(proof.bytes)||proof.bytes<1||proof.bytes>131072||typeof proof.sha256!=='string'||!/^[a-f0-9]{64}$/.test(proof.sha256))throw problem('invalid_input');}
@@ -97,11 +97,11 @@ function importedCandidate(company) {
   for (const evidence of company.evidence ?? []) {
     try { evidenceUrls.push(validateCompanyUrl(evidence.url)); } catch { /* Ignore unsupported imported links. */ }
   }
-  return { id: randomUUID(), name: text(company.name, 200), domain: root, websiteUrl,
-    evidenceUrls: [...new Set(evidenceUrls)].slice(0, 8), coverage: { state: 'imported_snapshot' } };
+  return { id: randomUUID(), companyId:company.id, name: text(company.name, 200), domain: root, websiteUrl,
+    evidenceUrls: [...new Set(evidenceUrls)].slice(0, 8), coverage: { state: company.coverage?.state??'imported_snapshot' } };
 }
 
-export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, afterPrivateTransaction, withPrivateTransaction, model = null, availability } = {}) {
+export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, afterPrivateTransaction, withPrivateTransaction, model = null, availability, readingPreferences } = {}) {
   if (!db || !feed?.companies || !tasks?.enqueue || (beforePrivateDelete != null && typeof beforePrivateDelete !== 'function')) throw new TypeError('Invalid company service configuration.');
   const maxPerOwner = config.maxCompanyRequestsPerOwner ?? 32;
   if (!Number.isSafeInteger(maxPerOwner) || maxPerOwner < 1 || maxPerOwner > 96) throw new TypeError('Invalid company request limit.');
@@ -126,6 +126,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
   const row = (ownerId, id) => db.prepare('SELECT * FROM demo_company_requests WHERE owner_id=? AND id=?').get(ownerId, id);
   function view(found) {
     return { id: found.id, input: found.input_text, scope: found.scope, status: found.status,
+      companyId:found.candidate_json?JSON.parse(found.candidate_json).companyId??null:null,
       candidate: found.candidate_json == null ? null : JSON.parse(found.candidate_json), previewRevision: found.preview_revision,
       clarification: found.clarification, taskId: found.task_id, createdAt: new Date(found.created_at).toISOString() };
   }
@@ -207,12 +208,23 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
           || !['candidate', 'accepted'].includes(found.status)) throw problem('preview_conflict', 409, 'This preview changed. Reload it and try again.');
       if (found.status === 'accepted') {
         if (found.accept_key !== idempotencyKey) throw problem('idempotency_conflict', 409, 'This preview was already accepted.');
+        // An exact retry of a preview accepted by an older server can establish
+        // its catalogue identity once. Existing explicit follow choices win.
+        if(!candidate.companyId&&feed.publishCompany){
+          candidate.companyId=feed.publishCompany(candidate);
+          db.prepare('UPDATE demo_company_requests SET candidate_json=? WHERE owner_id=? AND id=?').run(JSON.stringify(candidate),ownerId,id);
+          readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId);
+          return result(row(ownerId,id));
+        }
         return result(found);
       }
       const used = db.prepare('SELECT id FROM demo_company_requests WHERE owner_id=? AND accept_key=?').get(ownerId, idempotencyKey);
       if (used) throw problem('idempotency_conflict', 409, 'This request key was already used.');
-      db.prepare("UPDATE demo_company_requests SET status='accepted',accept_key=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
-        .run(idempotencyKey, ownerId, id, body.previewRevision);
+      if(feed.publishCompany)candidate.companyId=feed.publishCompany(candidate);
+      if(readingPreferences&&!candidate.companyId)throw problem('dependency_unavailable',503);
+      db.prepare("UPDATE demo_company_requests SET status='accepted',accept_key=?,candidate_json=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
+        .run(idempotencyKey,JSON.stringify(candidate),ownerId,id,body.previewRevision);
+      if(candidate.companyId)readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId);
       return result(row(ownerId, id));
     });
   }

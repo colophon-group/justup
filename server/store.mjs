@@ -4,6 +4,7 @@ import { lstatSync, chmodSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
+import { initializeCompanyIdentities,validateCompanyIdentities,recordCompanyIdentities } from './company-identities.mjs';
 
 export const SCHEMA_VERSION = 1;
 export const DAY_MS = 86_400_000;
@@ -127,6 +128,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
       verified_at INTEGER NOT NULL, active INTEGER NOT NULL CHECK(active IN (0,1)),
       reserved INTEGER NOT NULL CHECK(reserved IN (0,1))
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS job_source_identities_company ON job_source_identities(company_id);
     PRAGMA user_version = 1;
   `);
   // Retain source lifecycle independently from bounded bodies/metadata, including
@@ -139,6 +141,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     SELECT id,company_id,first_seen_at,verified_at,active,reserved FROM demo_jobs;
     UPDATE job_source_identities SET (verified_at,active,reserved)=(SELECT verified_at,active,reserved FROM demo_jobs WHERE id=job_source_identities.id)
       WHERE verified_at=0 AND EXISTS(SELECT 1 FROM demo_jobs WHERE id=job_source_identities.id);`);
+  initializeCompanyIdentities(db);
   function generation() {
     return db.prepare('SELECT * FROM demo_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   }
@@ -149,6 +152,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     const snapshotAt = timestamp(snapshot.snapshotAt), verifiedAt = timestamp(snapshot.verifiedAt);
     if (verifiedAt < snapshotAt || verifiedAt > Date.now() + 60_000) throw problem('invalid_import');
     const jobs = snapshot.jobs.map((r) => normalizedJob(r, snapshotAt, verifiedAt));
+    const companyIdentities=validateCompanyIdentities(snapshot.companyIdentities);
     const ids = new Set(jobs.map((j) => j.job.id));
     if (ids.size !== jobs.length) throw problem('invalid_import');
     const observations = (snapshot.observations ?? []).map((o) => {
@@ -180,6 +184,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
         rememberIdentity.run(job.id,job.companyId,first,observedAt);
         insert.run(job.id, job.companyId, first, observedAt, textHash, boundedJson(job, 16_384), bodyText);
       }
+      recordCompanyIdentities(db,companyIdentities,verifiedAt);
       const close = db.prepare(`UPDATE demo_jobs SET active=?,reserved=?,verified_at=?,closed_observed_at=? WHERE id=?`);
       const rememberObservation = db.prepare('UPDATE job_source_identities SET active=?,reserved=?,verified_at=? WHERE id=?');
       for (const o of observations) {
