@@ -74,3 +74,24 @@ test('preemption cannot resurrect Wire when cancellation invalidated its lease',
   }}});
   await runner.runOnce();assert.equal(tasks.get(wire.ownerId,wire.id).status,'cancelled');
 });
+test('cleanup failure after Wire lease expiry durably closes runner admission',async t=>{
+  const db=new DatabaseSync(':memory:');t.after(()=>db.close());let at=1000,halts=0,maintenance=0;
+  const tasks=createTasks({db,now:()=>at});
+  const wire=tasks.enqueue({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'week',payload:{}});
+  const runner=createRunner({tasks,leaseMs:1000,beforeClaim:()=>maintenance++,onHalt:()=>halts++,handlers:{hiring_wire:()=>{
+    at+=1001;throw Object.assign(Error('Unproven cleanup.'),{code:'cleanup_unproven'});
+  }}});t.after(()=>runner.stop());
+  assert.equal(await runner.runOnce(),true);assert.equal(halts,1);assert.equal(tasks.halted(),true);assert.equal(runner.ready(),false);
+  const foreground=tasks.enqueue({ownerId:'owner',kind:'search_intent',requestKey:'search',payload:{}});
+  const restarted=createTasks({db,now:()=>at});restarted.recover();
+  assert.equal(restarted.claim({workerId:'restart'}),null);
+  assert.equal(restarted.get(wire.ownerId,wire.id).status,'running');assert.equal(restarted.get('owner',foreground.id).status,'pending');
+  assert.equal(await runner.runOnce(),false);assert.equal(maintenance,1);
+});
+test('cleanup uncertainty keeps this runner unavailable when persisting the halt fails',async()=>{
+  const q=queue('hiring_wire');let halts=0;
+  q.tasks.haltWire=()=>{throw Error('Storage unavailable.');};
+  const runner=createRunner({tasks:q.tasks,onHalt:()=>halts++,handlers:{hiring_wire:()=>{throw Object.assign(Error('Cleanup unproven.'),{code:'cleanup_unproven'});}}});
+  await assert.rejects(runner.runOnce(),/Storage unavailable/);
+  assert.equal(halts,1);assert.equal(runner.ready(),false);assert.equal(await runner.runOnce(),false);assert.equal(q.claims,1);
+});

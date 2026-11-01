@@ -156,10 +156,10 @@ test('preempted weekly editorial awaits cleanup, publishes nothing, then resumes
   await runner.runOnce();assert.equal(published(api).state,'published');assert.equal(fake.cancels(),2);
   assert.equal(s.db.prepare("SELECT count(*) n FROM justup_tasks WHERE kind='hiring_wire'").get().n,1);
 });
-test('unproven native cleanup durably halts claim/recovery/scheduling across reopen and elapsed lease',async t=>{
+test('cleanup failure after lease expiry durably halts claim/recovery/scheduling across reopen and clock rollback',async t=>{
   const directory=mkdtempSync(join(tmpdir(),'wire-halt-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
   const path=join(directory,'halt.sqlite'),s=state(t,{path});let unready=0;
-  const fake=fakes({cancel:()=>{throw Object.assign(Error('fixed cleanup failure'),{code:'cleanup_unproven'});}});
+  const fake=fakes({cancel:()=>{s.setNow(AT+30_001);throw Object.assign(Error('fixed cleanup failure'),{code:'cleanup_unproven'});}});
   const {wire,api}=await composition(s,fake);
   const runner=createRunner({tasks:s.tasks,beforeClaim:wire.beforeClaim,onHalt:()=>unready++,handlers:{hiring_wire:wire.runTask}});
   t.after(()=>runner.stop());await runner.runOnce();
@@ -179,4 +179,22 @@ test('unproven native cleanup durably halts claim/recovery/scheduling across reo
   assert.equal(await next.runner.runOnce(),false);assert.equal(fake.calls(),1);
   assert.equal(restarted.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,2);
   assert.equal(restarted.db.prepare('SELECT count(*) n FROM hiring_wire_schedule').get().n,1);
+  restarted.setNow(AT-1000);restarted.tasks.recover();
+  assert.equal(next.runner.ready(),false);assert.equal(restarted.tasks.claim({workerId:'clock-rollback'}),null);
+  assert.deepEqual(next.wire.beforeClaim(),{state:'cleanup_unproven'});assert.equal(fake.calls(),1);
+});
+test('reopened expired Wire ownership seals a halt before readiness or a new weekly tick',async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'wire-expired-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  const path=join(directory,'queue.sqlite'),s=state(t,{path}),fake=fakes(),{wire}=await composition(s,fake);
+  wire.beforeClaim();const held=s.tasks.claim({workerId:'suspended',leaseMs:1000});
+  const foreground=s.tasks.enqueue({ownerId:'account',kind:'search_intent',requestKey:'foreground',payload:{}});
+  s.db.close();
+  const restarted=state(t,{path,at:AT+7*86_400_000}),next=await composition(restarted,fake);
+  assert.deepEqual(next.wire.beforeClaim(),{state:'cleanup_unproven'});
+  assert.equal(next.runner.ready(),false);restarted.tasks.recover();assert.equal(await next.runner.runOnce(),false);
+  assert.equal(restarted.tasks.claim({workerId:'restart'}),null);
+  assert.equal(restarted.tasks.get('__hiring_wire__',held.id).status,'running');
+  assert.equal(restarted.tasks.get('account',foreground.id).status,'pending');
+  assert.equal(restarted.db.prepare('SELECT count(*) n FROM hiring_wire_schedule').get().n,1);
+  assert.equal(fake.calls(),0);assert.equal(fake.reads(),0);
 });

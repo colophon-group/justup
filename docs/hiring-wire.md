@@ -21,8 +21,11 @@ integration contract](hiring-wire-integration.md) for exact queue-only configura
 restart behavior and priority. Wire is disabled by default, and enabling it does
 not qualify a native runtime or establish authoritative historical coverage.
 If native cancellation reports `cleanup_unproven`, a bounded singleton SQLite
-guard leaves the task held, stops all claims/recovery/scheduler actions across
-restart and marks runner readiness unavailable. Recovery requires a stopped runner,
+guard stops all claims/recovery/scheduler actions and marks runner readiness
+unavailable, even if that task's lease expired or was superseded. An expired
+running Wire lease also seals the guard and retains ownership because elapsed
+time cannot prove native cleanup. Restart or clock rollback cannot clear it.
+Recovery requires a stopped runner,
 reviewed native/broker idle and cleanup proof, then one reviewed transaction to
 terminate the held task and remove the guard. No public or automatic clear exists;
 ordinary stored-feed/account access remains independent of runner availability.

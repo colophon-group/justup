@@ -6,9 +6,9 @@ import { pathToFileURL } from 'node:url';
 
 export function createRunner({tasks,handlers,workerId=`runner-${randomUUID()}`,leaseMs=30_000,taskTimeoutMs=90_000,pollMs=1000,onMetric=()=>{},onTaskFinished=()=>{},beforeClaim=()=>{},onHalt=()=>{}}={}) {
   if(!tasks||!handlers||Object.values(handlers).some(h=>typeof h!=='function')||typeof beforeClaim!=='function'||typeof onHalt!=='function'||!Number.isInteger(leaseMs)||leaseMs<1000||leaseMs>300_000||!Number.isInteger(taskTimeoutMs)||taskTimeoutMs<1||taskTimeoutMs>120_000||!Number.isInteger(pollMs)||pollMs<10||pollMs>60_000) throw new TypeError('Invalid runner configuration.');
-  let busy=false,controller=null,haltHeartbeat=null;
+  let busy=false,controller=null,haltHeartbeat=null,cleanupHalted=false;
   async function runOnce({signal}={}) {
-    if(busy||signal?.aborted||tasks.halted?.())return false;
+    if(busy||cleanupHalted||signal?.aborted||tasks.halted?.())return false;
     busy=true;let task,timer,heartbeat,preemption,abort;
     try {
       const maintenance=beforeClaim();if(maintenance?.then)await maintenance;
@@ -36,11 +36,14 @@ export function createRunner({tasks,handlers,workerId=`runner-${randomUUID()}`,l
         if(task.kind==='hiring_wire') {
           try{await handling;}catch(cause){error=cause;}
           if(error?.code==='cleanup_unproven') {
+            // Keep this process closed even if the durable guard write fails.
+            // The private task identity, rather than a live lease, seals it.
+            cleanupHalted=true;
+            try{onHalt();}catch{}
             if(!tasks.haltWire?.(task.id,task.leaseToken))throw error;
             // Retain ownership while this process is alive. The durable guard
             // also prevents recovery after restart, independently of lease TTL.
             haltHeartbeat=heartbeat;heartbeat=null;
-            try{onHalt();}catch{}
             try{onMetric({kind:task.kind,code:'cleanup_unproven'});}catch{}
             return true;
           }
@@ -67,7 +70,7 @@ export function createRunner({tasks,handlers,workerId=`runner-${randomUUID()}`,l
     try{while(!signal?.aborted){const worked=await runOnce({signal});if(!worked)try{await delay(pollMs,undefined,{signal});}catch{break;}}}
     finally{clearInterval(haltHeartbeat);haltHeartbeat=null;}
   }
-  return {runOnce,run,stop:()=>{clearInterval(haltHeartbeat);haltHeartbeat=null;controller?.abort(Object.assign(new Error('Runner stopped.'),{code:'task_timeout'}));},ready:()=>!busy&&!tasks.halted?.(),workerId};
+  return {runOnce,run,stop:()=>{clearInterval(haltHeartbeat);haltHeartbeat=null;controller?.abort(Object.assign(new Error('Runner stopped.'),{code:'task_timeout'}));},ready:()=>!busy&&!cleanupHalted&&!tasks.halted?.(),workerId};
 }
 
 // CLI bootstrap is a fixed reviewed module. Operator JSON supplies bounded

@@ -19,12 +19,15 @@ is confirmed, using the same global lease and resource ceiling. The command does
 not establish authoritative coverage, qualify a model, activate automation or grant
 model access to this database.
 
-An unproven native cleanup creates a durable singleton queue halt: the held task
-stays running, readiness becomes unavailable, and claims, recovery and weekly ticks
-remain blocked across process restart or elapsed lease time. Do not use manual
+An unproven native cleanup creates a durable singleton queue halt even if its
+queue lease expired or was replaced. An expired running Wire lease also seals
+that halt because elapsed time cannot prove native cleanup. The guard preserves
+the existing task state, readiness becomes unavailable, and claims, recovery and weekly
+ticks remain blocked across restart or clock rollback. Do not use manual
 enqueueing to bypass it. Recovery requires stopping the runner, reviewed proof
 that the native invocation is gone and the broker is idle/clean, then one reviewed
-database transaction terminating that task and deleting the guard. There is no
+database transaction terminating that task and any superseding running Wire
+attempt, then deleting the guard. There is no
 public or automatic clear operation. See [the integration contract](../../docs/hiring-wire-integration.md)
 for protected configuration, recovery boundaries and verification limits.
 
