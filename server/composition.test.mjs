@@ -47,7 +47,10 @@ test('assembled core/auth/matching API consumes heartbeat, exposes real services
   // Cookie name is part of the core boundary, not a provider/session substitute.
   const coreSession=await demo.auth.session(account.token);assert.ok(coreSession.account.id);
   const call=(path,options={})=>fetch(endpoint+path,{...options,headers:{...headers,...options.headers}});
+  const publicCounts=()=>['justup_visitors','justup_workspaces','demo_tasks'].map(table=>demo.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n);
+  const beforePublic=publicCounts();
   const publicWire=await fetch(`${endpoint}/hiring-wire`);assert.equal(publicWire.status,200);assert.deepEqual(await publicWire.json(),{state:'unavailable',edition:null});
+  assert.deepEqual(publicCounts(),beforePublic);assert.equal(publicWire.headers.getSetCookie().some(cookie=>cookie.includes('justup_visitor=')),false);
   const response=await call('/session');let session=await response.json();
   assert.ok(session.user);assert.equal(session.capabilities.search,true);assert.equal(JSON.stringify(session).includes('must-never'),false);
   assert.deepEqual(await (await call('/searches')).json(),{items:[]});assert.deepEqual(await (await call('/company-requests')).json(),{items:[]});
