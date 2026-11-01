@@ -53,7 +53,7 @@ export async function createRunnerDependencies(){
   const store=openStore(config.dbPath,{sharedState:config.sharedState===true});let heartbeatTimer,cleanupTimer;
   try{
     const feed=createFeed({db:store.db,verificationTtlMs:config.verificationTtlMs}),tasks=createTasks({db:store.db});
-    const identity=createVisitorIdentity({db:store.db,accessForAccount:createAccessReader({db:store.db})});
+    const identity=createVisitorIdentity({db:store.db,config:{dbPath:config.dbPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},accessForAccount:createAccessReader({db:store.db})});
     const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
     const modelConfig=config.model??{},executor=isAbsolute(modelConfig.socketPath??'')?createBrokerExecutor({socketPath:modelConfig.socketPath}):undefined;
     const model=createCodexModel({config:modelConfig,...(executor?{execute:executor}:{})});

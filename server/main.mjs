@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { openStore } from './store.mjs';
 import { createFeed } from './feed.mjs';
 import { createTasks } from './tasks.mjs';
-import { createHandler } from './http.mjs';
+import { createHandler,policyState } from './http.mjs';
 import { runtimeEnv, booleanEnv, integerEnv } from './config.mjs';
 
 // Hold a durable pending marker across the SQL transaction. Backup/restore must
@@ -88,9 +88,10 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
     const tasks = createTasks({ db: store.db, now });
     const deletion = createDeletionBarrier({ generationPath: config.privateGenerationPath, backupDir: config.backupDir, dbPath: path, db: store.db });
     const withPrivateTransaction = (work) => { try { return store.transaction(work); } finally { deletion.afterPrivateTransaction(); } };
-    let auth;
+    let auth,maintenanceReady=false;
     const accessForAccount=id=>auth?.accessForAccount?.(id)??null;
-    const services = serviceFactories.flatMap((factory) => factory({ db: store.db, feed, tasks, config, now, accessForAccount, beforePrivateDelete: deletion.beforePrivateDelete, afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction }));
+    const visitorAvailability=()=>maintenanceReady&&policyState(config).reviewed&&deletion.ready();
+    const services = serviceFactories.flatMap((factory) => factory({ db: store.db, feed, tasks, config, now, accessForAccount,visitorAvailability,beforePrivateDelete: deletion.beforePrivateDelete, afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction }));
     if (services.some((s) => !s || typeof s.then === 'function')) throw new TypeError('Service factories must synchronously return services.');
     const deleteAccountData = (ownerId) => {
       deletion.beforePrivateDelete();
@@ -102,7 +103,6 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
     };
     const createAuth = authFactory ?? (await import('./auth.mjs')).createAuth;
     auth = createAuth({ db: store.db, config, now, deleteAccountData });
-    let maintenanceReady = false;
     function maintainAuth() {
       try {
         if (typeof auth.cleanup !== 'function') return;
@@ -111,11 +111,12 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
         for(const service of services)service.cleanup?.();
         maintenanceReady = true;
       } catch { maintenanceReady = false; }
-      finally { try { deletion.afterPrivateTransaction(); } catch { maintenanceReady = false; } }
+      finally { try { deletion.afterPrivateTransaction(); } catch { maintenanceReady = false; }for(const service of services)try{service.refreshAvailability?.();}catch{maintenanceReady=false;} }
     }
     maintainAuth();
     const maintenanceTimer = setInterval(maintainAuth, 60_000); maintenanceTimer.unref();
     const handler = createHandler({ auth, feed, tasks, db: store.db, services,
+      policyConfig:config,
       config: { ...config, deletionReady: deletion.ready, authMaintenanceReady: () => maintenanceReady },
       afterPrivateTransaction: deletion.afterPrivateTransaction, now, logger });
     const server = createServer({ requestTimeout: 15_000, headersTimeout: 10_000, maxHeaderSize: 16_384 }, handler);
