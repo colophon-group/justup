@@ -6,7 +6,7 @@ labels: ""
 assignees: ""
 ---
 
-<!-- Title: Area: desired outcome. Choose one type label: bug, enhancement, maintenance or documentation. Use a unique slug of short lowercase words joined by hyphens; keep it stable. Search open and closed issues before filing. Use plain words and define any necessary project term. -->
+<!-- Title: Area: desired outcome. Choose one type label: bug, enhancement, maintenance or documentation. Add human-decision only when an explicit operator choice remains, and remove it after the choice is recorded. Use a unique slug of short lowercase words joined by hyphens; keep it stable. Search open and closed issues before filing. Use plain words and define any necessary project term. -->
 
 Slug: replace-with-unique-words
 
