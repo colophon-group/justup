@@ -13,6 +13,7 @@ import { createIntentService } from './intent.mjs';
 import { createMatchingService } from './matching.mjs';
 import { createVisitorIdentity, createVisitorService } from './visitor.mjs';
 import { createLiveResultsService } from './live-results.mjs';
+import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 
 const DAY = 86_400_000, AT = Date.parse('2026-11-01T12:00:00Z'), ORIGIN = 'https://preview.example.org';
 const FILTERS = ['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'];
@@ -27,7 +28,8 @@ function job(id, first = AT - 3 * DAY, title = 'Engineer') {
       bodyBytes: Buffer.byteLength(bodyText), normalizationVersion: 1, truncated: false, aiEligible: true } };
 }
 async function setup(t, options = {}) {
-  const { verificationTtlMs, persistent = false, policyLocales, policyAssetProof, ...transportOptions } = options;
+  const { verificationTtlMs, persistent = false, policyLocales,
+    policyAssetProof=syntheticPolicyProof({origin:ORIGIN,sourceCommit:'a'.repeat(40),version:'fixture'}),...transportOptions } = options;
   const directory = persistent ? mkdtempSync(join(tmpdir(), 'justup-live-results-')) : null;
   const storage = directory ? { dbPath: join(directory, 'store.sqlite'), privateGenerationPath: join(directory, 'private-generation'), backupDir: join(directory, 'backups') } : {};
   if (directory) { mkdirSync(storage.backupDir, { mode: 0o700 }); writeFileSync(storage.privateGenerationPath, `${randomUUID()}\n`, { mode: 0o600 }); }

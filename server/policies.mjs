@@ -43,7 +43,7 @@ export function policyState(config={},locale='en') {
   const fallback=config.policyFallbacks?.[locale];
   const target=local?.reviewed===true?locale:fallback??locale;
   const entry=target===locale?local:config.policyLocales?.[target];
-  const reviewed=config.policiesReviewed===true&&entry?.reviewed===true&&(locale==='en'&&target==='en'||assetBinding(config,target,entry)!==null);
+  const reviewed=config.policiesReviewed===true&&entry?.reviewed===true&&assetBinding(config,target,entry)!==null;
   const suffix=locale==='en'?'':`.${locale}`,origin=config.allowedOrigin??'https://preview.justup.work';
   return {privacyUrl:entry?.privacyUrl??`${origin}/privacy${suffix}.html`,usageUrl:entry?.usageUrl??`${origin}/usage${suffix}.html`,version:entry?.version??'product-draft-5',reviewed,
     locale,reviewedLocale:reviewed?target:null,fallback:reviewed&&target!==locale};

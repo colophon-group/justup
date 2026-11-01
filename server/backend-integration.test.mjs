@@ -8,6 +8,7 @@ import {join} from 'node:path';
 import {createConfiguredApplication} from './main.mjs';
 import {createIntentService} from './intent.mjs';
 import {createCompanyProgress} from './company-progress.mjs';
+import {syntheticPolicyProof} from './policy-test-fixtures.mjs';
 
 const AT=Date.parse('2026-11-01T12:00:00Z'),DAY=86_400_000,ORIGIN='http://127.0.0.1:18787';
 const FILTERS=['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'];
@@ -16,7 +17,7 @@ async function fixture(t){
   writeFileSync(statusPath,JSON.stringify({schemaVersion:1,identity:'fixture-queue',sourceCommit,buildIdentity,ready:true,updatedAt:new Date(AT).toISOString(),capabilities:{search:true,companyRequests:true,aiMatching:false}}),{mode:0o640});
   const policy={privacyUrl:ORIGIN+'/privacy.html',usageUrl:ORIGIN+'/usage.html',version:'synthetic-reviewed',reviewed:true};
   const app=await createConfiguredApplication({config:{dbPath:':memory:',servicesEnabled:true,allowedOrigin:ORIGIN,allowInsecureLocalhost:true,requiresInvitation:false,
-    sourceCommit,buildIdentity,runnerStatusPath:statusPath,policiesReviewed:true,policyLocales:{en:policy},liveResults:{pollMs:10,heartbeatMs:30}},now:()=>AT});
+    sourceCommit,buildIdentity,runnerStatusPath:statusPath,policiesReviewed:true,policyLocales:{en:policy},policyAssetProof:syntheticPolicyProof({origin:ORIGIN,sourceCommit,version:policy.version}),liveResults:{pollMs:10,heartbeatMs:30}},now:()=>AT});
   await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));
   t.after(async()=>{app.server.closeAllConnections();await app.close();rmSync(dir,{recursive:true,force:true});});
   const base=`http://127.0.0.1:${app.server.address().port}/api/v1`,db=app.store.db;
