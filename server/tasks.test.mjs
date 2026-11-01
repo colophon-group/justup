@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync,rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openStore } from './store.mjs';
 import { createTasks } from './tasks.mjs';
 function setup(t, config = {}) {
@@ -65,9 +68,11 @@ test('private Wire work reserves its system owner and cannot produce a public ta
   assert.throws(()=>tasks.publicView(wire),{status:404});
 });
 test('all foreground kinds claim before older Wire work with one global lease', t => {
-  const {tasks,db,advance}=setup(t),other=createTasks({db,now:()=>100_001});
-  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'}));advance(1);
-  const foreground=tasks.enqueue(input({kind:'future_foreground'}));
+  const directory=mkdtempSync(join(tmpdir(),'task-priority-')),path=join(directory,'queue.sqlite');
+  const store=openStore(path),rival=openStore(path);t.after(()=>{rival.close();store.close();rmSync(directory,{recursive:true,force:true});});
+  const tasks=createTasks({db:store.db,now:()=>100_000}),other=createTasks({db:rival.db,now:()=>100_001});
+  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'}));
+  const foreground=other.enqueue(input({kind:'future_foreground'}));
   assert.equal(tasks.hasForeground(),true);
   const claimed=tasks.claim({workerId:'worker'});
   assert.equal(claimed.id,foreground.id);assert.equal(other.claim({workerId:'racing-worker'}),null);
