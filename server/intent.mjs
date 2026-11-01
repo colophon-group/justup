@@ -142,7 +142,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     CREATE TABLE IF NOT EXISTS demo_search_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,position INTEGER NOT NULL,created_at INTEGER NOT NULL) STRICT;
     CREATE TABLE IF NOT EXISTS demo_search_delegate_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,delegate_cursor TEXT,created_at INTEGER NOT NULL) STRICT;`);
   const ownerOf=ctx=>ctx.viewer?.visitor?.id??ctx.accountId;
-  const authority=owner=>typeof ownerAuthority==='function'?ownerAuthority(owner):null;
+  const authority=(owner,cleanup=false)=>typeof ownerAuthority==='function'?ownerAuthority(owner,{allowUnavailable:cleanup}):null;
   const row=(owner,id)=>db.prepare('SELECT * FROM demo_searches WHERE owner_id=? AND id=?').get(owner,id);
   const executionAvailable=()=>typeof model?.interpretIntent==='function'&&(typeof model.available!=='function'||model.available('search_intent'));
   const available=()=>typeof availability==='function'?availability()===true:executionAvailable();
@@ -267,7 +267,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
 
   async function route(ctx) {
     if(!/^\/searches(?:\/|$)/.test(ctx.path)) return null;
-    if(!ownerOf(ctx)||!ctx.viewer||!authority(ownerOf(ctx))) throw err('unauthenticated',401,'Sign in to continue.');
+    if(!ownerOf(ctx)||!ctx.viewer||!authority(ownerOf(ctx),ctx.method==='DELETE')) throw err('unauthenticated',401,'Sign in to continue.');
     const id=ctx.path.split('/')[2],r=id?row(ownerOf(ctx),id):null;
     if(id&&!r) throw err('not_found',404,'Not found.');
     if(ctx.method==='GET'&&ctx.path==='/searches') return {status:200,body:{items:db.prepare('SELECT * FROM demo_searches WHERE owner_id=? ORDER BY created_at,id').all(ownerOf(ctx)).map(publicSearch)}};
@@ -331,5 +331,6 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     db.prepare('UPDATE demo_search_proposals SET owner_id=? WHERE owner_id=?').run(to,from);
     for(const table of ['demo_search_cursors','demo_search_delegate_cursors','demo_search_submissions'])db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(from);
   }
-  return {transferOwner,capabilities:()=>({search:available()}),compilerCapabilities:catalogueCapabilities,route,taskResult,deleteAccountData,runTask};
+  function admitVisitorCreation(body){bodyKeys(body,['query','requestKey']);text(body.query);key(body.requestKey);if(!available())throw err('dependency_unavailable',503);}
+  return {transferOwner,admitVisitorCreation,capabilities:()=>({search:available()}),compilerCapabilities:catalogueCapabilities,route,taskResult,deleteAccountData,runTask};
 }
