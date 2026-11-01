@@ -59,11 +59,13 @@ export function createAccessReader({ db, now = Date.now } = {}) {
   const freePeriod = tableExists(db, 'access_free_periods') ? db.prepare('SELECT kind, ends_at FROM access_free_periods WHERE account_id=?') : null;
   const subscriptions = tableExists(db, 'access_subscriptions')
     ? db.prepare('SELECT status, paid_through_at, reconcile_pending FROM access_subscriptions WHERE account_id=? ORDER BY paid_through_at DESC') : null;
+  const billingClosure=tableExists(db,'justup_billing_accounts')?db.prepare('SELECT closing_revision FROM justup_billing_accounts WHERE account_id=?'):null;
 
   return function accessForAccount(accountId) {
     if (typeof accountId !== 'string' || !accountId || !account) return null;
     const at = now(), owner = account.get(accountId);
     if (!owner || !validTime(at) || (owner.account_expires_at != null && owner.account_expires_at <= at)) return null;
+    if(billingClosure?.get(accountId)?.closing_revision>0)return limited('pending','Account deletion is waiting for billing termination.');
     const ceiling = owner.account_expires_at ?? Infinity;
     const identityRow = identity?.get(accountId) ?? null;
     const trial = freePeriod?.get(accountId) ?? null;
@@ -207,7 +209,8 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
   async function applyBillingEvent(rawEvent) {
     if (!billingEventVerifier) throw failure('billing_unavailable', 503, 'Billing is unavailable.');
     const event = await billingEventVerifier(rawEvent);
-    if (!event || typeof event.accountId !== 'string' || typeof event.reconcile !== 'function') {
+    if (!event || typeof event.accountId !== 'string' || typeof event.reconcile !== 'function'
+        || event.commit !== undefined && typeof event.commit !== 'function') {
       throw failure('invalid_input', 400, 'Invalid verified billing event.');
     }
     const eventHash = opaqueHash('billing-event', event.eventId);
@@ -260,6 +263,9 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
       if (!current?.reconcile_pending || current.state_version !== reservation.version) {
         throw failure('billing_reconcile_required', 409, 'Billing state changed; retry reconciliation.');
       }
+      // A trusted provider adapter may atomically fence closure and preserve its
+      // private reference mapping alongside the authoritative entitlement write.
+      if(event.commit!==undefined&&event.commit()!==true)throw failure('billing_reconcile_required',409,'Billing state changed; retry reconciliation.');
       updateSubscription.run(snapshot.status, snapshot.plan ?? null, snapshot.paidThroughAt ?? null, subscriptionHash);
       insertBillingEvent.run(eventHash, canonicalHash, event.accountId, subscriptionHash, reservation.version, now());
       try{onAccessTransition({ownerId:event.accountId,event:'subscription_transition',key:eventHash,viewer:{access:accessForAccount(event.accountId)},outcome:snapshot.status});}catch{}

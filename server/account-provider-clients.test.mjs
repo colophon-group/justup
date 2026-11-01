@@ -70,3 +70,30 @@ test('Stripe test client pins API version and sandbox account before resource ac
   const wrong=createStripeTestClient({apiKey:'rk_test_synthetic',accountId:'acct_justuptest',fetchImpl:async()=>new Response('{"id":"acct_other","object":"account"}',{status:200})});
   await assert.rejects(wrong.retrieveSubscription('sub_test'),{code:'provider_account_mismatch'});
 });
+
+test('Stripe mutations preserve stable keys and fixed form fields while invoice evidence requests payments',async()=>{
+  const requests=[],reference='b'.repeat(43),client=createStripeTestClient({apiKey:'rk_test_Synthetic',accountId:'acct_Sandbox',fetchImpl:async(url,options)=>{
+    requests.push({url,options});let result;
+    if(url.endsWith('/account'))result={id:'acct_Sandbox',object:'account'};
+    else if(url.endsWith('/customers'))result={id:'cus_Owner',object:'customer',livemode:false,metadata:{justup_reference:reference}};
+    else if(url.includes('/invoices/'))result={id:'in_Owner',object:'invoice',livemode:false};
+    else if(url.endsWith('/subscriptions/sub_Owner'))result={id:'sub_Owner',object:'subscription',livemode:false,status:'canceled'};
+    else if(url.includes('/subscriptions?'))result={object:'list',has_more:false,data:[]};
+    else throw new Error('Unexpected synthetic destination');
+    return new Response(JSON.stringify(result),{status:200});
+  }});
+  const key='justup/synthetic-operation/customer';
+  await client.createCustomer(reference,{idempotencyKey:key});
+  await client.createCustomer(reference,{idempotencyKey:key});
+  const writes=requests.filter(value=>value.options.method==='POST');
+  assert.equal(writes.length,2);assert.deepEqual(writes.map(value=>value.options.headers['Idempotency-Key']),[key,key]);
+  assert.deepEqual([...new URLSearchParams(writes[0].options.body)],[[ 'metadata[justup_reference]',reference]]);
+  await client.retrieveInvoice('in_Owner');assert.equal(requests.at(-1).url,'https://api.stripe.com/v1/invoices/in_Owner?expand%5B%5D=payments');
+  await client.cancelSubscription('sub_Owner',{idempotencyKey:'justup/synthetic-operation/cancel'});
+  assert.equal(requests.at(-1).options.method,'DELETE');assert.equal(requests.at(-1).options.body,'invoice_now=false&prorate=false');
+  await client.listSubscriptions('cus_Owner');assert.equal(requests.at(-1).url,'https://api.stripe.com/v1/subscriptions?customer=cus_Owner&status=all&limit=32');
+  const before=requests.length;
+  await assert.rejects(client.retrieveInvoice('in_../Other'),{code:'invalid_input'});assert.equal(requests.length,before);
+  const controller=new AbortController();controller.abort();
+  await assert.rejects(client.retrieveInvoice('in_Owner',{signal:controller.signal}));assert.equal(requests.length,before);
+});
