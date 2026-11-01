@@ -14,6 +14,9 @@ import { useRoute, pageHref, navigate } from "./useRoute.ts";
 import type { PublicBootstrap } from "../public/bootstrap.ts";
 import { coverageDescription } from "../shared/coverage.ts";
 import { HiringWire } from "../features/news/HiringWire.tsx";
+import { DialogSuspension } from '../shared/Dialog.tsx';
+import { sessionOwner } from '../api/sessionOwner.ts';
+import { confirmsCredentialRecovery, expiredSessionSnapshot, keepsOwnedVisitorEditor, nextSessionDeadline, openSessionSignals, sessionDeadlineRemaining } from './sessionCoherence.ts';
 
 export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap | undefined }) {
   const { t, locale, explicitRequestLocale, notice: localizeNotice } = useInterfaceLocale();
@@ -21,8 +24,11 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
   useEffect(() => setInteractive(true), []);
   const expiryHandler = useRef<() => void>(() => {});
   const visitorExpiryHandler = useRef<() => void>(() => {});
+  const authenticationChanged = useRef<() => void>(() => {});
+  const ownAuthentication = useRef(false);
+  const signalBus = useRef<ReturnType<typeof openSessionSignals> | null>(null);
   const [client] = useState(
-    () => new ApiClient({ onSessionExpired: () => expiryHandler.current(), onVisitorExpired: () => visitorExpiryHandler.current() }),
+    () => new ApiClient({ onSessionExpired: () => expiryHandler.current(), onVisitorExpired: () => visitorExpiryHandler.current(), onAuthenticationChanged: () => authenticationChanged.current() }),
   );
   useLayoutEffect(() => {
     client.setExplicitRequestLocale(explicitRequestLocale);
@@ -35,6 +41,11 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
     [connecting, setConnecting] = useState(true),
     [epoch, setEpoch] = useState(0),
     [searchGeneration, setSearchGeneration] = useState(0);
+  const [quarantined, setQuarantined] = useState(false);
+  const [sessionStartedAt, setSessionStartedAt] = useState(0);
+  const heldFocus = useRef<{ element: HTMLElement | null; x: number; y: number; selection: [number | null, number | null] | null } | null>(null);
+  const consumedDeadline = useRef<string | null>(null);
+  const ownershipUncertain = useRef(false);
   const [companyPrefill, setCompanyPrefill] =
     useState<CompanyRequestPrefill | null>(null);
   const consumePrefill = useCallback(() => setCompanyPrefill(null), []);
@@ -60,6 +71,9 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
     setDialog("sign-in");
   }, []);
   const clearPrivate = useCallback(() => {
+    heldFocus.current = null;
+    ownershipUncertain.current = false;
+    setQuarantined(false);
     client.setSession(null);
     sessionRef.current = null;
     setSession(null);
@@ -83,48 +97,110 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
     setConnecting(false);
     setNotice("Your visitor search session expired. Reconnect to start a new search.");
   };
-  const refreshSession = useCallback(async (expectedReclamation = false) => {
+  const refreshSession = useCallback(async (expectedReclamation = false, recoveryUsername?: string) => {
     const generation = ++requestGeneration.current;
     sessionRequest.current?.abort();
+    const previous = sessionRef.current;
+    const keepVisitorEditor = keepsOwnedVisitorEditor(previous, expectedReclamation, ownershipUncertain.current);
+    if (previous && !keepVisitorEditor) ownershipUncertain.current = true;
+    const localAuthentication = ownAuthentication.current;
+    ownAuthentication.current = false;
+    if (previous && !keepVisitorEditor && !heldFocus.current) {
+      const element = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      heldFocus.current = { element, x: scrollX, y: scrollY,
+        selection: element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement ? [element.selectionStart, element.selectionEnd] : null };
+    }
+    client.suspendSession();
+    setQuarantined(Boolean(previous) && !keepVisitorEditor);
     const controller = new AbortController();
     sessionRequest.current = controller;
+    const startedAt = Date.now();
     setConnecting(true);
-    setNotice("Connecting to the edition…");
+    if (!previous) setNotice("Connecting to the edition…");
     try {
       const next = await client.getSession(controller.signal);
       if (generation !== requestGeneration.current || controller.signal.aborted)
         return;
-      if (sessionRef.current && !sessionRef.current.user && next.user) {
+      if (expiredSessionSnapshot(next, startedAt)) throw new Error("Your session expired. Reconnect before signing in again.");
+      const changedOwner = sessionOwner(previous) !== sessionOwner(next);
+      // A retired owned visitor intentionally receives a new unallocated hint
+      // and CSRF seed. Preserve that local editor only for this owned renewal.
+      const reclaimedVisitor = keepVisitorEditor && previous && !previous.user && !next.user && next.visitor === null;
+      const sameGuestBootstrap = previous && !previous.user && !next.user && !previous.visitor && next.visitor && previous.csrfToken === next.csrfToken;
+      const recoveredAuthentication = confirmsCredentialRecovery(next, recoveryUsername, previous);
+      if (previous && !previous.user && next.user && (localAuthentication || recoveredAuthentication)) {
+        heldFocus.current = null;
         // Search handoff must reload the merged server workspace, while a
         // company lead prepared by this visitor remains in its own editor.
         setSearchGeneration((value) => value + 1);
         setDialog(null);
-      } else if (
-        sessionRef.current &&
-        (sessionRef.current.user?.id !== next.user?.id
-          || (!next.user && sessionRef.current.visitor && sessionRef.current.visitor.expiresAt !== next.visitor?.expiresAt
-            && !(expectedReclamation && next.visitor === null)))
-      ) {
+      } else if (previous && changedOwner && !reclaimedVisitor && !sameGuestBootstrap) {
+        heldFocus.current = null;
         setEpoch((value) => value + 1);
         setCompanyPrefill(null);
         setDialog(null);
       }
       sessionRef.current = next;
-      client.setSession(next);
+      client.setSession(next, Boolean(reclaimedVisitor || sameGuestBootstrap));
       setSession(next);
+      setSessionStartedAt(startedAt);
+      setQuarantined(false);
+      ownershipUncertain.current = false;
       setNotice("");
+      if (recoveredAuthentication) signalBus.current?.notify();
     } catch (error) {
       if (generation === requestGeneration.current && !isAbortError(error))
         setNotice(errorText(error));
     } finally {
-      if (generation === requestGeneration.current) setConnecting(false);
+      if (generation === requestGeneration.current) { setConnecting(false); sessionRequest.current = null; }
     }
   }, [client]);
+  const recoverAuthentication = useCallback((username: string) => refreshSession(false, username), [refreshSession]);
+  authenticationChanged.current = () => { ownAuthentication.current = true; signalBus.current?.notify(); };
+  useLayoutEffect(() => {
+    if (quarantined || !heldFocus.current) return;
+    const held = heldFocus.current, generation = requestGeneration.current;
+    heldFocus.current = null;
+    if (generation !== requestGeneration.current) return;
+    if (held.element?.isConnected) {
+      held.element.focus({ preventScroll: true });
+      if (held.selection && (held.element instanceof HTMLTextAreaElement || held.element instanceof HTMLInputElement)
+        && held.selection[0] !== null && held.selection[1] !== null) held.element.setSelectionRange(...held.selection as [number, number]);
+    }
+    window.scrollTo({ left: held.x, top: held.y, behavior: 'instant' });
+  }, [quarantined, session]);
+  useEffect(() => {
+    let queued = false;
+    const resume = () => {
+      if (document.visibilityState === 'hidden' || queued || sessionRequest.current) return;
+      queued = true;
+      queueMicrotask(() => { queued = false; if (!sessionRequest.current && document.visibilityState !== 'hidden') void refreshSession(); });
+    };
+    const bus = openSessionSignals(() => { void refreshSession(); });
+    signalBus.current = bus;
+    window.addEventListener('pageshow', resume);
+    document.addEventListener('visibilitychange', resume);
+    return () => { bus.close(); signalBus.current = null; window.removeEventListener('pageshow', resume); document.removeEventListener('visibilitychange', resume); };
+  }, [refreshSession]);
+  useEffect(() => {
+    if (!session || quarantined) return;
+    const delay = nextSessionDeadline(session, sessionStartedAt, Date.now());
+    if (delay === null) return;
+    const key = JSON.stringify([sessionOwner(session), session.user ? session.expiresAt : session.visitor?.expiresAt, session.access.fullAccess ? session.access.until : null]);
+    if (consumedDeadline.current === key) return;
+    const timer = setTimeout(() => {
+      if ((sessionDeadlineRemaining(session, sessionStartedAt, Date.now()) ?? Infinity) <= 0) consumedDeadline.current = key;
+      void refreshSession();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [session, sessionStartedAt, quarantined, refreshSession]);
   const rebootstrapVisitor = useCallback(async () => {
     const previous = sessionRef.current;
+    const generation = requestGeneration.current + 1;
     await refreshSession(true);
     const next = sessionRef.current;
-    if (!next || next === previous || next.user || !next.capabilities.visitorSearch
+    if (requestGeneration.current !== generation || !next || next === previous || next.user || !next.capabilities.visitorSearch
+      || next.visitor !== null && previous?.csrfToken !== next.csrfToken
       || previous?.visitor && next.visitor && previous.visitor.expiresAt !== next.visitor.expiresAt)
       throw new Error("Reconnect the saved workspace before continuing.");
   }, [refreshSession]);
@@ -175,7 +251,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
   }, [locale, explicitRequestLocale, refreshSession]);
   const coverage = session?.coverage ?? publicPage?.coverage;
   return (
-    <>
+    <DialogSuspension.Provider value={quarantined}>
       <a
         className="skip"
         href="#main"
@@ -267,6 +343,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
               >{t("Reconnect")}</button>
             ) : null}
           </div>
+          <div id="session-private-surfaces" style={{ visibility: quarantined ? 'hidden' : undefined }} inert={quarantined || undefined} aria-busy={quarantined}>
           {interactive || route.page === "jobs" ? <SearchWorkspace
             key={`search-${epoch}-${searchGeneration}`}
             client={client}
@@ -312,6 +389,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
               <a className="button dark" href={pageHref("jobs", locale)}>{t("Back to search ↗")}</a>
             </section>
           ) : null}
+          </div>
         </main>
         <footer className="policy-footer">
           {coverage ? <p id="coverage-disclosure">
@@ -331,6 +409,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
         dialog={dialog}
         onDialogChange={setDialog}
         onSessionRefresh={refreshSession}
+        onAuthenticationRecovery={recoverAuthentication}
         onSignedOut={signedOut}
         reducedMotion={reducedMotion}
         onReducedMotionChange={setReducedMotion}
@@ -353,6 +432,6 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
       >
         <span aria-hidden="true">↑</span>
       </button>
-    </>
+    </DialogSuspension.Provider>
   );
 }

@@ -6,13 +6,14 @@ import { createEmailVerificationRunner,emailSessionHash,validateEmailVerificatio
 import { mkdtempSync,mkdirSync,writeFileSync,readFileSync,readdirSync,rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 
 const PASSWORD='a sufficiently long password';
 async function fixture(t,{provider={},send,storage={}}={}) {
   let at=Date.parse('2026-11-01T15:00:00.000Z');
   const now=()=>at,config={dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'b'.repeat(64),csrfSecret:'c'.repeat(32),
     allowedOrigin:'https://preview.justup.work',privacyUrl:'https://preview.justup.work/privacy.html',usageUrl:'https://preview.justup.work/usage.html',
-    policiesReviewed:true,policyVersion:'test-v1',requiresInvitation:false,emailVerificationEnabled:true,
+    policiesReviewed:true,policyVersion:'test-v1',policyAssetProof:syntheticPolicyProof({origin:'https://preview.justup.work',sourceCommit:'a'.repeat(40),version:'test-v1'}),requiresInvitation:false,emailVerificationEnabled:true,
     readiness:()=>({capabilities:{emailVerification:true}}),...storage};
   const app=await createApplication({config,now});t.after(()=>app.close());
   const api=app.services.find(service=>service.emailVerification),sent=[];
@@ -133,7 +134,7 @@ test('recipient scrub rotates the real deletion generation and removes retained 
 test('HTTP exposes original challenge locale after language changes without bypassing its current policy',async t=>{
   const origin='https://preview.justup.work',f=await fixture(t,{storage:{
     policyLocales:{de:{privacyUrl:`${origin}/privacy.de.html`,usageUrl:`${origin}/usage.de.html`,version:'test-v1',reviewed:true}},
-    policyAssetProof:{origin,sourceCommit:'a'.repeat(40),assetsSha256:'d'.repeat(64),locales:{de:{version:'test-v1',privacySha256:'e'.repeat(64),usageSha256:'f'.repeat(64)}}},
+    policyAssetProof:syntheticPolicyProof({origin,sourceCommit:'a'.repeat(40),version:'test-v1',locales:['en','de']}),
   }}),owner=await f.account();
   const initial=await f.api.handleVerification(f.ctx(owner,undefined,'/account/verification','GET'));
   assert.equal(initial.body.verification.challengeLocale,null);

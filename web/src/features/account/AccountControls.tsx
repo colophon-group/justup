@@ -6,7 +6,7 @@ import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { type ApiClient, ApiError, errorText, isAbortError } from '../../api/client';
 import type { Session } from '../../api/types';
-import { Dialog } from '../../shared/Dialog';
+import { Dialog, useDialogSuspended } from '../../shared/Dialog';
 
 export type AccountDialog = 'settings' | 'sign-in' | 'delete-account' | null;
 export interface AccountControlsProps {
@@ -16,14 +16,16 @@ export interface AccountControlsProps {
   dialog: AccountDialog;
   onDialogChange: (dialog: AccountDialog) => void;
   onSessionRefresh: () => Promise<void>;
+  onAuthenticationRecovery: (username: string) => Promise<void>;
   onSignedOut: () => Promise<void>;
   reducedMotion: boolean;
   onReducedMotionChange: (reduced: boolean) => void;
   signInReason?: string;
   onBeforeAuthenticate?: (signal: AbortSignal) => Promise<void>;
 }
-export function AccountControls({ client, interfaceLanguage, session, dialog, onDialogChange, onSessionRefresh, onSignedOut, reducedMotion, onReducedMotionChange, signInReason, onBeforeAuthenticate }: AccountControlsProps) {
+export function AccountControls({ client, interfaceLanguage, session, dialog, onDialogChange, onSessionRefresh, onAuthenticationRecovery, onSignedOut, reducedMotion, onReducedMotionChange, signInReason, onBeforeAuthenticate }: AccountControlsProps) {
   const { t, notice, override, locale } = useInterfaceLocale();
+  const suspended = useDialogSuspended();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [invitation, setInvitation] = useState('');
@@ -44,6 +46,11 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
   const requiresInvitation = session?.authentication.requiresInvitation !== false;
 
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current++; controller.current?.abort(); }; }, []);
+  useLayoutEffect(() => {
+    if (!suspended) return;
+    operation.current++; controller.current?.abort(); setBusy(false);
+    setPassword(''); setInvitation(''); setDeletePassword('');
+  }, [suspended]);
   useLayoutEffect(() => {
     operation.current++; controller.current?.abort(); setBusy(false);
     setPassword(''); setInvitation(''); setDeletePassword('');
@@ -86,7 +93,7 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
       if (credentialsSent && action.valid() && error instanceof ApiError && (error.status === 0 || error.status >= 500 || error.code === 'invalid_response')) {
         // A lost reply can follow a committed login and visitor handoff. Read the
         // authoritative session rather than submitting credentials a second time.
-        await onSessionRefresh();
+        await onAuthenticationRecovery(credentials.username);
       }
       if (action.valid() && !isAbortError(error)) setAuthError(errorText(error));
     } finally { if (action.valid()) setBusy(false); }
