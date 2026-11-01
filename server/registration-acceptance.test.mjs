@@ -13,7 +13,7 @@ import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 
 const PASSWORD = 'A synthetic account password';
 const ORIGIN = 'https://preview.justup.work';
-const VERSION = '2026-11-01';
+const VERSION = '2026-11-01.1';
 const START = Date.parse('2026-11-01T19:00:00Z');
 const acceptance = (locale = 'en') => ({ usageVersion: VERSION, locale, adultAndCapable: true });
 

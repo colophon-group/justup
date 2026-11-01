@@ -35,6 +35,7 @@ test('202 task success accepts one revision; failed edits preserve accepted rows
 test('unavailable API produces an explicit failure and no sample fallback', async ({ page }) => {
   await mockApi(page, { 'GET /session': { status: 503, body: { error: { code: 'unavailable', message: 'Search service unavailable.' } } } }); await page.goto('/');
   await expect(page.locator('#service-notice')).toContainText('Search service unavailable.'); await expect(page.locator('#job-search button[type=submit]')).toBeDisabled(); await expect(page.locator('[data-job]')).toHaveCount(0);
+  await page.locator('#header-sign-in').click(); await expect(page.locator('#sign-in-unavailable')).toContainText('unavailable right now');
 });
 
 test('unavailable visitor search does not submit or pretend that signing in ran a search', async ({ page }) => {
@@ -54,9 +55,9 @@ test('credentials are policy-gated; rejected login preserves the visitor draft a
   expect(calls.find(call => call.key === 'POST /auth/login').body).toEqual({ username: 'reader', password: 'test-only-password' }); expect(await page.evaluate(() => Object.keys(localStorage))).toEqual([]);
 });
 
-test('unreviewed static policies keep registration and login disabled', async ({ page }) => {
+test('unverified session policy keeps registration and login disabled without calling published notices drafts', async ({ page }) => {
   await mockApi(page, { 'GET /session': session({ user: null, policies: {locale:'en',reviewedLocale:null,fallback:false, reviewed: false, version: 'product-draft-4', privacyUrl: null, usageUrl: null } }) }); await page.goto('/'); await page.locator('#header-sign-in').click();
-  await expect(page.locator('#sign-in-unavailable')).toContainText('being reviewed'); await expect(page.locator('#sign-in-form')).toBeHidden();
+  await expect(page.locator('#sign-in-unavailable')).toContainText('published notices and data protections are verified'); await expect(page.locator('#sign-in-form')).toBeHidden();
 });
 
 test('unfinished zero-yield pages continue, while failed matching never becomes a clean empty search', async ({ page }) => {
@@ -251,14 +252,14 @@ for (const registration of [false, true]) {
     });
     await page.goto('/'); await page.locator('#query').fill(draft); await page.locator('#header-sign-in').click(); await expect(page.locator('#sign-in-dialog')).toBeVisible();
     await page.locator('#auth-username').fill('tester'); await page.locator('#auth-password').fill('test-only-password');
-    if (registration) { await page.locator('#auth-register').check(); await page.locator('#auth-invite').fill('test-only-invite'); }
+    if (registration) { await page.locator('#auth-register').check(); await expect(page.locator('#registration-age-notice')).toBeVisible(); await expect(page.locator('#registration-age-notice')).toContainText('at least 18 and legally able'); await page.locator('#auth-invite').fill('test-only-invite'); }
     await page.locator('#auth-submit').click();
     await expect(page.locator('#sign-in-dialog')).not.toBeVisible(); await expect(page.locator('#header-sign-in')).toBeHidden(); await expect(page.locator('#query')).toHaveValue(draft);
     expect(calls.filter(call => call.key === 'POST /searches')).toHaveLength(0);
     await page.locator('#job-search button[type=submit]').click(); await expect(page.locator('[data-job]')).toHaveCount(1);
     const create = calls.find(call => call.key === 'POST /searches'); expect(create.headers['x-csrf-token']).toBe('fresh-account-csrf'); expect(create.body.query).toBe(draft);
     const credentials = calls.find(call => call.key === authPath).body;
-    expect(credentials).toEqual({ username: 'tester', password: 'test-only-password', ...(registration ? { inviteCode: 'test-only-invite' } : {}) });
+    expect(credentials).toEqual({ username: 'tester', password: 'test-only-password', ...(registration ? { inviteCode: 'test-only-invite', acceptance: { usageVersion: 'test-v1', locale: 'en', adultAndCapable: true } } : {}) });
     await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(page.locator('#header-sign-in')).toBeVisible(); await expect(page.locator('[data-job]')).toHaveCount(0); await expect(page.getByRole('tab', { name: 'Library desk' })).toHaveCount(0); await expect(page.locator('#query')).toHaveValue(''); await expect(page.locator('#auth-username')).toHaveValue('');
   });

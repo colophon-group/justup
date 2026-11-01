@@ -16,7 +16,7 @@ for (const locale of locales) {
       expect(response.status()).toBe(200);
       await expect(page.locator('html')).toHaveAttribute('lang', locale);
       await expect(page.locator('body')).toHaveAttribute('data-policy-status', 'approved');
-      await expect(page.locator('body')).toHaveAttribute('data-policy-version', '2026-11-01');
+      await expect(page.locator('body')).toHaveAttribute('data-policy-version', '2026-11-01.1');
       await expect(page.locator('body')).toHaveAttribute('data-policy-reviewed', 'true');
       await expect(page.locator('meta[name="justup-policy-reviewed"]')).toHaveAttribute('content', 'true');
       await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'index,follow');

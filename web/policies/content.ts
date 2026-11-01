@@ -2,7 +2,7 @@
 export const POLICY_LOCALES = ["en", "de", "fr", "it", "es"] as const;
 export type PolicyLocale = typeof POLICY_LOCALES[number];
 export type PolicyKind = "privacy" | "usage";
-export const POLICY_VERSION = "2026-11-01";
+export const POLICY_VERSION = "2026-11-01.1";
 export const POLICY_STATUS = "approved";
 export const OPERATOR = "Viktor Shcherbakov";
 export const CONTACT = "business@colophon-group.org";
@@ -23,7 +23,7 @@ export const FACTS = {
 export const SECTIONS = {
   privacy: [
     ["section-0", "privacy.operator.heading", ["privacy.operator.intro", "privacy.operator.mail", "privacy.operator.bases"]],
-    ["section-1", "privacy.accounts.heading", ["privacy.accounts.login", "privacy.accounts.email", "privacy.accounts.emailRetention", "privacy.accounts.emailConfirmation", "privacy.accounts.session", "privacy.accounts.records", "privacy.accounts.preferences", "privacy.accounts.visitor", "privacy.accounts.bootstrap", "privacy.accounts.handoff", "privacy.accounts.access", "privacy.accounts.marketing", "privacy.accounts.billing"]],
+    ["section-1", "privacy.accounts.heading", ["privacy.accounts.login", "privacy.accounts.email", "privacy.accounts.emailRetention", "privacy.accounts.emailConfirmation", "privacy.accounts.session", "privacy.accounts.records", "privacy.accounts.acceptance", "privacy.accounts.preferences", "privacy.accounts.visitor", "privacy.accounts.bootstrap", "privacy.accounts.handoff", "privacy.accounts.access", "privacy.accounts.marketing", "privacy.accounts.billing"]],
     ["section-2", "privacy.models.heading", ["privacy.models.interpret", "privacy.models.residual", "privacy.models.sensitive"]],
     ["section-3", "privacy.requests.heading", ["privacy.requests.data", "privacy.requests.evidence", "privacy.requests.nativeWeb", "privacy.requests.coverage"]],
     ["section-4", "privacy.browser.heading", ["privacy.browser.cookies", "privacy.browser.visitor", "privacy.browser.locale", "privacy.browser.routeLocale", "privacy.browser.state", "privacy.browser.diagnostics"]],
@@ -63,6 +63,7 @@ export const en = {
   "privacy.accounts.login": "Justup may offer local username and password sign-in and sign-in with Google, Apple, Microsoft and LinkedIn. Choosing a provider sends you to that provider and returns a sign-in result to Justup. We use the provider account identifier and the name or email it supplies to create or access your Justup account; we do not receive your provider password. Accounts are never silently merged solely because email addresses match. You may link another sign-in method later after proving control of the existing account and the new method.",
   "privacy.accounts.session": "For local credentials, the server stores a salted password hash. It stores hashes of random session tokens rather than the tokens themselves. The default session lifetime is {{sessionDays}} days. Accounts remain until deletion unless an account deadline is expressly shown to you.",
   "privacy.accounts.records": "Your account, saved searches, company requests and their background tasks are private account records. The server checks ownership and protects changes against cross-site requests. Public job and company records are separate from these private records.",
+  "privacy.accounts.acceptance": "At account creation, we record your declaration that you are at least 18 and legally able to agree, the accepted Usage version, the language used for your registration request and the language of the approved notices, the acceptance time, and identifiers of the exact Privacy and Usage notices made available, to document your agreement; we remove this record with your account and invalidate recovery backups as described below.",
   "privacy.accounts.preferences": "Where enabled, account-held followed companies, explicit unfollow choices, and interface and posting-language preferences are private account records. They remain subject to the account lifetime and deletion rules, rather than the temporary visitor workspace deadline.",
   "privacy.accounts.access": "If free or paid access is offered, we store identity-proof hashes, access-period dates and payment-provider event identifiers needed to determine entitlement and prevent accidental duplicate activation. For a Jobseek welcome month, eligibility is checked against the verified identity used to create the Justup account. We do not require a separate claim ceremony.",
   "privacy.accounts.visitor": "If you submit a search while signed out, a temporary server workspace can hold searches, criteria, drafts, matching, related tasks and viewed state. Public browsing alone does not create that workspace or measure viewed activity. Its default fixed lifetime is {{visitorHours}} hours; reads do not extend it.",

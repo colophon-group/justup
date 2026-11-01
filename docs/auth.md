@@ -32,7 +32,7 @@ Invitations occupy at most 256 UTF-8 bytes and compare fixed-size SHA-256 digest
 
 The HTTP `/session` response publishes `user` with nullable account expiry, an ISO `expiresAt` session deadline (null for guests), and `authentication.requiresInvitation`. The backend's `registrationState()` supplies `{enabled,reason}` with `registration_closed`, `account_limit` or null. HTTP also checks reviewed policies, working deletion protections and successful maintenance. The browser cannot authorize registration or infer it from an invite input. A missing `requiresInvitation` must be treated conservatively by clients.
 
-Both login and registration remain unavailable until the operator configures genuinely reviewed HTTPS Privacy/Usage URLs and a reviewed policy version. The server default `product-draft-5` is unreviewed. Approved `2026-11-01` public pages still require exact deployed proof and deletion readiness before activation. Model availability is independent of account login and deletion.
+Both login and registration remain unavailable until the operator configures genuinely reviewed HTTPS Privacy/Usage URLs and a reviewed policy version. The server default `product-draft-5` is unreviewed. Approved `2026-11-01.1` public pages still require exact deployed proof and deletion readiness before activation. Model availability is independent of account login and deletion.
 
 Public `POST /auth/register` additionally requires
 `acceptance:{usageVersion,locale,adultAndCapable:true}`. The declaration accompanies
@@ -66,6 +66,7 @@ path. Future OAuth account creation must supply this acceptance through the same
 transaction without requiring a placeholder local password. Existing accounts
 with no historical record stay distinguishable; no backfill is performed.
 
+When registration is offered, the browser states beside account creation that the person must be at least 18 and legally able to agree to the Usage terms. The form does not collect a date of birth or independently verify age; the existing policy links remain available in the same dialog. This disclosure does not replace the server's policy and deletion admission checks.
 
 Only the HTTP server receives a raw 32-byte session token. It sets `__Host-justup_session` with `HttpOnly; Secure; SameSite=Lax; Path=/` and no Domain. The guest anti-forgery cookie is `__Host-justup_csrf`. Explicit localhost HTTP uses `justup_session` and `justup_csrf`; it cannot enable insecure cookies for a public origin. Tokens never enter response JSON, URLs, browser storage or logs. Every mutation checks the exact allowed Origin, a session-bound or guest-bound CSRF token, bounded JSON, admission rate limits and timeouts before feature code. Public registration retains all these checks.
 

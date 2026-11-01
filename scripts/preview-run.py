@@ -6,6 +6,7 @@ must run behind a separately reviewed isolation boundary.
 """
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import math
@@ -25,6 +26,7 @@ CONFIG_KEYS = {
     'JUSTUP_POLICIES_REVIEWED', 'JUSTUP_PRIVACY_URL', 'JUSTUP_USAGE_URL', 'JUSTUP_POLICY_VERSION',
     'JUSTUP_POLICY_LOCALES', 'JUSTUP_POLICY_FALLBACKS', 'JUSTUP_POLICY_ASSET_PROOF',
     'JUSTUP_SERVICES_ENABLED',
+    'JUSTUP_TRUSTED_INGRESS_SECRET',
     'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_MAX_ACCOUNTS', 'JUSTUP_SESSION_TTL_MS',
     'JUSTUP_ACCOUNT_TTL_MS', 'JUSTUP_ACCOUNT_EXPIRES_AT',
     'JUSTUP_EMAIL_VERIFICATION_ENABLED',
@@ -176,6 +178,12 @@ def child_environment(config, manifest):
     for key in ('JUSTUP_CSRF_SECRET', 'JUSTUP_CURSOR_SECRET'):
         if len(config.get(key, '').encode()) < 32:
             raise ValueError('Stable API CSRF and cursor secrets are required.')
+    ingress = config.get('JUSTUP_TRUSTED_INGRESS_SECRET', '')
+    if (not re.fullmatch(r'[A-Za-z0-9_-]{43}', ingress)
+            or base64.urlsafe_b64encode(base64.urlsafe_b64decode(ingress + '=')).decode().rstrip('=') != ingress):
+        raise ValueError('A private 32-byte base64url ingress secret is required.')
+    if 'app/server/ingress.mjs' not in manifest.get('files', {}):
+        raise ValueError('The API artifact must enforce trusted ingress.')
     policy_configuration(config, manifest['sourceCommit'])
     if config.get('JUSTUP_STRIPE_TEST_BILLING_ENABLED') == 'true':
         try:
@@ -194,6 +202,7 @@ def child_environment(config, manifest):
               'JUSTUP_PRIVATE_GENERATION_PATH': str(BASE / 'state/private-generation'),
               'JUSTUP_BACKUP_DIR': str(BASE / 'state/backups'),
               'JUSTUP_SHARED_STATE': 'true',
+              'JUSTUP_TRUSTED_INGRESS_REQUIRED': 'true',
               'JUSTUP_RUNNER_STATUS_PATH': str(BASE / 'state/runner-status.json'),
               'JUSTUP_SOURCE_COMMIT': manifest['sourceCommit'],
               'JUSTUP_BUILD_ID': manifest['buildIdentity']}

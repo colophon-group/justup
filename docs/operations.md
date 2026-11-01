@@ -131,6 +131,7 @@ Provision `/srv/justup_preview/config/api.json` as a regular mode-0600 file owne
 | --- | --- |
 | `JUSTUP_ORIGIN` | Exact frontend HTTPS origin; browser calls stay same-origin `/api/v1`. |
 | `JUSTUP_CSRF_SECRET`, `JUSTUP_CURSOR_SECRET` | Separate stable random preview secrets of at least 32 bytes. |
+| `JUSTUP_TRUSTED_INGRESS_SECRET` | Required separate random 32-byte canonical base64url credential shared only with the private frontend runtime. The Worker uses its private `API_INGRESS_SECRET` binding. |
 | `JUSTUP_REQUIRES_INVITATION`, `JUSTUP_INVITE_CODE` | Admission defaults to invitation required. Set `false` for reviewed public registration; this does not change existing accounts. |
 | `JUSTUP_MAX_ACCOUNTS` | Safe default 30; a positive integer or `none` for an explicitly unbounded deployment. |
 | `JUSTUP_SESSION_TTL_MS` | Positive milliseconds; seven days by default, independent of account lifetime. |
@@ -139,6 +140,12 @@ Provision `/srv/justup_preview/config/api.json` as a regular mode-0600 file owne
 | `JUSTUP_PRIVACY_URL`, `JUSTUP_USAGE_URL`, `JUSTUP_POLICY_VERSION` | English static HTTPS page metadata/version on the frontend origin; approval still requires exact asset binding. |
 | `JUSTUP_POLICY_LOCALES`, `JUSTUP_POLICY_FALLBACKS`, `JUSTUP_POLICY_ASSET_PROOF` | Exact fixed-locale identities, explicit fallbacks and operator-reviewed retained page hashes bound to origin/candidate. Every admitted locale, including English, requires matching asset proof, global review and matching locale approval configuration; see [processing admission](processing-admission.md). |
 | `JUSTUP_SERVICES_ENABLED` | Defaults to `false`; `true` selects the fixed reviewed intent/company/matching composition, never an arbitrary module path. |
+
+The launcher forces `JUSTUP_TRUSTED_INGRESS_REQUIRED=true`; this switch is not accepted in API JSON, and inherited environment variables cannot override it. It rejects a missing/malformed ingress secret or an artifact without `server/ingress.mjs`. Retained artifacts lacking this boundary cannot start through the protected launcher. Before switching, retain a compatible protected build for rollback and deliver matching private credentials to the frontend and API. Do not restore an unprotected launcher to make an older build start.
+
+Every API route, including `/health` and `/version`, requires the private token and a single validated plain client IP. Public catalogue reads remain keyless to browsers through the authenticated frontend. The frontend must remove caller-supplied internal/forwarding headers and set `X-Justup-Ingress` plus `X-Justup-Client-IP` from its trusted request context for both proxy and public-document source fetches. Preserve the complete `/api/v1/` path, query, Origin/CSRF/cookies, raw webhook body/signature and SSE reconnect/stream/cancellation behavior. Direct Tunnel requests without the private token receive generic 403 before body reading or application work; ingress authentication does not replace account, policy or entitlement checks. The [API contract](api.md#http-rules) owns address validation and bucket behavior.
+
+Supply both headers for approved local operator HTTP probes through their protected environment; there is no health bypass. Never print or retain the token or raw IP in probe output/logs. Before activating a route, verify missing/wrong token rejection at the direct origin, independent same-IP and different-IP limits through the frontend, and valid proxy/public-document/SSE reads against the exact compatible artifacts. A missing/mismatched Worker binding must leave origin access closed. Local synthetic tests do not qualify the deployed Tunnel or secret delivery.
 
 The launcher fixes port 8787, shared SQLite mode, heartbeat/work/backup/generation paths, source commit and build identity itself. API and queue use `UMask=0007` and the core's explicit shared-state mode for group-0660 SQLite/WAL/SHM; operations never races with chmod of live database files. It discards inherited operator environment variables. The API receives no Doppler access token, JEV/model credential, socket access, Docker access or administrator environment. Do not put secrets into the artifact or browser bundle.
 
@@ -231,6 +238,28 @@ The shared queue leases tasks durably; schedules enqueue fixed task kinds and ne
 | Observation | Read `/api/v1/health`, `/api/v1/version`, `/api/v1/session` coverage and exact runner heartbeat. API remains private/no-store/noindex in either frontend deployment mode. Record actual freshness, queue lag, task failures, latency, token/spend reservations, model-slot waits, backup age and guard failures. Missing instrumentation or absent collection is a release gap. |
 
 Record numeric freshness/latency/error/queue-age thresholds and a named response owner before activation, then exercise a missed refresh, unavailable provider, exhausted allowance, interrupted editorial task and stale backup. The existing API metadata log and host guard do not constitute a complete alert pipeline. `operations`, `fresh-job-feed`, `source-coverage-history`, `hiring-wire-editions` and `release-verification` track the integrated evidence. No enabled scheduler, monitor delivery, new source access or external service is implied by this guide.
+
+## Preview crash and safety-stop drills
+
+The API, runner and model units already use `Restart=on-failure` with bounded start limits (three, three and two attempts within 300 seconds). A deliberate `systemctl stop` or resource-guard stop must remain stopped. Those unit settings are preparation, not proof of recovered customer service. The restricted host currently has no active application route, and no deployed crash drill has passed.
+
+After the exact candidate, installation receipt, host identity and public route are reviewed and any host mutation hold is cleared, exercise one named preview unit at a time. First run the installed `preview-failure-drill.py capture` command as root in a transient unit inside `justup-preview.slice`, supplying the reviewed plan SHA and host machine SHA from protected operator records. Save its single JSON line in a root-private evidence directory. It refuses a pending operator upgrade or private deletion, a mismatched receipt, a different host, a release-link mismatch and a unit outside the three named preview services. Check the independent public probe and the relevant API/runner readiness before injecting a failure.
+
+For the API case, with a root-private `$EVIDENCE_DIR` already prepared and the two hashes taken from the protected review, the capture command is:
+
+```sh
+umask 077
+systemd-run --quiet --wait --pipe --collect --slice=justup-preview.slice \
+  /usr/bin/python3 /srv/justup_preview/ops/preview-failure-drill.py capture \
+  --unit api --reviewed-plan-sha "$JUSTUP_REVIEWED_PLAN_SHA" \
+  --host-machine-sha "$JUSTUP_HOST_MACHINE_SHA" > "$EVIDENCE_DIR/api-before.json"
+```
+
+Repeat with `api-after.json` after the single reviewed action, then run `python3 /srv/justup_preview/ops/preview-failure-drill.py assess --case crash --before "$EVIDENCE_DIR/api-before.json" --after "$EVIDENCE_DIR/api-after.json"`. Substitute only `runner` or `model` and its corresponding reviewed unit for those drills.
+
+For an ordinary process crash, use only `systemctl kill --kill-who=main --signal=SIGKILL justup-preview-api.service` (or substitute the reviewed runner/model unit) after the baseline capture. Wait no more than the reviewed recovery window, capture again, then run `preview-failure-drill.py assess --case crash --before <before.json> --after <after.json>`. It requires the same host, receipt, build and deletion generation, exactly one systemd restart, a new process/invocation, an active unit and a healthy guard timer. The reported observation window is **not** customer-visible downtime; record outage and recovery times from the external probe separately. Record queue lease/effect checks for the runner and socket/tool-isolation checks for the model.
+
+Rehearse deliberate stop separately: capture while active, run `systemctl stop` on that one reviewed unit, capture again and assess with `--case deliberate-stop`. Confirm it stays stopped beyond its restart delay and restart it only after a new operator review of readiness and safety barriers. A resource-guard stop requires a separately reviewed, reversible fault plan that does not fill the shared root disk, alter Jobseek services or weaken the preview ceiling. Assess its evidence with `--case guard-stop`; the guard must be failed and the affected service inactive with no restart. Do not manufacture a guard failure by raising resource limits or clearing a pending lock. Any repeated crash, failed start limit, held queue/model cleanup, deletion marker, ledger crash lock or unavailable public route is an incident for the named operator, not a reason to force-start or reset state. Alert delivery and customer-visible recovery remain acceptance work in [operations incident alerting](https://github.com/colophon-group/justup/issues/141) and [crash recovery drills](https://github.com/colophon-group/justup/issues/142).
 
 ## Backups, deletion and restoration
 

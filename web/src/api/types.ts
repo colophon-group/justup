@@ -20,6 +20,11 @@ export interface SessionPolicies {
   reviewedLocale: InterfaceLocale | null;
   fallback: boolean;
 }
+export interface RegistrationAcceptance {
+  usageVersion: string;
+  locale: InterfaceLocale;
+  adultAndCapable: true;
+}
 export interface Session {
   user: User | null;
   serverTime?: string;
@@ -113,6 +118,19 @@ export interface Company {
   hiringHistory?: { date: string; count: number }[];
   hiringRoles?: { name: string; count?: number }[];
   reportedSalaries?: { role?: string; text: string }[];
+}
+// Narrow public projection of the report; unknown analytic sections stay out of hydration.
+export interface CompanySourceReport {
+  companyId: string;
+  asOf: string;
+  sourceChecks: {
+    state: "available" | "partial" | "unavailable";
+    items: {
+      publicLink: { url: string; status: "approved"; provenance: "employer-careers" | "ats-careers" | "reviewed-redirect"; approvedAt: string } | null;
+      trackedSince: string;
+      lastVerifiedAt: string | null;
+    }[];
+  };
 }
 export interface CompanyCataloguePage {
   items: Company[];

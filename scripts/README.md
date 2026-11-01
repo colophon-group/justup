@@ -42,3 +42,5 @@ fails the receipt. Review the exact recipient packet and limits in
 [account verification](../docs/account-verification.md#run-one-bounded-operator-mailbox-proof)
 before an operator runs it. Its automatic contract suite lives at
 `server/account-test-journey.test.mjs`; CI uses synthetic transport only.
+
+`justup-incident-watch.py` is a Mac LaunchAgent tool for optional read-only IRM polling and a fixed Codex incident prompt. It does not run on the application host or deliver phone pages. Read [incident alerting](../docs/incident-alerting.md) before configuring it; `test_incident_watch.py` uses only synthetic local responses.

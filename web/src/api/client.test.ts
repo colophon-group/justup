@@ -64,9 +64,26 @@ test('authentication invalidation signals are emitted only after acknowledged su
   await assert.rejects(client.deleteAccount('wrong')); assert.equal(signals, 0);
   status = 200;
   await client.login({ username: 'reader', password: 'test-only' });
-  await client.register({ username: 'reader', password: 'test-only' });
+  await client.register({ username: 'reader', password: 'test-only', acceptance: { usageVersion: 'synthetic-v1', locale: 'en', adultAndCapable: true } });
   await client.logout(); await client.deleteAccount('test-only');
   assert.equal(signals, 4);
+});
+
+test('only registration transports explicit acceptance; login projects credentials only', async () => {
+  const calls: { url: string; body: unknown }[] = [];
+  const client = new ApiClient({ fetch: async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    return json({});
+  } });
+  client.setSession(session());
+  for (const locale of ['en', 'de', 'fr', 'it', 'es'] as const) {
+    const acceptance = { usageVersion: 'synthetic-v2', locale, adultAndCapable: true } as const;
+    const body = { username: 'reader', password: 'test-only', acceptance };
+    await client.register(body);
+    assert.deepEqual(calls.at(-1), { url: '/api/v1/auth/register', body });
+    await client.login(body);
+    assert.deepEqual(calls.at(-1), { url: '/api/v1/auth/login', body: { username: 'reader', password: 'test-only' } });
+  }
 });
 
 test('suspension cancels a recorded task poll while it is between GET requests', async () => {

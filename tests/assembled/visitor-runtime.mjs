@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createPublicHandler } from '../../web/worker-dist/worker.mjs';
 export async function startVisitorRuntime() {
+  const ingressSecret = 'A'.repeat(43);
   const dir = mkdtempSync(join(tmpdir(), 'justup-assembled-visitor-')), ref = process.env.JUSTUP_ASSEMBLED_API_REF;
   let app, server, heartbeatTimer, queue;
   try {
@@ -37,7 +38,7 @@ export async function startVisitorRuntime() {
   heartbeat(); heartbeatTimer = setInterval(heartbeat, 5000);
   app = await createConfiguredApplication({ config: { dbPath: join(dir, 'state.sqlite'), privateGenerationPath: generation, backupDir: backups,
     servicesEnabled: true, sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', runnerStatusPath: status,
-    allowedOrigin: origin, requiresInvitation: false, policiesReviewed: true, policyVersion: 'synthetic-reviewed', privacyUrl: origin + '/privacy.html', usageUrl: origin + '/usage.html',
+    allowedOrigin: origin, trustedIngressSecret: ingressSecret, requiresInvitation: false, policiesReviewed: true, policyVersion: 'synthetic-reviewed', privacyUrl: origin + '/privacy.html', usageUrl: origin + '/usage.html',
     policyLocales, policyAssetProof,
   } });
   const db = app.store.db, records = app.services.find(service => typeof service.onModelMetric === 'function'), identity = app.services.find(service => service.identity)?.identity;
@@ -75,8 +76,9 @@ export async function startVisitorRuntime() {
   server = createServer({ key: readFileSync(key), cert: readFileSync(cert) }, async (req, res) => {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
-      const request = new Request(origin + req.url, { method: req.method, headers: req.headers, ...(['GET', 'HEAD'].includes(req.method) ? {} : { body: Buffer.concat(chunks) }) });
-      const result = await handle(request, { PUBLIC_ORIGIN: origin, API_ORIGIN: 'https://api.fixture.example', DEPLOYMENT_MODE: 'preview', RELEASE_JSON: JSON.stringify({ sourceSha: 'a'.repeat(40) }), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: { fetch: async request => {
+      const incomingHeaders = new Headers(req.headers); incomingHeaders.set('CF-Connecting-IP', '203.0.113.25');
+      const request = new Request(origin + req.url, { method: req.method, headers: incomingHeaders, ...(['GET', 'HEAD'].includes(req.method) ? {} : { body: Buffer.concat(chunks) }) });
+      const result = await handle(request, { API_INGRESS_SECRET: ingressSecret, PUBLIC_ORIGIN: origin, API_ORIGIN: 'https://api.fixture.example', DEPLOYMENT_MODE: 'preview', RELEASE_JSON: JSON.stringify({ sourceSha: 'a'.repeat(40) }), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: { fetch: async request => {
         const path = resolve(assetsRoot, '.' + new URL(request.url).pathname); if (!path.startsWith(assetsRoot + sep)) return new Response(null, { status: 404 });
         try { return new Response(readFileSync(path), { headers: { 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html' })[extname(path)] || 'application/octet-stream' } }); } catch { return new Response(null, { status: 404 }); }
       } } });

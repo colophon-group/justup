@@ -14,12 +14,7 @@ export const messages = {
     "{current} nuovi annunci rilevati, rispetto a {previous} la settimana precedente",
     "{current} nuevas ofertas detectadas, frente a {previous} la semana anterior"
   ],
-  "Verified career-page links are unavailable.": [
-    "Verifizierte Links zu Karriereseiten sind nicht verfügbar.",
-    "Les liens vérifiés vers les pages carrières ne sont pas disponibles.",
-    "I link verificati alle pagine delle carriere non sono disponibili.",
-    "Los enlaces verificados a las páginas de empleo no están disponibles."
-  ],
+  "Last checked": ["Zuletzt geprüft", "Dernière vérification", "Ultima verifica", "Última comprobación"],
   "Your visitor search session expired. Reconnect to start a new search.": ["Deine Besuchersitzung ist abgelaufen. Verbinde dich erneut, um eine neue Suche zu starten.", "Ta session de recherche visiteur a expiré. Reconnecte-toi pour lancer une nouvelle recherche.", "La sessione di ricerca visitatore è scaduta. Riconnettiti per iniziare una nuova ricerca.", "Tu sesión de búsqueda de visitante ha caducado. Vuelve a conectarte para iniciar una nueva búsqueda."],
   "Your earlier check was interrupted. Submit this text when you want to try again.": ["Deine vorige Prüfung wurde unterbrochen. Sende diesen Text, wenn du es erneut versuchen möchtest.", "La vérification précédente a été interrompue. Envoie ce texte quand tu souhaites réessayer.", "La verifica precedente è stata interrotta. Invia questo testo quando vuoi riprovare.", "La comprobación anterior se interrumpió. Envía este texto cuando quieras volver a intentarlo."],
   "Sign in to keep your searches and continue.": ["Melde dich an, um deine Suchen zu behalten und fortzufahren.", "Connecte-toi pour conserver tes recherches et continuer.", "Accedi per conservare le tue ricerche e continuare.", "Inicia sesión para conservar tus búsquedas y continuar."],
@@ -1466,11 +1461,17 @@ export const messages = {
     "L’accesso all’account non è disponibile al momento. Riprova più tardi.",
     "El acceso a la cuenta no está disponible ahora. Inténtalo más tarde."
   ],
-  "Account access is unavailable while the privacy and usage notices are being reviewed.": [
-    "Der Kontozugriff ist während der Prüfung der Datenschutz- und Nutzungshinweise nicht verfügbar.",
-    "L’accès au compte est indisponible pendant la révision des avis de confidentialité et d’utilisation.",
-    "L’accesso all’account non è disponibile durante la revisione delle informative sulla privacy e sull’utilizzo.",
-    "El acceso a la cuenta no está disponible mientras se revisan los avisos de privacidad y uso."
+  "Account access is unavailable until the published notices and data protections are verified for this service.": [
+    "Der Kontozugriff ist nicht verfügbar, bis die veröffentlichten Hinweise und Datenschutzmaßnahmen für diesen Dienst geprüft sind.",
+    "L’accès au compte est indisponible jusqu’à la vérification des avis publiés et des protections des données pour ce service.",
+    "L’accesso all’account non è disponibile finché le informative pubblicate e le misure di protezione dei dati non sono verificate per questo servizio.",
+    "El acceso a la cuenta no está disponible hasta que se verifiquen los avisos publicados y las medidas de protección de datos de este servicio."
+  ],
+  "By creating an account, you confirm you are at least 18 and legally able to agree to the Usage terms.": [
+    "Mit der Erstellung eines Kontos bestätigst du, dass du mindestens 18 Jahre alt bist und den Nutzungsbedingungen rechtswirksam zustimmen kannst.",
+    "En créant un compte, tu confirmes avoir au moins 18 ans et pouvoir légalement accepter les conditions d’utilisation.",
+    "Creando un account, confermi di avere almeno 18 anni e di poter accettare legalmente le condizioni d’uso.",
+    "Al crear una cuenta, confirmas que tienes al menos 18 años y que puedes aceptar legalmente las condiciones de uso."
   ],
   "Saved search": [
     "Gespeicherte Suche",

@@ -5,7 +5,7 @@ import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 // Account dialogs use only authoritative session state and explicit server mutations.
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { type ApiClient, ApiError, errorText, isAbortError } from '../../api/client';
-import type { Session } from '../../api/types';
+import type { RegistrationAcceptance, Session } from '../../api/types';
 import { Dialog, useDialogSuspended } from '../../shared/Dialog';
 
 export type AccountDialog = 'settings' | 'sign-in' | 'delete-account' | null;
@@ -44,6 +44,8 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
   const loginEnabled = reviewed && session?.authentication.method === 'username_password' && session.authentication.loginEnabled;
   const registrationEnabled = loginEnabled && session?.authentication.registrationEnabled === true;
   const requiresInvitation = session?.authentication.requiresInvitation !== false;
+  const registrationScope = useRef({ session, locale, registrationEnabled });
+  useLayoutEffect(() => { registrationScope.current = { session, locale, registrationEnabled }; }, [session, locale, registrationEnabled]);
 
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current++; controller.current?.abort(); }; }, []);
   useLayoutEffect(() => {
@@ -75,6 +77,11 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy || !loginEnabled) return;
+    const creatingAccount = registration;
+    const acceptance: RegistrationAcceptance | null = creatingAccount && registrationEnabled && session?.policies.version ? {
+      usageVersion: session.policies.version, locale, adultAndCapable: true,
+    } : null;
+    if (creatingAccount && !acceptance) return;
     const action = begin();
     const credentials = { username, password };
     const inviteCode = invitation;
@@ -83,8 +90,18 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
     try {
       await onBeforeAuthenticate?.(action.abort.signal);
       if (!action.valid()) return;
+      if (acceptance) {
+        const current = registrationScope.current;
+        const currentLinks = reviewedPolicyLinks(current.session?.policies, current.locale, window.location.origin);
+        // Saving a visitor draft can outlast a policy or locale refresh. The
+        // reader's action affirms only the notice scope visible when submitted.
+        if (!current.registrationEnabled || !currentLinks
+          || current.locale !== acceptance.locale || current.session?.policies.version !== acceptance.usageVersion
+          || currentLinks.privacy !== policyLinks?.privacy || currentLinks.usage !== policyLinks?.usage
+          || currentLinks.fallbackLocale !== policyLinks?.fallbackLocale) return;
+      }
       credentialsSent = true;
-      if (registration && registrationEnabled) await client.register({ ...credentials, ...(requiresInvitation ? { inviteCode } : {}) }, action.abort.signal);
+      if (acceptance) await client.register({ ...credentials, ...(requiresInvitation ? { inviteCode } : {}), acceptance }, action.abort.signal);
       else await client.login(credentials, action.abort.signal);
       if (!action.valid()) return;
       onDialogChange(null);
@@ -155,10 +172,11 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
         <label htmlFor="auth-password">{t("Password")}</label><input id="auth-password" name="password" type="password" autoComplete={registration ? 'new-password' : 'current-password'} required disabled={busy} value={password} onChange={event => setPassword(event.target.value)} />
         <label className="check-label" id="auth-register-choice" hidden={!registrationEnabled}><input id="auth-register" type="checkbox" disabled={!registrationEnabled || busy} checked={registration} onChange={event => setRegistration(event.target.checked)} />{" "}{t("Create an account")}</label>
         <div id="auth-invite-field" hidden={!registration || !requiresInvitation}><label htmlFor="auth-invite">{t("Invitation code")}</label><input id="auth-invite" type="password" autoComplete="off" required={registration && requiresInvitation} disabled={busy || !requiresInvitation} value={invitation} onChange={event => setInvitation(event.target.value)} /></div>
+        <p id="registration-age-notice" className="small-print" hidden={!registration || !registrationEnabled}>{t("By creating an account, you confirm you are at least 18 and legally able to agree to the Usage terms.")}</p>
         <button id="auth-submit" className="button dark" disabled={busy}>{t("Continue ↗")}</button>
         <p id="auth-status" role="status">{notice(authError)}</p>
       </form>
-      <p id="sign-in-unavailable" role="status" hidden={loginEnabled}>{reviewed ? t("Account access is unavailable right now. Please try again later.") : t("Account access is unavailable while the privacy and usage notices are being reviewed.")}</p>
+      <p id="sign-in-unavailable" role="status" hidden={loginEnabled}>{!session || reviewed ? t("Account access is unavailable right now. Please try again later.") : t("Account access is unavailable until the published notices and data protections are verified for this service.")}</p>
       {policyLinks?.fallbackLocale ? <p className="small-print" id="policy-language-fallback">{t("For account access, the reviewed notices are in {language}.", {language: localeName[policyLinks.fallbackLocale]})}</p> : null}
       <p className="small-print">{t("Before signing in, read our")}{" "}<a href={policyLinks?.privacy ?? policyDocument(locale, "privacy")}>{t("Privacy notice")}</a>{" "}{t("and")}{" "}<a href={policyLinks?.usage ?? policyDocument(locale, "usage")}>{t("Usage terms")}</a>.</p>
     </Dialog>

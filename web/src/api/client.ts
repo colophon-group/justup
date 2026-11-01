@@ -2,6 +2,7 @@ import { parseInterfaceLocale, type InterfaceLocale } from "../i18n/locales.ts";
 // Same-origin transport owns credentials, timeouts and response validation, not UI state.
 import {
   decodeCompany,
+  decodeCompanySourceReport,
   decodeCompanyCataloguePage,
   decodeCompanyRequest,
   decodeHiringWire,
@@ -16,7 +17,7 @@ import {
   decodeWorkspace,
   record,
 } from "./decode.ts";
-import type { SavedWorkspaceState, SearchScope, Session } from "./types.ts";
+import type { RegistrationAcceptance, SavedWorkspaceState, SearchScope, Session } from "./types.ts";
 import { sessionOwner } from './sessionOwner.ts';
 export class ApiError extends Error {
   readonly status: number;
@@ -366,6 +367,9 @@ export class ApiClient {
       { signal },
     );
   }
+  getCompanySourceReport(companyId: string, signal?: AbortSignal) {
+    return this.request(`/companies/${id(companyId)}/report`, value => decodeCompanySourceReport(value, companyId), { signal });
+  }
   createCompanyRequest(
     body: {
       input: string;
@@ -415,13 +419,13 @@ export class ApiClient {
   async login(body: { username: string; password: string }, signal?: AbortSignal) {
     await this.request("/auth/login", ignored, {
       method: "POST",
-      body,
+      body: { username: body.username, password: body.password },
       signal,
     });
     this.onAuthenticationChanged?.();
   }
   async register(
-    body: { username: string; password: string; inviteCode?: string },
+    body: { username: string; password: string; inviteCode?: string; acceptance: RegistrationAcceptance },
     signal?: AbortSignal,
   ) {
     await this.request("/auth/register", ignored, {

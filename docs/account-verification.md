@@ -73,6 +73,12 @@ leased runner and the actual fixed Resend client with synthetic transport and
 mailbox input. This source proof sends no real message. Its receipt explicitly
 reports `emailControl:synthetic_code` and `stripeTestMode:not_run`.
 
+The current approved notice source is `2026-11-01.1`. That version describes the
+registration acceptance record; its ten reviewed page hashes are owned by the
+[policy release record](policies.md). The operator packet must explicitly supply
+that version and exact deployed proof; this helper has no policy-version default
+and cannot approve or update runtime proof.
+
 Before the operator entrypoint is run, review one concrete private test packet
 under `account-provider-resources` (#79). The release owner supplies the exact
 recipient authorization and nonsecret provider facts; a coding agent does not
@@ -107,7 +113,7 @@ fields (and `inviteCode` only if the approved test profile requires it):
 | `apiBase` | Exact approved HTTPS same-origin API base ending `/api/v1`; loopback HTTP is supported only for isolated tests. |
 | `origin` | Exact approved browser origin used by Origin/CSRF checks. |
 | `sourceCommit`, `buildIdentity` | Exact expected API candidate, never a moving branch alias. |
-| `policyVersion`, `locale` | Admitted version and one `en/de/fr/it/es` request locale. |
+| `policyVersion`, `locale` | Explicit current admitted version `2026-11-01.1` and one `en/de/fr/it/es` request locale, bound to the approved deployed bytes. |
 | `recipient` | The single privately authorized mailbox. |
 | `mode` | Exactly `operator-mailbox`; synthetic mode is import-only. |
 
