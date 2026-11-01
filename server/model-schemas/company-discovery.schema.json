@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "domain", "clarification"],
+  "required": ["status", "domain", "sourceUrls", "clarification"],
   "properties": {
-    "status": { "type": "string", "enum": ["propose_domain", "clarification", "unresolved"] },
+    "status": { "type": "string", "enum": ["discovered_domain", "clarification", "unresolved"] },
     "domain": { "anyOf": [{ "type": "null" }, { "type": "string", "minLength": 3, "maxLength": 253 }] },
+    "sourceUrls": { "type":"array", "maxItems":2, "uniqueItems":true, "items":{ "type":"string", "minLength":1, "maxLength":2048 } },
     "clarification": { "anyOf": [{ "type": "null" }, { "type": "string", "minLength": 1, "maxLength": 500 }] }
   }
 }

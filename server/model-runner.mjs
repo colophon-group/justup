@@ -10,13 +10,24 @@ import { fileURLToPath } from 'node:url';
 
 export const CODEX_VERSION='0.159.2';
 export const LUNA_MODEL='gpt-6-luna';
-// SHA256 of canonical JSON []; a matching nonempty catalogue is never approved.
+export const CODEX_SOURCE_COMMIT='ff6aec96948b70d94983af2641a6b67c94faeff5';
+// SHA256 of canonical JSON []; required only for actual tool-free intent proof.
 export const EMPTY_TOOL_CATALOG_SHA256='4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945';
 // Public Codex 0.159.2 / ff6aec96948b70d94983af2641a6b67c94faeff5
 // models-manager/models.json: preserve the complete shipped Luna record except
 // seven tool selectors. This is client policy, never account availability proof.
 export const MODEL_CATALOGUE_SHA256='0829441e0714986d05563eb5885fa7f22324eff3bf2446cc6be857a227c96402';
 const cataloguePath=fileURLToPath(new URL('./model-catalogue.json',import.meta.url));
+// Policy hashes identify supported configuration, never an observed wire capture.
+// The same restricted model metadata supports both profiles: native web.run is
+// selected by web_search; supports_search_tool controls deferred tool discovery.
+const profile=(kind,webSearch,maximumNativeToolCalls)=>{
+  const policy=Object.freeze({version:1,kind,cliVersion:CODEX_VERSION,sourceCommit:CODEX_SOURCE_COMMIT,model:LUNA_MODEL,modelCatalogueSha256:MODEL_CATALOGUE_SHA256,webSearch,webContextSize:'low',nativeToolNames:Object.freeze(webSearch==='disabled'?[]:['web.run']),maximumNativeToolCalls});
+  return Object.freeze({...policy,toolPolicySha256:createHash('sha256').update(JSON.stringify(policy)).digest('hex')});
+};
+export const MODEL_PROFILES=Object.freeze({search_intent:profile('search_intent','disabled',0),company_resolution:profile('company_resolution','live',2)});
+export function modelProfile(kind){if(!Object.hasOwn(MODEL_PROFILES,kind))throw fail('invalid_input');return MODEL_PROFILES[kind];}
+
 const fail=(code)=>Object.assign(new Error('The model task could not finish.'),{code});
 const plain=(v)=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&Object.getPrototypeOf(v)===Object.prototype;
 
@@ -83,22 +94,32 @@ export function validateModelData(value,schema,maxBytes=65_536) {
 const DISABLED=['shell_tool','unified_exec','apps','plugins','remote_plugin','memories','multi_agent','multi_agent_v2','agent_message_board','hooks','request_permissions_tool','browser_use','browser_use_external','computer_use','in_app_browser','image_generation','artifact','chronicle','code_mode','code_mode_host','code_mode_only','skill_mcp_dependency_install','tool_suggest','goals','workspace_dependencies','auth_elicitation','deferred_executor','enable_fanout','shell_snapshot','network_proxy','view_image','sleep_tool','skill_search','default_mode_request_user_input','send_message_to_user_async','token_budget','current_time_reminder'];
 export function codexArguments({kind,schemaPath,taskCwd}) {
   if(!['search_intent','company_resolution'].includes(kind)||!isAbsolute(schemaPath)||!isAbsolute(taskCwd)) throw fail('invalid_input');
-  const catalogue=checkedCatalogue();
+  const catalogue=checkedCatalogue(),policy=modelProfile(kind);
   return ['--no-daemon','exec','--ignore-user-config','--strict-config','--ephemeral','--json','--sandbox','read-only','--skip-git-repo-check','--cd',taskCwd,'--model',LUNA_MODEL,'--output-schema',schemaPath,
     ...DISABLED.flatMap(feature=>['--disable',feature]),
-    ...[`model_catalog_json=${JSON.stringify(catalogue)}`,'approval_policy="never"','forced_login_method="chatgpt"','allow_login_shell=false','project_doc_max_bytes=0','skills.config=[]','skills.bundled.enabled=false','skills.include_instructions=false','cloud.skills.enabled=false','orchestrator.mcp.enabled=false','agents.enabled=false','tools.experimental_request_user_input.enabled=false','tools.update_plan.enabled=false','mcp_servers={}','apps._default.enabled=false','memories.generate_memories=false','memories.use_memories=false','history.persistence="none"','analytics.enabled=false','feedback.enabled=false','model_reasoning_effort="low"','web_search="disabled"'].flatMap(v=>['--config',v]),'-'];
+    ...[`model_catalog_json=${JSON.stringify(catalogue)}`,'approval_policy="never"','forced_login_method="chatgpt"','allow_login_shell=false','project_doc_max_bytes=0','skills.config=[]','skills.bundled.enabled=false','skills.include_instructions=false','cloud.skills.enabled=false','orchestrator.mcp.enabled=false','agents.enabled=false','tools.experimental_request_user_input.enabled=false','tools.update_plan.enabled=false','mcp_servers={}','apps._default.enabled=false','memories.generate_memories=false','memories.use_memories=false','history.persistence="none"','analytics.enabled=false','feedback.enabled=false','model_reasoning_effort="low"',`web_search=${JSON.stringify(policy.webSearch)}`,'tools.web_search.context_size="low"'].flatMap(v=>['--config',v]),'-'];
 }
 export function codexEnvironment({codexHome,taskCwd}) {
   // Never inherit process.env: no admin, DB, SSH, Docker, proxy, cloud or API keys.
   return {HOME:codexHome,CODEX_HOME:codexHome,TMPDIR:taskCwd,PATH:'/usr/bin:/bin',LANG:'C.UTF-8',LC_ALL:'C.UTF-8',NO_COLOR:'1'};
 }
-export function modelAttestationMatches(report,config={}, {company=false}={}) {
-  return plain(report)&&/^[a-f0-9]{64}$/.test(config.buildIdentity??'')&&/^[a-f0-9]{64}$/.test(config.hostPlanSha256??'')&&config.toolCatalogSha256===EMPTY_TOOL_CATALOG_SHA256&&report.toolCatalogSha256===EMPTY_TOOL_CATALOG_SHA256&&
+function profileAttestationMatches(report,config,kind){
+  const expected=Object.hasOwn(MODEL_PROFILES,kind)?MODEL_PROFILES[kind]:null,configured=config.taskProfiles?.[kind],attested=report.taskProfiles?.[kind];
+  if(!expected||!plain(configured)||!plain(attested)||configured.enabled!==true||attested.enabled!==true)return false;
+  for(const entry of [configured,attested])if(entry.toolPolicySha256!==expected.toolPolicySha256||entry.modelCatalogueSha256!==MODEL_CATALOGUE_SHA256)return false;
+  const proof=attested.toolProof;
+  if(!plain(proof)||JSON.stringify(proof.toolNames)!==JSON.stringify(expected.nativeToolNames))return false;
+  if(proof.kind==='supported_static_policy')return proof.actualWireObserved===false&&proof.sourceCommit===CODEX_SOURCE_COMMIT&&!Object.hasOwn(proof,'toolCatalogSha256');
+  if(proof.kind!=='actual_wire'||proof.actualWireObserved!==true||!/^[a-f0-9]{64}$/.test(proof.toolCatalogSha256??''))return false;
+  return kind==='search_intent'?proof.toolCatalogSha256===EMPTY_TOOL_CATALOG_SHA256:proof.toolCatalogSha256!==EMPTY_TOOL_CATALOG_SHA256;
+}
+export function modelAttestationMatches(report,config={}, {kind='search_intent'}={}) {
+  return plain(report)&&/^[a-f0-9]{64}$/.test(config.buildIdentity??'')&&/^[a-f0-9]{64}$/.test(config.hostPlanSha256??'')&&profileAttestationMatches(report,config,kind)&&
     report.cliVersion===CODEX_VERSION&&report.model===LUNA_MODEL&&report.buildIdentity===config.buildIdentity&&report.hostPlanSha256===config.hostPlanSha256&&
     report.approved===true&&report.executorBoundary==='dedicated_uid_broker'&&report.socketPath===config.socketPath&&report.deniedPathsVerified===true&&report.retentionVerified===true&&
-    (!company||config.companyResearchVerified===true&&report.companyResearchVerified===true);
+    (kind!=='company_resolution'||config.companyResearchVerified===true&&report.companyResearchVerified===true);
 }
-export function checkModelIsolation(config={}, {company=false}={}) {
+export function checkModelIsolation(config={}, {kind='search_intent'}={}) {
   if(config.enabled!==true||config.isolationVerified!==true||config.cliVersion!==CODEX_VERSION) return false;
   try {
     // The client intentionally cannot inspect the model UID's protected auth.
@@ -107,21 +128,23 @@ export function checkModelIsolation(config={}, {company=false}={}) {
     const socket=statSync(config.socketPath);
     if(!socket.isSocket()||socket.uid!==0||(socket.mode&0o007)!==0) return false;
     const parent=statSync(dirname(config.socketPath));if(!parent.isDirectory()||parent.uid!==0||(parent.mode&0o022)!==0)return false;
-    if(config.toolCatalogSha256!==EMPTY_TOOL_CATALOG_SHA256||!isAbsolute(config.attestationPath)) return false;
+    if(!Object.hasOwn(MODEL_PROFILES,kind)||!isAbsolute(config.attestationPath)) return false;
     if(realpathSync(config.attestationPath)!==config.attestationPath) return false;
     const reportFile=statSync(config.attestationPath);
     if(!reportFile.isFile()||reportFile.uid!==0||(reportFile.mode&0o022)!==0||reportFile.size>16_384) return false;
     const report=JSON.parse(readFileSync(config.attestationPath,'utf8'));
-    return modelAttestationMatches(report,config,{company});
+    return modelAttestationMatches(report,config,{kind});
   } catch {return false;}
 }
 
-export function executeCodex({executable,args,cwd,env,stdin,signal,timeoutMs=45_000,maxStdoutBytes=262_144,maxStderrBytes=16_384,maxToolCalls=0,allowWeb=false,maxOutputTokens=6000}) {
-  if(Buffer.byteLength(stdin)>24_576||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>120_000||maxToolCalls!==0||allowWeb!==false||!Number.isInteger(maxOutputTokens)||maxOutputTokens<1||maxOutputTokens>6000) return Promise.reject(fail('invalid_input'));
+export function executeCodex({executable,args,cwd,env,stdin,signal,timeoutMs=45_000,maxStdoutBytes=262_144,maxStderrBytes=16_384,kind='search_intent',maxToolCalls,allowWeb,maxOutputTokens=6000}) {
+  const policy=Object.hasOwn(MODEL_PROFILES,kind)?MODEL_PROFILES[kind]:null;
+  maxToolCalls??=policy?.maximumNativeToolCalls;
+  if(!policy||allowWeb!==undefined||!Number.isSafeInteger(maxToolCalls)||maxToolCalls<0||maxToolCalls>policy.maximumNativeToolCalls||Buffer.byteLength(stdin)>24_576||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>120_000||!Number.isInteger(maxOutputTokens)||maxOutputTokens<1||maxOutputTokens>6000) return Promise.reject(fail('invalid_input'));
   return new Promise((resolve,reject)=>{
     if(signal?.aborted) {reject(fail('task_timeout'));return;}
     let child,done=false,budgetTimer,killTimer,stdoutBytes=0,stderrBytes=0,lineBuffer='',message=null,usage=null,turns=0,toolCalls=0;
-    const decoder=new StringDecoder('utf8');
+    const decoder=new StringDecoder('utf8'),webItems=new Map();
     const eventCounts={agentMessages:0,reasoningItems:0,webSearches:0,commandExecutions:0,fileChanges:0,mcpCalls:0,otherItems:0};
     function kill(finished) {if(!child?.pid){finished();return;}try{process.kill(-child.pid,'SIGTERM');}catch{}killTimer=setTimeout(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}finished();},100);}
     function stop(code) {if(done)return;done=true;clearTimeout(budgetTimer);signal?.removeEventListener('abort',abort);kill(()=>reject(Object.assign(fail(code),{metrics:{eventCounts:{...eventCounts},stdoutBytes,stderrBytes,usage}})));}
@@ -140,9 +163,22 @@ export function executeCodex({executable,args,cwd,env,stdin,signal,timeoutMs=45_
         const item=e.item;
         if(!plain(item)||typeof item.type!=='string') return stop('invalid_output');
         if(e.type==='item.started'||e.type==='item.completed'&&item.type==='agent_message')eventCounts[({agent_message:'agentMessages',reasoning:'reasoningItems',web_search:'webSearches',command_execution:'commandExecutions',file_change:'fileChanges',mcp_tool_call:'mcpCalls'})[item.type]??'otherItems']++;
-        // Tools are disabled before execution; events provide an independent
-        // fail-closed guard, not proof of the catalogue offered to the model.
-        if(!['agent_message','reasoning'].includes(item.type)) return stop('tool_not_allowed');
+        // The fixed profile excludes every local/utility tool. Web item limits
+        // react to observed starts; a search HTTP request may be in flight.
+        // These events do not prove the catalogue offered to the model.
+        if(item.type==='web_search'){
+          if(kind!=='company_resolution')return stop('tool_not_allowed');
+          if(typeof item.id!=='string'||!item.id||item.id.length>256)return stop('invalid_output');
+          if(e.type==='item.started'){
+            if(webItems.has(item.id))return stop('invalid_output');
+            if(++toolCalls>maxToolCalls)return stop('tool_limit');
+            webItems.set(item.id,false);
+          }else if(e.type==='item.completed'){
+            if(webItems.get(item.id)!==false)return stop('invalid_output');
+            if(!plain(item.action)||!['search','open_page','find_in_page'].includes(item.action.type))return stop('tool_not_allowed');
+            webItems.set(item.id,true);
+          }else return stop('invalid_output');
+        }else if(!['agent_message','reasoning'].includes(item.type)) return stop('tool_not_allowed');
         if(item.type==='agent_message'&&e.type==='item.completed') {
           if(typeof item.text!=='string'||Buffer.byteLength(item.text)>65_536) return stop('output_limit');
           message=item.text;
@@ -170,6 +206,7 @@ export function executeCodex({executable,args,cwd,env,stdin,signal,timeoutMs=45_
       lineBuffer+=decoder.end();
       if(lineBuffer.trim()){try{event(JSON.parse(lineBuffer));}catch{return stop('invalid_output');}}
       if(done)return;
+      if([...webItems.values()].some(completed=>!completed))return stop('provider_unavailable');
       if(code!==0||!message||!usage)return stop(code!==0?'provider_unavailable':'invalid_output');
       let data;try{data=JSON.parse(message);}catch{return stop('invalid_output');}
       done=true;kill(()=>resolve({data,usage,toolCalls,stdoutBytes,stderrBytes,eventCounts}));
@@ -187,7 +224,7 @@ export function createCodexModel({config={},execute=executeCodex,onMetric=()=>{}
   const schemas={search_intent:new URL('./model-schemas/intent.schema.json',import.meta.url),company_resolution:new URL('./model-schemas/company.schema.json',import.meta.url)};
   // The API/DB UID cannot directly launch a model with its own filesystem access.
   // A trusted dedicated-UID broker is a required deployment dependency.
-  function available(kind){return ['search_intent','company_resolution'].includes(kind)&&execute!==executeCodex&&checkModelIsolation(config,{company:kind==='company_resolution'});}
+  function available(kind){return ['search_intent','company_resolution'].includes(kind)&&execute!==executeCodex&&checkModelIsolation(config,{kind});}
   async function run(kind,input,{signal}={}) {
     if(!available(kind))throw fail('dependency_unavailable');
     const started=performance.now(),schema=JSON.parse(readFileSync(schemas[kind],'utf8'));
