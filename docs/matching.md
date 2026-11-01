@@ -12,9 +12,10 @@ matching. Neither provider failure nor insufficient evidence removes a requireme
 or substitutes unprocessed jobs. `feed.publicJob` supplies the final public
 projection; raw bodies, evidence hashes, scan counts and task output stay private.
 
-The default provider is disabled. Existing-key use is authorized in
-[resource issue 49](https://github.com/colophon-group/justup/issues/49), with the
-initial Justup cumulative guard still mandatory. Isolation review, confirmed
+The default provider is disabled. Existing-key use follows the recorded
+`jev-evaluation-budget` authorization, with the initial Justup cumulative guard
+still mandatory. Follow [operations](operations.md) for protected configuration
+and [release verification](development-process.md) before activation. Isolation review, confirmed
 account pricing, protected key delivery, ledger initialization and a completed
 real benchmark remain pending. No
 real provider request or infrastructure allocation is part of the test suite.
