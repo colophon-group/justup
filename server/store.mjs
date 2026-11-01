@@ -82,6 +82,7 @@ function normalizedJob(raw, snapshotAt, verifiedAt) {
       workplace: ['onsite', 'remote', 'hybrid'].includes(l.workplace) ? l.workplace : null,
       geoType: string(l.geoType, 100, true) })), employmentTypes,
     seniority: raw.seniority == null ? null : { id: string(raw.seniority.id, 100, true), name: string(raw.seniority.name, 200, true) },
+    occupation: raw.occupation == null ? null : { id: string(raw.occupation.id, 100), name: string(raw.occupation.name, 200) },
     salary: raw.salary == null ? null : { min: number(raw.salary.min), max: number(raw.salary.max), currency: string(raw.salary.currency, 10, true), period: string(raw.salary.period, 30, true) },
     experience: { min: number(raw.experience?.min), max: raw.experience?.max === 99 ? null : number(raw.experience?.max), openEnded: raw.experience?.openEnded === true || raw.experience?.max === 99 },
     evidence: { source: 'jobseek_public', metadataFetchedAt: new Date(metadataFetchedAt).toISOString(),

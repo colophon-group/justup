@@ -137,6 +137,8 @@ Keep the original lookup available after rejection. Acceptance references the ex
 
 The current acceptance transaction publishes/reuses a canonical catalogue ID and performs this automatic follow once. Imported IDs remain canonical; newly discovered identities share a public record by validated official domain, with requested coverage and no invented monitoring history. Exact-preview candidate IDs remain separate from catalogue IDs. Explicit unfollow survives retries and later scope requests. Setup progression and priority integration still require their complete company-request qualification.
 
+Public catalogue pages now use bounded signed continuations, independent of account/private request/follow state. The [company report projection](company-hiring-reports.md) combines eligible public structured role/salary samples with the existing published frozen source history. It records the actual sample window and separate observation/generation/publication timestamps, preserves unknown or interrupted counts, and exposes no underlying restricted listing identities. Only attributable source scopes supply monitoring-start evidence. Exact-ID public company website metadata can preserve accepted catalogue identities across a later source import. Real source-history and deployed browser qualification remain first-release requirements.
+
 Repeated submissions and priority requests are idempotent. Distinct users share identity and setup progress. Subscription entitlement controls priority, while free requests remain accepted and visible. Show separate catalogue-publication and coverage-active milestones, with a reason and next action for blocked work. The actual configuration work is outside this design.
 
 ## 6. Weekly Hiring Wire

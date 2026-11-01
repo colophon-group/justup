@@ -93,7 +93,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   function capabilities(locale) {
     const result = { search: false, aiMatching: false, companyRequests: false, hiringWire: false };
     for (const service of services) Object.assign(result, typeof service.capabilities === 'function' ? service.capabilities() : service.capabilities);
-    return { viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
+    return { follows:false,preferences:false,viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
       search:authentication(locale).loginEnabled&&result.search===true,aiMatching:authentication(locale).loginEnabled&&result.aiMatching===true,companyRequests:authentication(locale).loginEnabled&&result.companyRequests===true,
       sse:authentication(locale).loginEnabled&&result.sse===true,
       visitorSearch:policies(locale).reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
@@ -197,7 +197,14 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         const pageLimit = rawLimit == null ? 12 : /^\d{1,2}$/.test(rawLimit) ? Number(rawLimit) : NaN;
         return finish(200, feed.list({ viewer, cursor: url.searchParams.get('cursor'), limit: pageLimit }));
       }
-      if (method === 'GET' && path === '/companies') return finish(200, feed.companies({ q: url.searchParams.get('q') ?? '' }));
+      if (method === 'GET' && path === '/companies') {
+        if ([...url.searchParams.keys()].some(key => !['q', 'limit', 'cursor'].includes(key))
+            || ['q', 'limit', 'cursor'].some(key => url.searchParams.getAll(key).length > 1)) throw problem('invalid_query');
+        const rawLimit = url.searchParams.get('limit');
+        const limit = rawLimit == null ? 20 : /^[1-9]\d?$/.test(rawLimit) ? Number(rawLimit) : NaN;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw problem('invalid_limit');
+        return finish(200, feed.companies({ q: url.searchParams.get('q') ?? '', cursor: url.searchParams.get('cursor'), limit }));
+      }
       if (method === 'GET' && /^\/companies\/[^/]+$/.test(path)) return finish(200, feed.company(decodePath(path.split('/')[2])));
       if (method === 'GET' && path === '/health') {
         const readiness = typeof config.readiness === 'function' ? config.readiness() : { ready: true, runner: { ready: false, identity: null } };

@@ -21,7 +21,7 @@ test('fresh exact-build heartbeat exposes actual runner metadata and bounded boo
 test('API advertises queue availability and enqueues work without constructing inference providers',async t=>{
   const f=fixture(t);f.write();const db=new DatabaseSync(':memory:');t.after(()=>db.close());let serial=0;const queued=new Map();
   const tasks={enqueue(input){const task={...input,id:`task-${++serial}`,status:'pending',createdAt:new Date(AT).toISOString(),updatedAt:new Date(AT).toISOString()};queued.set(task.id,task);return task;},get:(owner,id)=>queued.get(id)?.ownerId===owner?queued.get(id):null,delete:(owner,id)=>queued.delete(id),complete:()=>false,publicView:task=>({id:task.id,status:task.status,result:null,error:null})};
-  const feed={eligibleJobs:()=>[],publicJob:j=>j,companies:()=>({items:[]}),generation:()=>null,coverage:()=>({stale:true})};
+  const feed={eligibleJobs:()=>[],publicJob:j=>j,companies:()=>({items:[]}),company:id=>({id}),generation:()=>null,coverage:()=>({stale:true})};
   const config={...f.config,dbPath:':memory:',allowedOrigin:'https://preview.example',policiesReviewed:true,privacyUrl:'https://preview.example/privacy',usageUrl:'https://preview.example/usage',policyVersion:'fixture',get model(){throw Error('API read model config');},get jev(){throw Error('API read provider key');},get hiringWire(){throw Error('API read Wire proof/socket');},get sourceCoverage(){throw Error('API read source history path');}};
   const services=createApiServices({db,feed,tasks,config,visitorAvailability:()=>true,accessForAccount:()=>({kind:'paid',fullAccess:true}),now:()=>AT,beforePrivateDelete:()=>{}}),intent=services[0],company=services[1];
   assert.equal(intent.capabilities().search,true);assert.equal(company.capabilities().companyRequests,true);
