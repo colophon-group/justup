@@ -36,7 +36,7 @@ The source field allowlist is exactly:
 id company_id company_name company_slug title source_url is_active has_content
  tdm_reserved first_seen_at last_seen_at locales location_direct_ids location_names
  location_types location_geo_types employment_type seniority_id seniority_name
- salary_min salary_max salary_currency salary_period experience_min_years
+ salary_min salary_max salary_currency salary_period occupation_id occupation_name experience_min_years
  experience_max_years
 ```
 
@@ -44,7 +44,9 @@ New source fields cannot enter the export implicitly. Company identities use onl
 
 Location arrays are paired by their original position. Positive int32 GeoNames IDs from `location_direct_ids` become canonical decimal strings; booleans, fractions, zero, negative and out-of-range numbers remain unknown. Existing opaque string IDs remain compatible. IDs are never inferred from location labels. A missing workplace value is `unknown`; only explicit `onsite`, `remote` or `hybrid` values become those workplace types. A location label alone makes no claim about cross-border remote eligibility. Employment values are limited to `full_time`, `part_time`, `contract`, `temporary`, `volunteer` and `full_or_part`. Missing or negative experience is unknown; a maximum of 99 is represented as open ended. Other unknown fields remain null or empty rather than guessed.
 
-The store additionally accepts an explicitly reviewed `companyIdentities:[{companyId,officialDomain}]` array, at most 1,000 unique source company IDs already present in its immutable source registry. This optional evidence can bind a later source UUID to a company accepted in Justup earlier, using an exact validated official domain. The canonical public URL, follow and request identity survives; the stored posting/source company IDs and original discovery times do not change. A conflicting domain or canonical reassignment rejects the whole import. The current public listing exporter has no verified official-company-domain input and does not generate this array. Do not derive it from company names, slugs or ATS posting URLs. A reviewed authoritative company-identity producer must supply it before claiming automatic cross-source identity integration. The [reading-state guide](reading-preferences.md) describes the account and catalogue boundary.
+The importer also makes at most four public `company` collection lookups of 250 distinct selected company IDs, requesting only `id,website` from the same approved Typesense host. The explicit source `website` field supplies a validated HTTPS official hostname for optional `companyIdentities:[{companyId,officialDomain}]`; missing, duplicate, invalid, ATS or failed results stay unbound. No name, slug, posting URL, parent-domain guess or `www` rewrite creates evidence. The store accepts at most 1,000 unique source company IDs already in its immutable source registry. Exact-domain evidence can bind a later source UUID to a company accepted in Justup earlier: its public URL, follow and request identity survives while source posting/company IDs and discovery times remain unchanged. Conflicting domain or canonical reassignment rejects the whole import. The [reading-state guide](reading-preferences.md) describes this boundary; the [report guide](company-hiring-reports.md) records the audited public source fields and remaining real-data qualification.
+
+Positive int32 `occupation_id` plus a nonempty source `occupation_name` become the optional structured occupation label used by company reports. Missing or malformed occupation evidence stays null. The report does not infer roles from title sampling queries or call another classifier.
 
 ## Description evidence
 

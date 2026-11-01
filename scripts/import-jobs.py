@@ -32,11 +32,13 @@ SOURCE_FIELDS = (
     "locales", "location_direct_ids", "location_names", "location_types",
     "location_geo_types", "employment_type", "seniority_id", "seniority_name",
     "salary_min", "salary_max", "salary_currency", "salary_period",
+    "occupation_id", "occupation_name",
     "experience_min_years", "experience_max_years",
 )
 EMPLOYMENT = frozenset(("full_time", "part_time", "contract", "temporary", "volunteer", "full_or_part"))
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 LOCALE = re.compile(r"^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$")
+ATS_DOMAINS = ("greenhouse.io", "lever.co", "workdayjobs.com", "myworkdayjobs.com", "smartrecruiters.com", "ashbyhq.com", "bamboohr.com", "recruitee.com", "personio.com", "personio.de", "teamtailor.com", "icims.com", "jobvite.com", "successfactors.com", "oraclecloud.com")
 
 
 class ImportFailure(Exception):
@@ -104,6 +106,56 @@ def safe_url(value):
         return value
     except ValueError:
         return None
+
+
+def official_domain(website):
+    """Use only the explicit public company.website field, never a posting URL."""
+    if not safe_url(website) or len(website) > 2048:
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(website)
+        host = parsed.hostname.lower().rstrip(".")
+        if parsed.scheme != "https" or parsed.port not in (None, 443) or parsed.fragment or len(host) > 253:
+            return None
+    except (ValueError, AttributeError):
+        return None
+    try:
+        ipaddress.ip_address(host)
+        return None
+    except ValueError:
+        pass
+    if "." not in host or not re.fullmatch(r"[a-z0-9.-]+", host) or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split(".")):
+        return None
+    if re.search(r"(?:^|\.)(?:localhost|local|internal|home|lan|invalid|test)$", host) or re.search(r"(?:^|\.)localhost\.", host):
+        return None
+    if any(host == ats or host.endswith("." + ats) for ats in ATS_DOMAINS):
+        return None
+    return host
+
+
+def company_identities(client, jobs):
+    """At most four exact-ID public reads; missing evidence stays unbound."""
+    identities = []
+    ids = sorted({job["companyId"] for job in jobs})
+    for start in range(0, len(ids), 250):
+        batch = ids[start:start + 250]
+        try:
+            rows = documents(client.search({"collection": "company", "q": "*", "query_by": "name",
+                "filter_by": "id:=[" + ",".join("`" + value + "`" for value in batch) + "]",
+                "include_fields": "id,website", "per_page": len(batch)}), len(batch))
+        except ImportFailure:
+            continue
+        # Conflicting duplicate source identities cannot authorize an alias.
+        seen, ambiguous = {}, set()
+        for row in rows:
+            identifier = row.get("id")
+            if not isinstance(identifier, str) or identifier not in batch:
+                continue
+            if identifier in seen:
+                ambiguous.add(identifier)
+            seen[identifier] = official_domain(row.get("website"))
+        identities.extend({"companyId": identifier, "officialDomain": domain} for identifier, domain in sorted(seen.items()) if domain and identifier not in ambiguous)
+    return identities
 
 
 class VisibleText(HTMLParser):
@@ -276,6 +328,9 @@ def normalize_job(raw, fetched_at, client, clock=None, body_budget=None):
     employment = list(dict.fromkeys(value for value in employment_raw if isinstance(value, str) and value in EMPLOYMENT)) if isinstance(employment_raw, list) else []
     seniority_name = text(raw.get("seniority_name"), 100)
     seniority_id = text(raw.get("seniority_id"), 100)
+    occupation_id = raw.get("occupation_id")
+    occupation_name = text(raw.get("occupation_name"), 200)
+    occupation = {"id": str(occupation_id), "name": occupation_name} if type(occupation_id) is int and 0 < occupation_id <= 2147483647 and occupation_name and not re.search(r"[\x00-\x1f\x7f]", occupation_name) else None
     salary_min, salary_max = number(raw.get("salary_min")), number(raw.get("salary_max"))
     currency, period = text(raw.get("salary_currency"), 10), text(raw.get("salary_period"), 30)
     salary = {"min": salary_min, "max": salary_max, "currency": currency or None, "period": period or None} if salary_min is not None or salary_max is not None else None
@@ -316,7 +371,7 @@ def normalize_job(raw, fetched_at, client, clock=None, body_budget=None):
         "lastObserved": source_time(raw.get("last_seen_at")), "locales": locales,
         "locations": locations, "employmentTypes": employment,
         "seniority": {"id": seniority_id or None, "name": seniority_name or None} if seniority_id or seniority_name else None,
-        "salary": salary, "experience": {"min": experience_min, "max": None if open_ended else experience_max, "openEnded": open_ended},
+        "salary": salary, "occupation": occupation, "experience": {"min": experience_min, "max": None if open_ended else experience_max, "openEnded": open_ended},
         "reserved": False, "hasContent": True, "bodyText": body_text, "evidence": evidence,
     }
 
@@ -435,10 +490,11 @@ def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=Non
         unknown.update(set(batch) - refreshed)
     # Keep the initial selection ceiling even when refreshing a previous snapshot.
     jobs = sorted(selected.values(), key=lambda item: (-utc(item["firstObserved"]).timestamp(), item["id"]))[:max_jobs]
+    identities = company_identities(client, jobs)
     return {
         "schemaVersion": 1, "snapshotAt": iso(snapshot), "verifiedAt": iso(clock()),
         "selection": {"source": "jobseek_public", "cutoffAt": iso(cutoff), "rule": "reserved_age_windows_companies_diversity_then_newest", "samplingBudgets": {"guest48HoursTo14Days": guest_budget, "recentUnder48Hours": recent_budget, "companyRepresentatives": company_budget, "diversity": diversity_budget}, "limit": max_jobs, "initialReturnedDocuments": returned, "initialQueries": query_count, "knownIdsRefreshed": len(known), "bodyTextBudgetBytes": BODY_BUDGET_LIMIT, "bodyTextRetainedBytes": sum(len(job["bodyText"].encode("utf-8")) for job in jobs if job["bodyText"]), "selectedJobs": len(jobs), "selectedCompanies": len({job["companyId"] for job in jobs})},
-        "jobs": jobs, "observations": observations, "unknownIds": sorted(unknown),
+        "jobs": jobs, "observations": observations, "unknownIds": sorted(unknown), "companyIdentities": identities,
     }
 
 

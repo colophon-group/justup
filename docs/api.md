@@ -143,6 +143,7 @@ The composed runtime implements follows, viewed observations, interface preferen
 | --- | --- |
 | `GET /companies?q=…&limit=20&cursor=…` | Public catalogue page `{items,coverage,nextCursor}` of imported identities and accepted company-request identities. |
 | `GET /companies/:id` | Public canonical identity/source evidence; absent history remains unavailable. |
+| `GET /companies/:id/report` | Public deterministic report with historical provenance, unknown/partial periods, guest-eligible role labels and reported salary samples. No query parameters or generation side effects. |
 | `GET /company-requests` | Account-owned requests and current state. |
 | `POST /company-requests` | `{input,domain?,careerUrl?,scope?,requestKey}` → known candidate or bounded identity-resolution task. |
 | `POST /company-requests/:id/accept` | `{candidateId,previewRevision}` and `Idempotency-Key` → atomically publish/reuse canonical company identity and follow once, preserving explicit unfollow. |
@@ -154,7 +155,9 @@ The public catalogue accepts only `q`, `limit` and `cursor`, once each. `q` is a
 
 A known immediate identity returns `201 {request}`; queued resolution returns `202 {request,task}`. Acceptance returns `200 {request}` with status accepted and references the exact server-held candidate and preview revision. Requirements use `{id,text,handling,reason}` and warnings use `{code,message,requirementIds}`; `handling` is primary/ai/preference/unsatisfied.
 
-When a reviewed import supplies verified official-domain company identity evidence, a later source UUID can alias the original accepted public company ID. Catalogue reads, follows and search filters use that canonical ID while stored source posting identities remain immutable. A name or posting URL alone cannot authorize a binding; the current listing exporter lacks this additional company identity evidence. See [source identity integration](reading-preferences.md).
+When the importer obtains verified official-domain evidence through bounded exact-ID reads of Jobseek's public `company.website`, a later source UUID can alias the original accepted public company ID. Catalogue reads, reports, follows and search filters use that canonical ID while stored source posting identities remain immutable. Missing or failed company lookups remain unbound; a name or posting URL alone cannot authorize a binding. See [source identity integration](reading-preferences.md).
+
+The [company report contract](company-hiring-reports.md) defines `{companyId,asOf,provenance,scope,freshness,monitoringSince,hiringHistory,hiringRoles,reportedSalaries,methodology}`. Current facts use only the fresh active unreserved 48-hour–14-day public listing sample, with explicit label/salary sample coverage and `completeCompanyCoverage:false`. Historical facts use the latest published frozen `jobseek-coverage-v1` snapshot and its own observation/generation/publication times. Missing or interrupted periods yield unknown counts; no current snapshot can establish monitoring start or historical zeros. Currency and salary period remain separate. Public projections contain no raw source scope or posting identities, bodies, private request/follow/search state or provider configuration.
 
 Imported companies have `coverage.state:"imported_snapshot"`; an accepted new identity has `coverage.state:"requested"`. Neither claims that a board has been configured or that Justup currently monitors it. Do not fabricate a company website from an applicant-tracking-system job URL, or expose private crawler board configuration. Request acceptance does not write to Jobseek or start crawler onboarding.
 
