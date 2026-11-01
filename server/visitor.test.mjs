@@ -262,7 +262,7 @@ test('insufficient or unavailable hidden classification never claims a final cou
 
 test('real password registration commits the visitor search and private draft in its auth transaction',async t=>{
   const s=await setup(t,{realAuth:true}),c=s.client();await c.session();const id=await s.create(c);await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:1,activeSearchId:id,drafts:{[id]:'Keep this unsent draft'}}});
-  const result=await c.request('/auth/register',{method:'POST',body:{username:'visitor-handoff',password:randomBytes(24).toString('base64url')}});assert.equal(result.status,201);assert.equal(result.body.visitorHandoff.status,'complete');assert.equal(result.body.access.fullAccess,false);assert.equal(result.body.user.expiresAt,null);
+  const result=await c.request('/auth/register',{method:'POST',body:{acceptance:{usageVersion:'test-reviewed',locale:'en',adultAndCapable:true},username:'visitor-handoff',password:randomBytes(24).toString('base64url')}});assert.equal(result.status,201);assert.equal(result.body.visitorHandoff.status,'complete');assert.equal(result.body.access.fullAccess,false);assert.equal(result.body.user.expiresAt,null);
   const searches=await c.request('/searches');assert.equal(searches.body.items[0].id,id);assert.equal((await c.request('/workspace')).body.state.drafts[id],'Keep this unsent draft');
   const page=await c.request(`/searches/${id}/results?revision=1`);assert.deepEqual(page.body.items.map(j=>j.id),['visible-accepted','visible-rejected']);assert.deepEqual(page.body.hiddenMatches,{status:'exact',count:2});
   assert.equal((await c.request('/access/activate',{method:'POST',body:{}})).status,403);assert.equal(s.modelCalls(),1);
@@ -270,7 +270,7 @@ test('real password registration commits the visitor search and private draft in
 
 test('the independent queue reader honors persisted paid and free periods and rechecks expiry after inference',async t=>{
   for(const kind of ['paid','free'])await t.test(kind,async t=>{
-    const s=await setup(t,{realAuth:true,residual:true}),c=s.client();await c.session();const registration=await c.request('/auth/register',{method:'POST',body:{username:`current-${kind}`,password:randomBytes(24).toString('base64url')}});assert.equal(registration.status,201);const owner=registration.body.user.id,db=s.app.store.db;
+    const s=await setup(t,{realAuth:true,residual:true}),c=s.client();await c.session();const registration=await c.request('/auth/register',{method:'POST',body:{acceptance:{usageVersion:'test-reviewed',locale:'en',adultAndCapable:true},username:`current-${kind}`,password:randomBytes(24).toString('base64url')}});assert.equal(registration.status,201);const owner=registration.body.user.id,db=s.app.store.db;
     if(kind==='paid')db.prepare('INSERT INTO access_subscriptions (subscription_hash,account_id,state_version,status,plan,paid_through_at,reconcile_pending) VALUES(?,?,?,?,?,?,?)').run('synthetic-subscription',owner,START,'active','weekly',START+1000,0);
     else db.prepare('INSERT INTO access_free_periods VALUES(?,?,?,?)').run(owner,'standard',START,START+1000);
     const created=await c.request('/searches',{method:'POST',body:{query:'Engineer four day week',requestKey:'persisted'}});await s.work('search_intent');const path=`/searches/${created.body.search.id}/results?revision=1`;const initial=await c.request(path);assert.equal(initial.status,200);
@@ -510,7 +510,7 @@ test('a live private pending marker stops visitor writes and independent queued 
 test('English review without exact asset proof cannot register or accept a private search',async t=>{
   const s=await setup(t,{realAuth:true,runtime:{policyAssetProof:undefined}}),c=s.client();await c.session();
   const submitted=await c.request('/visitor/searches',{method:'POST',body:{query:'Private English query',requestKey:'no-english-proof'}});
-  const registered=await c.request('/auth/register',{method:'POST',body:{username:'unproved-english',password:'Synthetic unproved English password'}});
+  const registered=await c.request('/auth/register',{method:'POST',body:{acceptance:{usageVersion:'test-reviewed',locale:'en',adultAndCapable:true},username:'unproved-english',password:'Synthetic unproved English password'}});
   assert.deepEqual({registration:registered.status,submission:submitted.status},{registration:503,submission:503});
   for(const table of ['auth_accounts','justup_visitors','justup_searches','justup_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
   assert.equal(s.modelCalls(),0);assert.equal(s.providerCalls(),0);assert.equal(s.companyCalls(),0);
@@ -520,7 +520,7 @@ test('removing English asset proof revokes existing account work while owned rea
   const policyAssetProof=syntheticPolicyProof({origin:ORIGIN,sourceCommit:'a'.repeat(40),version:'test-reviewed'});
   const s=await setup(t,{realAuth:true,runtime:{policyAssetProof}}),c=s.client();await c.session();
   const password='Synthetic retained English account password';
-  assert.equal((await c.request('/auth/register',{method:'POST',body:{username:'english-proof-owner',password}})).status,201);
+  assert.equal((await c.request('/auth/register',{method:'POST',body:{acceptance:{usageVersion:'test-reviewed',locale:'en',adultAndCapable:true},username:'english-proof-owner',password}})).status,201);
   assert.equal((await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'before-proof-removal'}})).status,202);
   assert.equal((await c.request('/company-requests',{method:'POST',body:{input:'Private synthetic company',scope:null,requestKey:'company-before-proof-removal'}})).status,202);
   delete s.config.policyAssetProof;
@@ -565,7 +565,7 @@ test('policy-paused stored workspace reads retain current paid viewed access wit
 test('persisted account session survives a policy-closed restart while query and company processing stop',async t=>{
   const dir=mkdtempSync(join(tmpdir(),'justup-account-policy-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),generationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(generationPath,'00000000-0000-4000-8000-000000000000\n');
   const runtime={dbPath:join(dir,'state.sqlite'),privateGenerationPath:generationPath,backupDir},old=await setup(t,{runtime,realAuth:true}),c=old.client();await c.session();
-  const registered=await c.request('/auth/register',{method:'POST',body:{username:'policy-account',password:'Synthetic account password 123!'}});assert.equal(registered.status,201);
+  const registered=await c.request('/auth/register',{method:'POST',body:{acceptance:{usageVersion:'test-reviewed',locale:'en',adultAndCapable:true},username:'policy-account',password:'Synthetic account password 123!'}});assert.equal(registered.status,201);
   assert.equal((await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'before-restart'}})).status,202);
   assert.equal((await c.request('/company-requests',{method:'POST',body:{input:'Synthetic Unlisted Company',scope:null,requestKey:'company-before-restart'}})).status,202);
   const next=await setup(t,{runtime,realAuth:true,policiesReviewed:false}),persisted=next.client();persisted.restore(c.snapshot());const current=await persisted.session();assert.equal(current.body.user.id,registered.body.user.id);
@@ -648,7 +648,7 @@ test('visitor and configured account expiry remove linked measurement and review
     const s=await setup(t,{measurement:true,realAuth:mode==='account',visitor:{ttlMs:60000},runtime:mode==='account'?{accountTtlMs:60000}:{}}),db=s.app.store.db,c=s.client();await c.session();
     let owner,id;
     if(mode==='account'){
-      const registered=await c.request('/auth/register',{method:'POST',body:{username:'expiring-measurement',password:'Synthetic expiry password 123!'}});assert.equal(registered.status,201);owner=registered.body.user.id;
+      const registered=await c.request('/auth/register',{method:'POST',body:{acceptance:{usageVersion:'test-reviewed',locale:'en',adultAndCapable:true},username:'expiring-measurement',password:'Synthetic expiry password 123!'}});assert.equal(registered.status,201);owner=registered.body.user.id;
       const submitted=await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'expiry'}});assert.equal(submitted.status,202);id=submitted.body.search.id;await s.work('search_intent');
     }else{id=await s.create(c);owner=db.prepare('SELECT id FROM justup_visitors').get().id;}
     s.records.evaluations.stage({ownerId:owner,referenceId:id,revision:1,task:'search_intent',reason:'edit_requires_review'});

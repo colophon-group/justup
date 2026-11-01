@@ -3,6 +3,7 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { createEntitlements } from './entitlements.mjs';
+import { POLICY_LOCALES, policyScopes } from './policies.mjs';
 
 const deriveKey = promisify(scrypt);
 const MAX_TIMESTAMP = 8_640_000_000_000_000;
@@ -15,6 +16,7 @@ const ERROR_DETAILS = {
   account_limit: [403, 'The account limit has been reached.'],
   username_taken: [409, 'That username is unavailable.'],
   unauthenticated: [401, 'Sign in to continue.'],
+  policy_unavailable: [503, 'Processing is unavailable until policies are approved for this language.'],
 };
 
 // Bound expensive work across all auth instances in this process. The HTTP
@@ -105,6 +107,15 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     ) STRICT;
     CREATE INDEX IF NOT EXISTS auth_sessions_account ON auth_sessions(account_id);
     CREATE INDEX IF NOT EXISTS auth_sessions_expiry ON auth_sessions(expires_at);
+    CREATE TABLE IF NOT EXISTS auth_registration_acceptance (
+      account_id TEXT PRIMARY KEY REFERENCES auth_accounts(id) ON DELETE CASCADE,
+      accepted_at INTEGER NOT NULL,
+      usage_version TEXT NOT NULL CHECK(length(usage_version) BETWEEN 1 AND 100),
+      locale TEXT NOT NULL CHECK(locale IN ('en','de','fr','it','es')),
+      reviewed_locale TEXT NOT NULL CHECK(reviewed_locale IN ('en','de','fr','it','es')),
+      adult_and_capable INTEGER NOT NULL CHECK(adult_and_capable = 1),
+      policy_scope_json TEXT NOT NULL CHECK(length(policy_scope_json) <= 4096)
+    ) STRICT;
   `);
 
   // Additive migration: existing identities become durable. A deployment policy
@@ -134,6 +145,26 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
   const insertAccount = db.prepare(`
     INSERT INTO auth_accounts (id, username, password_salt, password_hash, created_at, account_expires_at) VALUES (?, ?, ?, ?, ?, ?)
   `);
+
+  const insertAcceptance = db.prepare(`
+    INSERT INTO auth_registration_acceptance
+      (account_id, accepted_at, usage_version, locale, reviewed_locale, adult_and_capable, policy_scope_json)
+    VALUES (?, ?, ?, ?, ?, 1, ?)
+  `);
+  const removeAcceptance = db.prepare('DELETE FROM auth_registration_acceptance WHERE account_id = ?');
+
+  function registrationPolicy(declaration) {
+    if (!declaration || typeof declaration !== 'object' || Array.isArray(declaration)
+        || Object.keys(declaration).sort().join(',') !== 'adultAndCapable,locale,usageVersion'
+        || declaration.adultAndCapable !== true || !POLICY_LOCALES.includes(declaration.locale)
+        || typeof declaration.usageVersion !== 'string') throw failure('invalid_input');
+    // policyScopes returns only allowlisted notice metadata and exact asset
+    // identities. Never copy runtime configuration or browser-provided hashes.
+    const scope = policyScopes(config)[declaration.locale];
+    if (!scope.reviewed) throw failure('policy_unavailable');
+    if (declaration.usageVersion !== scope.version) throw failure('invalid_input');
+    return JSON.stringify(scope);
+  }
 
   function transaction(work) {
     db.exec('BEGIN IMMEDIATE');
@@ -173,10 +204,18 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     const inviteCode = input?.inviteCode;
     if (!username || !validPassword(password) || (requiresInvitation && !boundedInvite(inviteCode))) throw failure('invalid_input');
     if (requiresInvitation && !timingSafeEqual(digest(inviteCode), inviteDigest)) throw failure('invalid_credentials');
+    // Only the trusted public-registration boundary supplies this option. Local
+    // synthetic/bootstrap callers create no invented real-user acceptance.
+    const declaration = options.registrationAcceptance == null ? null : { ...options.registrationAcceptance };
+    const acceptedPolicy = declaration === null ? null : registrationPolicy(declaration);
+    const requireSamePolicy = () => {
+      if (acceptedPolicy !== null && JSON.stringify(policyScopes(config)[declaration.locale]) !== acceptedPolicy) throw failure('policy_unavailable');
+    };
 
     const salt = randomBytes(16);
     const hash = await passwordHash(password, salt);
     return transaction(() => {
+      requireSamePolicy();
       if (byUsername.get(username)) throw failure('username_taken');
       if (maxAccounts !== null && accountCount.get().count >= maxAccounts) throw failure('account_limit');
       const timestamp = now();
@@ -184,8 +223,13 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
       if (deadline !== Infinity && (!Number.isSafeInteger(deadline) || deadline > MAX_TIMESTAMP || deadline <= timestamp)) throw failure('registration_closed');
       const account = { id: randomUUID(), username, created_at: timestamp, account_expires_at: deadline === Infinity ? null : deadline };
       insertAccount.run(account.id, username, salt, hash, timestamp, account.account_expires_at);
+      if (acceptedPolicy !== null) {
+        const scope = JSON.parse(acceptedPolicy);
+        insertAcceptance.run(account.id, timestamp, scope.version, scope.locale, scope.reviewedLocale, acceptedPolicy);
+      }
       const issued = issueSession(account, timestamp);
       authenticatedCallback(options, account.id, 'register');
+      requireSamePolicy();
       return issued;
     });
   }
@@ -240,6 +284,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
       throw new TypeError('Account deletion callback must be synchronous.');
     }
     entitlements.deleteAccount(accountId);
+    removeAcceptance.run(accountId);
     removeAccount.run(accountId);
     return sessionsDeleted;
   }

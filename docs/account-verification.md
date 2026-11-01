@@ -60,6 +60,99 @@ Resend receives recipient, fixed subject and code-bearing message. Its Ireland s
 
 `server/email-verification.test.mjs` exercises real SQLite/auth/queue/HTTP with fake delivery: retry, original session, attempt budget, explicit activation, overlap, deletion/re-registration, deletion and policy pause during a provider wait, restore invalidation and send ceilings. `account-provider-clients.test.mjs` covers fixed requests, response bounds/redaction and preparatory Stripe test signatures/account isolation. No provider is contacted.
 
-The shared Stripe primitives pin [the current documented version](https://docs.stripe.com/api/versioning), `2026-10-28.endive`, accept only restricted test credentials and verify exact raw webhook bytes using the [documented v1 signature protocol](https://docs.stripe.com/webhooks#verify-manually). They are preparatory; no webhook route, checkout, billing configuration or runtime Stripe credential is enabled here. A scoped test runtime key, approved test prices and signed current-state lifecycle integration remain separate work. Live price, tax registration, country, refunds and paid resource decisions remain unapproved.
+The [ordinary Stripe test adapter](account-billing.md) already composes restricted test credentials, fixed current-state reconciliation, the raw-body signed webhook route, test Checkout and provider termination before deletion. Its source integration is separate from real sandbox/hosted-UI proof. It does not qualify the conditional Managed Payments target, live pricing, tax, refunds or any live charge.
 
 Before activation, review the actual served policy statements, free quota allocation, protected key delivery, exact API/queue artifacts and live fake-account email journey. Qualify provider timeouts/retries and deletion/restore under the real service identities. Source tests do not approve these operations.
+
+
+## Run one bounded operator mailbox proof
+
+`scripts/account-test-journey.mjs` is the reusable HTTP journey. Its adjacent
+`server/account-test-journey.test.mjs` uses real HTTP/auth/SQLite, the existing
+leased runner and the actual fixed Resend client with synthetic transport and
+mailbox input. This source proof sends no real message. Its receipt explicitly
+reports `emailControl:synthetic_code` and `stripeTestMode:not_run`.
+
+Before the operator entrypoint is run, review one concrete private test packet
+under `account-provider-resources` (#79). The release owner supplies the exact
+recipient authorization and nonsecret provider facts; a coding agent does not
+read provider keys or perform setup to fill this packet. Required facts are:
+
+1. Exact compatible frontend/API/queue source and build identities, isolated test
+   database, active deletion-generation/backup barrier, admitted notice version
+   and locale with exact retained asset/page hashes. Live-profile registration
+   remains disabled. The helper checks API `/version` and current locale policy;
+   the existing policy verifier owns actual served-byte and frontend/queue proof.
+2. Existing Resend Free team capacity and shared allowance, verified
+   `notify.justup.work` sender, the fixed `Justup <accounts@notify.justup.work>`
+   sender and queue-only domain-restricted sending key. Pin the separate stable
+   verification-key fingerprint. Reserve at most **one send** for this run,
+   with explicit `maxDaily:1,maxMonthly:1` in its isolated queue configuration
+   and no paid fallback. Capacity on a shared team must be checked separately.
+3. One exact, operator-controlled recipient address, affirmative permission to
+   send that single verification message, selected locale, and the operator who
+   will read the actual mailbox. Keep the address and permission receipt in
+   protected notes. A provider acceptance response is not mailbox control.
+4. Reviewed run/cleanup scope: one generated disposable account, one email,
+   code confirmation, one explicit ordinary-week activation, replay rejection
+   and password-confirmed account deletion. No checkout, provider setup, OAuth,
+   former-user cohort import, promotional subscription, paid conversion, live
+   charge or new resource is part of this command.
+
+The operator prepares a mode-0600 JSON file outside Git with exactly these
+fields (and `inviteCode` only if the approved test profile requires it):
+
+| Field | Value |
+| --- | --- |
+| `apiBase` | Exact approved HTTPS same-origin API base ending `/api/v1`; loopback HTTP is supported only for isolated tests. |
+| `origin` | Exact approved browser origin used by Origin/CSRF checks. |
+| `sourceCommit`, `buildIdentity` | Exact expected API candidate, never a moving branch alias. |
+| `policyVersion`, `locale` | Admitted version and one `en/de/fr/it/es` request locale. |
+| `recipient` | The single privately authorized mailbox. |
+| `mode` | Exactly `operator-mailbox`; synthetic mode is import-only. |
+
+After that exact packet and recipient scope are reviewed, the authorized
+operator runs the reviewed source with Node 24.22.2:
+
+```sh
+node scripts/account-test-journey.mjs \
+  --approved-packet /absolute/private/account-proof-packet.json \
+  --private-recovery /absolute/private/account-proof-recovery.json
+```
+
+This is an explicit operator mutation command, never a CI check or automatic
+post-merge action. It supplies no provider key and changes no capability/review
+flag. The already configured isolated API/queue own the send. The command does
+not retry or resend email. It polls delivery at most ten times, then accepts an
+eight-digit code through hidden terminal input with a two-minute bound. Never
+supply a code from provider logs or a synthetic callback as real mailbox proof.
+The resulting fixed-field receipt distinguishes `delivery:queue_sent` from
+`emailControl:operator_mailbox_code`. Queue `sent` proves only that the selected
+transport accepted the request; it does not prove inbox delivery until the
+operator reads and confirms the code. Record the separately reviewed runtime
+adapter identity with the receipt. Provider message contents, codes, cookies,
+tokens, credentials and recipient never enter its output.
+
+The helper writes and syncs a mode-0600 recovery file **before** registration.
+The file contains only this generated account's credentials and target identity;
+never attach it to a PR or issue. Its `finally` path recovers a lost registration
+reply through that account's login, deletes only that account, verifies guest
+state and rejected subsequent login, then removes the recovery file. A network,
+policy, billing or deletion outage can prevent confirmed cleanup. Such a run
+fails `cleanup_unconfirmed`, retains the protected recovery file and cannot
+produce a passing receipt. Reconcile that exact account with the existing
+password-confirmed deletion path before another run; do not infer deletion from
+session expiry or remove the recovery file early. Account deletion does not
+recall a delivered message or establish deletion of Resend's provider copy.
+
+Keep #29 and #79 open until real-adapter/mailbox and the separate actual Stripe
+sandbox journeys are evidenced. For Stripe, first review actual nonsecret
+sandbox identity, restricted test runtime scope, approved test offer and portal
+configuration IDs, webhook route/secret delivery, fixed account/API version and
+zero-spend scope. Through the existing [billing routes](account-billing.md),
+complete one hosted **test-mode** checkout using provider test payment details,
+verify a genuinely signed test webhook/current-state reconciliation, cancellation,
+failed renewal, restore invalidation and provider-terminated final deletion.
+Synthetic signed events prove protocol behavior only. Ordinary sandbox success
+is not Managed Payments eligibility or live merchant/tax qualification. Record
+that evidence separately; this mailbox helper never calls Stripe.

@@ -34,22 +34,55 @@ The HTTP `/session` response publishes `user` with nullable account expiry, an I
 
 Both login and registration remain unavailable until the operator configures genuinely reviewed HTTPS Privacy/Usage URLs and a reviewed policy version. The server default `product-draft-5` is unreviewed. Approved `2026-11-01` public pages still require exact deployed proof and deletion readiness before activation. Model availability is independent of account login and deletion.
 
+Public `POST /auth/register` additionally requires
+`acceptance:{usageVersion,locale,adultAndCapable:true}`. The declaration accompanies
+the explicit registration action: the person agrees to Usage and confirms they
+are at least 18 and legally able to agree where they live. It requires no date of
+birth, separate promotional consent or extra claim ceremony. The version must
+match the server's currently admitted Usage version; locale must equal the
+server-resolved requested language. Missing, false, extra-field, stale-version or
+wrong-locale declarations fail before password work. The server selects exact
+policy metadata and rechecks it after password work and before commit. Approval
+of one locale never approves another; an explicitly approved fallback records
+both requested and reviewed page language.
+
+One `auth_registration_acceptance` row is written atomically with the account,
+session and visitor handoff. It stores the account ID, server acceptance time,
+Usage version, requested/reviewed locale, affirmative adult/capacity value and
+bounded `policyScopes` metadata: canonical notice URLs, version, fallback,
+frontend origin, source commit, retained-assets hash and both page hashes. It
+stores no birth date, submitted credentials, browser language list or runtime
+configuration. The record is private and is absent from session projections.
+Registration and acceptance grant no free period; independent email control and
+explicit activation remain separate actions.
+
+The feature-owned table is additive within epoch 2. Reopening existing storage
+creates no historical acceptance, changes no prior identity or deadline and
+never infers agreement from an invitation or current notice. The trusted
+low-level `auth.register(input,{registrationAcceptance})` option supplies the
+same declaration; omitting it is reserved for synthetic/local bootstrap callers
+and creates no acceptance claim. It is not the public real-user registration
+path. Future OAuth account creation must supply this acceptance through the same
+transaction without requiring a placeholder local password. Existing accounts
+with no historical record stay distinguishable; no backfill is performed.
+
+
 Only the HTTP server receives a raw 32-byte session token. It sets `__Host-justup_session` with `HttpOnly; Secure; SameSite=Lax; Path=/` and no Domain. The guest anti-forgery cookie is `__Host-justup_csrf`. Explicit localhost HTTP uses `justup_session` and `justup_csrf`; it cannot enable insecure cookies for a public origin. Tokens never enter response JSON, URLs, browser storage or logs. Every mutation checks the exact allowed Origin, a session-bound or guest-bound CSRF token, bounded JSON, admission rate limits and timeouts before feature code. Public registration retains all these checks.
 
 Passwords use asynchronous scrypt (`N=32768,r=8,p=3,maxmem=64 MiB`) with independent 16-byte salts and 64-byte hashes. Unknown-user login pays the same hashing work and fixed failure as a wrong password. Malformed credentials fail before hashing. At most two hashes run per process; the HTTP admission limit bounds their queue. This is not a claim of constant total network response time.
 
 ## Deletion and recovery
 
-`logout(token)` revokes only that session and is harmless when repeated. `deleteAccount(token,password)` requires a live session and the current password. A wrong password returns `invalid_credentials` without revoking the valid session. After hashing, it checks any asynchronous provider-termination precondition outside SQL. Pending/unavailable billing termination preserves the account and offers an explicit retry path. Once ready, it rechecks the session inside a short `BEGIN IMMEDIATE` transaction, revokes all account sessions, runs every synchronous private-data deletion hook and removes the account. Network work, promises and nested transactions are forbidden in these hooks.
+`logout(token)` revokes only that session and is harmless when repeated. `deleteAccount(token,password)` requires a live session and the current password. A wrong password returns `invalid_credentials` without revoking the valid session. After hashing, it checks any asynchronous provider-termination precondition outside SQL. Pending/unavailable billing termination preserves the account and offers an explicit retry path. Once ready, it rechecks the session inside a short `BEGIN IMMEDIATE` transaction, revokes all account sessions, runs every synchronous private-data deletion hook and removes the registration acceptance and account. Network work, promises and nested transactions are forbidden in these hooks.
 
 The core's durable filesystem barrier completes before private SQL deletion and remains pending until commit or rollback. SQL hook failure rolls back the account, its sessions and private changes together. Filesystem rotation cannot be rolled back; unsafe recovery state closes authentication until repaired. [The API guide](api.md) describes the generation barrier and protected restore contract.
 
 `cleanup()` removes expired sessions and only accounts with an explicit stored deadline, using the same atomic deletion hooks. Failure rolls back the entire cleanup, including earlier deletions. The core runs it at startup and once per minute; a maintenance failure closes authentication until a successful retry. Expired temporary rows still consume the admission cap until cleanup succeeds. Durable accounts have no inactivity/age deletion in this module.
 
-`invalidateAllSessions()` is a protected restore helper, never a public route. It deletes restored token hashes, clears one-time email challenges and hosted billing URLs, and invalidates billing-termination proof while preserving accounts and their stored deadlines. The explicit main restore-preparation command invokes it on a separate database without feature cleanup. Backups and WAL can contain earlier bytes; the deployment recovery barrier, backup expiry and protected restore workflow remain required. Logical deletion alone does not erase every historical file. Imported public job evidence is not account-owned.
+`invalidateAllSessions()` is a protected restore helper, never a public route. It deletes restored token hashes, clears one-time email challenges and hosted billing URLs, and invalidates billing-termination proof while preserving accounts, their stored deadlines and factual registration acceptance. The explicit main restore-preparation command invokes it on a separate database without feature cleanup. Backups and WAL can contain earlier bytes; the deployment recovery barrier, backup expiry and protected restore workflow remain required. Logical deletion alone does not erase every historical file. Imported public job evidence is not account-owned.
 
 ## Errors and verification
 
 Errors expose only stable codes and fixed messages: invalid registration input (400), `invalid_credentials` (401), `registration_closed` or `account_limit` (403), `username_taken` (409), and `unauthenticated` (401). Database and callback failures use the HTTP layer's sanitized server error. No submitted values reach diagnostics.
 
-Run `node --test server/auth.test.mjs server/http.test.mjs server/main.test.mjs`. The account suite uses isolated SQLite and fixed clocks; real scrypt takes roughly 10–25 seconds. It covers durable accounts across maintenance/reopen, additive migration, explicit temporary expiry, public/invite registration, capacity races, session expiry, deletion rollback, restore invalidation and concurrent sign-out/deletion. HTTP contracts verify cookies, Origin, CSRF, policy/deletion gates and server-owned registration. No test calls a provider or a deployed service.
+Run `node --test server/auth.test.mjs server/http.test.mjs server/main.test.mjs server/registration-acceptance.test.mjs`. The account suite uses isolated SQLite and fixed clocks; real scrypt takes roughly 10–25 seconds. It covers durable accounts across maintenance/reopen, additive migration, explicit temporary expiry, public/invite registration, capacity races, session expiry, deletion rollback, restore invalidation and concurrent sign-out/deletion. HTTP contracts verify cookies, Origin, CSRF, policy/deletion gates and server-owned registration. The registration-acceptance suite owns all five exact locale bindings, no signup free grant, policy-change and handoff rollback, additive reopen without backfill, restore preservation and deletion with the real backup-generation barrier. No test calls a provider or a deployed service.

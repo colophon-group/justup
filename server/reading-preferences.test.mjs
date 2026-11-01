@@ -274,7 +274,7 @@ test('real HTTP exposes account preferences and visitor languages with CSRF, han
   assert.equal((await b.call('/visitor/searches','POST',{query:'Another visitor search',requestKey:'other-owner'})).status,202);
   assert.equal((await b.call(`/visitor/searches/${id}/options`,'PATCH',{expectedRevision:2,followedOnly:false,postingLanguages:[]})).status,404);
   await a.call('/visitor/viewed','POST',{jobId:'en'});
-  const registered=await a.call('/auth/register','POST',{username:'http-alice',password:'A synthetic HTTP account password'});assert.equal(registered.status,201);
+  const registered=await a.call('/auth/register','POST',{acceptance:{usageVersion:'synthetic',locale:'en',adultAndCapable:true},username:'http-alice',password:'A synthetic HTTP account password'});assert.equal(registered.status,201);
   const searches=await a.call('/searches');assert.deepEqual(searches.body.items[0].options,{followedOnly:false,postingLanguages:['en']});assert.equal((await a.call('/workspace')).body.viewed[0].jobId,'en');
   assert.equal((await a.call('/follows/alpha','PATCH',{expectedRevision:0,followed:true},{'X-CSRF-Token':'x'.repeat(43)})).status,403);
   assert.equal((await a.call('/follows/alpha','PATCH',{expectedRevision:0,followed:true})).status,200);
@@ -282,7 +282,7 @@ test('real HTTP exposes account preferences and visitor languages with CSRF, han
   assert.equal((await a.call('/preferences','PATCH',{expectedRevision:0,interfaceLocale:'it'})).status,200);
   const localizedSession=await a.call('/session','GET',undefined,{'Accept-Language':'fr-CH'});assert.equal(localizedSession.body.policies.locale,'it');assert.equal(localizedSession.body.policies.reviewedLocale,'it');
   assert.equal((await a.call(`/searches/${id}`,'PATCH',{query:'Query unchanged by locale',expectedRevision:2,requestKey:'invalid-locale',presentationLocale:'ja'})).status,400);
-  await b.call('/auth/register','POST',{username:'http-bob',password:'Another synthetic HTTP password'});assert.deepEqual((await b.call('/follows')).body.items,[]);assert.equal((await b.call('/preferences')).body.interfaceLocale,null);
+  await b.call('/auth/register','POST',{acceptance:{usageVersion:'synthetic',locale:'en',adultAndCapable:true},username:'http-bob',password:'Another synthetic HTTP password'});assert.deepEqual((await b.call('/follows')).body.items,[]);assert.equal((await b.call('/preferences')).body.interfaceLocale,null);
   assert.equal((await b.call(`/searches/${id}/options`,'PATCH',{expectedRevision:2,followedOnly:false,postingLanguages:[]})).status,404);
   assert.equal((await a.call('/follows')).body.accountId,registered.body.user.id);
 });
@@ -312,7 +312,7 @@ test('French-only policy approval admits preference, follow and automatic accept
   }
   const session=await call('/session');assert.equal(session.body.policies.reviewedLocale,'fr');
   jar.set('justup_interface_locale','es');language='en';
-  const registered=await call('/auth/register','POST',{username:'french-only',password:'A synthetic French account password'},{'X-Justup-Locale':'fr'});assert.equal(registered.status,201);
+  const registered=await call('/auth/register','POST',{acceptance:{usageVersion:'reviewed-fr',locale:'fr',adultAndCapable:true},username:'french-only',password:'A synthetic French account password'},{'X-Justup-Locale':'fr'});assert.equal(registered.status,201);
   assert.equal(registered.body.policies.locale,'fr');assert.equal(app.store.db.prepare('SELECT count(*) n FROM justup_preferences').get().n,0);language='fr';
   jar.set('justup_interface_locale','es');assert.equal((await call('/session')).body.policies.locale,'fr');
   const owner=registered.body.user.id;assert.equal(identity.principal(owner),null);assert(identity.principal(owner,{locale:'fr'}));
