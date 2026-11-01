@@ -1,0 +1,112 @@
+// Aligned notice copy and common review facts. Read before changing any public policy language.
+export const POLICY_LOCALES = ["en", "de", "fr", "it", "es"] as const;
+export type PolicyLocale = typeof POLICY_LOCALES[number];
+export type PolicyKind = "privacy" | "usage";
+export const POLICY_VERSION = "product-draft-5";
+export const POLICY_STATUS = "draft";
+export const OPERATOR = "Viktor Shcherbakov";
+export const CONTACT = "business@colophon-group.org";
+export const LOCALE_NAMES: Record<PolicyLocale, string> = {
+  en: "English", de: "Deutsch", fr: "Français", it: "Italiano", es: "Español",
+};
+export const FACTS = {
+  operator: OPERATOR, email: CONTACT, sessionDays: 7, csrfHours: 1,
+  localRetentionDays: 7, backupCount: 2, backupAgeDays: 7,
+  visitorDelayHours: 48, freshDays: 14,
+  localeCookieName: "justup_interface_locale", localeCookieMaxAge: 31536000,
+} as const;
+
+export const SECTIONS = {
+  privacy: [
+    ["section-0", "privacy.operator.heading", ["privacy.operator.intro", "privacy.operator.mail"]],
+    ["section-1", "privacy.accounts.heading", ["privacy.accounts.login", "privacy.accounts.session", "privacy.accounts.records", "privacy.accounts.access"]],
+    ["section-2", "privacy.models.heading", ["privacy.models.interpret", "privacy.models.residual", "privacy.models.sensitive"]],
+    ["section-3", "privacy.requests.heading", ["privacy.requests.data", "privacy.requests.evidence", "privacy.requests.nativeWeb", "privacy.requests.coverage"]],
+    ["section-4", "privacy.browser.heading", ["privacy.browser.cookies", "privacy.browser.locale", "privacy.browser.state", "privacy.browser.diagnostics"]],
+    ["section-5", "privacy.hosting.heading", ["privacy.hosting.processors", "privacy.hosting.links"]],
+    ["section-6", "privacy.retention.heading", ["privacy.retention.cleanup", "privacy.retention.delete", "privacy.retention.redemption", "privacy.retention.contact"]],
+    ["deployment-settings", "privacy.deployment.heading", ["privacy.deployment.admission", "privacy.deployment.limits"]],
+    ["section-7", "privacy.review.heading", ["privacy.review.gaps"]],
+  ],
+  usage: [
+    ["section-0", "usage.service.heading", ["usage.service.intro"]],
+    ["section-1", "usage.access.heading", ["usage.access.admission", "usage.access.entitlement", "usage.access.enabled"]],
+    ["section-2", "usage.freshness.heading", ["usage.freshness.coverage", "usage.freshness.window", "usage.freshness.stale"]],
+    ["section-3", "usage.search.heading", ["usage.search.interpret", "usage.search.partial"]],
+    ["section-4", "usage.companies.heading", ["usage.companies.evidence", "usage.companies.request", "usage.companies.effects"]],
+    ["section-5", "usage.responsible.heading", ["usage.responsible.sources", "usage.responsible.behaviour"]],
+    ["section-6", "usage.contact.heading", ["usage.contact.help", "usage.contact.review"]],
+  ],
+} as const;
+
+export const en = {
+  "nav.privacy": "Privacy", "nav.usage": "Usage", "nav.back": "Back to search", "nav.label": "Policy navigation",
+  "nav.languages": "Notice language", "brand.label": "Justup — back to search", "eyebrow": "On the record",
+  "privacy.title": "Privacy", "usage.title": "Usage",
+  "privacy.skip": "Skip to privacy information", "usage.skip": "Skip to usage information",
+  "privacy.description": "Draft privacy information for Justup. Operator review is incomplete.",
+  "usage.description": "Draft usage information for Justup. Operator review is incomplete.",
+  "status.title": "Draft — review incomplete",
+  "status.body": "These notices are not approved for account access or public sharing. They describe the implemented service and identify deployment settings and provider handling that still need verification. Sign-in must remain disabled until the reviewed pages are published.",
+  "status.version": "Draft version", "status.date": "No effective date has been set.",
+  "footer.privacy": "Read the privacy information", "footer.usage": "Read the usage information",
+  "privacy.operator.heading": "Who runs Justup?",
+  "privacy.operator.intro": "Justup is operated by {{operator}}. For privacy questions or requests about your data, email {{email}}.",
+  "privacy.operator.mail": "If you contact us by email, we receive your message and reply address to answer your request. The mailbox provider and retention settings still need review.",
+  "privacy.accounts.heading": "Accounts and private records",
+  "privacy.accounts.login": "Account access uses a local username and password. Registration does not ask for an email address. The service currently has no Google login, resume upload or payment collection. Access restrictions for the temporary deployment are listed below.",
+  "privacy.accounts.session": "The server checks your password and stores a salted password hash. It stores hashes of random session tokens rather than the tokens themselves. The default session lifetime is {{sessionDays}} days; a deployment can configure a different lifetime, which must be disclosed before use. Accounts are retained until you delete them unless an explicitly disclosed temporary account deadline is configured; a session cannot outlive such a deadline.",
+  "privacy.accounts.records": "Your account, saved searches, company requests and their background tasks are private account records. The server checks ownership and protects changes against cross-site requests. Public job and company records are separate from these private records.",
+  "privacy.accounts.access": "Where verified eligibility and access features are enabled, the service stores keyed identity-proof hashes, free-period start and end times, and reconciled subscription and event identifiers. Signing in alone does not grant full access. Identity and billing providers have not been selected or approved for active use.",
+  "privacy.models.heading": "Searches and AI",
+  "privacy.models.interpret": "When search interpretation is enabled, OpenAI receives your search text, relevant prior accepted query and criteria, supported filter values and validation feedback to interpret your requirements. Model-backed features remain disabled until execution, data handling and quality checks are complete.",
+  "privacy.models.residual": "If ordinary filters cannot express a requirement and AI matching is available, TypeSafe’s JEV service receives that remaining condition and eligible public posting text and metadata. The application does not add your Justup account identifier, username, password, session token or billing identifiers to these model inputs.",
+  "privacy.models.sensitive": "What you type is still part of the input. Do not put sensitive personal information in a search or company request. Provider retention, training use, processing countries and transfer arrangements still require verification before these features can be enabled.",
+  "privacy.requests.heading": "Company requests",
+  "privacy.requests.data": "A submitted request stores the company name or website, any supplied scope, the proposed identity and confirmation state under your account. Opening a prefilled form does not submit it. Known imported companies can be identified without an AI call.",
+  "privacy.requests.evidence": "When company verification is enabled, an unfamiliar company can require bounded public official-site evidence. Your company input and that evidence go to OpenAI. Public websites contacted by the server receive ordinary request metadata. An uncertain identity must remain unresolved or ask for clarification; you confirm the exact proposed company.",
+  "privacy.requests.nativeWeb": "Company discovery is being configured to use OpenAI’s web search and browsing tools. Native-web discovery remains disabled until its search and browsing inputs, default request metadata and provider retention are verified and covered by reviewed notices.",
+  "privacy.requests.coverage": "A confirmed identity request does not by itself start career-page collection, follow a company or establish that Justup monitors it. Enabled request and coverage features must be verified separately.",
+  "privacy.browser.heading": "Cookies, browser state and diagnostics",
+  "privacy.browser.cookies": "The HTTPS service uses essential host-only session and request-protection cookies, marked Secure, HttpOnly and SameSite=Lax. Cookie lifetimes are listed below; their deployed values still need to be checked.",
+  "privacy.browser.locale": "The browser-readable {{localeCookieName}} cookie remembers only a manually selected interface language (en, de, fr, it or es). It has Path=/, SameSite=Lax, Secure on HTTPS and Max-Age={{localeCookieMaxAge}} (one year); choosing the browser/default language removes it. It contains no identifier, query or filter data and creates no visitor record. A signed-in account’s server-saved choice takes precedence; the guest choice is never copied into an account.",
+  "privacy.browser.state": "The application keeps sensitive account, query, draft and request state in memory or on the server, not in browser localStorage. The current application includes no analytics or advertising tracker. This does not mean the hosting services keep no access or security logs.",
+  "privacy.browser.diagnostics": "Application diagnostics allow request identifiers, route categories, status, duration, redacted error codes and bounded token/cost counts. They exclude raw searches, request bodies, usernames, passwords, tokens and IP addresses. Network-derived information is used in memory to limit abusive requests. Actual host cleanup and hosting-layer logging remain under review.",
+  "privacy.hosting.heading": "Hosting and outside websites",
+  "privacy.hosting.processors": "Cloudflare is intended to deliver the website and forward API requests, including account-form submissions and cookies, to the isolated Hetzner application and database host in Nuremberg, Germany. OpenAI and TypeSafe are the intended AI recipients above. Their processing locations, provider-side retention and applicable transfer arrangements are not yet verified.",
+  "privacy.hosting.links": "The current imported job and company records contain no remote logo URLs. Employer and source links open outside Justup when you choose them. Those websites receive your web request and apply their own privacy notices.",
+  "privacy.retention.heading": "Retention and deletion",
+  "privacy.retention.cleanup": "Private records with a retention deadline are removed through cleanup while the API is running. A deadline does not prove physical deletion at that moment if the service is stopped. Recovery pruning runs after a successful backup or an explicit command; there is no automatic backup schedule. Deployed cleanup must be verified.",
+  "privacy.retention.delete": "Password-confirmed deletion removes the account, sessions and its private searches, requests, tasks, matching and access records. Private deletion invalidates and purges recovery backups; restoring a database revokes its sessions. Immediate secure erasure of storage remnants or copies already held by a provider is not promised.",
+  "privacy.retention.redemption": "Deletion also erases ordinary and welcome free-period redemption records and keyed identity evidence. No hidden redemption marker is retained after deletion. A person who verifies eligibility again may receive another free period. The deployed deletion path must match this rule before approval.",
+  "privacy.retention.contact": "Use the contact above for access, correction or deletion questions, including when an in-app control is unavailable.",
+  "privacy.deployment.heading": "Temporary deployment settings",
+  "privacy.deployment.admission": "The isolated preview uses invitation access. Registration capacity, any temporary account deadline and deployment expiry must be verified and disclosed before invitations are issued. Accounts have no automatic expiry by default. The configured session lifetime must be disclosed; its default is {{sessionDays}} days. A signed-out request-protection cookie lasts {{csrfHours}} hour.",
+  "privacy.deployment.limits": "Local matching decisions and diagnostic logs have {{localRetentionDays}}-day limits. Recovery permits at most {{backupCount}} SQLite backups, with a {{backupAgeDays}}-day usable age. These are deployment settings, not subscription rules or a permanent account-expiry promise. Changes to access, retention or recipients need notice review before activation.",
+  "privacy.review.heading": "What still needs review?",
+  "privacy.review.gaps": "The fixed deployment must confirm cookies, ownership and deletion, cleanup and backup pruning, hosting/access/security logs, contact-mailbox handling and each provider’s actual metadata, retention, processing locations and transfer arrangements. Model isolation, quality and final operator review remain outstanding. This draft is not an approved notice for active accounts or model use.",
+  "usage.service.heading": "About Justup",
+  "usage.service.intro": "Justup is operated by {{operator}}. It helps you find recent roles from company career pages and inspect their sources. These conditions describe the service; temporary deployment access and availability restrictions are listed separately.",
+  "usage.access.heading": "Access and availability",
+  "usage.access.admission": "The temporary deployment uses invitation-only username/password accounts and does not collect payments. Registration capacity, any temporary account deadline and deployment expiry must be verified and disclosed before invitations. Accounts remain until you delete them unless an explicitly disclosed temporary deadline applies.",
+  "usage.access.entitlement": "Signing in alone does not unlock the newest matches. Visitors and accounts without a current full-access entitlement remain limited. Full access depends on server-verified eligibility and an active free or paid access period. When enabled, a verified person explicitly starts a free week; verified eligible Jobseek users receive a calendar month instead. Repeating activation does not restart that period. No active identity or billing provider is approved yet.",
+  "usage.access.enabled": "Availability depends on verified source data and enabled capabilities. Models remain disabled until execution, data handling and quality checks pass. Unimplemented or unverified live updates, saved follow/viewed state, posting-language preferences, request priority, Hiring Wire and billing remain product-readiness gaps, not exemptions from the first-release requirements.",
+  "usage.freshness.heading": "Fresh listings, limited coverage",
+  "usage.freshness.coverage": "Coverage is limited to catalogue companies and their shown career-page sources. The current deployment uses a bounded imported snapshot of public Jobseek listings, not continuous monitoring of every company. It is not a complete view of the job market.",
+  "usage.freshness.window": "Results are always newest first and limited to the last {{freshDays}} days. “First seen” means when collection first observed the posting, not necessarily when the employer published it. Limited access includes eligible listings first seen between {{visitorDelayHours}} hours and {{freshDays}} days ago. A current full-access entitlement includes the eligible last-{{freshDays}}-day slice; signed-in status alone is insufficient.",
+  "usage.freshness.stale": "Old, inactive or unverified listings are not shown. Missing or stale imported evidence pauses results with a retry action, instead of proving there are no matches. A role can close before the next source check.",
+  "usage.search.heading": "Interpreting a search",
+  "usage.search.interpret": "When enabled, AI can misunderstand criteria, omit a useful result or include an unsuitable one. Ordinary filters run before extra model-based matching. Check the employer’s posting before deciding.",
+  "usage.search.partial": "A failed interpretation keeps the last accepted search. A partial search with unmet requirements needs your explicit confirmation before those criteria are accepted. Editing the text changes your request; it is not a conversation with a recruiter.",
+  "usage.companies.heading": "Company pages and requests",
+  "usage.companies.evidence": "Company pages show available identity and source evidence. Missing data does not establish headquarters, hiring performance or continuous monitoring. Reports and weekly changes require verified source history, not invented figures.",
+  "usage.companies.request": "Your submitted identity request and task are private account records. Known imported companies need no AI research. Enabled company verification can require public evidence or clarification. Check the exact proposed company before confirming it.",
+  "usage.companies.effects": "Confirmation records the identity and requested scope. It does not by itself establish monitored sources or guarantee collection or a completion date. Catalogue publication, following, request priority and collection must follow their verified service state; they must not be implied from identity confirmation alone.",
+  "usage.responsible.heading": "Applications and responsible use",
+  "usage.responsible.sources": "Source links lead to third-party pages with their own terms and privacy notices. Review the current employer description and apply there. A listing does not guarantee a vacancy, interview, offer or completed hiring.",
+  "usage.responsible.behaviour": "Do not share information without permission, impersonate another person or interfere with others’ access. Keep sensitive personal information out of searches and company requests. Generated matches are not verified advice.",
+  "usage.contact.heading": "Questions and problem reports",
+  "usage.contact.help": "For questions or incorrect matches, company identities, source links or access, email {{email}}.",
+  "usage.contact.review": "The fixed deployment, provider handling and complete notices in every admitted language need verification and operator review before activation. No language fallback is approved automatically. This draft has no effective date.",
+} as const;
+export type PolicyCopy = Record<keyof typeof en, string>;
