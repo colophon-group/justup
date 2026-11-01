@@ -10,13 +10,14 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import pwd
 import stat
 
 BASE = Path('/srv/justup_preview')
 CONFIG_PATH = BASE / 'queue/config/runner.json'
 LEDGER_PATH = BASE / 'queue/budget/jev.jsonl'
 CONFIG_KEYS = {'dbPath', 'sharedState', 'runnerStatusPath',
-               'model', 'jev', 'matching', 'verificationTtlMs'}
+               'model', 'jev', 'matching', 'verificationTtlMs', 'hiringWire'}
 MODEL_KEYS = {'enabled', 'isolationVerified', 'cliVersion', 'socketPath', 'attestationPath',
               'taskProfiles', 'companyResearchVerified'}
 
@@ -46,6 +47,12 @@ def validate_configuration(config, manifest):
         profiles = model_contract().validate_task_profiles(model.get('taskProfiles'))
         if 'company_resolution' in profiles and model.get('companyResearchVerified') is not True:
             raise ValueError('Company web research requires a separately qualified task profile.')
+    if 'hiringWire' in config:
+        wire = config['hiringWire']
+        model_uid = pwd.getpwnam('justup-preview-model').pw_uid if isinstance(wire, dict) and wire.get('enabled') is True else None
+        contract = model_contract()
+        if contract.validate_wire_configuration(wire, private=False, model_uid=model_uid):
+            contract.validate_wire_inventory(manifest)
     jev = config.get('jev', {})
     if not isinstance(jev, dict):
         raise ValueError('Queue provider configuration is unavailable.')

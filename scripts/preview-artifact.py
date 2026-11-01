@@ -26,6 +26,9 @@ CODEX_ENTRYPOINT = 'runtime/codex/bin/codex'
 MODEL_CATALOGUE = 'app/server/model-catalogue.json'
 WIRE_CATALOGUE = 'app/server/hiring-wire-sol-catalogue.json'
 WIRE_CATALOGUE_SHA256 = '5ed662f51bb5a9eda38e52fae474954574504286a851bfbad4a4aa6d32b4ed61'
+WIRE_MODULES = {'app/server/' + name + '.mjs' for name in (
+    'hiring-wire', 'hiring-wire-facts', 'hiring-wire-editorial', 'hiring-wire-codex',
+    'hiring-wire-codex-policy', 'hiring-wire-codex-broker')}
 CODEX_FILES = {
     CODEX_ENTRYPOINT: '113aa5d5952a6fd3950a88323219747d0c91978ebee948509a540c8a460e59a3',
     'runtime/codex/codex-resources/bwrap': 'c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4',
@@ -112,9 +115,10 @@ def validate_manifest(manifest):
             raise ValueError('Runtime module is missing its immutable model schema asset.')
     if 'app/server/model-runner.mjs' in files and MODEL_CATALOGUE not in files:
         raise ValueError('Model runtime is missing its immutable model catalogue asset.')
-    if ('app/server/hiring-wire-codex.mjs' in files and files.get(WIRE_CATALOGUE) != WIRE_CATALOGUE_SHA256
+    wire_transport = {'app/server/' + name + '.mjs' for name in ('hiring-wire-codex', 'hiring-wire-codex-policy', 'hiring-wire-codex-broker')}
+    if (bool(wire_transport & files.keys()) and (not WIRE_MODULES <= files.keys() or files.get(WIRE_CATALOGUE) != WIRE_CATALOGUE_SHA256)
             or WIRE_CATALOGUE in files and files[WIRE_CATALOGUE] != WIRE_CATALOGUE_SHA256):
-        raise ValueError('Hiring Wire runtime is missing its pinned immutable model catalogue asset.')
+        raise ValueError('Hiring Wire runtime is missing its complete modules or pinned immutable model catalogue asset.')
     if any(not allowed(path) or not isinstance(value, str) or not SHA.fullmatch(value) for path, value in files.items()):
         raise ValueError('Artifact file inventory is unsafe or incomplete.')
     if manifest.get('nodeArchiveSha256') != NODE_ARCHIVE_SHA256 or manifest.get('buildIdentity') != identity(manifest):

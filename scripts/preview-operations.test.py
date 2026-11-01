@@ -22,6 +22,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 import uuid
+from urllib.request import Request
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).parent
@@ -109,6 +110,7 @@ class ArtifactContracts(unittest.TestCase):
         for name in ('app/scripts/hiring-wire/enqueue.mjs', 'app/scripts/hiring-wire/check-snapshot.mjs'):
             self.assertTrue(artifact.allowed(name))
         manifest['files']['app/server/hiring-wire-codex.mjs'] = artifact.sha(b'export {};')
+        manifest['files'].update({name: artifact.sha(b'export {};') for name in artifact.WIRE_MODULES})
         for checksum in (None, 'a' * 64, artifact.WIRE_CATALOGUE_SHA256):
             with self.subTest(checksum=checksum):
                 if checksum is not None:
@@ -119,6 +121,27 @@ class ArtifactContracts(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(ValueError, 'Hiring Wire'):
                         artifact.validate_manifest(manifest)
+        for name in artifact.WIRE_MODULES - {'app/server/hiring-wire-codex.mjs'}:
+            partial = deepcopy(manifest)
+            del partial['files'][name]
+            partial['buildIdentity'] = artifact.identity(partial)
+            with self.subTest(missing=name), self.assertRaisesRegex(ValueError, 'Hiring Wire'):
+                artifact.validate_manifest(partial)
+
+    def test_canonical_importer_without_registered_contracts_cannot_skip_python_verification(self):
+        for unrelated in (False, True):
+            with self.subTest(unrelated=unrelated), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                scripts = root / 'scripts'
+                scripts.mkdir()
+                (scripts / 'import-jobs.py').write_text('# importer implementation fixture\n')
+                if unrelated:
+                    (scripts / 'test_other.py').write_text('import unittest\nclass Other(unittest.TestCase):\n def test_other(self): pass\n')
+                result = subprocess.run([sys.executable, str(HERE / 'test-python.py')], cwd=root,
+                                        capture_output=True, text=True, timeout=10,
+                                        env={'PATH': os.environ.get('PATH', ''), 'PYTHONDONTWRITEBYTECODE': '1'})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Importer' if not unrelated else 'test_import_jobs.py', result.stderr)
 
     def test_canonical_importer_and_runtime_adapter_are_required_together(self):
         manifest, _ = payload()
@@ -666,6 +689,49 @@ class BoundaryContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             model.validate_attestation({'approved': True}, manifest, 'f' * 64)
 
+    def test_wire_configuration_is_off_without_proof_and_pins_existing_private_boundary(self):
+        self.assertFalse(model.validate_wire_configuration({'enabled': False}, private=True))
+        config = {'enabled': True, 'attestationPath': '/srv/justup_preview/model/config/hiring-wire-reviewed.json',
+                  'socketPath': '/srv/justup_preview/broker/model.sock', 'providerCatalogueSha256': 'a' * 64, 'modelUid': 1234}
+        self.assertTrue(model.validate_wire_configuration(config, private=True, model_uid=1234))
+        for change in ({'attestationPath': '/srv/justup_preview/broker/hiring-wire-reviewed.json'},
+                       {'socketPath': '/tmp/other.sock'}, {'providerCatalogueSha256': ''}, {'modelUid': 1},
+                       {'buildIdentity': 'b' * 64}, {'enabled': 1}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                model.validate_wire_configuration({**config, **change}, private=True, model_uid=1234)
+        with self.assertRaises(ValueError):
+            model.validate_wire_configuration({'enabled': False, 'providerCatalogueSha256': 'a' * 64}, private=True)
+        config['attestationPath'] = '/srv/justup_preview/broker/hiring-wire-reviewed.json'
+        queue_config = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
+                        'runnerStatusPath': '/srv/justup_preview/state/runner-status.json', 'hiringWire': config}
+        manifest, _ = payload()
+        with patch.object(queue.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1234)):
+            with self.assertRaisesRegex(ValueError, 'exact artifact'):
+                queue.validate_configuration(queue_config, manifest)
+            manifest['files'].update({'app/server/hiring-wire-sol-catalogue.json': model.WIRE_CATALOGUE_SHA256,
+                                      'app/server/hiring-wire-codex-broker.mjs': 'b' * 64})
+            queue.validate_configuration(queue_config, manifest)
+        queue_config['hiringWire'] = {'enabled': False}
+        with patch.object(queue.pwd, 'getpwnam', side_effect=AssertionError('disabled Wire must not inspect a UID')):
+            queue.validate_configuration(queue_config, manifest)
+
+    def test_wire_deployment_proof_cannot_reuse_luna_or_another_build_uid_or_catalogue(self):
+        manifest, _ = payload()
+        config = {'socketPath': '/srv/justup_preview/broker/model.sock', 'providerCatalogueSha256': 'a' * 64, 'modelUid': 1234}
+        report = {'version': 1, 'approved': True, 'profile': 'hiring_wire', 'model': 'gpt-6.1-sol',
+                  'cliVersion': manifest['codexVersion'], 'cliSource': model.CODEX_SOURCE_COMMIT, 'nodeVersion': manifest['nodeVersion'],
+                  'policyVersion': 'hiring-wire-codex-v1', 'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': 'f' * 64,
+                  'socketPath': config['socketPath'], 'modelUid': 1234, 'fd': 3, 'modelCatalogueSha256': model.WIRE_CATALOGUE_SHA256,
+                  'executorBoundary': 'dedicated_uid_broker', 'deniedPathsVerified': True, 'retentionVerified': True,
+                  'qualityVerified': True, 'sharedSlotVerified': True, 'descriptor': {'fixture': 'runtime validates exact descriptor'},
+                  'dynamicToolsSha256': 'b' * 64, 'providerCatalogue': {'verified': True, 'sha256': 'a' * 64}}
+        model.validate_wire_attestation(report, config, manifest, 'f' * 64)
+        for change in ({'profile': 'search_intent'}, {'model': 'gpt-6-luna'}, {'buildIdentity': 'e' * 64},
+                       {'hostPlanSha256': 'e' * 64}, {'modelUid': 1}, {'fd': 4}, {'qualityVerified': False},
+                       {'sharedSlotVerified': False}, {'providerCatalogue': {'verified': True, 'sha256': 'c' * 64}}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                model.validate_wire_attestation({**report, **change}, config, manifest, 'f' * 64)
+
     def test_stale_model_attestation_and_inherited_identity_cannot_match_current_release(self):
         model = load('preview-model-run')
         manifest, _ = payload()
@@ -1016,6 +1082,13 @@ class RecoveryContracts(unittest.TestCase):
 
 
 class HTTPVerificationContracts(unittest.TestCase):
+    def test_https_redirect_cannot_downgrade_or_leave_the_fixed_origin(self):
+        handler = http.FixedOriginRedirect()
+        request = Request('https://preview.example/api/v1/health')
+        for target in ('http://preview.example/api/v1/health', 'https://other.example/api/v1/health'):
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, 'origin'):
+                handler.redirect_request(request, None, 302, 'Found', {}, target)
+
     def responses(self):
         manifest, _ = payload()
         values = {'/api/v1/health': {'ready': True},
@@ -1057,28 +1130,42 @@ class HTTPVerificationContracts(unittest.TestCase):
                 return '<html>candidate</html>', {'x-robots-tag': 'noindex, nofollow'}
             return deepcopy(values[path]), {'cache-control': 'private, no-store', 'x-robots-tag': 'noindex, nofollow'}
         frontend = {'sourceSha': manifest['sourceCommit'], 'treeSha': manifest['sourceTree'],
-                    'assetsSha256': 'c' * 64, 'workerSha256': 'd' * 64, 'artifactSha256': 'e' * 64, 'deploymentMode': 'preview'}
+                    'assetsSha256': 'c' * 64, 'workerSha256': 'd' * 64, 'artifactSha256': 'e' * 64}
+        runtime = {'publicOrigin': 'https://preview.example', 'apiOrigin': 'https://api.example',
+                   'apiPrefix': '/api/v1', 'deploymentMode': 'preview'}
+        runtime_sha = hashlib.sha256(json.dumps(runtime, separators=(',', ':')).encode()).hexdigest()
+        configuration = {'vars': {'PUBLIC_ORIGIN': runtime['publicOrigin'], 'API_ORIGIN': runtime['apiOrigin'],
+                                  'DEPLOYMENT_MODE': 'preview', 'RUNTIME_CONFIG_SHA256': runtime_sha,
+                                  'RELEASE_JSON': json.dumps(frontend)}}
+        deployed = {**frontend, 'runtimeConfigSha256': runtime_sha, 'apiPrefix': '/api/v1', 'deploymentMode': 'preview'}
         options = {'runner_identity': 'runner-build', 'import_generation': 'import-generation', 'policy_version': 'approved-v1',
-                   'fetch': fetch, 'frontend_release': frontend}
-        values['/__release/version'] = dict(frontend)
-        for candidate in ({**frontend, 'deploymentMode': 'production'}, {key: value for key, value in frontend.items() if key != 'deploymentMode'}):
-            with self.subTest(mode=candidate.get('deploymentMode')), self.assertRaisesRegex(ValueError, 'built frontend'):
-                http.verify('https://preview.example', manifest, 'preview', **{**options, 'frontend_release': candidate})
-        values['/__release/version']['deploymentMode'] = 'production'
-        with self.assertRaisesRegex(ValueError, 'frontend identity differs'):
-            http.verify('https://preview.example', manifest, 'preview', **options)
-        values['/__release/version'] = dict(frontend)
+                   'fetch': fetch, 'frontend_release': frontend, 'frontend_config': configuration}
+        values['/__release/version'] = dict(deployed)
+        for change in ({'DEPLOYMENT_MODE': 'production'}, {'DEPLOYMENT_MODE': ''}, {'PUBLIC_ORIGIN': 'https://other.example'},
+                       {'API_ORIGIN': 'https://api2.example'}, {'RUNTIME_CONFIG_SHA256': 'f' * 64},
+                       {'API_ORIGIN': 'https://api.example/'}, {'API_ORIGIN': runtime['publicOrigin']},
+                       {'RELEASE_JSON': json.dumps({**frontend, 'artifactSha256': 'f' * 64})}):
+            wrong_config = {'vars': {**configuration['vars'], **change}}
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                http.verify('https://preview.example', manifest, 'preview', **{**options, 'frontend_config': wrong_config})
+        for field, value in (('deploymentMode', 'production'), ('runtimeConfigSha256', 'f' * 64), ('apiPrefix', '/other')):
+            values['/__release/version'][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'frontend identity differs'):
+                http.verify('https://preview.example', manifest, 'preview', **options)
+            values['/__release/version'] = dict(deployed)
+        with self.assertRaisesRegex(ValueError, 'runtime configuration'):
+            http.verify('https://preview.example', manifest, 'preview', **{**options, 'frontend_config': None})
         report = http.verify('https://preview.example', manifest, 'preview', **options)
         self.assertIn('fresh_guest_public_projection', report['checks'])
         self.assertFalse(report['completeReleaseGate'])
         self.assertFalse(report['shareable'])
-        self.assertEqual(report['frontend'], frontend)
+        self.assertEqual(report['frontend'], deployed)
         with self.assertRaisesRegex(ValueError, 'built frontend'):
             http.verify('https://preview.example', manifest, 'preview', **{**options, 'frontend_release': None})
         values['/__release/version']['artifactSha256'] = 'f' * 64
         with self.assertRaisesRegex(ValueError, 'frontend identity differs'):
             http.verify('https://preview.example', manifest, 'preview', **options)
-        values['/__release/version'] = dict(frontend)
+        values['/__release/version'] = dict(deployed)
         for change in ({'firstObserved': '2026-10-31T17:00:00Z'}, {'description': 'must stay internal'}):
             with self.subTest(change=change):
                 original = deepcopy(values['/api/v1/jobs?limit=12']['items'][0])
