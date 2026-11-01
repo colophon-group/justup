@@ -32,7 +32,15 @@ An operation is `{id,kind,status,url,expiresAt,retryAfterMs,error}`. Kinds are
 The URL is credential-like private state, never a generic task result or log
 field. Exact creation retries reuse the same operation. Use a new request key for
 a deliberate fresh reconciliation. A failed or pending operation never proves a
-payment, completed cancellation or account deletion.
+payment, completed cancellation or account deletion. A hosted URL deadline alone
+does not resolve a checkout: `billing_pending` requires the existing reconcile
+action until the provider confirms its subscription or that the session expired
+without one. The current checkout reference remains private ownership evidence
+through ordinary cleanup and restart. Recovery can resolve a conclusively
+unstarted checkout without a mutation. A lost hosted-session response remains
+paused unless the original bounded task recovers its exact resource; after its
+deadline it requires operator reconciliation. A known customer's current complete
+provider lists can still establish safe account termination.
 
 `/session.capabilities.billing` and `access.billingEnabled` require enabled API
 configuration, current locale policy and a fresh exact-build queue heartbeat.
@@ -79,8 +87,12 @@ Other mutations retain their normal checks.
 A signed event selects a minimal resource reference for a locally known billing
 customer or settled charge. It never establishes ownership or access from
 metadata, event creation time or a success redirect. Unknown late events after
-deletion create no owner, operation or provider binding. Accepted events pause
-the existing paid projection while the queue retrieves current state.
+deletion create no owner, operation or provider binding. Each newly accepted event
+atomically advances existing entitlement versions and pauses the paid projection,
+so a provider snapshot already in flight cannot clear that pause. Exact pending
+duplicates reuse their operation; failed or lost tasks can retry after a short
+cooldown. Already applied event receipts remain idempotent after operation history
+expires and do not pause settled access again.
 
 The queue uses the existing entitlement reservation/version transaction. It
 checks the current subscription, approved recurring price, actual invoice service
@@ -90,6 +102,10 @@ do not establish service duration. A failed renewal cannot extend a previously
 settled period. Unavailable, contradictory, refunded or disputed evidence stays
 fail-closed; this code invents no refund or grace policy. Current owner, lease,
 session where applicable, policy and billing closure are checked again at commit.
+A private current-checkout reference anchors replacement subscriptions; a late
+event for a canceled subscription cannot reclaim ownership from its replacement.
+The previous subscription remains bound until current provider evidence proves
+the replacement, and a new checkout fences earlier entitlement reservations.
 
 ## Delete only after provider termination
 
@@ -99,6 +115,12 @@ URL disclosure stop immediately. The account and its private data remain until
 current provider termination is confirmed. `billing_termination_pending` (409) or
 `billing_termination_unavailable` (503) never means `deleted:true`. Read the
 termination operation, then retry the ordinary password-confirmed account delete.
+Retries inspect the actual queue task, preserve a live lease and reuse the same
+termination operation and provider idempotency keys after an exhausted or missing
+task, with a five-second cooldown. One owner-bound termination reservation is
+separate from ordinary operation history limits. A full shared task queue leaves
+billing durably closed with that pending reservation; a later password-confirmed
+retry can enqueue it when capacity returns. Shared queue limits remain unchanged.
 
 Provider bindings and operation reservations exist **before** the first external
 mutation. Their foreign keys use `ON DELETE RESTRICT`, so an older or unaware
@@ -109,7 +131,10 @@ same closure revision. Incomplete bounded lists require reconciliation rather
 than a false completion.
 
 An unknown customer-creation outcome is replayed with its original provider
-idempotency key only within a conservative 23-hour window. Passing a checkout
+idempotency key only within a conservative 23-hour window. This applies to
+checkout task recovery as well as termination. Expired checkout admission cannot
+create a fresh customer, and a recovered unknown mutation outside the window
+retains its ambiguous operation and operator-reconciliation status. Passing a checkout
 expiry cannot settle unknown ownership. An unresolved outcome outside that
 window remains operator-reconciliation pending. No hidden deletion outbox or
 redemption tombstone is created.
@@ -129,9 +154,15 @@ The application retains an owner mapping, random billing reference, minimal
 customer/subscription/current settled invoice/charge IDs, locale/policy context
 and closure proof while that account exists. Bounded private operations retain
 request fingerprints, task/resource references, safe status and short-lived
-hosted URLs. The global operation cap is 128 and per-account cap 32. Ordinary
-completed/failed operations are removed after 24 hours; unresolved outcomes and
-termination remain until resolved or account deletion. URL expiry is enforced
+hosted URLs. Ordinary operation history has a global cap of 128 and per-account cap of 32,
+plus at most one reusable termination record per existing owner binding. Ordinary
+completed/failed operations are removed after 24 hours; the current checkout
+reference, unresolved outcomes and termination remain until resolved, superseded
+by a safely admitted checkout, or account deletion. Adding the current-checkout
+field to older epoch-2 storage automatically anchors only an unambiguous single
+checkout and still requires provider confirmation. Competing generations or
+missing history stay held for operator reconciliation; local or provider event
+timestamps never select ownership. URL expiry is enforced
 on reads and cleanup scrubs expired URLs while the composed API runs. Neither a
 logical expiry nor deletion promises immediate physical removal from SQLite/WAL
 or provider copies.

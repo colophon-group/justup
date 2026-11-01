@@ -3,6 +3,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,createHmac} from 'node:crypto';
+import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {createApplication} from './main.mjs';
 import {createAuth} from './auth.mjs';
 import {createStripeBillingRunner,validateStripeBillingConfig} from './stripe-billing.mjs';
@@ -19,7 +22,7 @@ async function fixture(t,{storage={},hooks={}}={}) {
   const config={dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'b'.repeat(64),csrfSecret:'c'.repeat(32),
     allowedOrigin:ORIGIN,privacyUrl:`${ORIGIN}/privacy.html`,usageUrl:`${ORIGIN}/usage.html`,policiesReviewed:true,policyVersion:'test-v1',requiresInvitation:false,
     stripeBilling:{...base,webhookSecret:'whsec_synthetic_endpoint_secret_value'},readiness:()=>({capabilities:{stripeBilling:true}}),...storage};
-  const app=await createApplication({config,now});t.after(()=>app.close());const api=app.services.find(service=>service.stripeBilling);
+  let app=await createApplication({config,now});t.after(()=>app.close());let api=app.services.find(service=>service.stripeBilling);
   const state={customer:null,checkouts:[],subscription:null,invoice:null,intent:null,charge:null,calls:[],customerKeys:[],unavailable:false};
   function called(name){state.calls.push(name);if(state.unavailable)throw Object.assign(new Error('synthetic private failure'),{code:'provider_unavailable'});}
   const client={
@@ -32,17 +35,17 @@ async function fixture(t,{storage={},hooks={}}={}) {
     async retrieveCheckout(identifier){called('checkout-read');return structuredClone(state.checkouts.find(value=>value.id===identifier));},
     async retrievePortalConfiguration(){called('portal-config');return {id:'bpc_Justup',object:'billing_portal.configuration',livemode:false,active:true,features:{subscription_update:{enabled:false},subscription_cancel:{enabled:true,mode:'at_period_end'}}};},
     async createPortal(fields){called('portal-create');return {id:'bps_Owner',object:'billing_portal.session',livemode:false,customer:fields.customer,configuration:fields.configuration,url:'https://billing.stripe.com/p/session/test_Synthetic'};},
-    async retrieveSubscription(){called('subscription-read');await hooks.subscription?.();return structuredClone(state.subscription);},
+    async retrieveSubscription(identifier){called('subscription-read');await hooks.subscription?.();return structuredClone(state.previousSubscription?.id===identifier?state.previousSubscription:state.subscription);},
     async retrieveInvoice(identifier){called('invoice-read');if(identifier==='in_Unpaid')return {id:identifier,object:'invoice',livemode:false,customer:'cus_Owner',status:'open'};return structuredClone(state.invoice);},
     async retrievePaymentIntent(){called('intent-read');return structuredClone(state.intent);},
-    async retrieveCharge(){called('charge-read');return structuredClone(state.charge);},
+    async retrieveCharge(){called('charge-read');const charge=structuredClone(state.charge);await hooks.charge?.();return charge;},
     async listCheckouts(){called('checkout-list');return list(structuredClone(state.checkouts));},
     async listSubscriptions(){called('subscription-list');return list(state.subscription?[structuredClone(state.subscription)]:[]);},
     async expireCheckout(identifier){called('checkout-expire');const value=state.checkouts.find(value=>value.id===identifier);value.status='expired';return structuredClone(value);},
     async cancelSubscription(){called('subscription-cancel');state.subscription.status='canceled';return structuredClone(state.subscription);},
   };
   const queueConfig={...config,stripeBilling:{...base,apiKey:'rk_test_Synthetic'}};
-  const queue=createStripeBillingRunner({db:app.store.db,tasks:app.tasks,config:queueConfig,now,client});
+  let queue=createStripeBillingRunner({db:app.store.db,tasks:app.tasks,config:queueConfig,now,client});
   const owner=await app.auth.register({username:'person',password:PASSWORD});
   app.store.db.prepare('INSERT INTO access_identities VALUES(?,?,NULL,?)').run(owner.account.id,hash('synthetic verified subject'),at);
   const ctx=(body,path='/account/billing/checkout',method='POST',person=owner)=>({method,path,url:new URL(`${ORIGIN}/api/v1${path}`),body,accountId:person.account.id,sessionHash:hash(person.token),interfaceLocale:'en'});
@@ -65,7 +68,8 @@ async function fixture(t,{storage={},hooks={}}={}) {
   function notification(identifier='evt_First',object=state.subscription,type='customer.subscription.updated',created=at/1000){const event={id:identifier,object:'event',livemode:false,api_version:STRIPE_API_VERSION,type,created,data:{object:structuredClone(object)}};
     const body=Buffer.from(JSON.stringify(event)),timestamp=Math.floor(at/1000),signature=`t=${timestamp},v1=${createHmac('sha256',config.stripeBilling.webhookSecret).update(`${timestamp}.`).update(body).digest('hex')}`;
     return {body,signature};}
-  return {app,api,queue,config,queueConfig,state,owner,ctx,start,work,paid,notification,now,advance:ms=>{at+=ms;}};
+  async function reopen(){await app.close();app=await createApplication({config,now});api=app.services.find(service=>service.stripeBilling);queue=createStripeBillingRunner({db:app.store.db,tasks:app.tasks,config:queueConfig,now,client});}
+  return {get app(){return app;},get api(){return api;},get queue(){return queue;},config,queueConfig,state,owner,ctx,start,work,paid,notification,now,reopen,advance:ms=>{at+=ms;}};
 }
 
 test('checkout, signed current-state reconciliation and hosted management compose without exposing queue secrets',async t=>{
@@ -215,4 +219,222 @@ test('API and queue roles reject live/admin keys, extra fields and mismatched of
     {...f.queueConfig.stripeBilling,unexpected:true},{...f.queueConfig.stripeBilling,offers:{weekly:offers.weekly,monthly:offers.weekly}}])assert.throws(()=>validateStripeBillingConfig(bad));
   assert.throws(()=>validateStripeBillingConfig({...f.config.stripeBilling,apiKey:'rk_test_NotApi'},{role:'api'}));
   f.config.stripeBilling.offers={monthly:offers.monthly,weekly:offers.weekly};f.start();assert.equal((await f.work()).result.status,'succeeded');
+});
+
+
+test('new refund evidence invalidates an older in-flight paid snapshot before its commit',async t=>{
+  let release,read;const paused=new Promise(resolve=>{read=resolve;});let block=false;
+  const f=await fixture(t,{hooks:{charge:async()=>{if(block){block=false;read();await new Promise(resolve=>{release=resolve;});}}}});
+  f.start();await f.work();f.paid();f.api.handleWebhook(f.notification());await f.work();
+  f.api.handleBilling(f.ctx({requestKey:'fresh-before-refund'},'/account/billing/reconcile'));
+  block=true;const older=f.work();await paused;
+  f.state.charge.amount_refunded=1;const refund=f.notification('evt_ConcurrentRefund',f.state.charge,'charge.refunded');
+  f.api.handleWebhook(refund);assert.equal(f.app.auth.session(f.owner.token).access.fullAccess,false);
+  release();assert.equal((await older).result.status,'failed');
+  assert.equal(f.app.auth.session(f.owner.token).access.fullAccess,false);
+  assert.equal((await f.work()).result.status,'failed');assert.equal(f.app.auth.session(f.owner.token).access.fullAccess,false);
+  f.state.charge.amount_refunded=0;f.advance(5001);f.api.handleWebhook(refund);
+  assert.equal((await f.work()).result.status,'succeeded');assert.equal(f.app.auth.session(f.owner.token).access.kind,'paid');
+  const version=f.app.store.db.prepare('SELECT state_version FROM access_subscriptions').get().state_version;
+  f.api.handleWebhook(refund);assert.equal(f.app.auth.session(f.owner.token).access.kind,'paid');
+  assert.equal(f.app.store.db.prepare('SELECT state_version FROM access_subscriptions').get().state_version,version);
+  f.advance(2*86_400_000);f.api.cleanup();
+  assert.equal(f.app.store.db.prepare("SELECT 1 FROM justup_billing_operations WHERE request_key='evt_ConcurrentRefund'").get(),undefined);
+  f.api.handleWebhook(f.notification('evt_ConcurrentRefund',{...f.state.charge,amount_refunded:1},'charge.refunded'));assert.equal(f.app.auth.session(f.owner.token).access.kind,'paid');
+  assert.equal(f.app.store.db.prepare('SELECT state_version FROM access_subscriptions').get().state_version,version);
+});
+
+for(const restart of [false,'restart','upgrade'])test(`an unseen old subscription cannot take replacement ownership${restart?` after cleanup and ${restart}`:''}`,async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'justup-billing-generation-')),backupDir=join(directory,'backups'),privateGenerationPath=join(directory,'private-generation');
+  mkdirSync(backupDir,{mode:0o700});writeFileSync(privateGenerationPath,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n',{mode:0o600});
+  t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  const f=await fixture(t,{storage:{dbPath:join(directory,'billing.sqlite'),backupDir,privateGenerationPath}});f.start();await f.work();f.paid();
+  const period={start:f.now()/1000-604740,end:f.now()/1000+60};
+  Object.assign(f.state.subscription.items.data[0],{current_period_start:period.start,current_period_end:period.end});f.state.invoice.lines.data[0].period=period;
+  f.api.handleWebhook(f.notification());await f.work();
+  f.state.subscription.status='canceled';f.api.handleWebhook(f.notification('evt_Canceled'));await f.work();
+  f.advance(32*60_000);const replacement=f.start('replacement');await f.work();
+  const canceled=structuredClone(f.state.subscription);f.state.previousSubscription=canceled;
+  const paidReplacement=()=>{f.paid();for(const name of ['subscription','invoice','intent','charge','checkouts'])f.state[name]=JSON.parse(JSON.stringify(f.state[name]).replaceAll('sub_Owner','sub_Replacement').replaceAll('in_Paid','in_Replacement').replaceAll('pi_Owner','pi_Replacement').replaceAll('ch_Owner','ch_Replacement'));};
+  if(restart){
+    paidReplacement();f.advance(2*86_400_000);
+    if(restart==='upgrade'){
+      f.app.store.db.prepare("UPDATE justup_billing_operations SET created_at=CASE WHEN id=? THEN 1 ELSE ? END,resource_kind='checkout' WHERE kind='checkout'").run(replacement.body.operation.id,f.now()+86_400_000);
+      f.app.store.db.exec('ALTER TABLE justup_billing_accounts DROP COLUMN current_checkout_operation_id');
+    }else f.api.cleanup();
+    await f.reopen();f.api.cleanup();
+    if(restart==='upgrade'){
+      const held=f.app.store.db.prepare("SELECT status,error_code FROM justup_billing_operations WHERE kind='checkout'").all();
+      assert.equal(held.length,2);assert.ok(held.every(row=>row.status==='ambiguous'&&row.error_code==='billing_operator_reconciliation_required'));
+      const before=f.app.store.db.prepare('SELECT subscription_id FROM justup_billing_accounts').get().subscription_id;
+      for(const [event,object] of [['evt_LegacyOld',canceled],['evt_LegacyNew',f.state.subscription]]){
+        f.api.handleWebhook(f.notification(event,object));assert.equal((await f.work()).result.errorCode,'billing_operator_reconciliation_required');
+        assert.equal(f.app.store.db.prepare('SELECT subscription_id FROM justup_billing_accounts').get().subscription_id,before);assert.equal(f.app.auth.session(f.owner.token).access.fullAccess,false);
+      }
+      assert.throws(()=>f.start('legacy-ambiguous-replacement'),{code:'billing_pending'});return;
+    }
+    assert.equal(f.app.store.db.prepare('SELECT current_checkout_operation_id FROM justup_billing_accounts').get().current_checkout_operation_id,replacement.body.operation.id);
+    const proof=f.app.store.db.prepare('SELECT resource_id,url FROM justup_billing_operations WHERE id=?').get(replacement.body.operation.id);assert.ok(proof.resource_id);assert.equal(proof.url,null);
+  }
+  f.api.handleWebhook(f.notification('evt_UnseenOld',canceled));assert.equal((await f.work()).result.status,'succeeded');
+  if(!restart)paidReplacement();
+  f.api.handleWebhook(f.notification('evt_NewSubscription'));assert.equal((await f.work()).result.status,'succeeded');
+  assert.equal(f.app.store.db.prepare('SELECT subscription_id FROM justup_billing_accounts').get().subscription_id,'sub_Replacement');
+  assert.equal(f.app.auth.session(f.owner.token).access.kind,'paid');
+});
+
+test('password-confirmed deletion retries the same termination record after three crashed task leases',async t=>{
+  const f=await fixture(t);f.start();await f.work();
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const original=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();
+  for(let attempt=0;attempt<3;attempt++){
+    const task=f.app.tasks.claim({workerId:`crash-${attempt}`,kinds:['billing_terminate'],leaseMs:1000});assert.ok(task);f.advance(1001);f.app.tasks.recover();
+  }
+  assert.equal(f.app.tasks.get(f.owner.account.id,original.task_id).status,'failed');f.advance(5001);
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const retried=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();
+  assert.equal(retried.id,original.id);assert.notEqual(retried.task_id,original.task_id);
+  assert.equal((await f.work()).result.status,'succeeded');assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
+});
+
+for(const capacity of ['owner','global'])test(`ordinary ${capacity} operation capacity cannot block billing closure`,async t=>{
+  const f=await fixture(t);f.start();await f.work();
+  const db=f.app.store.db;
+  if(capacity==='owner'){
+    for(let index=0;index<31;index++){f.api.handleBilling(f.ctx({requestKey:`capacity-${index}`},'/account/billing/reconcile'));await f.work();}
+  }else{
+    const others=[];for(let index=0;index<4;index++)others.push(await f.app.auth.register({username:`other-capacity-${index}`,password:PASSWORD}));
+    const source=db.prepare('SELECT * FROM justup_billing_operations LIMIT 1').get(),columns=Object.keys(source);
+    const insert=db.prepare(`INSERT INTO justup_billing_operations(${columns.join(',')}) VALUES(${columns.map(()=>'?').join(',')})`);
+    for(let index=0;index<127;index++)insert.run(...columns.map(column=>column==='id'?`capacity-${index}`:column==='account_id'?others[Math.floor(index/32)].account.id:column==='request_key'?`capacity-${index}`:column==='task_id'?null:source[column]));
+  }
+  const before=db.prepare("SELECT count(*) n FROM justup_billing_operations WHERE kind<>'terminate'").get().n;
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  assert.equal(db.prepare('SELECT closing_revision FROM justup_billing_accounts WHERE account_id=?').get(f.owner.account.id).closing_revision,1);
+  assert.equal(db.prepare("SELECT count(*) n FROM justup_billing_operations WHERE kind<>'terminate'").get().n,before);
+  assert.equal((await f.work()).result.status,'succeeded');assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
+});
+
+test('expired customer mutation recovery never repeats an unsafe creation or permits deletion',async t=>{
+  let f,first=true;
+  f=await fixture(t,{hooks:{customer:()=>{if(first){first=false;f.state.customer.id='cus_UnknownOriginal';f.advance(24*3_600_000+1001);throw new Error('synthetic response lost after remote mutation');}}}});
+  const checkout=f.start();const task=f.app.tasks.claim({workerId:'crashed-checkout',kinds:['billing_checkout'],leaseMs:1000});
+  assert.equal((await f.queue.runTask(task)).status,'failed');
+  assert.equal(f.app.store.db.prepare('SELECT customer_id FROM justup_billing_accounts').get().customer_id,null);
+  f.state.customer=null;f.api.refreshAvailability();f.app.tasks.recover();
+  assert.equal((await f.work()).result.status,'failed');assert.equal(f.state.customerKeys.length,1);
+  const row=f.app.store.db.prepare('SELECT * FROM justup_billing_operations WHERE id=?').get(checkout.body.operation.id);
+  assert.equal(row.status,'ambiguous');assert.equal(row.error_code,'billing_operator_reconciliation_required');
+  f.advance(2*86_400_000);f.api.handleBilling(f.ctx(undefined,'/account/billing','GET'));
+  assert.ok(f.app.store.db.prepare('SELECT id FROM justup_billing_operations WHERE id=?').get(row.id));
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  assert.equal((await f.work()).result.status,'failed');assert.equal(f.state.customerKeys.length,1);
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_unavailable'});
+  assert.ok(f.app.auth.session(f.owner.token));assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,null);
+});
+
+
+test('saturated queue keeps billing closed and its single termination reservation retryable',async t=>{
+  const f=await fixture(t);f.start();await f.work();
+  const active=f.app.tasks.enqueue({ownerId:f.owner.account.id,kind:'synthetic_foreground',requestKey:'active',payload:{}});
+  const claim=f.app.tasks.claim({workerId:'active-worker',kinds:['synthetic_foreground'],leaseMs:90_000});assert.equal(claim.id,active.id);
+  for(let index=0;index<94;index++)f.app.tasks.enqueue({ownerId:`synthetic-owner-${index}`,kind:'synthetic_foreground',requestKey:`capacity-${index}`,payload:{}});
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const reserved=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();assert.equal(reserved.task_id,null);
+  assert.equal(f.app.store.db.prepare('SELECT closing_revision FROM justup_billing_accounts').get().closing_revision,1);
+  assert.throws(()=>f.start('closed'),{code:'billing_termination_pending'});
+  assert.equal(f.app.tasks.get(f.owner.account.id,claim.id).leaseToken,claim.leaseToken);
+  f.app.tasks.delete(f.owner.account.id,active.id);f.advance(5001);
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const retry=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();assert.equal(retry.id,reserved.id);assert.ok(retry.task_id);
+  assert.equal((await f.work()).result.status,'succeeded');assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
+});
+
+test('termination retry preserves a live task lease and requires the current password-confirmed session',async t=>{
+  const f=await fixture(t);f.start();await f.work();
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const task=f.app.tasks.claim({workerId:'live-termination',kinds:['billing_terminate'],leaseMs:90_000});f.advance(5001);
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  assert.equal(f.app.tasks.get(f.owner.account.id,task.id).leaseToken,task.leaseToken);
+  f.app.auth.invalidateAllSessions();
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'unauthenticated'});
+  assert.equal(f.app.tasks.get(f.owner.account.id,task.id).leaseToken,task.leaseToken);
+});
+
+
+test('checkout replacement requires authoritative expiry instead of a hosted URL deadline',async t=>{
+  const f=await fixture(t);const original=f.start();await f.work();f.advance(32*60_000);
+  assert.throws(()=>f.start('unresolved-replacement'),{code:'billing_pending'});
+  assert.equal(f.api.handleBilling(f.ctx(undefined,'/account/billing','GET')).body.billing.canCheckout,false);
+  f.state.checkouts[0].status='expired';f.api.handleBilling(f.ctx({requestKey:'verify-expired'},'/account/billing/reconcile'));assert.equal((await f.work()).result.status,'succeeded');
+  assert.equal(f.app.store.db.prepare('SELECT resource_kind FROM justup_billing_operations WHERE id=?').get(original.body.operation.id).resource_kind,'expired_checkout');
+  assert.equal(f.api.handleBilling(f.ctx(undefined,'/account/billing','GET')).body.billing.canCheckout,true);
+  assert.equal(f.start('resolved-replacement').status,202);
+});
+
+
+test('an expired replacement checkout clears the prior subscription pause before another checkout',async t=>{
+  const f=await fixture(t);f.start();await f.work();f.paid();
+  const period={start:f.now()/1000-604740,end:f.now()/1000+60};
+  Object.assign(f.state.subscription.items.data[0],{current_period_start:period.start,current_period_end:period.end});f.state.invoice.lines.data[0].period=period;
+  f.api.handleWebhook(f.notification());await f.work();f.state.subscription.status='canceled';f.api.handleWebhook(f.notification('evt_CanceledForExpiry'));await f.work();
+  f.advance(32*60_000);f.start('expires-without-payment');await f.work();f.state.checkouts[0].status='expired';f.advance(32*60_000);
+  f.api.handleBilling(f.ctx({requestKey:'verify-replacement-expiry'},'/account/billing/reconcile'));assert.equal((await f.work()).result.status,'succeeded');
+  assert.equal(f.app.auth.session(f.owner.token).access.kind,'expired');
+  assert.equal(f.start('after-proven-expiry').status,202);
+});
+
+
+test('settled replacement retires prior reservations so a third checkout remains possible',async t=>{
+  const f=await fixture(t);f.start();await f.work();
+  function shortPaid(){f.paid();const period={start:f.now()/1000-604740,end:f.now()/1000+60};Object.assign(f.state.subscription.items.data[0],{current_period_start:period.start,current_period_end:period.end});f.state.invoice.lines.data[0].period=period;}
+  shortPaid();f.api.handleWebhook(f.notification());await f.work();f.state.subscription.status='canceled';f.api.handleWebhook(f.notification('evt_FirstCanceled'));await f.work();f.advance(32*60_000);
+  f.start('second-generation');await f.work();shortPaid();
+  for(const name of ['subscription','invoice','intent','charge','checkouts'])f.state[name]=JSON.parse(JSON.stringify(f.state[name]).replaceAll('sub_Owner','sub_Second').replaceAll('in_Paid','in_Second').replaceAll('pi_Owner','pi_Second').replaceAll('ch_Owner','ch_Second'));
+  f.api.handleWebhook(f.notification('evt_SecondPaid'));assert.equal((await f.work()).result.status,'succeeded');
+  const first=f.app.store.db.prepare('SELECT status,reconcile_pending FROM access_subscriptions WHERE subscription_hash=?').get(hash('subscription:sub_Owner'));
+  assert.deepEqual({...first},{status:'ended',reconcile_pending:0});
+  f.state.subscription.status='canceled';f.api.handleWebhook(f.notification('evt_SecondCanceled'));await f.work();f.advance(32*60_000);
+  assert.equal(f.app.auth.session(f.owner.token).access.kind,'expired');assert.equal(f.start('third-generation').status,202);
+});
+
+test('a checkout that failed before a mutation can reconcile its prior binding and retry safely',async t=>{
+  const f=await fixture(t);f.start();await f.work();f.paid();const period={start:f.now()/1000-604740,end:f.now()/1000+60};
+  Object.assign(f.state.subscription.items.data[0],{current_period_start:period.start,current_period_end:period.end});f.state.invoice.lines.data[0].period=period;
+  f.api.handleWebhook(f.notification());await f.work();f.state.subscription.status='canceled';f.api.handleWebhook(f.notification('evt_PreMutationCanceled'));await f.work();f.advance(32*60_000);
+  f.state.unavailable=true;const failed=f.start('failed-before-price');assert.equal((await f.work()).result.status,'failed');f.state.unavailable=false;
+  const before=f.state.calls.filter(name=>name==='checkout-create').length;
+  f.api.handleBilling(f.ctx({requestKey:'resolve-no-mutation'},'/account/billing/reconcile'));assert.equal((await f.work()).result.status,'succeeded');
+  assert.equal(f.state.calls.filter(name=>name==='checkout-create').length,before);
+  assert.equal(f.app.store.db.prepare('SELECT resource_kind FROM justup_billing_operations WHERE id=?').get(failed.body.operation.id).resource_kind,'unstarted_checkout');
+  assert.equal(f.app.auth.session(f.owner.token).access.kind,'expired');assert.equal(f.start('safe-after-price-failure').status,202);
+});
+
+
+for(const legacy of ['single','unknown_customer','unknown_customer_failed','missing_history'])test(`legacy ${legacy} ownership requires the corresponding current provider proof`,async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'justup-billing-legacy-')),backupDir=join(directory,'backups'),privateGenerationPath=join(directory,'private-generation');
+  mkdirSync(backupDir,{mode:0o700});writeFileSync(privateGenerationPath,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n',{mode:0o600});t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  const f=await fixture(t,{storage:{dbPath:join(directory,'billing.sqlite'),backupDir,privateGenerationPath},hooks:legacy==='single'?{}:{customer:()=>{throw new Error('synthetic lost customer response');}}});
+  const first=f.start();await f.work();
+  if(legacy==='single')f.paid();
+  else if(legacy==='unknown_customer_failed'){
+    f.advance(24*3_600_000);f.app.store.db.prepare("UPDATE justup_billing_operations SET status='failed' WHERE id=?").run(first.body.operation.id);
+    f.app.store.db.prepare('UPDATE justup_billing_accounts SET closing_revision=1,termination_revision=1,termination_verified_at=?').run(f.now());
+  }else if(legacy==='unknown_customer'){
+    f.advance(24*3_600_000);f.state.customer.id='cus_SecondUnknown';
+    f.app.store.db.prepare('UPDATE justup_billing_accounts SET customer_id=?').run(f.state.customer.id);
+  }else{
+    const operation=f.app.store.db.prepare('SELECT task_id FROM justup_billing_operations WHERE id=?').get(first.body.operation.id);
+    f.app.tasks.delete(f.owner.account.id,operation.task_id);f.app.store.db.prepare('DELETE FROM justup_billing_operations WHERE id=?').run(first.body.operation.id);
+  }
+  f.app.store.db.exec('ALTER TABLE justup_billing_accounts DROP COLUMN current_checkout_operation_id');await f.reopen();
+  if(legacy==='single'){
+    f.api.handleWebhook(f.notification('evt_LegacySingle'));assert.equal((await f.work()).result.status,'succeeded');assert.equal(f.app.auth.session(f.owner.token).access.kind,'paid');
+  }else{
+    const before=f.state.customerKeys.length;
+    await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+    assert.equal((await f.work()).result.errorCode,'billing_operator_reconciliation_required');assert.equal(f.state.customerKeys.length,before);
+    await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_unavailable'});
+    assert.ok(f.app.auth.session(f.owner.token));assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,null);
+  }
 });
