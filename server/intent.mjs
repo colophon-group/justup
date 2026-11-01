@@ -294,7 +294,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       }
       if(editing&&r.revision!==expected) throw err('revision_conflict',409,'This search changed. Reload it and try again.');
       if(!available()) throw err('dependency_unavailable',503,'Search interpretation is temporarily unavailable.');
-      if(creating&&db.prepare('SELECT count(*) n FROM demo_searches WHERE owner_id=?').get(ctx.accountId).n>=20) throw err('task_limit',429,'The demo search limit has been reached.');
+      if(creating&&db.prepare('SELECT count(*) n FROM demo_searches WHERE owner_id=?').get(ctx.accountId).n>=20) throw err('task_limit',429,'The search limit has been reached.');
       const searchId=creating?randomUUID():id;
       const task=tasks.enqueue({ownerId:ctx.accountId,kind:'search_intent',requestKey,payload:{searchId,query,expectedRevision:expected}});
       try { tx(db,()=>{

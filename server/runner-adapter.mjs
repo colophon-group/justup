@@ -7,10 +7,11 @@ import { createIntentService } from './intent.mjs';
 import { createCompanyService } from './companies.mjs';
 import { createCodexModel } from './model-runner.mjs';
 import { createBrokerExecutor } from './model-broker.mjs';
-import { runnerStatusPath } from './demo-composition.mjs';
+import { runtimeEnv } from './config.mjs';
+import { runnerStatusPath } from './composition.mjs';
 
 export function runnerIdentity(env=process.env){
-  const sourceCommit=env.JUSTUP_DEMO_SOURCE_COMMIT,buildIdentity=env.JUSTUP_DEMO_BUILD_ID,hostPlanSha256=env.JUSTUP_DEMO_HOST_PLAN_SHA256;
+  const sourceCommit=runtimeEnv(env,'SOURCE_COMMIT'),buildIdentity=runtimeEnv(env,'BUILD_ID'),hostPlanSha256=runtimeEnv(env,'HOST_PLAN_SHA256');
   if(!/^[a-f0-9]{40}$/.test(sourceCommit??'')||!/^[a-f0-9]{64}$/.test(buildIdentity??'')||!/^[a-f0-9]{64}$/.test(hostPlanSha256??''))throw new Error('Runner build identity is unavailable.');
   return {sourceCommit,buildIdentity,hostPlanSha256};
 }
@@ -21,7 +22,8 @@ export function bindRunnerConfig(config,env=process.env){
   // installed host plan. Operator JSON cannot substitute a different proof.
   return {...config,...identity,model:{...(config.model??{}),buildIdentity:identity.buildIdentity,hostPlanSha256:identity.hostPlanSha256}};
 }
-export function readRunnerConfig(path=process.env.JUSTUP_DEMO_RUNNER_CONFIG,env=process.env){
+export function readRunnerConfig(path,env=process.env){
+  path ??= runtimeEnv(env,'RUNNER_CONFIG');
   if(typeof path!=='string'||!isAbsolute(path)||realpathSync(path)!==path)throw new Error('Runner configuration is unavailable.');
   const meta=lstatSync(path);if(!meta.isFile()||meta.uid!==0||(meta.mode&0o027)!==0||meta.size>32_768)throw new Error('Runner configuration is unavailable.');
   return bindRunnerConfig(JSON.parse(readFileSync(path,'utf8')),env);

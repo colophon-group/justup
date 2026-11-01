@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
-export function createRunner({tasks,handlers,workerId=`demo-${randomUUID()}`,leaseMs=30_000,taskTimeoutMs=90_000,pollMs=1000,onMetric=()=>{}}={}) {
+export function createRunner({tasks,handlers,workerId=`runner-${randomUUID()}`,leaseMs=30_000,taskTimeoutMs=90_000,pollMs=1000,onMetric=()=>{}}={}) {
   if(!tasks||!handlers||Object.values(handlers).some(h=>typeof h!=='function')||!Number.isInteger(leaseMs)||leaseMs<1000||leaseMs>300_000||!Number.isInteger(taskTimeoutMs)||taskTimeoutMs<1||taskTimeoutMs>120_000||!Number.isInteger(pollMs)||pollMs<10||pollMs>60_000) throw new TypeError('Invalid runner configuration.');
   let busy=false,controller=null;
   async function runOnce({signal}={}) {
@@ -44,7 +44,7 @@ export function createRunner({tasks,handlers,workerId=`demo-${randomUUID()}`,lea
 // configuration, never a module, command or browser/model-supplied path.
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) {
   const shutdown=new AbortController();process.once('SIGTERM',()=>shutdown.abort());process.once('SIGINT',()=>shutdown.abort());let deps;
-  try{const module=await import('./demo-runner-adapter.mjs');deps=await module.createRunnerDependencies();await createRunner(deps).run({signal:shutdown.signal});}
+  try{const module=await import('./runner-adapter.mjs');deps=await module.createRunnerDependencies();await createRunner(deps).run({signal:shutdown.signal});}
   catch{console.error('Runner could not start.');process.exitCode=1;}
   finally{await deps?.close?.();}
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { openStore, DAY_MS } from './store.mjs';
 import { createFeed } from './feed.mjs';
 const AT = Date.parse('2026-10-31T12:00:00Z'), iso = (v) => new Date(v).toISOString();
-const viewer = { account: { id: 'account-a' } };
+const viewer = { account: { id: 'account-a' }, access: { fullAccess: true } };
 function setup(t, options = {}) {
   const s = openStore(); t.after(() => s.close()); let at = AT;
   const feed = createFeed({ db: s.db, now: () => at, cursorSecret: 'x'.repeat(32), ...options });
@@ -80,4 +80,11 @@ test('company catalogue exposes imported identity without inventing monitoring o
   assert.equal(co.history, null); assert.equal(co.evidence[0].url, 'https://jseek.co/en/company/example'); assert.ok(!JSON.stringify(co).includes('/hidden'));
   assert.equal(feed.companies({ q: 'EXAM' }).items.length, 1);
   assert.throws(() => feed.company('absent'), { status: 404 });
+});
+
+test('signed-in accounts without full access receive only the guest slice', (t) => {
+  const { feed } = setup(t);
+  for (const access of [undefined, {fullAccess:false}]) {
+    assert.deepEqual(feed.list({viewer:{account:{id:'restricted'},access}}).items.map(j=>j.id), feed.list().items.map(j=>j.id));
+  }
 });
