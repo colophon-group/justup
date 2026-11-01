@@ -10,6 +10,7 @@ interface Options<T> {
   hasMore?: boolean;
   onNeedMore?: () => void;
   delayMs?: number;
+  prerenderedCount?: number;
 }
 export function useViewportReveal<T>({
   items,
@@ -20,10 +21,12 @@ export function useViewportReveal<T>({
   hasMore = false,
   onNeedMore,
   delayMs = 450,
+  prerenderedCount = 0,
 }: Options<T>): { visible: T[]; revealing: boolean; initialCount: number } {
-  const [count, setCount] = useState(0),
+  const [count, setCount] = useState(prerenderedCount),
     [revealing, setRevealing] = useState(false);
   const [initialCount, setInitialCount] = useState(Number.POSITIVE_INFINITY);
+  const hydrated = useRef(false);
   const initial = useRef(true),
     key = useRef(resetKey);
   const isVisible = () => {
@@ -38,6 +41,21 @@ export function useViewportReveal<T>({
     );
   };
   useLayoutEffect(() => {
+    if (!hydrated.current) {
+      hydrated.current = true;
+      if (prerenderedCount) {
+        // Hydrate identical public HTML, then retain every row already seen in this viewport.
+        // Rows below it enter the same 450ms reveal queue as fetched catalogue rows.
+        const rows = tailRef.current?.previousElementSibling?.children;
+        let seen = 0;
+        for (const row of rows ?? []) {
+          if (row.getBoundingClientRect().top < window.innerHeight) seen++;
+        }
+        setCount(seen);
+        setInitialCount(seen);
+        initial.current = false;
+      }
+    }
     if (key.current !== resetKey) {
       key.current = resetKey;
       initial.current = true;

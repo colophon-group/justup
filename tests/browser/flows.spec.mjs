@@ -37,22 +37,24 @@ test('unavailable API produces an explicit failure and no sample fallback', asyn
   await expect(page.locator('#service-notice')).toContainText('Search service unavailable.'); await expect(page.locator('#job-search button[type=submit]')).toBeDisabled(); await expect(page.locator('[data-job]')).toHaveCount(0);
 });
 
-test('visitor search prompts real credentials without creating an anonymous model request', async ({ page }) => {
-  const calls = await mockApi(page, { 'GET /session': session({ user: null, access: { kind: 'guest', fullAccess: false, billingEnabled: false } }) }); await page.goto('/'); await capture(page, 'desktop-landing'); await submit(page, 'Part-time museum work');
-  await expect(page.locator('#sign-in-dialog')).toBeVisible(); await expect(page.locator('#query')).toHaveValue('Part-time museum work');
+test('unavailable visitor search does not submit or pretend that signing in ran a search', async ({ page }) => {
+  const calls = await mockApi(page, { 'GET /session': session({ user: null, visitor: null, capabilities: { search: true, visitorSearch: false }, access: { kind: 'guest', fullAccess: false, billingEnabled: false } }) }); await page.goto('/'); await capture(page, 'desktop-landing'); await page.locator('#query').fill('Part-time museum work');
+  await expect(page.locator('#job-search button[type=submit]')).toBeDisabled();
+  await expect(page.locator('#sign-in-dialog')).not.toBeVisible(); await expect(page.locator('#query')).toHaveValue('Part-time museum work');
+  await page.locator('#header-sign-in').click();
   expect(calls.some(call => call.key === 'POST /searches' || call.key === 'GET /searches')).toBe(false);
   await expect(page.locator('#sign-in-dialog a[href="/privacy.html"]')).toBeVisible();
 });
 
 test('credentials are policy-gated; rejected login preserves the visitor draft and clears password/invite', async ({ page }) => {
-  const calls = await mockApi(page, { 'GET /session': session({ user: null }), 'POST /auth/login': { status: 401, body: { error: { code: 'invalid_credentials', message: 'Username or password is incorrect.' } } } }); await page.goto('/'); await submit(page, 'Garden jobs');
+  const calls = await mockApi(page, { 'GET /session': session({ user: null }), 'POST /auth/login': { status: 401, body: { error: { code: 'invalid_credentials', message: 'Username or password is incorrect.' } } } }); await page.goto('/'); await page.locator('#query').fill('Garden jobs'); await page.locator('#header-sign-in').click();
   await page.locator('#auth-username').fill('reader'); await page.locator('#auth-password').fill('test-only-password'); await page.locator('#auth-submit').click();
   await expect(page.locator('#auth-status')).toContainText('incorrect'); await expect(page.locator('#auth-password')).toHaveValue(''); await expect(page.locator('#query')).toHaveValue('Garden jobs');
   expect(calls.find(call => call.key === 'POST /auth/login').body).toEqual({ username: 'reader', password: 'test-only-password' }); expect(await page.evaluate(() => Object.keys(localStorage))).toEqual([]);
 });
 
 test('unreviewed static policies keep registration and login disabled', async ({ page }) => {
-  await mockApi(page, { 'GET /session': session({ user: null, policies: { reviewed: false, version: 'product-draft-4', privacyUrl: null, usageUrl: null } }) }); await page.goto('/'); await page.locator('#header-sign-in').click();
+  await mockApi(page, { 'GET /session': session({ user: null, policies: {locale:'en',reviewedLocale:null,fallback:false, reviewed: false, version: 'product-draft-4', privacyUrl: null, usageUrl: null } }) }); await page.goto('/'); await page.locator('#header-sign-in').click();
   await expect(page.locator('#sign-in-unavailable')).toContainText('being reviewed'); await expect(page.locator('#sign-in-form')).toBeHidden();
 });
 
@@ -163,7 +165,7 @@ test('configured authentication availability is enforced independently of review
 
 test('guest company submission prompts sign-in without a model POST or clearing either draft', async ({ page }) => {
   const calls = await mockApi(page, { 'GET /session': session({ user: null, capabilities: { search: false, companyRequests: true } }) });
-  await page.goto('/'); await expect(page.locator('#job-search button[type=submit]')).toBeEnabled(); await page.locator('#query').fill('Part-time museum jobs');
+  await page.goto('/'); await expect(page.locator('#job-search button[type=submit]')).toBeDisabled(); await page.locator('#query').fill('Part-time museum jobs');
   await page.getByRole('link', { name: 'Companies', exact: true }).click(); await page.getByRole('link', { name: 'Request a company +' }).click();
   await page.locator('#request-query').fill('A local museum'); await page.getByRole('button', { name: 'Find company' }).click();
   await expect(page.locator('#sign-in-dialog')).toBeVisible(); await expect(page.locator('#request-query')).toHaveValue('A local museum'); await expect(page.locator('#query')).toHaveValue('Part-time museum jobs');
@@ -176,7 +178,7 @@ for (const surface of ['positions', 'companies']) {
     const items = Array.from({ length: 10 }, (_, index) => ({ ...company, id: `company-${index}`, name: `Library ${index}` }));
     await mockApi(page, { ...saved, 'GET /companies': { items }, 'GET /searches/search-1/results': completed(Array.from({ length: 10 }, (_, index) => job(index))) });
     const isJobs = surface === 'positions', rows = isJobs ? '#feed [data-job]' : '#company-list [data-company]', tail = isJobs ? '#feed-tail' : '#company-tail';
-    await page.goto(isJobs ? '/' : '/#companies');
+    await page.goto(isJobs ? '/' : '/companies');
     await expect(page.locator(isJobs ? '#feed-status' : '#company-scroll-status')).toContainText(isJobs ? 'Still checking' : 'More from the directory');
     await expect.poll(() => page.locator(tail).evaluate(element => element.getBoundingClientRect().top)).toBeGreaterThan(420);
     await page.waitForTimeout(600); await expect(page.locator(rows)).toHaveCount(0);
@@ -190,7 +192,7 @@ test('initial fills measure wrapped row geometry instead of assuming a fixed row
   const tallTitle = 'Long role title with detailed responsibilities '.repeat(18);
   const tallDescription = 'Imported company description with several lines of public evidence. '.repeat(25);
   await mockApi(page, { ...saved, 'GET /searches/search-1/results': completed(Array.from({ length: 12 }, (_, index) => ({ ...job(index), title: tallTitle + index }))), 'GET /companies': { items: Array.from({ length: 12 }, (_, index) => ({ ...company, id: `company-${index}`, description: tallDescription })) } });
-  for (const [route, rows] of [['/', '#feed [data-job]'], ['/#companies', '#company-list [data-company]']]) {
+  for (const [route, rows] of [['/', '#feed [data-job]'], ['/companies', '#company-list [data-company]']]) {
     await page.goto(route); await expect.poll(() => page.locator(rows).count()).toBeGreaterThan(0); await page.waitForTimeout(550);
     const tops = await page.locator(rows).evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top));
     expect(tops.every(top => top < 1100)).toBe(true); expect(tops.length).toBeLessThan(12);
@@ -228,7 +230,7 @@ test('reported salary ranges retain their currency, bounds and disclosed period 
 });
 
 test('company-request submission capability does not advertise an unsupported requested catalogue filter', async ({ page }) => {
-  await mockApi(page); await page.goto('/#companies'); await expect(page.locator('#companies-page')).toBeVisible(); await expect(page.locator('#company-list [data-company]')).toHaveCount(1); await expect(page.locator('#company-scroll-status')).toContainText('That’s the directory so far.');
+  await mockApi(page); await page.goto('/companies'); await expect(page.locator('#companies-page')).toBeVisible(); await expect(page.locator('#company-list [data-company]')).toHaveCount(1); await expect(page.locator('#company-scroll-status')).toContainText('That’s the directory so far.');
   await expect(page.locator('[data-status=requested]')).toBeHidden(); await expect(page.getByRole('link', { name: 'Request a company +' })).toBeVisible(); await capture(page, 'desktop-companies');
   await page.getByRole('link', { name: 'Request a company +' }).click(); await expect(page.getByRole('button', { name: 'Find company' })).toBeEnabled();
 });
@@ -246,7 +248,7 @@ for (const registration of [false, true]) {
       'GET /searches/search-1/results': completed(),
       'POST /session/logout': () => { signedIn = false; return {}; },
     });
-    await page.goto('/'); await submit(page, draft); await expect(page.locator('#sign-in-dialog')).toBeVisible();
+    await page.goto('/'); await page.locator('#query').fill(draft); await page.locator('#header-sign-in').click(); await expect(page.locator('#sign-in-dialog')).toBeVisible();
     await page.locator('#auth-username').fill('tester'); await page.locator('#auth-password').fill('test-only-password');
     if (registration) { await page.locator('#auth-register').check(); await page.locator('#auth-invite').fill('test-only-invite'); }
     await page.locator('#auth-submit').click();
@@ -265,7 +267,7 @@ test('closing a pending sign-in dialog prevents its late completion from refresh
   let release;
   const pending = new Promise(resolve => { release = resolve; });
   const calls = await mockApi(page, { 'GET /session': session({ user: null }), 'POST /auth/login': async () => { await pending; return session(); } });
-  await page.goto('/'); await submit(page, 'A visitor draft');
+  await page.goto('/'); await page.locator('#query').fill('A visitor draft'); await page.locator('#header-sign-in').click();
   await page.locator('#auth-username').fill('tester'); await page.locator('#auth-password').fill('test-only-password'); await page.locator('#auth-submit').click();
   await expect.poll(() => calls.filter(call => call.key === 'POST /auth/login').length).toBe(1);
   await page.getByRole('button', { name: 'Close sign in', exact: true }).click(); release();
@@ -292,5 +294,5 @@ test('skip navigation focuses content and search tabs support keyboard changes w
   await page.locator('#query').fill('Unsubmitted garden draft'); await garden.focus(); await page.keyboard.press('Home'); await expect(library).toBeFocused();
   await page.keyboard.press('End'); await expect(garden).toBeFocused(); await expect(page.locator('#query')).toHaveValue('Unsubmitted garden draft');
   expect(calls.some(call => call.key === 'POST /searches' || call.key.startsWith('PATCH /searches/'))).toBe(false);
-  await page.getByRole('link', { name: 'Companies', exact: true }).click(); await page.getByRole('link', { name: 'Skip to content' }).focus(); await page.keyboard.press('Enter'); await expect(page.locator('#main')).toBeFocused(); await expect(page).toHaveURL(/#companies$/);
+  await page.getByRole('link', { name: 'Companies', exact: true }).click(); await page.getByRole('link', { name: 'Skip to content' }).focus(); await page.keyboard.press('Enter'); await expect(page.locator('#main')).toBeFocused(); await expect(page).toHaveURL(/companies$/);
 });

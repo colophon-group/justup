@@ -16,11 +16,11 @@ export function httpsOrigin(value) {
   return url.origin;
 }
 
-function response(body, status, headers = {}, privateResponse = false, indexable = false) {
+function response(body, status, headers = {}, privateResponse = false, indexable = false, publicRobots = null) {
   const result = new Headers(headers);
   for (const [key, value] of Object.entries(SECURITY_HEADERS)) result.set(key, value);
   if (indexable) result.delete('X-Robots-Tag');
-  else result.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+  else result.set('X-Robots-Tag', publicRobots ?? 'noindex, nofollow, noarchive');
   result.set('Cache-Control', privateResponse ? 'private, no-store, max-age=0' : 'no-cache');
   result.set('CDN-Cache-Control', 'no-store');
   result.set('Cloudflare-CDN-Cache-Control', 'no-store');
@@ -37,7 +37,7 @@ function unavailable(code = 'dependency_unavailable', status = 503) {
   return response(JSON.stringify({ error: { code, message: status === 403 ? 'Request origin is not allowed.' : 'The service is unavailable.', requestId: crypto.randomUUID(), retryAfter: 30 } }), status, { 'Content-Type': 'application/json', 'Retry-After': '30' }, true);
 }
 
-export function createHandler(fetchUpstream = globalThis.fetch) {
+export function createHandler(fetchUpstream = globalThis.fetch, renderPublicDocument) {
   return async function handle(request, env) {
     const url = new URL(request.url);
     const mode = env.DEPLOYMENT_MODE;
@@ -67,6 +67,10 @@ export function createHandler(fetchUpstream = globalThis.fetch) {
       const origin = request.headers.get('Origin');
       if (origin && origin !== publicOrigin) return unavailable('origin_not_allowed', 403);
       if (!SAFE_METHODS.has(request.method) && origin !== publicOrigin) return unavailable('origin_required', 403);
+      // This request-only presentation hint is accepted only on the private same-origin API boundary.
+      // Repeated headers are combined by Fetch into a comma-separated value and fail this exact check.
+      const explicitLocale = request.headers.get('X-Justup-Locale');
+      if (explicitLocale !== null && !/^(?:en|de|fr|it|es)$/.test(explicitLocale)) return response(JSON.stringify({ error: { code: 'invalid_locale', message: 'Choose a supported interface language.', requestId: crypto.randomUUID() } }), 400, { 'Content-Type': 'application/json' }, true);
       const headers = new Headers(request.headers);
       for (const key of [...headers.keys()]) {
         if (HOP_HEADERS.includes(key.toLowerCase()) || /^(forwarded|x-forwarded-|cf-|x-real-ip|host$)/i.test(key)) headers.delete(key);
@@ -99,11 +103,21 @@ export function createHandler(fetchUpstream = globalThis.fetch) {
       } catch { return unavailable(); }
     }
     if (!['GET', 'HEAD'].includes(request.method)) return response(null, 405, { Allow: 'GET, HEAD' }, true);
+    if (!/\.[^/]+$/.test(url.pathname) || /^\/(?:[a-z]{2}\/)?companies(?:\/|$)/.test(url.pathname)) {
+      if (!renderPublicDocument) return unavailable('public_renderer_unavailable');
+      try {
+        const templateUrl = new URL('/index.html', publicOrigin);
+        const template = await env.ASSETS.fetch(new Request(templateUrl));
+        if (template.status !== 200) return unavailable('document_template_unavailable');
+        const rendered = await renderPublicDocument(request, env, await template.text(), fetchUpstream);
+        return response(request.method === 'HEAD' ? null : rendered.body, rendered.status, rendered.headers, true, mode === 'production' && rendered.status === 200 && !rendered.headers.has('X-Robots-Tag'), mode === 'production' && rendered.status === 200 && rendered.headers.get('X-Robots-Tag') === 'noindex, follow' ? 'noindex, follow' : null);
+      } catch { return unavailable('public_document_unavailable'); }
+    }
     try {
       const assetUrl = new URL(request.url);
       if (assetUrl.pathname === '/') assetUrl.pathname = '/index.html';
       const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
-      return response(asset.body, asset.status, asset.headers, asset.status < 200 || asset.status >= 300, mode === 'production' && asset.status >= 200 && asset.status < 300);
+      return response(asset.body, asset.status, asset.headers, asset.status < 200 || asset.status >= 300, mode === 'production' && /^\/(?:privacy|usage)(?:\.(?:de|fr|it|es))?\.html$/.test(url.pathname) && asset.status >= 200 && asset.status < 300);
     } catch { return unavailable(); }
   };
 }

@@ -9,6 +9,7 @@ read_when: You need to find a policy or setup guide.
 | --- | --- |
 | Running, building or changing the web application | [Web application guide](../web/README.md) |
 | Understanding product behavior and open design choices | [Product guide](product-design.md) |
+| Checking the prerelease against the accepted mockup and remaining interface gaps | [Interface readiness checklist](interface-readiness.md) |
 | Designing user-facing backend boundaries and AI work | [Backend design](backend-design.md) |
 | Choosing deployment placement, preview isolation or recovery | [Deployment plan](deployment-plan.md) |
 | Changing result arrivals, scrolling or motion | [Motion guide](motion-design.md) |

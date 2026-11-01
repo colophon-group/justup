@@ -21,6 +21,8 @@ async function fixture(temporary) {
   await writeFile(join(repository, 'web/build-fixture.mjs'), `
     import {mkdirSync,copyFileSync,writeFileSync} from 'node:fs';
     mkdirSync('web/dist/assets',{recursive:true});
+    mkdirSync('web/worker-dist',{recursive:true});
+    copyFileSync('deploy/frontend/worker.mjs','web/worker-dist/worker.mjs');
     copyFileSync('web/index.html','web/dist/index.html');
     for(const name of ['privacy.html','usage.html']) copyFileSync('web/public/'+name,'web/dist/'+name);
     writeFileSync('web/dist/assets/app.fixture.js',JSON.stringify({privateBuildValue:process.env.VITE_PRIVATE_CANARY??null}));
@@ -63,7 +65,8 @@ test('artifact builds committed source, ignores dirty input and filters operator
       if (path === '/__release/version') return new Response(JSON.stringify(version), { headers });
       if (path.startsWith('/api/v1/')) return new Response(JSON.stringify({ user: null, access: { kind: 'guest' } }), { headers });
       if (path === '/robots.txt') return new Response('User-agent: *\nDisallow: /\n', { headers });
-      return new Response(await readFile(join(first, 'assets', path === '/' ? 'index.html' : path.slice(1))), { headers });
+      if (path === '/') return new Response(`<html><head><meta name="justup-public-document" content="v1"><meta name="justup-source" content="${release.sourceSha}"><meta name="justup-runtime-config" content="${config.vars.RUNTIME_CONFIG_SHA256}"><link rel="canonical" href="${config.vars.PUBLIC_ORIGIN}/"></head><body><div id="root">Beat the endless scroll.</div><template id="public-bootstrap" data-public="{}"></template><script src="/assets/app.fixture.js"></script></body></html>`, { headers });
+      return new Response(await readFile(join(first, 'assets', path.slice(1))), { headers });
     };
     assert.equal((await smoke('https://preview.justup.test', first, fetchFixture)).result, 'passed');
     await verifyArtifact(first);
@@ -79,7 +82,9 @@ test('artifact builds committed source, ignores dirty input and filters operator
       const path = new URL(url).pathname;
       if (path === '/__release/version') return new Response(JSON.stringify({ ...JSON.parse(productionConfig.vars.RELEASE_JSON), runtimeConfigSha256: productionConfig.vars.RUNTIME_CONFIG_SHA256, deploymentMode: 'production' }), { headers: { 'X-Robots-Tag': 'noindex' } });
       if (path === '/robots.txt') return new Response('User-agent: *\nDisallow: /api/\nDisallow: /__release/\n');
-      return fetchFixture(url);
+      const result = await fetchFixture(url);
+      if (path === '/') return new Response((await result.text()).replaceAll(config.vars.RUNTIME_CONFIG_SHA256, productionConfig.vars.RUNTIME_CONFIG_SHA256).replaceAll(config.vars.PUBLIC_ORIGIN, productionConfig.vars.PUBLIC_ORIGIN), { headers: result.headers });
+      return result;
     };
     assert.equal((await smoke('https://justup.test', production, productionFetch)).deploymentMode, 'production');
     const noMode = { ...config, vars: { ...config.vars } }; delete noMode.vars.DEPLOYMENT_MODE;
@@ -92,7 +97,7 @@ test('artifact builds committed source, ignores dirty input and filters operator
     await assert.rejects(smoke('https://preview.justup.test', first, async url => new URL(url).pathname === '/__release/version' ? new Response(JSON.stringify({ ...version, deploymentMode: 'production' }), { headers: { 'X-Robots-Tag': 'noindex' } }) : fetchFixture(url)), /Wrong deployed environment/);
     await writeFile(join(first, 'assets/index.html'), 'drift');
     await assert.rejects(verifyArtifact(first), /bytes differ/);
-    await assert.rejects(smoke('https://preview.justup.test', first, fetchFixture), /Wrong root index bytes/);
+    await assert.rejects(smoke('https://preview.justup.test', first, fetchFixture), /Wrong asset bytes: index.html/);
     git('add', 'web/.env'); git('commit', '-qm', 'Unsafe fixture');
     await assert.rejects(prepare(git('rev-parse', 'HEAD'), join(temporary, 'unsafe'), repository), /Refusing build input/);
   } finally {

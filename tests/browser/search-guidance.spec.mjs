@@ -161,7 +161,7 @@ test("a newly stale page clears visible jobs and discards unverified page items 
       if (attempts === 1)
         return {
           ...completed([job(1)]),
-          hidden: { count: 9, exact: true },
+          hiddenMatches: { count: 9, status: 'exact' },
           coverage: { stale: false, verifiedAt: "2026-10-31T08:00:00Z" },
           continuation: { state: "open", cursor: "next", retryAfterMs: null },
         };

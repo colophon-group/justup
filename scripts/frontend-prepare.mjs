@@ -30,6 +30,7 @@ async function builtAssets(directory) {
   }
   await walk(directory);
   assets.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  if (assets.find(asset => asset.path === 'index.html')?.bytes > 64 * 1024) throw new Error('Public template exceeds the rendering allowance');
   if (!assets.some(asset => asset.path === 'index.html')) throw new Error('Missing built frontend index');
   return assets;
 }
@@ -40,6 +41,8 @@ export async function verifyArtifact(output) {
   if (!/^[a-f0-9]{40}$/.test(release.sourceSha) || !/^[a-f0-9]{40}$/.test(release.treeSha)) throw new Error('Invalid source identity');
   const assets = await builtAssets(join(output, 'assets'));
   if (JSON.stringify(assets) !== JSON.stringify(release.assets) || digest(JSON.stringify(assets)) !== release.assetsSha256) throw new Error('Artifact asset bytes differ from manifest');
+  const workerMetadata = await lstat(join(output, 'worker.mjs'));
+  if (!workerMetadata.isFile() || workerMetadata.isSymbolicLink()) throw new Error('Retained Worker must be a regular file');
   const workerSha256 = digest(await readFile(join(output, 'worker.mjs')));
   if (workerSha256 !== release.workerSha256 || digest(JSON.stringify({ assetsSha256: release.assetsSha256, workerSha256 })) !== release.artifactSha256) throw new Error('Artifact worker bytes differ from manifest');
   return release;
@@ -66,10 +69,10 @@ export async function prepare(source, output, cwd = process.cwd()) {
   if (!workerEntry || !/^(100644|100755) blob /.test(workerEntry)) throw new Error('Worker must be a regular committed file');
   for (const entry of entries) {
     const split = entry.indexOf('\t'), name = entry.slice(split + 1);
-    if (!(name.startsWith('web/') || CONFIG.test(name))) continue;
+    if (!(name.startsWith('web/') || name === 'deploy/frontend/worker.mjs' || CONFIG.test(name))) continue;
     const match = /^(100644|100755) blob ([a-f0-9]+)$/.exec(entry.slice(0, split));
     if (!match) throw new Error('Build inputs must be regular committed files');
-    if (name.startsWith('web/dist/') || name.split('/').some(part => part.startsWith('.')) || /\.(?:env|pem|key)$/i.test(name)) throw new Error(`Refusing build input: ${name}`);
+    if ((name.startsWith('web/dist/') || name.startsWith('web/worker-dist/')) || name.split('/').some(part => part.startsWith('.')) || /\.(?:env|pem|key)$/i.test(name)) throw new Error(`Refusing build input: ${name}`);
     if (name.startsWith('web/public/')) publicPath(name.slice('web/public/'.length));
     inputs.push({ name, bytes: git('cat-file', 'blob', match[2]) });
   }
@@ -92,7 +95,13 @@ export async function prepare(source, output, cwd = process.cwd()) {
     execFileSync('npm', ['run', 'build'], options);
     const built = join(snapshot, 'web/dist'), assets = await builtAssets(built);
     const assetsSha256 = digest(JSON.stringify(assets));
-    const worker = git('show', `${sourceSha}:deploy/frontend/worker.mjs`), workerSha256 = digest(worker);
+    const privateOutput = join(snapshot, 'web/worker-dist');
+    const privateFiles = await readdir(privateOutput);
+    if (privateFiles.length !== 1 || privateFiles[0] !== 'worker.mjs') throw new Error('Worker output must contain exactly one self-contained bundle');
+    const workerMetadata = await lstat(join(privateOutput, 'worker.mjs'));
+    if (!workerMetadata.isFile() || workerMetadata.isSymbolicLink()) throw new Error('Built Worker must be a regular file');
+    const worker = await readFile(join(privateOutput, 'worker.mjs')), workerSha256 = digest(worker);
+    if (worker.length > 3 * 1024 * 1024 || /(?:^|\n)import\s/m.test(worker.toString())) throw new Error('Worker must be a bounded self-contained bundle');
     const artifactSha256 = digest(JSON.stringify({ assetsSha256, workerSha256 }));
     const release = { sourceSha, treeSha, assetsSha256, workerSha256, artifactSha256, assets };
     await mkdir(join(out, 'assets'), { recursive: true });

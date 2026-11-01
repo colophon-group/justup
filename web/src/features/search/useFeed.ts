@@ -2,13 +2,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText, isAbortError } from "../../api/client.ts";
 import type { ApiClient } from "../../api/client.ts";
-import type { Job, ResultPage, Search } from "../../api/types.ts";
+import type { Job, ResultPage, Search, SearchScope } from "../../api/types.ts";
 interface Feed {
   key: string;
   jobs: Job[];
   continuation: ResultPage["continuation"];
   ai: ResultPage["ai"];
-  hidden: ResultPage["hidden"];
+  hiddenMatches: ResultPage["hiddenMatches"];
   coverage: ResultPage["coverage"];
   bufferVersion: number;
   loading: boolean;
@@ -19,7 +19,7 @@ const emptyFeed = (key: string): Feed => ({
   jobs: [],
   continuation: { state: "open", cursor: null, retryAfterMs: null },
   ai: { status: "not_required" },
-  hidden: undefined,
+  hiddenMatches: { status: "unavailable", count: null },
   coverage: undefined,
   bufferVersion: 0,
   loading: false,
@@ -29,9 +29,10 @@ export function useFeed(
   client: ApiClient,
   search: Search | undefined,
   active: boolean,
+  scope: SearchScope = "account",
 ) {
   const key =
-    search?.status === "ready" ? `${search.id}:${search.revision}` : "";
+    search?.status === "ready" ? `${scope}:${search.id}:${search.revision}` : "";
   const [feed, setFeed] = useState(() => emptyFeed(key));
   const generation = useRef(0),
     inFlight = useRef(false),
@@ -60,6 +61,7 @@ export function useFeed(
           search.revision,
           cursor,
           request.signal,
+          scope,
         );
         if (epoch !== generation.current || request.signal.aborted) return;
         if (page.searchId !== search.id || page.revision !== search.revision)
@@ -77,7 +79,7 @@ export function useFeed(
               ? {
                   ...current,
                   jobs: [],
-                  hidden: undefined,
+                  hiddenMatches: { status: "unavailable", count: null },
                   coverage: page.coverage,
                   bufferVersion: current.bufferVersion + 1,
                   continuation: {
@@ -115,7 +117,7 @@ export function useFeed(
                 jobs: [...current.jobs, ...fresh],
                 continuation: page.continuation,
                 ai: page.ai,
-                hidden: page.hidden,
+                hiddenMatches: page.hiddenMatches,
                 coverage: page.coverage,
                 loading: false,
                 error: null,
@@ -136,7 +138,7 @@ export function useFeed(
         }
       }
     },
-    [client, key, search?.id, search?.revision],
+    [client, key, scope, search?.id, search?.revision],
   );
   useEffect(() => {
     generation.current++;
