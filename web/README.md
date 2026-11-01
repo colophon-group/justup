@@ -5,7 +5,7 @@ read_when: Changing the interface, connecting the API or checking compiled front
 
 # Justup web application
 
-The browser application uses React and strict TypeScript, built by Vite. Its source lives in `src/`; `policies/` contains aligned Privacy and Usage drafts and their static generator; `public/` contains local assets such as policy CSS. Generated `dist/` public assets and the private `worker-dist/` bundle are ignored by Git. The application calls the authoritative same-origin `/api/v1` service for account access, accepted searches, job evidence and company requests.
+The browser application uses React and strict TypeScript, built by Vite. Its source lives in `src/`; `policies/` contains aligned approved Privacy and Usage notices and their static generator; `public/` contains local assets such as policy CSS. Generated `dist/` public assets and the private `worker-dist/` bundle are ignored by Git. The application calls the authoritative same-origin `/api/v1` service for account access, accepted searches, job evidence and company requests.
 
 ## Develop and build
 
@@ -86,6 +86,6 @@ Hiring Wire reads published weekly editions from the public API. The cream strip
 
 When result responses supply hidden-match metadata, the access notice displays the reported exact count or an explicit lower bound; absent or zero counts produce no notice. The compressed-paper illustration contains no restricted job data.
 
-`/privacy.html` and `/usage.html`, plus `.de.html`, `.fr.html`, `.it.html` and `.es.html` variants, are generated static, explicitly unapproved drafts. Development and public client builds use the same generator; private SSR bundles receive no policy assets. Their successful build or integration does not approve the notices or enable sign-in. Actual data flows, public policy version/URLs, operator review and deployed verification remain required before sharing the service. See the [policy review guide](../docs/policies.md) and [hosting guide](../docs/frontend-delivery.md).
+`/privacy.html` and `/usage.html`, plus `.de.html`, `.fr.html`, `.it.html` and `.es.html` variants, are generated static approved notices at version `2026-11-01`. Development and public client builds use the same generator; private SSR bundles receive no policy assets. The approved wording does not enable sign-in or providers by itself. Actual deployed page hashes, public URLs, provider data flows and processing prerequisites must pass the separate admission gate. See the [policy release record](../docs/policies.md) and [hosting guide](../docs/frontend-delivery.md).
 
 Public landing, catalogue and company reports use `/`, `/companies` and `/companies/:id`, with `/de/`, `/fr/`, `/it/` and `/es/` variants. The default server locale seeds matching hydration; explicit language prefixes remain authoritative and default entries resolve account or browser preferences after hydration. Public catalogue pages share bounded server continuation with the client’s paced infinite reveal. Source build and local fixtures do not establish backend availability or deployed release acceptance.
