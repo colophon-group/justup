@@ -12,6 +12,7 @@ import { createHiringWireService } from './hiring-wire.mjs';
 import { createHiringWireEditorial } from './hiring-wire-editorial.mjs';
 import { createCompanyReports } from './company-reports.mjs';
 import { createHandler } from './http.mjs';
+import { digest } from './hiring-wire-facts.mjs';
 
 const AT = Date.parse('2026-11-01T12:00:00.000Z'), END = '2026-10-26T00:00:00.000Z', iso = at => new Date(at).toISOString();
 function job(id, age = 3, fields = {}) {
@@ -29,6 +30,11 @@ function snapshot() {
     postings: [{ id: 'closed-historical-listing', scopeId: 'private-source-scope', firstObserved: '2026-10-13T12:00:00.000Z' },
       { id: 'historical-listing-two', scopeId: 'private-source-scope', firstObserved: '2026-10-20T12:00:00.000Z' },
       { id: 'historical-listing-three', scopeId: 'private-source-scope', firstObserved: '2026-10-22T12:00:00.000Z' }] };
+}
+function snapshotV2() {
+  const value=snapshot();value.schemaVersion=2;value.sourceVersion='jobseek-coverage-v2';
+  for(const scope of value.scopes)scope.publicLink={url:'https://careers.example.com/team/jobs',status:'approved',provenance:'employer-careers',approvedAt:'2026-09-01T00:00:00.000Z'};
+  return value;
 }
 function fixture(t, jobs = [job('visible')]) {
   const store = openStore(); t.after(() => store.close()); let at = AT;
@@ -55,6 +61,7 @@ test('current snapshot supports sampled roles and separate salary units without 
     job('unlabelled', 7), job('hidden-latest', 1, { occupation: { id: 'secret-role', name: 'Restricted title' }, salary: { min: 999, max: 999, currency: 'PRIVATE', period: 'secret' } })]);
   const report = f.reports.report('company-1');
   assert.equal(report.monitoringSince, null); assert.equal(report.hiringHistory.state, 'unavailable');
+  assert.deepEqual(report.sourceChecks,{state:'unavailable',items:[]});
   assert.deepEqual(report.hiringRoles, { state: 'available', sampleSize: 5, labelledSampleSize: 2, unknownSampleSize: 3, items: [{ id: '23', name: 'Developer', count: 2 }] });
   assert.equal(report.reportedSalaries.reportedSampleSize, 4); assert.equal(report.reportedSalaries.incompleteSampleSize, 1);
   assert.equal(report.reportedSalaries.unknownSampleSize, 1);
@@ -83,6 +90,84 @@ test('published frozen history stays attributable after 24 hours and closures do
   assert.equal(f.reports.report('company-1').freshness.history, 'stale');
   assert.deepEqual(f.reports.report('company-1').hiringHistory.points.map(value => value.newListings), [1, 2]);
   for (const forbidden of ['closed-historical-listing', 'historical-listing-two', 'private-source-scope', 'rev-1', 'snapshot_json']) assert.equal(JSON.stringify(report).includes(forbidden), false);
+});
+
+test('published v1 and v2 retain the same activity and their original immutable snapshot hashes',async t=>{
+  const first=fixture(t),second=fixture(t),v1=snapshot(),v2=snapshotV2();
+  await publish(first,v1);await publish(second,v2);
+  const before=first.db.prepare('SELECT snapshot_json,snapshot_sha256 FROM hiring_wire_editions').get();
+  assert.equal(before.snapshot_sha256,digest(v1));assert.deepEqual(JSON.parse(before.snapshot_json),v1);
+  const older=first.reports.report('company-1'),newer=second.reports.report('company-1');
+  assert.deepEqual(newer.hiringHistory,older.hiringHistory);assert.equal(newer.monitoringSince,older.monitoringSince);
+  assert.deepEqual(older.sourceChecks,{state:'unavailable',items:[{publicLink:null,trackedSince:v1.scopes[0].trackedSince,lastVerifiedAt:END}]});
+  assert.deepEqual(newer.sourceChecks,{state:'available',items:[{publicLink:v2.scopes[0].publicLink,trackedSince:v2.scopes[0].trackedSince,lastVerifiedAt:END}]});
+  assert.equal(newer.provenance.history.sourceVersion,'jobseek-coverage-v2');
+  assert.equal(newer.provenance.history.sha256,digest(v2));
+  assert.deepEqual(first.db.prepare('SELECT snapshot_json,snapshot_sha256 FROM hiring_wire_editions').get(),before);
+});
+
+test('malformed v2 approval metadata makes published history unavailable even with a matching stored hash',async t=>{
+  for(const change of [
+    value=>delete value.scopes[0].publicLink,
+    value=>value.scopes[0].publicLink.status='pending',
+    value=>value.scopes[0].publicLink.url='https://private.internal/secret',
+    value=>value.scopes[0].publicLink.provenance='inferred',
+    value=>value.scopes[0].publicLink.approvedAt=iso(Date.parse(value.generatedAt)+1),
+    value=>value.sourceVersion='jobseek-coverage-v3'
+  ]) {
+    const f=fixture(t),value=snapshotV2();await publish(f,value);change(value);
+    f.db.exec('DROP TRIGGER hiring_wire_published_immutable; DROP TRIGGER hiring_wire_period_immutable; DROP TRIGGER hiring_wire_snapshot_immutable;');
+    f.db.prepare('UPDATE hiring_wire_editions SET snapshot_json=?,snapshot_sha256=?').run(JSON.stringify(value),digest(value));
+    const report=f.reports.report('company-1');
+    assert.equal(report.hiringHistory.state,'unavailable');assert.equal(report.provenance.history,null);
+    assert.deepEqual(report.sourceChecks,{state:'unavailable',items:[]});
+    assert.equal(report.monitoringSince,null);assert.equal(report.hiringRoles.sampleSize,1);
+    assert.equal(JSON.stringify(report).includes('private.internal'),false);
+  }
+});
+
+test('multi-board public links stay with their frozen scope checks and null never substitutes another URL',async t=>{
+  const f=fixture(t),value=snapshotV2();
+  value.scopes.push({...structuredClone(value.scopes[0]),id:'second-private-scope',revision:'new-private-revision',
+    publicLink:null,trackedSince:'2026-10-20T00:00:00.000Z',lastVerifiedAt:null,
+    coverage:[{start:'2026-10-12T00:00:00.000Z',end:END,state:'unknown'}]});
+  await publish(f,value);
+  const report=f.reports.report('company-1');
+  assert.deepEqual(report.sourceChecks,{state:'partial',items:[
+    {publicLink:value.scopes[0].publicLink,trackedSince:'2026-09-01T00:00:00.000Z',lastVerifiedAt:END},
+    {publicLink:null,trackedSince:'2026-10-20T00:00:00.000Z',lastVerifiedAt:null}
+  ]});
+  assert.equal(report.hiringHistory.state,'partial');
+  assert.deepEqual(report.hiringHistory.points.map(point=>point.newListings),[null,null]);
+  assert.equal(report.hiringHistory.points[0].reasons.includes('new_scope'),true);
+  assert.equal(JSON.stringify(report.sourceChecks).includes('employer.example'),false);
+  assert.equal(JSON.stringify(report).includes('second-private-scope'),false);
+  assert.equal(JSON.stringify(report).includes('new-private-revision'),false);
+  // Later in-memory source edits cannot relabel or repair a published snapshot.
+  value.scopes[0].publicLink.url='https://careers.example.com/reassigned/jobs';
+  assert.equal(f.reports.report('company-1').sourceChecks.items[0].publicLink.url,'https://careers.example.com/team/jobs');
+  f.setNow(Date.parse(END)+8*DAY_MS);
+  assert.equal(f.reports.report('company-1').freshness.history,'stale');
+  assert.deepEqual(f.reports.report('company-1').sourceChecks,report.sourceChecks);
+});
+
+test('available approved links do not assert a successful check or complete history',async t=>{
+  const f=fixture(t),value=snapshotV2();
+  value.scopes.push({...structuredClone(value.scopes[0]),id:'unverified-scope',lastVerifiedAt:null,
+    publicLink:{...value.scopes[0].publicLink,url:'https://ats.example.org/openings',provenance:'ats-careers',approvedAt:value.generatedAt},
+    coverage:[{start:'2026-10-12T00:00:00.000Z',end:END,state:'unknown'}]});
+  await publish(f,value);
+  const report=f.reports.report('company-1');
+  assert.equal(report.sourceChecks.state,'available');assert.equal(report.sourceChecks.items[1].lastVerifiedAt,null);
+  assert.equal(report.sourceChecks.items[1].publicLink.approvedAt,value.generatedAt);
+  assert.equal(report.hiringHistory.state,'partial');
+});
+
+test('v2 with no approved links keeps attributable counts and explicit unavailable link evidence',async t=>{
+  const f=fixture(t),value=snapshotV2();value.scopes[0].publicLink=null;await publish(f,value);
+  const report=f.reports.report('company-1');
+  assert.equal(report.sourceChecks.state,'unavailable');assert.equal(report.sourceChecks.items[0].publicLink,null);
+  assert.equal(report.hiringHistory.state,'available');assert.equal(report.provenance.history.sha256,digest(value));
 });
 
 test('zero newly observed listings is reported only for an explicitly complete historical period', async t => {

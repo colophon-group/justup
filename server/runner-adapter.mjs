@@ -13,11 +13,11 @@ import { createReadingPreferencesService } from './reading-preferences.mjs';
 import { runnerStatusPath } from './composition.mjs';
 import { createHiringWireRunner } from './hiring-wire-integration.mjs';
 import { validWireConfiguration } from './hiring-wire-codex-broker.mjs';
-import { SOURCE_COVERAGE_VERSION } from './source-coverage.mjs';
+import { SOURCE_COVERAGE_VERSIONS } from './source-coverage.mjs';
 
 function validSourceCoverage(value) {
   return value===undefined||value!==null&&typeof value==='object'&&Object.getPrototypeOf(value)===Object.prototype
-    &&Object.keys(value).sort().join(',')==='directory,sourceVersion'&&value.sourceVersion===SOURCE_COVERAGE_VERSION
+    &&Object.keys(value).sort().join(',')==='directory,sourceVersion'&&SOURCE_COVERAGE_VERSIONS.includes(value.sourceVersion)
     &&typeof value.directory==='string'&&isAbsolute(value.directory)&&resolve(value.directory)===value.directory;
 }
 

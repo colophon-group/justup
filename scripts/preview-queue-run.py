@@ -52,7 +52,8 @@ def validate_configuration(config, manifest):
     if 'sourceCoverage' in config:
         source = config['sourceCoverage']
         if (not isinstance(source, dict) or set(source) != {'directory', 'sourceVersion'}
-                or source.get('sourceVersion') != 'jobseek-coverage-v1' or not isinstance(source.get('directory'), str)):
+                or source.get('sourceVersion') not in ('jobseek-coverage-v1', 'jobseek-coverage-v2')
+                or not isinstance(source.get('directory'), str)):
             raise ValueError('Source coverage must use the reviewed queue-only reader configuration.')
         directory = Path(source['directory'])
         if (not directory.is_absolute() or str(directory) != source['directory'] or '..' in directory.parts

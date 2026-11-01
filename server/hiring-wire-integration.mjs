@@ -33,9 +33,12 @@ export async function createHiringWireRunner({db,tasks,now=Date.now,hiringWire,s
   if(sourceCoverage!==undefined) {
     if(!exact(sourceCoverage,['directory','sourceVersion'])||typeof sourceCoverage.directory!=='string'
       ||!isAbsolute(sourceCoverage.directory)||resolve(sourceCoverage.directory)!==sourceCoverage.directory)throw invalid();
-    const {createSourceCoverageReader,SOURCE_COVERAGE_VERSION}=await import('./source-coverage.mjs');
-    if(sourceCoverage.sourceVersion!==SOURCE_COVERAGE_VERSION)throw invalid();
-    if(hiringWire?.enabled===true)source=(factories.source??createSourceCoverageReader)({directory:sourceCoverage.directory});
+    const {createSourceCoverageReader,SOURCE_COVERAGE_VERSIONS}=await import('./source-coverage.mjs');
+    if(!SOURCE_COVERAGE_VERSIONS.includes(sourceCoverage.sourceVersion))throw invalid();
+    if(hiringWire?.enabled===true) {
+      source=(factories.source??createSourceCoverageReader)({...sourceCoverage});
+      if(source?.version!==sourceCoverage.sourceVersion)throw invalid();
+    }
   }
   if(hiringWire?.enabled===true) {
     if(!/^[a-f0-9]{64}$/u.test(buildIdentity??'')||!/^[a-f0-9]{64}$/u.test(hostPlanSha256??''))throw invalid();

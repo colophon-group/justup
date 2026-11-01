@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, chmod, lstat, mkdir, open, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, chmod, lstat, mkdir, open, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -83,6 +83,24 @@ test('preserves unknown scope evidence without inventing a verification timestam
   await publish(path, artifact(Buffer.from(JSON.stringify(unknown))));
   const actual = await fixtureReader(path).readSnapshot({ periodEnd: PERIOD_END });
   assert.deepEqual(actual, unknown);
+});
+
+test('explicit v2 selection reads the same immutable wrapper and never falls back to v1', async t => {
+  const path = await directory(t), value = snapshot();
+  value.schemaVersion = 2; value.sourceVersion = 'jobseek-coverage-v2'; value.scopes[0].publicLink = null;
+  const raw = Buffer.from(JSON.stringify(value)), file = await publish(path, artifact(raw));
+  const original = await readFile(file);
+  const reader = createSourceCoverageReaderWithFilesystemForTest({ directory: path, sourceVersion: value.sourceVersion }, filesystemFixture());
+  assert.equal(reader.version, 'jobseek-coverage-v2');
+  assert.deepEqual(await reader.readSnapshot({ periodEnd: PERIOD_END }), value);
+  assert.deepEqual(await readFile(file), original);
+  await assert.rejects(fixtureReader(path).readSnapshot({ periodEnd: PERIOD_END }), { code: 'dependency_unavailable' });
+  await publish(path, artifact(Buffer.from(JSON.stringify(snapshot()))));
+  await assert.rejects(reader.readSnapshot({ periodEnd: PERIOD_END }), { code: 'dependency_unavailable' });
+  assert.throws(() => createSourceCoverageReader({ directory: path, sourceVersion: 'unreviewed-v3' }), { code: 'invalid_input' });
+  value.schemaVersion = 1;
+  await publish(path, artifact(Buffer.from(JSON.stringify(value))));
+  await assert.rejects(reader.readSnapshot({ periodEnd: PERIOD_END }), { code: 'dependency_unavailable' });
 });
 
 test('rejects changed bytes, wrong period, wrong source version and invalid transport data', async t => {

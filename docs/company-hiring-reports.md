@@ -12,7 +12,7 @@ private scope selectors return `400 invalid_query`. It creates no visitor sessio
 task or source read. The standard API no-store/noindex headers still apply.
 
 The report has `companyId`, `asOf`, `provenance`, `scope`, `freshness`,
-`monitoringSince`, `hiringHistory`, `hiringRoles`, `reportedSalaries` and
+`monitoringSince`, `sourceChecks`, `hiringHistory`, `hiringRoles`, `reportedSalaries` and
 `methodology`. `asOf` is when the report was computed. Listing verification,
 historical observation, source generation and publication have their own explicit
 timestamps; none are replaced with the request time.
@@ -50,8 +50,8 @@ that belongs only to a withheld recent listing never enters these samples.
 ## Read attributable historical activity
 
 `server/company-reports.mjs` reads the latest **published** frozen
-`hiring_wire_editions` snapshot from the existing SQLite store. It accepts only
-`jobseek-coverage-v1`, verifies the canonical stored hash, the edition period,
+`hiring_wire_editions` snapshot from the existing SQLite store. It accepts explicit
+`jobseek-coverage-v1` and `jobseek-coverage-v2`, verifies the canonical stored hash, the edition period,
 publication ordering and the shared fact compiler's schema. Source generation
 must precede publication and publication must not be in the future. Revalidation
 uses the frozen generation time: a valid historical edition does not disappear
@@ -70,6 +70,14 @@ the earliest `trackedSince` among the current recorded scopes for that canonical
 company. It does not mean all company career pages were tracked from that date,
 or that coverage was continuous. It is never derived from a current listing,
 account request, import timestamp or catalogue publication.
+
+`sourceChecks` is `{state,items:[{publicLink,trackedSince,lastVerifiedAt}]}` from
+those same frozen scopes. The [v2 source contract](source-coverage.md) supplies
+`publicLink:null|{url,status:"approved",provenance,approvedAt}`; v1 scopes retain
+null links. State describes link evidence only: `available` for all linked scopes,
+`partial` for some, `unavailable` for none or no history. It makes no live-health or
+coverage-completeness claim. Missing verification remains null, unsafe metadata
+closes historical evidence, and no scope identity/revision is public.
 
 `hiringHistory` has `{state,scopeCount,points}`. Without usable historical evidence
 it is `{state:"unavailable",scopeCount:0,points:[]}`. A recorded snapshot covers

@@ -47,6 +47,13 @@ The injected adapter is `{authoritative:true, version, readSnapshot({periodEnd,s
 
 All objects reject unknown keys. Timestamps use UTC with three fractional digits. Company links are canonical public HTTPS homepages without credentials, ports, queries or fragments. The producer owns official identity verification and must not use model-proposed company links as evidence. Company IDs are catalogue identities; posting and scope identities stay internal. The projection has no posting text, crawler configuration, account data or queries. It covers every distinct newly observed posting in the interval, including postings that later closed. Filtering to currently active listings would produce false counts and is forbidden.
 
+The explicit `jobseek-coverage-v2` source uses `schemaVersion:2` and adds required
+`publicLink:null|{url,status:"approved",provenance,approvedAt}` to each scope.
+The [source consumer guide](source-coverage.md) defines the exact approval and
+URL checks. V1 snapshots and generic schema-1 injected adapter versions remain
+valid. Link metadata does not change facts, comparisons, tool versions or hashes
+of existing snapshots.
+
 Each opaque scope identifies the same career-page scope and revision for both weeks. A scope change resets `trackedSince`; history from a different revision cannot establish continuity. The producer must derive complete intervals from its durable observation/ingestion ledger, including missed refreshes, failures and freshness policy. A successful latest refresh cannot retrospectively mark an earlier unknown interval complete. The intervals must tile exactly the full fourteen days in order without gaps or overlaps. `trackedSince` must precede the comparison window and `lastVerifiedAt` must reach the period end. A source capture must be generated after the period end, within the following 24 hours, and at most 24 hours old when first accepted.
 
 New, stale, interrupted, unknown and sparse scopes are suppressed independently. The compiler counts distinct posting identities across only the remaining comparable scopes for each company. Duplicate observations do not add activity; contradictory identity/company/first-observed data reject the entire projection. A zero preceding baseline produces `percentageChange:null` and explicit before/after counts. These measure listing activity, never hires, headcount or a business cause.

@@ -8,6 +8,47 @@ import { compileWireSnapshot,digest,periodFor,renderWireItems,validateWireSelect
 import { AT,END,wireFixture } from './hiring-wire-fixtures.mjs';
 const compile=snapshot=>compileWireSnapshot(snapshot,{periodEnd:END,now:AT});
 
+const approvedLink = () => ({url:'https://careers.example.com/team/jobs',status:'approved',provenance:'employer-careers',approvedAt:'2026-10-01T00:00:00.000Z'});
+function v2Fixture() {
+  const value=wireFixture();value.schemaVersion=2;value.sourceVersion='jobseek-coverage-v2';
+  for(const scope of value.scopes)scope.publicLink=approvedLink();
+  return value;
+}
+
+test('v1 immutable hash and deterministic facts survive explicit v2 metadata',()=>{
+  const v1=wireFixture(), original=structuredClone(v1), before=compile(v1), v2=v2Fixture(), next=compile(v2);
+  assert.equal(before.snapshotSha256,'4b78732b44534b7a86d3649cbe22642c19f973b5af3e0b9030743d19191ed995');
+  assert.deepEqual(v1,original);assert.deepEqual(before.snapshot,original);
+  assert.deepEqual(next.facts,before.facts);assert.deepEqual(next.suppressed,before.suppressed);
+  assert.equal(next.factsVersion,before.factsVersion);assert.deepEqual(next.snapshot,v2);
+  for(const provenance of ['employer-careers','ats-careers','reviewed-redirect']) {
+    const value=v2Fixture();value.scopes[0].publicLink.provenance=provenance;assert.deepEqual(compile(value).facts,before.facts);
+  }
+  v2.scopes[0].publicLink=null;assert.deepEqual(compile(v2).facts,before.facts);
+  v2.scopes[0].publicLink=approvedLink();v2.scopes[0].publicLink.approvedAt=v2.generatedAt;
+  assert.deepEqual(compile(v2).facts,before.facts);
+});
+
+test('v2 missing, unapproved, malformed or future public-link approval fails closed',()=>{
+  for(const alter of [
+    s=>delete s.scopes[0].publicLink, s=>s.scopes[0].publicLink={},
+    s=>s.scopes[0].publicLink.status='pending',s=>s.scopes[0].publicLink.provenance='guessed',
+    s=>s.scopes[0].publicLink.approvedAt=new Date(Date.parse(s.generatedAt)+1).toISOString(),
+    s=>s.scopes[0].publicLink.approvedAt='2026-10-01',s=>s.scopes[0].publicLink.secret='endpoint',
+    s=>s.schemaVersion=1,s=>s.sourceVersion='unreviewed-v2',s=>s.schemaVersion=3
+  ]) {const value=v2Fixture();alter(value);assert.throws(()=>compile(value),{code:'invalid_output'});}
+  for(const url of [
+    'http://careers.example.com/jobs','https://u:p@careers.example.com/jobs','https://@careers.example.com/jobs',
+    'https://127.0.0.1/jobs','https://[::1]/jobs','https://2130706433/jobs','https://0x7f000001/jobs',
+    'https://jobs.internal/jobs','https://jobs.test/jobs','https://careers.example/jobs','https://jobs.onion/jobs',
+    'https://careers.example.com:8080/jobs','https://careers.example.com:443/jobs',
+    'https://careers.example.com/jobs?token=private','https://careers.example.com/jobs#fragment',
+    'https://careers.example.com/jobs%2Fprivate','https://careers.example.com/a/../jobs',
+    'https://careers.example.com/jobs here','https://careers.example.com/jobs\\private',
+    'https://careers.example.com/jobs\nprivate','https://careers.example.com/é'
+  ]) {const value=v2Fixture();value.scopes[0].publicLink.url=url;assert.throws(()=>compile(value),{code:'invalid_output'},url);}
+});
+
 test('counts distinct first observations in two fixed half-open weeks',()=>{
   const snapshot=wireFixture();snapshot.postings.push({...snapshot.postings[0]},{...snapshot.postings[2]});
   const result=compile(snapshot),fact=result.facts[0];

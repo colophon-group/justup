@@ -83,6 +83,7 @@ export function createCompanyReports({ db, feed, now = Date.now } = {}) {
   if (!db || !feed?.eligibleJobs || !feed?.company || typeof now !== 'function') throw new TypeError('Invalid company report configuration.');
   function history(companyId, at) {
     const unavailable = { monitoringSince: null, provenance: null, freshness: 'unavailable',
+      sourceChecks: { state: 'unavailable', items: [] },
       hiringHistory: { state: 'unavailable', scopeCount: 0, points: [] } };
     if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='hiring_wire_editions'").get()) return unavailable;
     const row = db.prepare("SELECT period_id,period_end,published_at,snapshot_json,snapshot_sha256 FROM hiring_wire_editions WHERE status='published' AND period_end<=? ORDER BY period_end DESC LIMIT 1").get(iso(at));
@@ -91,7 +92,7 @@ export function createCompanyReports({ db, feed, now = Date.now } = {}) {
     try {
       snapshot = JSON.parse(row.snapshot_json);
       const generatedAt = Date.parse(snapshot.generatedAt);
-      if (snapshot.sourceVersion !== 'jobseek-coverage-v1' || digest(snapshot) !== row.snapshot_sha256
+      if (!['jobseek-coverage-v1','jobseek-coverage-v2'].includes(snapshot.sourceVersion) || digest(snapshot) !== row.snapshot_sha256
           || snapshot.asOf !== row.period_end || row.period_id !== snapshot.asOf.slice(0, 10)
           || !Number.isSafeInteger(row.published_at) || generatedAt > row.published_at || row.published_at > at) return unavailable;
       // Validation uses the frozen observation time. Old attributable history
@@ -101,10 +102,16 @@ export function createCompanyReports({ db, feed, now = Date.now } = {}) {
     const scopes = snapshot.scopes.filter(scope => feed.canonicalCompanyId(scope.companyId) === companyId);
     if (!scopes.length) return unavailable;
     const end = Date.parse(snapshot.asOf), points = [point(snapshot, scopes, end - 2 * WEEK, end - WEEK), point(snapshot, scopes, end - WEEK, end)];
+    const items = scopes.map(scope => ({ publicLink: scope.publicLink ?? null,
+      trackedSince: scope.trackedSince, lastVerifiedAt: scope.lastVerifiedAt }));
+    const linked = items.filter(item => item.publicLink !== null).length;
     return { monitoringSince: iso(Math.min(...scopes.map(scope => Date.parse(scope.trackedSince)))),
       provenance: { source: 'jobseek_public_coverage', sourceVersion: snapshot.sourceVersion, snapshotId: snapshot.snapshotId,
         asOf: snapshot.asOf, generatedAt: snapshot.generatedAt, publishedAt: iso(row.published_at), sha256: row.snapshot_sha256 },
       freshness: at - end >= WEEK ? 'stale' : 'fresh',
+      // Availability describes approved link evidence, independently of page
+      // health, verification recency or complete historical coverage.
+      sourceChecks: { state: linked === 0 ? 'unavailable' : linked === items.length ? 'available' : 'partial', items },
       hiringHistory: { state: points.every(value => value.state === 'complete') ? 'available' : 'partial', scopeCount: scopes.length, points } };
   }
   function report(id) {
@@ -117,7 +124,7 @@ export function createCompanyReports({ db, feed, now = Date.now } = {}) {
         sampleObservedThrough: observations.length ? iso(Math.max(...observations)) : null, history: recorded.provenance },
       scope: { kind: 'eligible_public_listing_sample', firstObservedFrom: iso(at - 14 * DAY_MS), firstObservedThrough: iso(at - 2 * DAY_MS), completeCompanyCoverage: false },
       freshness: { listings: coverage.stale ? 'unavailable' : 'fresh', history: recorded.freshness },
-      monitoringSince: recorded.monitoringSince, hiringHistory: recorded.hiringHistory,
+      monitoringSince: recorded.monitoringSince, sourceChecks: recorded.sourceChecks, hiringHistory: recorded.hiringHistory,
       hiringRoles: { state: coverage.stale ? 'unavailable' : 'available', ...roles(jobs) },
       reportedSalaries: { state: coverage.stale ? 'unavailable' : 'available', ...salaries(jobs) }, methodology: METHODOLOGY };
   }
