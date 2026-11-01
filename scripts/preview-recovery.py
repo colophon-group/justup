@@ -279,7 +279,7 @@ def restore(snapshot, barrier, destination, prepare_command, now=None, migrate_v
                 Path(str(destination) + suffix).unlink(missing_ok=True)
 
 
-def operational_context(paths, build_identity=None):
+def operational_context(paths, build_identity=None, *, cleanup_logs=True):
     base = Path('/srv/justup_preview')
     state = base / 'state'
     expected = {state / 'preview.sqlite', state / 'private-generation', state / 'backups'}
@@ -292,7 +292,7 @@ def operational_context(paths, build_identity=None):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
-    load('preview-host').guard()
+    load('preview-host').guard(cleanup_logs=cleanup_logs)
     if build_identity is not None and not re.fullmatch('[a-f0-9]{64}', build_identity):
         raise ValueError('Migration requires an exact retained target build identity.')
     release = (base / 'releases' / build_identity).resolve(strict=True) if build_identity else (base / 'current').resolve(strict=True)
@@ -385,7 +385,9 @@ def main():
     args = parser.parse_args()
     try:
         paths = [getattr(args, key) for key in ('database', 'backup_dir', 'generation', 'snapshot', 'destination') if hasattr(args, key)]
-        manifest, prepare_command = operational_context(paths, getattr(args, 'build_identity', None) if args.command in {'migrate', 'restore'} else None)
+        manifest, prepare_command = operational_context(
+            paths, getattr(args, 'build_identity', None) if args.command in {'migrate', 'restore'} else None,
+            cleanup_logs=args.command != 'backup-status')
         if args.command == 'backup':
             if args.source_commit != manifest['sourceCommit'] or args.build_identity != manifest['buildIdentity']:
                 raise ValueError('Backup identity differs from the active immutable artifact.')

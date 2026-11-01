@@ -1037,6 +1037,25 @@ assert.equal(configFromEnv(input.child).stripeBilling.enabled,true);
             self.assertEqual(stops, [('systemctl', 'stop', unit) for unit in host.STOP_UNITS])
             self.assertFalse(any('jobseek' in str(item) or '*' in str(item) for item in call.call_args_list))
 
+    def test_read_only_guard_keeps_old_logs_and_still_validates_boundaries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            logs = base / 'logs'
+            logs.mkdir()
+            old = logs / 'api-20000101.jsonl'
+            old.write_text('old diagnostic')
+            os.utime(old, (0, 0))
+            with patch.object(host, 'BASE', base), \
+                 patch.object(host, 'verify_caps', return_value={'checked': True}) as caps, \
+                 patch.object(host, 'verify_storage', return_value={'checked': True}) as storage, \
+                 patch.object(host.shutil, 'disk_usage', return_value=SimpleNamespace(free=128 * host.MIB)):
+                self.assertEqual(host.guard(cleanup_logs=False)['kernel'], {'checked': True})
+                self.assertTrue(old.exists())
+                caps.assert_called_once()
+                storage.assert_called_once()
+                host.guard()
+                self.assertFalse(old.exists())
+
     def test_stop_refuses_to_switch_if_a_preview_writer_remains_running(self):
         def response(*args, **kwargs):
             return 'loaded' if '--property=LoadState' in args else 'active'
@@ -1782,15 +1801,17 @@ class RecoveryContracts(unittest.TestCase):
             argv = ['preview-recovery.py', 'backup-status', '--backup-dir', str(folder),
                     '--generation', str(barrier), '--max-age-seconds', '3600']
             manifest = {'sourceCommit': 'a' * 40, 'buildIdentity': 'b' * 64}
-            with patch.object(recovery, 'operational_context', return_value=(manifest, [])), \
+            with patch.object(recovery, 'operational_context', return_value=(manifest, [])) as context, \
                  patch.object(recovery.sys, 'argv', argv), patch.object(recovery.sys, 'stderr', io.StringIO()):
                 self.assertEqual(recovery.main(), 1)
+                context.assert_called_once_with([folder, barrier], None, cleanup_logs=False)
             db = root / 'preview.sqlite'
             self.make_backup(db, folder, barrier, now=1000)
-            with patch.object(recovery, 'operational_context', return_value=(manifest, [])), \
+            with patch.object(recovery, 'operational_context', return_value=(manifest, [])) as context, \
                  patch.object(recovery.sys, 'argv', argv), patch.object(recovery.time, 'time', return_value=1001), \
                  patch.object(recovery.sys, 'stdout', io.StringIO()) as output:
                 self.assertEqual(recovery.main(), 0)
+                context.assert_called_once_with([folder, barrier], None, cleanup_logs=False)
                 self.assertTrue(json.loads(output.getvalue())['healthy'])
 
 
