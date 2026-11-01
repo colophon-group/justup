@@ -11,11 +11,12 @@ Choose the task you are doing. The [product guide](product-design.md) defines ac
 
 | Task | Owning guide |
 | --- | --- |
+| See the service components and follow a job or search through them | [Service overview](service-overview.md) |
 | Understand the accepted user experience and release scope | [Product design](product-design.md) |
 | Check the accepted interface against remaining release gaps | [Interface readiness](interface-readiness.md) |
 | Understand the server's main boundaries before changing a feature | [Backend design](backend-design.md) and [server directory](../server/README.md) |
 | Change result arrival, scrolling or reduced motion | [Motion design](motion-design.md) |
-| Review what Privacy and Usage notices must say before access is enabled | [Policy review](policies.md) |
+| Review approved Privacy and Usage notices and exact admission evidence | [Policy release record](policies.md) and [provider evidence](policy-review-package.md) |
 
 ## Build a user journey
 

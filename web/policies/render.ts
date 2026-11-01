@@ -1,4 +1,4 @@
-// One static document layout for all aligned, unapproved notice translations.
+// One static document layout for all aligned notice translations.
 import { CONTACT, en, FACTS, LOCALE_NAMES, POLICY_LOCALES, POLICY_STATUS, POLICY_VERSION, SECTIONS } from "./content.ts";
 import type { PolicyCopy, PolicyKind, PolicyLocale } from "./content.ts";
 import { de } from "./de.ts";
@@ -7,6 +7,9 @@ import { it } from "./it.ts";
 import { es } from "./es.ts";
 
 export const POLICY_COPY: Record<PolicyLocale, PolicyCopy> = { en, de, fr, it, es };
+const contentsLabel: Record<PolicyLocale, string> = {
+  en: "On this page", de: "Auf dieser Seite", fr: "Sur cette page", it: "In questa pagina", es: "En esta página",
+};
 export function policyPath(kind: PolicyKind, locale: PolicyLocale): string {
   return `/${kind}${locale === "en" ? "" : `.${locale}`}.html`;
 }
@@ -31,26 +34,27 @@ export function renderPolicy(kind: PolicyKind, locale: PolicyLocale): string {
   const copy = POLICY_COPY[locale];
   const text = (key: keyof PolicyCopy) => escapeHtml(copy[key]);
   const other = kind === "privacy" ? "usage" : "privacy";
-  const sections = SECTIONS[kind].map(([id, heading, paragraphs]) => `      <section class="policy-section" aria-labelledby="${id}">
-        <h2 id="${id}">${text(heading)}</h2>
+  const sections = SECTIONS[kind].map(([id, heading, paragraphs], index) => `      <section class="policy-section" aria-labelledby="${id}">
+        <h2 id="${id}"><span class="section-number" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>${text(heading)}</h2>
 ${paragraphs.map(key => `        <p data-copy="${key}">${paragraph(copy[key])}</p>`).join("\n")}
       </section>`).join("\n");
   const languages = POLICY_LOCALES.map(language => `<a href="${policyPath(kind, language)}" lang="${language}" hreflang="${language}"${language === locale ? ' aria-current="page"' : ""}>${LOCALE_NAMES[language]}</a>`).join("");
+  const contents = SECTIONS[kind].map(([id, heading], index) => `<li><a href="#${id}"><span class="section-number" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span><span>${text(heading)}</span></a></li>`).join("\n");
   return `<!doctype html>
 <html lang="${locale}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex,nofollow">
+  <meta name="robots" content="index,follow">
   <meta name="justup-policy-status" content="${POLICY_STATUS}">
   <meta name="justup-policy-version" content="${POLICY_VERSION}">
-  <meta name="justup-policy-reviewed" content="false">
+  <meta name="justup-policy-reviewed" content="true">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'">
   <title>${text(`${kind}.title`)} — Justup</title>
   <meta name="description" content="${text(`${kind}.description`)}">
   <link rel="stylesheet" href="/policies.css">
 </head>
-<body data-policy="${kind}" data-policy-status="${POLICY_STATUS}" data-policy-version="${POLICY_VERSION}" data-policy-reviewed="false">
+<body data-policy="${kind}" data-policy-status="${POLICY_STATUS}" data-policy-version="${POLICY_VERSION}" data-policy-reviewed="true">
   <a class="skip-link" href="#main">${text(`${kind}.skip`)}</a>
   <div class="policy-paper">
     <header class="policy-header">
@@ -61,12 +65,20 @@ ${paragraphs.map(key => `        <p data-copy="${key}">${paragraph(copy[key])}</
     <main id="main" tabindex="-1">
       <p class="eyebrow">${text("eyebrow")}</p>
       <h1>${text(`${kind}.title`)}.</h1>
+      <div class="policy-reading-layout">
+        <aside class="policy-contents" aria-labelledby="contents-title">
+          <h2 id="contents-title">${escapeHtml(contentsLabel[locale])}</h2>
+          <nav aria-labelledby="contents-title"><ol>${contents}</ol></nav>
+        </aside>
+        <article class="policy-document" aria-label="${text(`${kind}.title`)}">
       <aside class="policy-status" aria-labelledby="review-status">
         <h2 id="review-status">${text("status.title")}</h2>
         <p>${text("status.body")}</p>
         <p>${text("status.version")}: <strong>${POLICY_VERSION}</strong>. ${text("status.date")}</p>
       </aside>
 ${sections}
+        </article>
+      </div>
     </main>
     <footer><a href="${policyPath(other, locale)}">${text(`footer.${other}`)} ↗</a><a href="${policySearchPath(locale)}">${text("nav.back")} ↗</a></footer>
   </div>
