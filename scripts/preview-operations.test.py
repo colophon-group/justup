@@ -838,6 +838,19 @@ class BoundaryContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 launcher.read_configuration(path)
 
+    def test_api_cannot_start_during_pending_upgrade_or_withdrawn_receipt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            release = base / 'releases' / ('a' * 64)
+            release.mkdir(parents=True)
+            (base / 'current').symlink_to(release)
+            for condition in ('withdrawn-receipt', 'pending-upgrade'):
+                if condition == 'pending-upgrade':
+                    (base / '.preview-ops-upgrade.lock').write_text('pending fixture')
+                with self.subTest(condition=condition), patch.object(launcher, 'BASE', base), \
+                        patch.object(launcher, 'module', return_value=artifact), \
+                        patch.object(launcher, 'read_configuration', side_effect=AssertionError('startup must stop before private config')):
+                    self.assertEqual(launcher.main(), 1)
     def test_queue_boundary_records_uninitialized_private_ledger_and_no_frontend_build(self):
         root = HERE.parent
         plan = host.plan(root, 'a' * 64)

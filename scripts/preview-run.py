@@ -146,7 +146,9 @@ def main():
         release = (BASE / 'current').resolve(strict=True)
         if release.parent != BASE / 'releases':
             raise ValueError('Current release points outside the dedicated release directory.')
-        manifest = module('preview-artifact').verify_directory(release)
+        artifact = module('preview-artifact')
+        artifact.read_host_plan(BASE)
+        manifest = artifact.verify_directory(release)
         config = read_configuration(BASE / 'config/api.json')
         environment = child_environment(config, manifest)
         child = subprocess.Popen([str(release / 'runtime/bin/node'), str(release / manifest['entrypoint'])],

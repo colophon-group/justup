@@ -1,9 +1,9 @@
 ---
-summary: Small repository-owned checks used by Justup pull-request CI.
-read_when: Changing test selection or the pull-request quality gate.
+summary: Repository-owned CI, immutable deployment and offline ingestion tools.
+read_when: Changing verification, packaging, runtime startup or recovery.
 ---
 
-# CI scripts
+# Repository scripts
 
 `ci.py` reads the pull-request event and changed paths, checks the work-based branch name, verifies the quality checklist and local guide links, then runs the full runtime lane when application, test, deployment or CI tooling files change. Checklist explanations may link an issue. The script also has a `selftest` command for its naming, selection and checklist rules.
 
