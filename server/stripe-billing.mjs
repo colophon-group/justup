@@ -110,7 +110,7 @@ function absorbedTermination(db,receipt){
   return outcome!==null&&operation.resource_kind==='termination_receipt'&&operation.resource_id===receipt.id
     &&operation.status===outcome.status&&operation.error_code===outcome.error;
 }
-function hasTerminationReceipt(db,owner){return Boolean(db.prepare("SELECT 1 FROM justup_tasks WHERE kind='billing_terminate' AND (owner_id=? OR id IN (SELECT task_id FROM justup_billing_operations WHERE account_id=? AND kind='terminate')) LIMIT 1").get(owner,owner));}
+function hasTerminationReceipt(db,owner){return Boolean(db.prepare("SELECT 1 FROM justup_tasks WHERE ((kind='billing_terminate' AND owner_id=?) OR id IN (SELECT task_id FROM justup_billing_operations WHERE account_id=? AND kind='terminate')) LIMIT 1").get(owner,owner));}
 function freshTerminationProof(binding,at){return binding?.closing_revision>0&&binding.termination_revision===binding.closing_revision&&binding.termination_verified_at<=at&&binding.termination_verified_at>=at-30_000;}
 function enqueue(db,tasks,operation,now) {
   if(operation.task_id&&['pending','running'].includes(tasks.get(operation.account_id,operation.task_id)?.status))return;
