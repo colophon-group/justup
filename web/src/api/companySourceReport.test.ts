@@ -24,3 +24,13 @@ test('unapproved, unsafe or inconsistent report evidence cannot supply a career 
     (v: ReturnType<typeof report>) => { v.sourceChecks.state = 'available'; },
   ]) { const value = report(); mutate(value); assert.throws(() => decodeCompanySourceReport(value, 'company')); }
 });
+
+test('valid producer scope counts remain supported through the 2000-scope contract limit', () => {
+  const item = report().sourceChecks.items[0]!;
+  for (const size of [1001, 2000]) {
+    const value = { ...report(), sourceChecks: { state: 'available', items: Array.from({ length: size }, () => item) } };
+    assert.equal(decodeCompanySourceReport(value, 'company').sourceChecks.items.length, size);
+  }
+  const oversized = { ...report(), sourceChecks: { state: 'available', items: Array.from({ length: 2001 }, () => item) } };
+  assert.throws(() => decodeCompanySourceReport(oversized, 'company'));
+});

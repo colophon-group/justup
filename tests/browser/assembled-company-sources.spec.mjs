@@ -9,7 +9,8 @@ let runtime;
 test.beforeEach(async () => { runtime = await startVisitorRuntime(); });
 test.afterEach(async () => { await runtime?.close(); });
 async function publishSources() {
-  const end = new Date(); end.setUTCHours(0, 0, 0, 0); end.setUTCDate(end.getUTCDate() - (end.getUTCDay() + 6) % 7);
+  const end = new Date(); end.setUTCHours(0, 0, 0, 0); end.setUTCDate(end.getUTCDate() - (end.getUTCDay() + 6) % 7 - 7);
+  // Use the preceding completed week so publication is already past even early Monday UTC.
   const iso = value => new Date(value).toISOString(), DAY = 86400000, period = end.toISOString();
   const trackedSince = iso(+end - 21 * DAY), start = iso(+end - 14 * DAY), now = () => +end + 2 * 3600000;
   const snapshot = { schemaVersion: 2, sourceVersion: 'jobseek-coverage-v2', snapshotId: 'assembled-approved-links', asOf: period, generatedAt: iso(+end + 3600000),

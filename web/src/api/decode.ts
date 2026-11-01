@@ -182,7 +182,7 @@ export function decodeCompanySourceReport(value: unknown, expectedCompanyId: str
   if (companyId !== expectedCompanyId) fail("company report identity");
   const asOf = date(o.asOf), checks = record(o.sourceChecks, "source checks");
   if (!["available", "partial", "unavailable"].includes(String(checks.state))) fail("source check state");
-  const entries: unknown[] = Array.isArray(checks.items) && checks.items.length <= 1000 ? checks.items : fail("source checks");
+  const entries: unknown[] = Array.isArray(checks.items) && checks.items.length <= 2000 ? checks.items : fail("source checks");
   const items: CompanySourceReport["sourceChecks"]["items"] = entries.map(value => {
     const item = record(value, "source check");
     const trackedSince = date(item.trackedSince);
