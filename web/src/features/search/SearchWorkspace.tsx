@@ -16,6 +16,7 @@ interface Props {
   onSignIn: (reason?: string) => void;
   dialogOpen: boolean;
   onCompanyRequest: (prefill: CompanyRequestPrefill) => void;
+  onAccount: () => void;
 }
 export function SearchWorkspace({
   client,
@@ -25,6 +26,7 @@ export function SearchWorkspace({
   onSignIn,
   dialogOpen,
   onCompanyRequest,
+  onAccount,
 }: Props) {
   const workspace = useWorkspace(client, session, () =>
     onSignIn(
@@ -148,8 +150,8 @@ export function SearchWorkspace({
                 <span>No paid placement.</span>
               </h1>
               <p>
-                Fresh listings from company career pages. See the companies
-                included in this snapshot.
+                Fresh listings from company career pages. See exactly which
+                companies are included.
               </p>
             </div>
           )}
@@ -279,6 +281,9 @@ export function SearchWorkspace({
           active={active}
           paused={state.busy}
           reducedMotion={reducedMotion}
+          session={session}
+          onSignIn={onSignIn}
+          onAccount={onAccount}
         />
       ) : null}
       <Dialog
