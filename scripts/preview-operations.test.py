@@ -54,6 +54,23 @@ def profiles(*, attested=False):
     return result
 
 
+def wire_config(*, private=False):
+    return {'enabled': True, 'attestationPath': '/srv/justup_preview/' + ('model/config' if private else 'broker') + '/hiring-wire-reviewed.json',
+            'providerCatalogueSha256': 'd' * 64, 'modelUid': 1234, 'socketPath': '/srv/justup_preview/broker/model.sock'}
+
+
+def wire_report(manifest, config):
+    return {'version': 1, 'approved': True, 'profile': 'hiring_wire', 'model': 'gpt-6.1-sol',
+            'cliVersion': manifest['codexVersion'], 'cliSource': model.CODEX_SOURCE_COMMIT, 'nodeVersion': manifest['nodeVersion'],
+            'policyVersion': 'hiring-wire-codex-v1', 'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': 'f' * 64,
+            'socketPath': config['socketPath'], 'descriptor': deepcopy(model.WIRE_DESCRIPTOR),
+            'modelCatalogueSha256': model.WIRE_CATALOGUE_SHA256, 'dynamicToolsSha256': model.WIRE_DYNAMIC_TOOLS_SHA256,
+            'providerCatalogue': {'verified': True, 'transport': 'responses_lite', 'sha256': config['providerCatalogueSha256'],
+                                  'toolSchemaSha256': model.WIRE_DESCRIPTOR['toolSchemaSha256'], 'stockTools': 0, 'tools': list(model.WIRE_TOOLS)},
+            'executorBoundary': 'dedicated_uid_broker', 'modelUid': config['modelUid'], 'fd': 3,
+            'deniedPathsVerified': True, 'retentionVerified': True, 'qualityVerified': True, 'sharedSlotVerified': True}
+
+
 def payload():
     files = {'runtime/bin/node': b'fixture runtime', 'runtime/LICENSE': b'fixture license',
              'app/scripts/import-jobs.py': b'# canonical importer fixture\n',
@@ -701,8 +718,19 @@ class BoundaryContracts(unittest.TestCase):
                   'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
         model.validate_configuration(broker, release, manifest)
         queue.validate_configuration(runner, manifest)
-        unsupported = [{'hiringWire': {'enabled': False}},
-                       {'sourceCoverage': {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}}]
+        manifest['files'].update({name: 'b' * 64 for name in model.WIRE_MODULES})
+        manifest['files']['app/server/hiring-wire-sol-catalogue.json'] = model.WIRE_CATALOGUE_SHA256
+        source = {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}
+        runner_cases = [runner, {**runner, 'hiringWire': {'enabled': False}},
+                        {**runner, 'hiringWire': wire_config(), 'sourceCoverage': source}]
+        broker_cases = [broker, {**broker, 'hiringWire': {'enabled': False}}, {**broker, 'hiringWire': wire_config(private=True)}]
+        with patch.object(queue.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1234)), patch.object(model.os, 'getuid', return_value=1234):
+            for admitted in runner_cases:
+                queue.validate_configuration(admitted, manifest)
+            for admitted in broker_cases:
+                model.validate_configuration(admitted, release, manifest)
+        unsupported = [{'hiringWire': {'enabled': False, 'command': 'caller'}},
+                       {'sourceCoverage': {**source, 'sourceVersion': 'caller-version'}}, {'modulePath': '/caller/module.mjs'}]
         for extra in unsupported:
             with self.subTest(extra=extra):
                 with self.assertRaises(ValueError):
@@ -715,25 +743,35 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 const input = JSON.parse(readFileSync(0, 'utf8'));
 const { bindRunnerConfig } = await import(input.adapterUrl);
-const bound = bindRunnerConfig(input.runner, input.environment);
-assert.equal(bound.sourceCommit, input.environment.JUSTUP_SOURCE_COMMIT);
-assert.equal(bound.buildIdentity, input.environment.JUSTUP_BUILD_ID);
-assert.equal(bound.hostPlanSha256, input.environment.JUSTUP_HOST_PLAN_SHA256);
+const { validWireConfiguration } = await import(input.wireUrl);
+for (const runner of input.runners) {
+  const bound = bindRunnerConfig(runner, input.environment);
+  assert.equal(bound.sourceCommit, input.environment.JUSTUP_SOURCE_COMMIT);
+  assert.equal(bound.buildIdentity, input.environment.JUSTUP_BUILD_ID);
+  assert.equal(bound.hostPlanSha256, input.environment.JUSTUP_HOST_PLAN_SHA256);
+}
 const source = readFileSync(new URL(input.brokerUrl), 'utf8');
 // Evaluate the actual executable's key guard without starting its fd/auth boundary.
 const guard = source.match(/Object\.keys\(supplied\)\.some\(key=>!\[[^\]]*\]\.includes\(key\)\)/)?.[0];
 assert.ok(guard, 'The broker key boundary must remain independently testable.');
-assert.equal(runInNewContext(guard, { supplied: input.broker }), false);
+for (const broker of input.brokers) {
+  assert.equal(runInNewContext(guard, { supplied: broker }), false);
+  assert.equal(validWireConfiguration(broker.hiringWire), true);
+}
+assert.equal(runInNewContext(guard, { supplied: { ...input.broker, sourceCoverage: input.sourceCoverage } }), true);
 for (const extra of input.unsupported) {
   assert.throws(() => bindRunnerConfig({ ...input.runner, ...extra }, input.environment));
-  assert.equal(runInNewContext(guard, { supplied: { ...input.broker, ...extra } }), true);
+  if (extra.hiringWire) assert.equal(validWireConfiguration(extra.hiringWire), false);
+  else assert.equal(runInNewContext(guard, { supplied: { ...input.broker, ...extra } }), true);
 }
 process.stdout.write('actual_node_configuration_boundaries_match\n');
 """
         result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
-                                input=json.dumps({'runner': runner, 'broker': broker, 'unsupported': unsupported,
+                                input=json.dumps({'runner': runner, 'broker': broker, 'runners': runner_cases, 'brokers': broker_cases,
+                                                  'sourceCoverage': source, 'unsupported': unsupported,
                                                   'environment': queue.child_environment(manifest, 'f' * 64),
                                                   'adapterUrl': (HERE.parent / 'server/runner-adapter.mjs').resolve().as_uri(),
+                                                  'wireUrl': (HERE.parent / 'server/hiring-wire-codex-broker.mjs').resolve().as_uri(),
                                                   'brokerUrl': (HERE.parent / 'server/model-broker.mjs').resolve().as_uri()}),
                                 capture_output=True, timeout=15,
                                 env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
@@ -759,6 +797,85 @@ process.stdout.write('actual_node_configuration_boundaries_match\n');
         self.assertEqual(env['JUSTUP_HOST_PLAN_SHA256'], 'f' * 64)
         self.assertEqual(env['LISTEN_PID'], '1234')
         self.assertNotIn('TYPESAFE_AI_TOKEN', env)
+
+    def test_wire_source_configuration_requires_its_exact_graph_and_stays_outside_shared_state(self):
+        manifest, _ = payload()
+        config = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
+                  'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
+        source = {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}
+        with self.assertRaisesRegex(ValueError, 'exact artifact'):
+            queue.validate_configuration({**config, 'sourceCoverage': source}, manifest)
+        self.assertEqual(model.WIRE_MODULES, artifact.WIRE_MODULES)
+        manifest['files'].update({name: 'b' * 64 for name in model.WIRE_MODULES})
+        manifest['files']['app/server/hiring-wire-sol-catalogue.json'] = model.WIRE_CATALOGUE_SHA256
+        with patch.object(Path, 'read_text', side_effect=AssertionError('Configuration must not read source bytes')):
+            queue.validate_configuration({**config, 'sourceCoverage': source}, manifest)
+        with patch.object(queue.pwd, 'getpwnam', side_effect=AssertionError('Disabled Wire must not inspect a UID')):
+            queue.validate_configuration({**config, 'hiringWire': {'enabled': False}}, manifest)
+        for change in ({'directory': 'relative/source'}, {'directory': '/source/../other'}, {'directory': '/source//input'},
+                       {'directory': '/srv/justup_preview/state'}, {'directory': '/srv/justup_preview/state/backups'},
+                       {'directory': '/srv/justup_preview/state/history'}, {'sourceVersion': 'unreviewed'}, {'enabled': True}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                queue.validate_configuration({**config, 'sourceCoverage': {**source, **change}}, manifest)
+        for private in (False, True):
+            wire = wire_config(private=private)
+            self.assertTrue(model.validate_wire_configuration(wire, private=private, model_uid=1234))
+            for change in ({'attestationPath': '/unreviewed/proof.json'}, {'modelUid': 1}, {'modelUid': True},
+                           {'socketPath': '/tmp/model.sock'}, {'enabled': 1}, {'buildIdentity': 'a' * 64}):
+                with self.subTest(private=private, change=change), self.assertRaises(ValueError):
+                    model.validate_wire_configuration({**wire, **change}, private=private, model_uid=1234)
+
+    def test_wire_launcher_proof_matches_actual_node_descriptor_and_independent_attestation(self):
+        manifest, _ = payload()
+        config = wire_config()
+        report = wire_report(manifest, config)
+        model.validate_wire_attestation(report, config, manifest, 'f' * 64)
+        rejected = []
+        for change in ({'profile': 'search_intent'}, {'model': 'gpt-6-luna'}, {'buildIdentity': 'e' * 64},
+                       {'hostPlanSha256': 'e' * 64}, {'modelUid': 1}, {'fd': 4}, {'qualityVerified': False},
+                       {'sharedSlotVerified': False}, {'approved': 1}, {'dynamicToolsSha256': 'e' * 64},
+                       {'descriptor': {**report['descriptor'], 'maxToolCalls': 13}},
+                       {'providerCatalogue': {**report['providerCatalogue'], 'stockTools': 1}},
+                       {'providerCatalogue': {**report['providerCatalogue'], 'tools': ['shell']}},
+                       {'providerCatalogue': {**report['providerCatalogue'], 'sha256': 'e' * 64}}, {'extra': True}):
+            bad = {**report, **change}
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                model.validate_wire_attestation(bad, config, manifest, 'f' * 64)
+            rejected.append(bad)
+        script = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const { wireAttestationMatches } = await import(input.policyUrl);
+assert.equal(wireAttestationMatches(input.report, input.config), true);
+for (const report of input.rejected) assert.equal(wireAttestationMatches(report, input.config), false);
+process.stdout.write('independent_wire_policy_matches\n');
+"""
+        result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
+                                input=json.dumps({'report': report, 'rejected': rejected,
+                                                  'config': {**config, 'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': 'f' * 64},
+                                                  'policyUrl': (HERE.parent / 'server/hiring-wire-codex-policy.mjs').resolve().as_uri()}),
+                                capture_output=True, timeout=15, env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('independent_wire_policy_matches', result.stdout)
+
+    def test_wire_proof_requires_root_immutable_file_and_protected_ancestors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp).resolve() / 'proof.json'
+            path.write_text('{"synthetic":true}')
+            size = path.stat().st_size
+            def metadata(entry, change=None):
+                change = change or {}
+                if entry == path:
+                    return SimpleNamespace(st_mode=stat.S_IFREG | change.get('file_mode', 0o440), st_uid=change.get('file_uid', 0),
+                                           st_nlink=change.get('links', 1), st_size=change.get('size', size))
+                return SimpleNamespace(st_mode=stat.S_IFDIR | change.get('parent_mode', 0o750), st_uid=change.get('parent_uid', 0))
+            with patch.object(Path, 'lstat', lambda entry: metadata(entry)):
+                self.assertEqual(model.read_wire_attestation(path), {'synthetic': True})
+            for change in ({'file_mode': 0o640}, {'file_uid': 1234}, {'links': 2}, {'size': 16_385},
+                           {'parent_mode': 0o770}, {'parent_uid': 1234}):
+                with self.subTest(change=change), patch.object(Path, 'lstat', lambda entry: metadata(entry, change)), self.assertRaises(ValueError):
+                    model.read_wire_attestation(path)
 
     def test_task_specific_static_and_observed_proof_cannot_approve_sibling_tools(self):
         configured = profiles()

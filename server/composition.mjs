@@ -8,6 +8,7 @@ import { createMatchingService } from './matching.mjs';
 import { createVisitorIdentity,createVisitorService } from './visitor.mjs';
 import { createLiveResultsService } from './live-results.mjs';
 import { createReadingPreferencesService } from './reading-preferences.mjs';
+import { createHiringWireApi } from './hiring-wire-integration.mjs';
 
 const disabled=()=>({search:false,companyRequests:false,aiMatching:false});
 export function runnerStatusPath(config){return config.runnerStatusPath??(typeof config.dbPath==='string'&&isAbsolute(config.dbPath)?join(dirname(config.dbPath),'runner-status.json'):null);}
@@ -44,5 +45,6 @@ export function createApiServices(deps){
   const companies=createCompanyService({...deps,...ownership,readingPreferences,config:apiConfig,model:undefined,availability:()=>heartbeat().companyRequests});
   const visitor=createVisitorService({...deps,config:apiConfig,identity,intent,matching});
   const liveResults=createLiveResultsService({...deps,intent});
-  return [intent,companies,matching,visitor,readingPreferences,liveResults];
+  const wire=createHiringWireApi({db:deps.db,now});
+  return [intent,companies,matching,visitor,readingPreferences,liveResults,wire];
 }

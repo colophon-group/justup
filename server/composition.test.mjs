@@ -22,9 +22,10 @@ test('API advertises queue availability and enqueues work without constructing i
   const f=fixture(t);f.write();const db=new DatabaseSync(':memory:');t.after(()=>db.close());let serial=0;const queued=new Map();
   const tasks={enqueue(input){const task={...input,id:`task-${++serial}`,status:'pending',createdAt:new Date(AT).toISOString(),updatedAt:new Date(AT).toISOString()};queued.set(task.id,task);return task;},get:(owner,id)=>queued.get(id)?.ownerId===owner?queued.get(id):null,delete:(owner,id)=>queued.delete(id),complete:()=>false,publicView:task=>({id:task.id,status:task.status,result:null,error:null})};
   const feed={eligibleJobs:()=>[],publicJob:j=>j,companies:()=>({items:[]}),generation:()=>null,coverage:()=>({stale:true})};
-  const config={...f.config,dbPath:':memory:',allowedOrigin:'https://preview.example',policiesReviewed:true,privacyUrl:'https://preview.example/privacy',usageUrl:'https://preview.example/usage',policyVersion:'fixture',get model(){throw Error('API read model config');},get jev(){throw Error('API read provider key');}};
+  const config={...f.config,dbPath:':memory:',allowedOrigin:'https://preview.example',policiesReviewed:true,privacyUrl:'https://preview.example/privacy',usageUrl:'https://preview.example/usage',policyVersion:'fixture',get model(){throw Error('API read model config');},get jev(){throw Error('API read provider key');},get hiringWire(){throw Error('API read Wire proof/socket');},get sourceCoverage(){throw Error('API read source history path');}};
   const services=createApiServices({db,feed,tasks,config,visitorAvailability:()=>true,accessForAccount:()=>({kind:'paid',fullAccess:true}),now:()=>AT,beforePrivateDelete:()=>{}}),intent=services[0],company=services[1];
   assert.equal(intent.capabilities().search,true);assert.equal(company.capabilities().companyRequests,true);
+  assert.deepEqual(services.at(-1).publicRoute({method:'GET',path:'/hiring-wire'}),{status:200,body:{state:'unavailable',edition:null}});
   const ctx={method:'POST',path:'/searches',url:new URL('https://preview.example/searches'),body:{query:'backend',requestKey:'one'},viewer:{account:{id:'owner'}},accountId:'owner'};
   const response=await intent.route(ctx);assert.equal(response.status,202);assert.equal(JSON.stringify(response).includes('provider'),false);
   const task=queued.get(response.body.task.id);Object.assign(task,{status:'running',leaseToken:'lease',leaseUntil:AT+30000});assert.equal((await intent.runTask(task)).errorCode,'dependency_unavailable');
@@ -46,6 +47,10 @@ test('assembled core/auth/matching API consumes heartbeat, exposes real services
   // Cookie name is part of the core boundary, not a provider/session substitute.
   const coreSession=await demo.auth.session(account.token);assert.ok(coreSession.account.id);
   const call=(path,options={})=>fetch(endpoint+path,{...options,headers:{...headers,...options.headers}});
+  const publicCounts=()=>['justup_visitors','justup_workspaces','demo_tasks'].map(table=>demo.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n);
+  const beforePublic=publicCounts();
+  const publicWire=await fetch(`${endpoint}/hiring-wire`);assert.equal(publicWire.status,200);assert.deepEqual(await publicWire.json(),{state:'unavailable',edition:null});
+  assert.deepEqual(publicCounts(),beforePublic);assert.equal(publicWire.headers.getSetCookie().some(cookie=>cookie.includes('justup_visitor=')),false);
   const response=await call('/session');let session=await response.json();
   assert.ok(session.user);assert.equal(session.capabilities.search,true);assert.equal(JSON.stringify(session).includes('must-never'),false);
   assert.deepEqual(await (await call('/searches')).json(),{items:[]});assert.deepEqual(await (await call('/company-requests')).json(),{items:[]});
