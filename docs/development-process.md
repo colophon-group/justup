@@ -25,7 +25,7 @@ Name ordinary branches `work/<semantic-slug>`, normally using the primary issue'
 | Branch or ref | Purpose | Entry rule |
 | --- | --- | --- |
 | `work/<semantic-slug>` | One coherent change, based on `dev`. | PR into `dev`. |
-| `dev` | Integrated next version; never a production deployment source. | Selected PR checks and reviewed quality checklist pass. |
+| `dev` | Integrated next version; never a production deployment source. | An authorized agent completes review and merges the PR after current required checks pass. |
 | `release/vX.Y.Z` | Frozen candidate cut from an exact `dev` commit. | PR into `main`; full release gate passes on the candidate and current base. |
 | `hotfix/<semantic-slug>` | Urgent correction based on `main`. | PR into `main` with the affected release gate; merge back into `dev`. |
 | `main` | Stable baseline and source of released versions. | Release or urgent hotfix PR; before launch, reviewed repository-setup or policy PR. No direct pushes. |
@@ -151,7 +151,11 @@ The production deploy is an explicit release action, not an automatic build on e
 
 ## 7. Ownership and enforcement
 
-Before the first live release, decide who may merge into `dev` and `main`, who owns each suite, and who can approve production promotion. Require PRs, current green checks and resolved review comments. Code owners or a second reviewer should inspect security, billing, migration and deploy changes. Restrict CI credentials to the minimum scope and keep preview and production secrets separate.
+Authorized agents own the `dev` pull request path. GitHub requires a PR and a current green `CI / decision` check, but requires zero approving reviews. No ordinary `dev` PR waits for human approval. An agent other than the contributor reviews the exact change; security, billing, migration and deployment work needs a reviewer with relevant context. Resolve findings and review comments, and complete the quality checklist before marking a draft ready. A passing check alone does not make incomplete work ready.
+
+After review, an authorized agent rereads the PR's draft state, exact head and base commit IDs, required checks, merge state and any hold or conflicting operator decision. Arm auto-merge only when source edits are finished: if checks are pending, GitHub merges that ready PR when they pass; if checks are already green, merge against the reviewed head. Never use administrator bypass or push directly to `dev`. Before another push or base change, disable auto-merge; a reviewer then checks the affected evidence and re-arms it only for the new exact state. An agent watches an armed PR through its merge. A new draft, hold, failed check or conflicting operator decision stops the merge; do not change draft state to evade a hold.
+
+Operator decisions required for new resource spending, policy approval and production promotion remain separate from PR review. Before the first live release, name the owners of each suite and the production promotion authority. Restrict CI credentials to the minimum scope and keep preview and production secrets separate.
 
 Keep `dev` and `main` protected against direct pushes and require current `CI / decision` results before merging. If a branch rule or required check is missing, stop the application merge and restore the gate. The full preview deployment and `Preview / verified` release check are not implemented yet; they must pass before a live release. Do not create an always-green placeholder check.
 
