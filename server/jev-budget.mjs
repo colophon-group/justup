@@ -8,7 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 export const JEV_BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49';
 export const JEV_BUDGET_SLUG = 'jev-evaluation-budget';
 export const JEV_BUDGET_IDENTITY_PROFILE = 'canonical-v1';
-export const JEV_BUDGET_LEGACY_IDENTITY_PROFILE = 'legacy-demo-v1';
+export const JEV_BUDGET_LEGACY_IDENTITY_PROFILE = 'legacy-v1';
 export const JEV_BUDGET_LEGACY_SLUG = 'demo-jev-evaluation-budget';
 export const JEV_CUMULATIVE_CAP_NANO = 500_000_000;
 export const JEV_ATTEMPT_INPUT_TOKENS = 64_000;

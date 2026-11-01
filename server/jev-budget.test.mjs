@@ -56,6 +56,8 @@ function historicalFixture(t, cap = COST * 4) {
 test('new unapproved templates use canonical identity and retain the version-1 field set', (t) => {
   const f = fixture(t);
   assert.equal(JEV_BUDGET_SLUG, 'jev-evaluation-budget');
+  assert.equal(JEV_BUDGET_LEGACY_IDENTITY_PROFILE, 'legacy-v1');
+  assert.equal(JEV_BUDGET_LEGACY_SLUG, 'demo-jev-evaluation-budget');
   assert.equal(f.header.resourceSlug, JEV_BUDGET_SLUG);
   assert.equal(f.header.schemaVersion, 1);
   assert.equal(Object.hasOwn(f.header, 'identityProfile'), false);
@@ -92,6 +94,7 @@ test('unknown, implicit and mixed identities fail closed without rewriting histo
     ['historical identity without explicit profile', (f) => { delete f.config.identityProfile; }],
     ['historical identity with canonical profile', (f) => { f.config.identityProfile = JEV_BUDGET_IDENTITY_PROFILE; }],
     ['unknown profile', (f) => { f.config.identityProfile = 'future-v2'; }],
+    ['unreleased profile spelling', (f) => { f.config.identityProfile = 'legacy-demo-v1'; }],
     ['null profile', (f) => { f.config.identityProfile = null; }],
     ['canonical approval with historical header', (f) => { f.config.approval.resourceSlug = JEV_BUDGET_SLUG; }],
     ['canonical header with historical approval', (f) => { f.header.resourceSlug = JEV_BUDGET_SLUG; }],

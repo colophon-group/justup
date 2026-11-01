@@ -120,7 +120,8 @@ The runtime never creates, truncates, resets, refunds or restores that ledger.
 
 No active ledger or real key is initialized by this change. The operator must:
 
-1. Verify the recorded human authorization in `jev-evaluation-budget` and complete
+1. Verify the recorded human authorization in
+   [`jev-evaluation-budget`](https://github.com/colophon-group/justup/issues/49) and complete
    the queue/API/model identity and logging review in the
    [operations guide](demo-operations.md).
    Confirm actual account input pricing, free output and the supported per-request
@@ -199,14 +200,14 @@ rewrite, truncate, replace or refund it when updating the product identity.
 Before upgrading a consumer of this historical format, the protected operator
 must review that the header belongs to the known approved `jev-evaluation-budget`
 resource and supply `identityProfile: JEV_BUDGET_LEGACY_IDENTITY_PROFILE`
-(`legacy-demo-v1`) with `approval.resourceSlug: JEV_BUDGET_LEGACY_SLUG`. These
+(`legacy-v1`) with `approval.resourceSlug: JEV_BUDGET_LEGACY_SLUG`. These
 constants are exported by `server/jev-budget.mjs`. Keep the fixed
 `JEV_BUDGET_RESOURCE` and every approval, model and pricing value matched exactly
 to that header. This explicit binding permits continued append-only reservations
 under the original cap; the profile and approval syntax grant no human approval.
 
 The default `canonical-v1` profile accepts only `jev-evaluation-budget` headers.
-The explicit `legacy-demo-v1` profile accepts only the known historical slug.
+The explicit `legacy-v1` profile accepts only the known historical slug.
 Unknown profiles, resources or slugs and mixed canonical/historical configuration
 and headers fail closed. The runtime never infers a profile from a file or
 migrates a header. The historical format remains supported while an authorized
