@@ -25,6 +25,15 @@ export function expiredSessionSnapshot(session: Session, requestStarted = Date.n
     || session.access.fullAccess && session.access.until && Date.parse(session.access.until) <= at);
 }
 
+export function confirmsCredentialRecovery(session: Session, attemptedUsername: string | undefined, previous: Session | null = null): boolean {
+  return Boolean(attemptedUsername && session.user?.username === attemptedUsername.trim().toLowerCase()
+    && (previous?.user?.id !== session.user?.id || previous?.csrfToken !== session.csrfToken));
+}
+
+export function keepsOwnedVisitorEditor(session: Session | null, expectedReclamation: boolean, ownershipUncertain: boolean): boolean {
+  return Boolean(expectedReclamation && session && !session.user && session.capabilities.visitorSearch && !ownershipUncertain);
+}
+
 export function openSessionSignals(invalidate: () => void): { notify: () => void; close: () => void } {
   try {
     if (typeof BroadcastChannel !== 'undefined') {

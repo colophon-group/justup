@@ -68,6 +68,23 @@ test('authentication invalidation signals are emitted only after acknowledged su
   await client.logout(); await client.deleteAccount('test-only');
   assert.equal(signals, 4);
 });
+
+test('suspension cancels a recorded task poll while it is between GET requests', async () => {
+  let reads = 0;
+  const client = new ApiClient({ fetch: async () => {
+    reads++;
+    return json({ id: 'existing-task', kind: 'search_intent', status: 'pending', result: null, error: null });
+  } });
+  client.setSession(session());
+  const controller = new AbortController();
+  client.onSessionSuspended(() => controller.abort());
+  const polling = pollTask(client, 'existing-task', controller.signal);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 1);
+  client.suspendSession();
+  await assert.rejects(polling, { name: 'AbortError' });
+  assert.equal(reads, 1);
+});
 test("bodyless mutations retain same-origin credentials, JSON and CSRF without storing a session", async () => {
   let calls = 0;
   const client = new ApiClient({

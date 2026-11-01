@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { decodeSession } from '../api/decode.ts';
 import { sessionOwner } from '../api/sessionOwner.ts';
-import { expiredSessionSnapshot, nextSessionDeadline, sessionDeadlineRemaining } from './sessionCoherence.ts';
+import { confirmsCredentialRecovery, expiredSessionSnapshot, keepsOwnedVisitorEditor, nextSessionDeadline, sessionDeadlineRemaining } from './sessionCoherence.ts';
 
 const AT = Date.parse('2026-11-01T12:00:00Z');
 const iso = (offset: number) => new Date(AT + offset).toISOString();
@@ -45,4 +45,24 @@ test('same-account token rotation preserves ownership but equal-expiry replaceme
   const visitor = { ...session, user: null, visitor: { expiresAt: iso(60_000) } };
   assert.notEqual(sessionOwner(visitor), sessionOwner({ ...visitor, csrfToken: 'different-guest' }));
   assert.notEqual(sessionOwner({ ...visitor, visitor: null }), sessionOwner({ ...visitor, visitor: null, csrfToken: 'different-guest' }));
+});
+
+test('a lost credential acknowledgement is local only when the authoritative username matches', () => {
+  const session = decodeSession(wire());
+  assert.equal(confirmsCredentialRecovery(session, ' READER '), true);
+  assert.equal(confirmsCredentialRecovery(session, 'another-account'), false);
+  assert.equal(confirmsCredentialRecovery({ ...session, user: null }, 'reader'), false);
+  assert.equal(confirmsCredentialRecovery(session, undefined), false);
+  assert.equal(confirmsCredentialRecovery(session, 'reader', session), false);
+  assert.equal(confirmsCredentialRecovery({ ...session, csrfToken: 'rotated' }, 'reader', session), true);
+});
+
+test('only an owned visitor renewal keeps editing available, never an external identity barrier', () => {
+  const account = decodeSession(wire());
+  const visitor = { ...account, user: null, capabilities: { visitorSearch: true } };
+  assert.equal(keepsOwnedVisitorEditor(visitor, true, false), true);
+  assert.equal(keepsOwnedVisitorEditor(visitor, false, false), false);
+  assert.equal(keepsOwnedVisitorEditor(visitor, true, true), false);
+  assert.equal(keepsOwnedVisitorEditor(account, true, false), false);
+  assert.equal(keepsOwnedVisitorEditor(null, true, false), false);
 });

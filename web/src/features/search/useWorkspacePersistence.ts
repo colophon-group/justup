@@ -53,6 +53,12 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
   const reclaimed = useRef(false);
   const recoveredCreate = useRef<RecoveredCreate | null>(null);
   const pendingDeletion = useRef<SavedWorkspaceState | null>(null), refreshingDeletion = useRef<Promise<void> | null>(null);
+  const renewingVisitor = useRef(false);
+  const renewVisitor = useCallback(async () => {
+    renewingVisitor.current = true;
+    try { await onVisitorRebootstrap(); }
+    finally { renewingVisitor.current = false; }
+  }, [onVisitorRebootstrap]);
   const project = useCallback(() => {
     const local = savedWorkspace(current.current,
       scope === "visitor" && (!hasVisitor || reclaimed.current) && stored.current?.revision === 0 && current.current.searches.length === 0
@@ -110,7 +116,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
     return () => { controller.abort(); ready.current = false; };
   }, [scope, owner, read]);
   useEffect(() => client.onSessionResumed(() => {
-    if (!scope || guard.current.controller.signal.aborted) return;
+    if (!scope || guard.current.controller.signal.aborted || renewingVisitor.current) return;
     // Reconcile a possibly committed interrupted save, retaining newer local edits.
     reading.current = read(undefined, true, base.current);
   }), [client, scope, read]);
@@ -123,7 +129,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
     const work = async () => {
       // A successful owned DELETE can reclaim its visitor even when this
       // browser's list is stale. Renew before either private hydration read.
-      if (scope === "visitor") await onVisitorRebootstrap();
+      if (scope === "visitor") await renewVisitor();
       if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
       await read(undefined, true, transition);
       if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
@@ -138,7 +144,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
     }).finally(() => { if (valid(generation)) { refreshingDeletion.current = null; setLoading(false); } });
     refreshingDeletion.current = running; reading.current = running;
     return running;
-  }, [scope, onVisitorRebootstrap, read]);
+  }, [scope, renewVisitor, read]);
   const sendViewed = useCallback(async (jobId: string) => {
     if (!scope) return;
     const running = pendingViewed.current.get(jobId);
@@ -185,7 +191,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
             recoveredCreate.current = null;
             // Canonical revision zero is the response bound to our successful
             // clear. Renew its stale hint without remounting newer typed text.
-            await onVisitorRebootstrap();
+            await renewVisitor();
             if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
             reading.current = read(); await reading.current;
           }
@@ -193,7 +199,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
           if (clearing && valid(generation) && error instanceof ApiError && (error.status === 0 || error.status === 401 || error.status >= 500 || error.code === "invalid_response")) {
             // A committed clear may lose its entire reply. Obtain a current
             // hint, then inspect real storage before another private write.
-            await onVisitorRebootstrap();
+            await renewVisitor();
             if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
             reading.current = read(); await reading.current;
             if (ready.current && stored.current && (stored.current.revision === 0 || fingerprint(stored.current.state) === fingerprint(next))) {
@@ -238,7 +244,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
     }).finally(() => { if (valid(generation)) saving.current = null; });
     saving.current = running;
     return running;
-  }, [client, scope, owner, current, noteSnapshot, project, onVisitorRebootstrap, read]);
+  }, [client, scope, owner, current, noteSnapshot, project, renewVisitor, read]);
   useEffect(() => {
     if (!scope || !ready.current || heldConflict.current) return;
     // Autosave uses at most twelve writes per minute; deliberate submission and

@@ -1,6 +1,6 @@
 // Same-browser account ownership contracts. The shared fixture reads a real context cookie on every request.
 import { expect, test } from '@playwright/test';
-import { completed, job, search, session } from './api-fixture.mjs';
+import { completed, job, search, session, task } from './api-fixture.mjs';
 
 const START = Date.parse('2026-11-01T12:00:00.000Z');
 const names = { alpha: 'Alpha', beta: 'Beta', visitor: 'Visitor' };
@@ -14,7 +14,19 @@ async function sharedAccounts(context, baseURL, options = {}) {
     deadlineKind: options.deadlineKind, deadline: options.deadline ?? START + 3_600_000, ...options };
   const calls = [], held = [], workspaces = new Map(), deleted = new Set();
   let holdPage = null, invalidLogin = null;
-  const workspace = owner => { if (!workspaces.has(owner)) workspaces.set(owner, emptyWorkspace(owner)); return workspaces.get(owner); };
+  const taskStarted = deferred(); let heldTask = null;
+  const recordedQuery = 'Alpha pending refinement';
+  const currentSearch = owner => !state.recordedTask || owner !== 'alpha' ? privateSearch(owner)
+    : state.taskCompleted ? { ...privateSearch(owner), revision: 2, query: recordedQuery }
+    : { ...privateSearch(owner), draft: { query: recordedQuery, taskId: 'alpha-recorded-task' } };
+  const workspace = owner => {
+    if (!workspaces.has(owner)) {
+      const value = emptyWorkspace(owner);
+      if (state.recordedTask && owner === 'alpha') value.state.drafts['alpha-search'] = recordedQuery;
+      workspaces.set(owner, value);
+    }
+    return workspaces.get(owner);
+  };
   const cookieOwner = headers => /(?:^|;\s*)fixture_owner=([^;]+)/.exec(headers.cookie || '')?.[1] || null;
   const identity = headers => {
     const owner = cookieOwner(headers);
@@ -73,6 +85,13 @@ async function sharedAccounts(context, baseURL, options = {}) {
       if (method === 'DELETE') deleted.add(owner);
       await respond(route, {}, 200, { 'Set-Cookie': 'fixture_owner=; Path=/; Max-Age=0; SameSite=Lax' }); return;
     }
+    if (state.recordedTask && owner === 'alpha' && method === 'GET' && path === '/tasks/alpha-recorded-task') {
+      if (!heldTask) {
+        const gate = deferred(); heldTask = { route, gate }; taskStarted.resolve(); await gate.promise; return;
+      }
+      state.taskCompleted = true;
+      await respond(route, task('alpha-recorded-task', 'succeeded', { search: currentSearch(owner) })); return;
+    }
     const privatePath = path.replace(/^\/visitor/, '');
     if (['/workspace', '/searches'].includes(privatePath) || /^\/searches\//.test(privatePath)) {
       if (!owner) { await respond(route, { error: { code: 'unauthenticated', message: 'Sign in again.' } }, 401); return; }
@@ -87,16 +106,25 @@ async function sharedAccounts(context, baseURL, options = {}) {
         const next = { ...previous, revision: previous.revision + 1, state: { activeSearchId: body.activeSearchId, drafts: body.drafts } };
         workspaces.set(owner, next); await respond(route, next); return;
       }
-      if (privatePath === '/searches' && method === 'GET') { await respond(route, { items: [privateSearch(owner)] }); return; }
+      if (privatePath === '/searches' && method === 'GET') { await respond(route, { items: [currentSearch(owner)] }); return; }
       if (privatePath === `/searches/${owner}-search/results` && method === 'GET') {
-        const items = state.deadlineKind === 'access' && state.now >= state.deadline ? [] : [privateJob(owner)];
-        await respond(route, completed(items, 1, `${owner}-search`)); return;
+        const revision = Number(url.searchParams.get('revision')) || 1;
+        const visible = state.recordedTask && owner === 'alpha' && revision === 2
+          ? { ...privateJob(owner), id: 'alpha-refined-job', title: 'Alpha refined private role' } : privateJob(owner);
+        const items = state.deadlineKind === 'access' && state.now >= state.deadline ? [] : [visible];
+        await respond(route, completed(items, revision, `${owner}-search`)); return;
       }
     }
     if (path === '/companies') { await respond(route, { items: [], nextCursor: null }); return; }
     await respond(route, { error: { code: 'unavailable', message: 'Unavailable in this test.' } }, 503);
   });
   return { state, calls, workspace,
+    recordedTaskStarted: taskStarted.promise,
+    async releaseRecordedTask() {
+      if (!heldTask) throw new Error('The recorded task was not requested.');
+      try { await respond(heldTask.route, task('alpha-recorded-task')); } catch (error) { if (!heldTask.route.request().failure()) throw error; }
+      heldTask.gate.resolve();
+    },
     holdSessions(page) { holdPage = page; },
     async releaseSessions() {
       holdPage = null;
@@ -116,10 +144,20 @@ async function openPages(context, baseURL, fixture, { clock = false } = {}) {
     await page.setViewportSize({ width: 1280, height: 550 });
     if (clock) { await page.clock.install({ time: new Date(START) }); await page.clock.pauseAt(new Date(START + 1000)); }
     await page.goto(baseURL);
-    if (fixture.state.owner || fixture.state.deadlineKind === 'visitor') await expect(page.locator('[data-job]')).toBeVisible();
+    if (fixture.state.owner || fixture.state.deadlineKind === 'visitor') await revealJob(page, '[data-job]', clock);
     else await expect(page.locator('#header-sign-in')).toBeVisible();
   }
   return pages;
+}
+async function revealJob(page, selector, clock = false) {
+  await page.bringToFront();
+  await expect(page.locator('#session-private-surfaces')).toHaveAttribute('aria-busy', 'false');
+  await expect.poll(async () => {
+    // The product deliberately buffers unseen rows. Move the real next slot into view.
+    await page.locator('#feed-tail').evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    if (clock) await page.clock.runFor(500);
+    return page.locator(selector).isVisible();
+  }, { timeout: 5000, intervals: [100, 150, 250] }).toBe(true);
 }
 async function signIn(page, username = 'beta', password = 'test-only-password') {
   await page.locator('#header-sign-in').click(); await page.locator('#auth-username').fill(username);
@@ -143,11 +181,11 @@ test('cross-tab logout and login clear private state, block old drafts and rejec
   await signOut(account);
   await expect(reader.locator('[data-job="alpha-job"]')).not.toBeVisible();
   await signIn(account);
-  await expect(account.locator('[data-job="beta-job"]')).toBeVisible();
+  await revealJob(account, '[data-job="beta-job"]', true);
   await reader.clock.runFor(6000);
   expect(fixture.calls.filter(call => call.owner === 'beta' && call.key === 'PATCH /workspace' && JSON.stringify(call.body).includes('Alpha private'))).toEqual([]);
   await fixture.releaseSessions();
-  await expect(reader.locator('[data-job="beta-job"]')).toBeVisible();
+  await revealJob(reader, '[data-job="beta-job"]', true);
   await expect(reader.locator('#query')).toHaveValue('Beta accepted search');
   await expect(reader.locator('[data-job="alpha-job"]')).toHaveCount(0);
   expect(JSON.stringify(fixture.workspace('beta'))).not.toContain('Alpha private');
@@ -185,7 +223,7 @@ test('a delayed rejected login cannot revoke the account established in another 
   const rejected = fixture.holdInvalidLogin();
   await signIn(stale, 'beta', 'incorrect'); await rejected.started;
   await signIn(account, 'alpha');
-  await expect(stale.locator('[data-job="alpha-job"]')).toBeVisible();
+  await revealJob(stale, '[data-job="alpha-job"]');
   rejected.release();
   await expect(stale.locator('#header-sign-in')).toHaveCount(0);
   await expect(stale.locator('#query')).toHaveValue('Alpha accepted search');
@@ -215,10 +253,50 @@ test('same-owner visibility resume preserves unsent text, focus and reading posi
   noInterpretation(fixture.calls);
 });
 
+test('same-owner revalidation preserves open Settings and the focused language selection', async ({ context, baseURL }) => {
+  const fixture = await sharedAccounts(context, baseURL, { owner: null, deadlineKind: 'visitor' });
+  const [reader] = await openPages(context, baseURL, fixture);
+  await reader.bringToFront(); await reader.locator('#account-open').click();
+  const language = reader.locator('#interface-language');
+  // A visitor preference is available without a private account-preferences service.
+  await language.selectOption('fr');
+  await expect(reader.locator('html')).toHaveAttribute('lang', 'fr');
+  await expect(reader.locator('#settings-dialog[open]')).toBeVisible();
+  await language.focus();
+  const refreshed = reader.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/session');
+  await resume(reader); await (await refreshed).finished();
+  await expect(reader.locator('#settings-dialog[open]')).toBeVisible();
+  await expect(language).toHaveValue('fr');
+  await expect(language).toBeFocused();
+  noInterpretation(fixture.calls);
+});
+
+test('same-owner revalidation resumes the recorded task without interpreting a newer visible draft', async ({ context, baseURL }) => {
+  const fixture = await sharedAccounts(context, baseURL, { recordedTask: true });
+  const reader = await context.newPage();
+  await reader.goto(baseURL); await fixture.recordedTaskStarted;
+  await expect(reader.locator('#query')).toHaveValue('Alpha pending refinement');
+  await reader.locator('#query').fill('Alpha newer unsubmitted draft');
+  const cancelled = reader.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/v1/tasks/alpha-recorded-task');
+  await resume(reader); await cancelled;
+  await revealJob(reader, '[data-job="alpha-refined-job"]');
+  await expect(reader.locator('#query')).toHaveValue('Alpha newer unsubmitted draft');
+  await fixture.releaseRecordedTask();
+  expect(fixture.calls.filter(call => call.key.includes('/tasks/')).map(call => call.key)).toEqual([
+    'GET /tasks/alpha-recorded-task', 'GET /tasks/alpha-recorded-task',
+  ]);
+  expect(fixture.calls.filter(call => /^(?:POST|PATCH) \/(?:visitor\/)?searches(?:\/|$)/.test(call.key))).toEqual([]);
+});
+
 for (const kind of ['session', 'visitor', 'access']) {
   test(`${kind} deadline reconciles authoritative state without an extra grace period or polling`, async ({ context, baseURL }) => {
     const fixture = await sharedAccounts(context, baseURL, { owner: kind === 'visitor' ? null : 'alpha', now: START + 1000, deadlineKind: kind, deadline: START + 11_000 });
     const [reader] = await openPages(context, baseURL, fixture, { clock: true });
+    // Bootstrap reveal advances the paused presentation clock. A fresh authoritative
+    // response anchors the remaining ten seconds before testing the exact boundary.
+    const refreshed = reader.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/session');
+    await reader.bringToFront(); await resume(reader); await (await refreshed).finished();
+    await expect(reader.locator('#session-private-surfaces')).toHaveAttribute('aria-busy', 'false');
     const before = fixture.calls.filter(call => call.page === reader && call.key === 'GET /session').length;
     fixture.state.now = START + 10_999;
     await reader.clock.runFor(9999);

@@ -76,6 +76,7 @@ export class ApiClient {
   private owner: string | null = null;
   private readonly privateRequests = new Set<AbortController>();
   private readonly resumed = new Set<() => void>();
+  private readonly suspending = new Set<() => void>();
   private readonly fetcher: typeof fetch;
   private readonly onSessionExpired: (() => void) | undefined;
   private readonly onVisitorExpired: (() => void) | undefined;
@@ -115,6 +116,12 @@ export class ApiClient {
     this.suspended = true;
     for (const controller of this.privateRequests) controller.abort(new DOMException('Session is being checked', 'AbortError'));
     this.privateRequests.clear();
+    for (const listener of this.suspending) listener();
+  }
+  isSessionSuspended(): boolean { return this.suspended; }
+  onSessionSuspended(listener: () => void): () => void {
+    this.suspending.add(listener);
+    return () => { this.suspending.delete(listener); };
   }
   onSessionResumed(listener: () => void): () => void {
     this.resumed.add(listener);
