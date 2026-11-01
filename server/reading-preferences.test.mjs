@@ -225,7 +225,7 @@ test('an awaited live snapshot rejects revision, source membership and authority
 
 test('real HTTP exposes account preferences and visitor languages with CSRF, handoff and account isolation',async t=>{
   const origin='https://preview.example';let intent,reading,modelInput;
-  const app=await createApplication({now:()=>AT,config:{dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:origin,requiresInvitation:false,policiesReviewed:true,privacyUrl:origin+'/privacy',usageUrl:origin+'/usage',policyVersion:'synthetic'},serviceFactories:[deps=>{
+  const app=await createApplication({now:()=>AT,config:{dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:origin,requiresInvitation:false,policiesReviewed:true,privacyUrl:origin+'/privacy',usageUrl:origin+'/usage',policyVersion:'synthetic',policyLocales:Object.fromEntries(['en','de','fr','it','es'].map(locale=>[locale,{privacyUrl:origin+'/privacy'+(locale==='en'?'':'.'+locale)+'.html',usageUrl:origin+'/usage'+(locale==='en'?'':'.'+locale)+'.html',version:'synthetic',reviewed:true}]))},serviceFactories:[deps=>{
     const identity=createVisitorIdentity(deps),ownership={ownerAuthority:identity.principal,visitorIdentity:identity};
     reading=createReadingPreferencesService({...deps,...ownership});
     intent=createIntentService({...deps,...ownership,readingPreferences:reading,model:{interpretIntent:async data=>{modelInput=data;return modelOutput();}}});
@@ -245,7 +245,7 @@ test('real HTTP exposes account preferences and visitor languages with CSRF, han
   assert.equal(session.body.capabilities.follows,true);assert.equal(session.body.capabilities.preferences,true);
   assert.equal((await a.call('/follows')).status,401);
   assert.deepEqual((await a.call('/visitor/search-options')).body.postingLanguages.map(l=>l.id),['en','fr']);
-  const created=await a.call('/visitor/searches','POST',{query:'Original source query',requestKey:'visitor',presentationLocale:'de',options:{followedOnly:false,postingLanguages:['fr']}});assert.equal(created.status,202);
+  const created=await a.call('/visitor/searches','POST',{query:'Original source query',requestKey:'visitor',presentationLocale:'de',options:{followedOnly:false,postingLanguages:['fr']}},{'Accept-Language':'de'});assert.equal(created.status,202);
   const task=app.tasks.claim({workerId:'fixture',kinds:['search_intent']});assert.equal((await intent.runTask(task)).committed,true);assert.equal(modelInput.presentationLocale,'de');assert.equal(modelInput.query,'Original source query');
   const id=created.body.search.id;
   assert.equal((await a.call(`/visitor/searches/${id}/options`,'PATCH',{expectedRevision:1,followedOnly:true,postingLanguages:['fr']})).status,401);
@@ -260,6 +260,7 @@ test('real HTTP exposes account preferences and visitor languages with CSRF, han
   assert.equal((await a.call('/follows/alpha','PATCH',{expectedRevision:0,followed:true})).status,200);
   const prefs=await a.call('/preferences?languages=ja-JP,es-MX,de-CH');assert.equal(prefs.body.resolvedInterfaceLocale,'es');
   assert.equal((await a.call('/preferences','PATCH',{expectedRevision:0,interfaceLocale:'it'})).status,200);
+  const localizedSession=await a.call('/session','GET',undefined,{'Accept-Language':'fr-CH'});assert.equal(localizedSession.body.policies.locale,'it');assert.equal(localizedSession.body.policies.reviewedLocale,'it');
   assert.equal((await a.call(`/searches/${id}`,'PATCH',{query:'Query unchanged by locale',expectedRevision:2,requestKey:'invalid-locale',presentationLocale:'ja'})).status,400);
   await b.call('/auth/register','POST',{username:'http-bob',password:'Another synthetic HTTP password'});assert.deepEqual((await b.call('/follows')).body.items,[]);assert.equal((await b.call('/preferences')).body.interfaceLocale,null);
   assert.equal((await b.call(`/searches/${id}/options`,'PATCH',{expectedRevision:2,followedOnly:false,postingLanguages:[]})).status,404);

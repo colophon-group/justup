@@ -9,6 +9,7 @@ import { openStore } from './store.mjs';
 import { createFeed } from './feed.mjs';
 import { createTasks } from './tasks.mjs';
 import { createHandler,policyState } from './http.mjs';
+import { validatePolicyConfig,policyJson,policyScopes } from './policies.mjs';
 import { runtimeEnv, booleanEnv, integerEnv } from './config.mjs';
 
 // Hold a durable pending marker across the SQL transaction. Backup/restore must
@@ -80,6 +81,7 @@ export function createDeletionBarrier({ generationPath, backupDir, dbPath, db } 
     beforePrivateDelete, afterPrivateTransaction };
 }
 export async function createApplication({ config = {}, now = Date.now, serviceFactories = [], authFactory, logger } = {}) {
+  validatePolicyConfig(config);
   const path = config.dbPath ?? ':memory:';
   if (path !== ':memory:' && !config.sharedState) mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
   const store = openStore(path, { sharedState: config.sharedState === true });
@@ -90,7 +92,7 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
     const withPrivateTransaction = (work) => { try { return store.transaction(work); } finally { deletion.afterPrivateTransaction(); } };
     let auth,maintenanceReady=false;
     const accessForAccount=id=>auth?.accessForAccount?.(id)??null;
-    const visitorAvailability=()=>maintenanceReady&&policyState(config).reviewed&&deletion.ready();
+    const visitorAvailability=()=>maintenanceReady&&deletion.ready()&&Object.values(policyScopes(config)).some(p=>p.reviewed);
     const services = serviceFactories.flatMap((factory) => factory({ db: store.db, feed, tasks, config, now, accessForAccount,visitorAvailability,beforePrivateDelete: deletion.beforePrivateDelete, afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction }));
     if (services.some((s) => !s || typeof s.then === 'function')) throw new TypeError('Service factories must synchronously return services.');
     const deleteAccountData = (ownerId) => {
@@ -161,7 +163,7 @@ export function readImportFile(path) {
   catch { throw new Error('Invalid job import file.'); }
 }
 export function configFromEnv(env = process.env) {
-  return {
+  return validatePolicyConfig({
     servicesEnabled: booleanEnv(env, 'SERVICES_ENABLED'), runnerStatusPath: runtimeEnv(env, 'RUNNER_STATUS_PATH'),
     dbPath: runtimeEnv(env, 'DB_PATH'), sharedState: booleanEnv(env, 'SHARED_STATE'), allowedOrigin: runtimeEnv(env, 'ORIGIN'),
     allowInsecureLocalhost: booleanEnv(env, 'ALLOW_LOCAL_HTTP'),
@@ -171,10 +173,11 @@ export function configFromEnv(env = process.env) {
     accountExpiresAt: integerEnv(env, 'ACCOUNT_EXPIRES_AT', { nullable: true }),
     privacyUrl: runtimeEnv(env, 'PRIVACY_URL'), usageUrl: runtimeEnv(env, 'USAGE_URL'), policyVersion: runtimeEnv(env, 'POLICY_VERSION'),
     policiesReviewed: booleanEnv(env, 'POLICIES_REVIEWED'),
+    policyLocales: policyJson(runtimeEnv(env,'POLICY_LOCALES')), policyFallbacks: policyJson(runtimeEnv(env,'POLICY_FALLBACKS')),
     sourceCommit: runtimeEnv(env, 'SOURCE_COMMIT'), buildIdentity: runtimeEnv(env, 'BUILD_ID'),
     csrfSecret: runtimeEnv(env, 'CSRF_SECRET'), cursorSecret: runtimeEnv(env, 'CURSOR_SECRET'),
     privateGenerationPath: runtimeEnv(env, 'PRIVATE_GENERATION_PATH'), backupDir: runtimeEnv(env, 'BACKUP_DIR'),
-  };
+  });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const config = configFromEnv();

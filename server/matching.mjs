@@ -53,7 +53,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     PRIMARY KEY(owner_id,search_id,cache_key)) STRICT;`);
   if(!db.prepare('PRAGMA table_info(demo_match_scans)').all().some(c=>c.name==='cohort'))db.exec("ALTER TABLE demo_match_scans ADD COLUMN cohort TEXT NOT NULL DEFAULT 'visible'");
   if(!db.prepare('PRAGMA table_info(demo_match_scans)').all().some(c=>c.name==='membership_hash'))db.exec("ALTER TABLE demo_match_scans ADD COLUMN membership_hash TEXT NOT NULL DEFAULT ''");
-  const authority=owner=>typeof ownerAuthority==='function'?ownerAuthority(owner):null;
+  const authority=(owner,locale)=>typeof ownerAuthority==='function'?ownerAuthority(owner,{locale}):null;
   const accessHashFor=(owner,viewer)=>sha({ownerId:owner,access:viewer.access??null});
   function searchLive(scan) {
     if(revisionIsCurrent)return revisionIsCurrent(scan.owner_id,scan.search_id,scan.revision)===true;
@@ -129,16 +129,17 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
       .get(scan.id, scan.delivered, pending ?? 1001).n;
   }
   function pendingCount(scan) { return db.prepare('SELECT count(*) AS n FROM demo_match_jobs WHERE scan_id=? AND decision IS NULL').get(scan.id).n; }
-  function schedule(scan) {
+  function schedule(scan,locale) {
+    const current=authority(scan.owner_id,locale);if(!current)return;
     if (!pendingCount(scan) || scan.cohort==='visible'&&readyCount(scan) >= readyLimit || !available()) return;
     // Count work cannot overtake unresolved visible work for this search.
     if(scan.cohort==='hidden'&&db.prepare("SELECT 1 FROM demo_match_jobs j JOIN demo_match_scans s ON s.id=j.scan_id WHERE s.owner_id=? AND s.search_id=? AND s.revision=? AND s.cohort='visible' AND j.decision IS NULL LIMIT 1").get(scan.owner_id,scan.search_id,scan.revision))return;
     const previous = scan.task_id ? tasks.get(scan.owner_id, scan.task_id) : null;
     if (!terminal(previous) || (scan.retry_at != null && scan.retry_at > now())) return;
     try {
-      taskAdmission?.(scan.owner_id);
+      taskAdmission?.(scan.owner_id,locale);
       const round = scan.round + 1;
-      const task = tasks.enqueue({ ownerId: scan.owner_id, kind: 'ai_match', requestKey: `match:${scan.id}:${round}`, payload: { scanId: scan.id } });
+      const task = tasks.enqueue({ ownerId: scan.owner_id, kind: 'ai_match', requestKey: `match:${scan.id}:${round}`, payload: { scanId: scan.id,...(current.processingPolicy?{presentationLocale:current.processingPolicy.locale,policyKey:current.processingPolicy.key}:{}) } });
       db.prepare("UPDATE demo_match_scans SET task_id=?,round=?,state='pending',pause_code=NULL,retry_at=NULL,updated_at=? WHERE id=?")
         .run(task.id, round, now(), scan.id);
     } catch (e) {
@@ -158,7 +159,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     const suppliedOwner=viewer?.visitor?.id??viewer?.account?.id;
     if (!suppliedOwner || (viewer.expiresAt != null && (!Number.isFinite(sessionDeadline) || sessionDeadline <= now()))) throw err('unauthenticated', 401);
     if (suppliedOwner !== ownerId) throw err('forbidden', 403);
-    viewer=authority(ownerId);if(!viewer)throw err('unauthenticated',401);
+    viewer=authority(ownerId,viewer?.interfaceLocale);if(!viewer)throw err('unauthenticated',401);
     const cohort=hidden?'hidden':'visible';
     if (typeof searchId !== 'string' || !searchId || searchId.length > 128 || !Number.isSafeInteger(revision) || revision < 1
         || !Array.isArray(jobs) || jobs.length > 1000 || (generation != null && (typeof generation !== 'string' || generation.length > 128))) throw err('invalid_input');
@@ -213,7 +214,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
       const current=new Map(currentJobs(scan,viewer).map(j=>[j.id,j]));
       const accepted=rows(scan.id).filter(r=>r.decision==='accepted'&&current.has(r.job_id)&&fingerprint(current.get(r.job_id))===r.evidence_hash).length;
       const unresolved=rows(scan.id).some(r=>r.decision==null||r.decision==='insufficient_evidence');
-      if(!coverage.stale&&(!snapshot||createdScan))schedule(scan);
+      if(!coverage.stale&&(!snapshot||createdScan))schedule(scan,viewer.interfaceLocale);
       return coverage.stale?{status:'unavailable',count:null}:!unresolved?{status:'exact',count:accepted}:accepted?{status:'lower_bound',count:accepted}:rows(scan.id).every(r=>r.decision==null)?{status:available()?'pending':'unavailable',count:null}:{status:'lower_bound',count:0};
     }
     const current = new Map((hidden?(viewer.access?.fullAccess===true?[]:feed.restrictedLatestJobs?.()??[]):feed.eligibleJobs({ viewer })).map((j) => [j.id, j]));
@@ -230,7 +231,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     }
     if(!snapshot)db.prepare('UPDATE demo_match_scans SET delivered=max(delivered,?),updated_at=? WHERE id=?').run(next, now(), scan.id);
     scan = scanById(scan.id);
-    if (!coverage.stale&&(!snapshot||createdScan)) schedule(scan);
+    if (!coverage.stale&&(!snapshot||createdScan)) schedule(scan,viewer.interfaceLocale);
     scan = scanById(scan.id);
     const all = rows(scan.id), remaining = all.filter((r) => r.position >= next), pending = remaining.some((r) => r.decision == null);
     let state, status, retryAfterMs = null;
@@ -257,7 +258,9 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     if (!scan || scan.owner_id !== task.ownerId || scan.task_id !== task.id || !taskLive(task)) return { status: 'failed', errorCode: 'revision_conflict', output: null };
     let pause = null, batches = 0, evaluated = 0, cacheHits = 0, insufficient = 0;
     const started = now(), usage = { inputTokens: 0, outputTokens: 0, costNanodollars: 0, attempts: 0, ambiguousAttempts: 0 };
-    const alive = () => { const viewer=authority(scan.owner_id);return !signal?.aborted&&(feed.generation()??'unavailable')===scan.generation&&!feed.coverage().stale&&viewer&&accessHashFor(scan.owner_id,viewer)===scan.access_hash&&searchLive(scan)&&taskLive(task)&&scanById(scan.id)?.task_id===task.id; };
+    const admitted=()=>{const viewer=authority(scan.owner_id,task.payload.presentationLocale);return viewer&&(!viewer.processingPolicy||viewer.processingPolicy.key===task.payload.policyKey);};
+    const interrupted=()=>({status:'failed',errorCode:admitted()?'task_interrupted':'processing_unavailable',output:null});
+    const alive = () => { const viewer=authority(scan.owner_id,task.payload.presentationLocale);return admitted()&& !signal?.aborted&&(feed.generation()??'unavailable')===scan.generation&&!feed.coverage().stale&&viewer&&accessHashFor(scan.owner_id,viewer)===scan.access_hash&&searchLive(scan)&&taskLive(task)&&scanById(scan.id)?.task_id===task.id; };
     while (alive() && now() - started < workMs && batches < maxBatches) {
       if ((feed.generation() ?? 'unavailable') !== scan.generation || feed.coverage().stale) { pause = 'import_unavailable'; break; }
       if (!executionAvailable()) {
@@ -267,7 +270,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
       const pending = rows(scan.id).filter((r) => r.decision == null);
       if (!pending.length || scan.cohort==='visible'&&readyCount(scanById(scan.id)) >= readyLimit) break;
       if(scan.cohort==='hidden'&&db.prepare("SELECT 1 FROM demo_match_jobs j JOIN demo_match_scans s ON s.id=j.scan_id WHERE s.owner_id=? AND s.search_id=? AND s.revision=? AND s.cohort='visible' AND j.decision IS NULL LIMIT 1").get(scan.owner_id,scan.search_id,scan.revision))break;
-      const current = new Map(currentJobs(scan,authority(scan.owner_id)).map((j) => [j.id, j]));
+      const current = new Map(currentJobs(scan,authority(scan.owner_id,task.payload.presentationLocale)).map((j) => [j.id, j]));
       const candidates = [], candidateKeys = new Set();
       // Resolve missing/weak evidence and cache hits without a provider call.
       tx(db, () => {
@@ -311,7 +314,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
         usage.attempts += e.attempts ?? 0; usage.ambiguousAttempts += e.ambiguousAttempts ?? 0;
         pause = ['budget_exhausted', 'budget_unavailable', 'budget_locked', 'usage_overrun', 'dependency_unavailable'].includes(e.code) ? e.code : 'provider_unavailable'; break;
       }
-      if (!alive()) return { status: 'failed', errorCode: 'task_interrupted', output: null };
+      if (!alive()) return interrupted();
       tx(db, () => {
         if (!alive()) return;
         for (const d of result.decisions) {
@@ -324,11 +327,11 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
       for (const key of ['inputTokens', 'outputTokens']) usage[key] += result.usage?.[key] ?? 0;
       for (const key of ['costNanodollars', 'attempts', 'ambiguousAttempts']) usage[key] += result[key] ?? 0;
     }
-    if (!alive()) return { status: 'failed', errorCode: 'task_interrupted', output: null };
+    if (!alive()) return interrupted();
     const output = { schemaVersion: 1, classifierVersion: version, batches, evaluated, cacheHits, insufficient,
       ...usage, latencyMs: Math.max(0, now() - started), pause };
     return tx(db, () => {
-      if (!alive()) return { status: 'failed', errorCode: 'task_interrupted', output: null };
+      if (!alive()) return interrupted();
       const status = pause ? 'warning' : 'succeeded';
       db.prepare('UPDATE demo_match_scans SET state=?,pause_code=?,retry_at=?,updated_at=? WHERE id=?')
         .run(pause ? 'paused' : 'pending', pause, pause ? now() + (pause === 'budget_exhausted' ? 60_000 : 5000) : null, now(), scan.id);

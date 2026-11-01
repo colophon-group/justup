@@ -149,7 +149,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     CREATE TABLE IF NOT EXISTS demo_search_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,position INTEGER NOT NULL,created_at INTEGER NOT NULL) STRICT;
     CREATE TABLE IF NOT EXISTS demo_search_delegate_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,delegate_cursor TEXT,created_at INTEGER NOT NULL) STRICT;`);
   const ownerOf=ctx=>ctx.viewer?.visitor?.id??ctx.accountId;
-  const authority=(owner,cleanup=false)=>typeof ownerAuthority==='function'?ownerAuthority(owner,{allowUnavailable:cleanup}):null;
+  const authority=(owner,cleanup=false,locale)=>typeof ownerAuthority==='function'?ownerAuthority(owner,{allowUnavailable:cleanup,locale}):null;
   const row=(owner,id)=>db.prepare('SELECT * FROM demo_searches WHERE owner_id=? AND id=?').get(owner,id);
   const searchOptions=(owner,id)=>readingPreferences?.options(owner,id)??structuredClone(DEFAULT_SEARCH_OPTIONS);
   const configurationFor=(owner,search)=>readingPreferences?.configurationForSearch(owner,search)??search.configuration;
@@ -209,10 +209,12 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(task.status==='warning') { const p=db.prepare('SELECT proposal_json FROM demo_search_proposals WHERE id=? AND owner_id=? AND search_id=? AND expected_revision=? AND task_id=?').get(task.output?.proposalId,ownerOf(ctx),r.id,r.revision,task.id); return p?{proposal:JSON.parse(p.proposal_json)}:undefined; }
     return r.revision===task.output?.revision&&r.accepted_json?{search:publicSearch(r)}:undefined;
   }
+  const taskAuthority=task=>{const current=authority(task.ownerId,false,task.payload.presentationLocale);return current&&(!current.processingPolicy||current.processingPolicy.key===task.payload.policyKey)?current:null;};
   async function runTask(task,{signal}={}) {
     if(task.kind!=='search_intent') throw new TypeError('Wrong task kind.');
+    if(!taskAuthority(task))return {status:'failed',errorCode:'processing_unavailable'};
     const r=row(task.ownerId,task.payload.searchId);
-    if(!authority(task.ownerId)||!r||r.task_id!==task.id||r.revision!==task.payload.expectedRevision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
+    if(!r||r.task_id!==task.id||r.revision!==task.payload.expectedRevision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
     const source=feed.coverage();if(source.stale||!source.verifiedAt)return {status:'failed',errorCode:'dependency_unavailable'};
     if(!executionAvailable()) return {status:'failed',errorCode:'dependency_unavailable'};
     const accepted=r.accepted_json?JSON.parse(r.accepted_json):null;
@@ -220,7 +222,8 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     let result,previous;
     for(let attempt=0;attempt<2;attempt++) {
       if(signal?.aborted) return {status:'failed',errorCode:'task_timeout'};
-      if(!authority(task.ownerId)||!live(task))return {status:'failed',errorCode:'revision_conflict'};
+      if(!taskAuthority(task))return {status:'failed',errorCode:'processing_unavailable'};
+      if(!live(task))return {status:'failed',errorCode:'revision_conflict'};
       let raw;
       try {raw=await model.interpretIntent(intentModelInput({query:task.payload.query,prior:accepted,capabilities:caps,explicitSearchOptions:searchOptions(task.ownerId,r.id),presentationLocale:task.payload.presentationLocale??readingPreferences?.preferences(task.ownerId).resolvedInterfaceLocale,...(attempt?{repair:{diagnostics:result.diagnostics,previous}}:{})}),{signal}); }
       catch { return {status:'failed',errorCode:signal?.aborted?'task_timeout':'provider_unavailable'}; }
@@ -234,7 +237,8 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(signal?.aborted) return {status:'failed',errorCode:'task_timeout'};
     return tx(db,()=>{
       const current=row(task.ownerId,r.id);
-      if(!authority(task.ownerId)||!current||current.task_id!==task.id||current.revision!==r.revision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
+      if(!taskAuthority(task))return {status:'failed',errorCode:'processing_unavailable'};
+      if(!current||current.task_id!==task.id||current.revision!==r.revision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
       const complete=(result)=>{if(!tasks.complete(task.id,task.leaseToken,result)) throw err('revision_conflict',409,'This search changed. Reload it and try again.');return {...result,committed:true};};
       if(result.value.warnings.length) {
         const proposal={proposalId:randomUUID(),searchId:r.id,expectedRevision:r.revision,query:task.payload.query,...result.value};
@@ -248,7 +252,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     });
   }
   async function results(r,ctx,{snapshot=false}={}) {
-    const current=authority(ownerOf(ctx));if(!current)throw err('unauthenticated',401);ctx={...ctx,viewer:current};
+    const current=authority(ownerOf(ctx),false,ctx.interfaceLocale);if(!current)throw err('unauthenticated',401);ctx={...ctx,viewer:current};
     const requested=Number(ctx.url.searchParams.get('revision'));
     if(!r.accepted_json||!ctx.url.searchParams.has('revision')||requested!==r.revision) throw err('revision_conflict',409,'This search changed. Reload it and try again.');
     const search=JSON.parse(r.accepted_json),configuration=configurationFor(ownerOf(ctx),search),limit=Number(ctx.url.searchParams.get('limit')??12),cursor=ctx.url.searchParams.get('cursor');
@@ -276,7 +280,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     const matchingPage=snapshot?matching?.snapshot:matching?.page;
     if(residual&&matchingPage){
       const page=await matchingPage({ownerId:ownerOf(ctx),searchId:r.id,revision:r.revision,configuration,jobs,viewer:ctx.viewer,cursor:delegateCursor,limit,coverage,generation,now});
-      const currentAuthority=authority(ownerOf(ctx));
+      const currentAuthority=authority(ownerOf(ctx),false,ctx.interfaceLocale);
       if(!currentAuthority||hash({accountId:ownerOf(ctx),access:currentAuthority.access??null})!==accessHash)throw err('stale_cursor',409);
       if(row(ownerOf(ctx),r.id)?.revision!==r.revision)throw err('revision_conflict',409);
       const next=page.continuation?.cursor;
@@ -301,13 +305,13 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
   }
   async function snapshot({ownerId,viewer,activeSearchId,activeRevision}={}) {
     if((viewer?.visitor?.id??viewer?.account?.id)!==ownerId)throw err('unauthenticated',401);
-    const current=authority(ownerId);if(!current)throw err('unauthenticated',401);
+    const current=authority(ownerId,false,viewer?.interfaceLocale);if(!current)throw err('unauthenticated',401);
     const deadline=viewer.expiresAt==null?Infinity:typeof viewer.expiresAt==='number'?viewer.expiresAt:Date.parse(viewer.expiresAt);
     if(!(deadline>now()))throw err('unauthenticated',401);
     const active=row(ownerId,activeSearchId);if(!active?.accepted_json||active.revision!==activeRevision)throw err('revision_conflict',409);
     const rows=[active],key=revisionKey(rows),generation=feed.generation?.()??null,accessKey=hash(current.access??null),evidence=evidenceKey(current),searches=[];
     for(const r of rows)searches.push(await results(r,{accountId:current.account?.id??null,viewer:current,url:new URL(`https://snapshot.invalid/?revision=${r.revision}&limit=96`)},{snapshot:true}));
-    const latest=authority(ownerId);if(!latest)throw err('unauthenticated',401);
+    const latest=authority(ownerId,false,viewer?.interfaceLocale);if(!latest)throw err('unauthenticated',401);
     if(accessKey!==hash(latest.access??null)||key!==revisionKey(acceptedRows(ownerId).filter(r=>r.id===activeSearchId))||generation!==(feed.generation?.()??null)||evidence!==evidenceKey(latest)||!(deadline>now()))throw err('revision_conflict',409);
     const databaseKey=`${db.prepare('PRAGMA data_version').get().data_version}:${db.prepare('SELECT total_changes() AS n').get().n}`;
     return {searches,generation,revisionKey:key,databaseKey};
@@ -316,7 +320,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
   async function route(ctx) {
     if(ctx.path==='/search-options'&&ctx.method==='GET')return {status:200,body:{postingLanguages:catalogueCapabilities().values.postingLanguages.filter(id=>canonicalLanguage(id)).map(id=>({id,name:new Intl.DisplayNames(['en'],{type:'language'}).of(id)})),emptySelection:'any',selectionOperator:'or',queryCombination:'intersection'}};
     if(!/^\/searches(?:\/|$)/.test(ctx.path)) return null;
-    if(!ownerOf(ctx)||!ctx.viewer||!authority(ownerOf(ctx),ctx.method==='DELETE')) throw err('unauthenticated',401,'Sign in to continue.');
+    if(!ownerOf(ctx)||!ctx.viewer||!authority(ownerOf(ctx),ctx.method==='DELETE'||ctx.method==='GET'&&!ctx.path.endsWith('/results'),ctx.interfaceLocale)) throw err('unauthenticated',401,'Sign in to continue.');
     const id=ctx.path.split('/')[2],r=id?row(ownerOf(ctx),id):null;
     if(id&&!r) throw err('not_found',404,'Not found.');
     if(ctx.method==='GET'&&ctx.path==='/searches') return {status:200,body:{items:db.prepare('SELECT * FROM demo_searches WHERE owner_id=? ORDER BY created_at,id').all(ownerOf(ctx)).map(publicSearch)}};
@@ -356,7 +360,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       const value=creating&&ctx.body.options!==undefined?readingPreferences?.validateOptions(ctx.body.options,catalogueCapabilities().values.postingLanguages):undefined;
       if(creating&&ctx.body.options!==undefined&&!value)throw err('invalid_input');
       if(ctx.viewer.visitor&&value?.followedOnly)throw err('unauthenticated',401);
-      const presentationLocale=ctx.body.presentationLocale;if(presentationLocale!==undefined&&!SUPPORTED_INTERFACE_LOCALES.includes(presentationLocale))throw err('invalid_input');
+      const presentationLocale=ctx.body.presentationLocale??ctx.interfaceLocale;if(presentationLocale!==undefined&&(!SUPPORTED_INTERFACE_LOCALES.includes(presentationLocale)||ctx.interfaceLocale&&presentationLocale!==ctx.interfaceLocale))throw err('invalid_input');
       const fingerprint=hash({id:creating?null:id,query,expectedRevision:expected,...(value?{options:value}:{}),...(presentationLocale?{presentationLocale}:{})});
       const prior=db.prepare('SELECT * FROM demo_search_submissions WHERE owner_id=? AND request_key=?').get(ownerOf(ctx),requestKey);
       if(prior) {
@@ -370,7 +374,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       if(!available()) throw err('dependency_unavailable',503,'Search interpretation is temporarily unavailable.');
       if(creating&&db.prepare('SELECT count(*) n FROM demo_searches WHERE owner_id=?').get(ownerOf(ctx)).n>=20) throw err('task_limit',429,'The search limit has been reached.');
       const searchId=creating?randomUUID():id;
-      const task=tasks.enqueue({ownerId:ownerOf(ctx),kind:'search_intent',requestKey,payload:{searchId,query,expectedRevision:expected,...(presentationLocale?{presentationLocale}:{})}});
+      const task=tasks.enqueue({ownerId:ownerOf(ctx),kind:'search_intent',requestKey,payload:{searchId,query,expectedRevision:expected,...(presentationLocale?{presentationLocale}:{}),...(authority(ownerOf(ctx),false,presentationLocale)?.processingPolicy?{policyKey:authority(ownerOf(ctx),false,presentationLocale).processingPolicy.key}:{})}});
       try { tx(db,()=>{
         if(ctx.viewer.visitor)visitorIdentity?.recordSubmission(ownerOf(ctx));
         if(creating) db.prepare('INSERT INTO demo_searches VALUES(?,?,0,NULL,?,?,?,?)').run(searchId,ownerOf(ctx),JSON.stringify({query,taskId:task.id}),task.id,now(),now());

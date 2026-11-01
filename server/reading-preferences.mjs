@@ -35,7 +35,7 @@ export function createReadingPreferencesService({db,feed,ownerAuthority,now=Date
   let invalidateFollowedSearches=()=>[];
   const options=(owner,id)=>{const r=db.prepare('SELECT options_json FROM justup_search_options WHERE owner_id=? AND search_id=?').get(owner,id);return r?JSON.parse(r.options_json):structuredClone(DEFAULT_SEARCH_OPTIONS);};
   function requireOwner(ctx) {
-    const id=ctx.accountId,current=typeof id==='string'?ownerAuthority(id):null;
+    const id=ctx.accountId,current=typeof id==='string'?ownerAuthority(id,{allowUnavailable:ctx.method==='GET'}):null;
     if(!id||ctx.viewer?.account?.id!==id||current?.account?.id!==id||typeof current.access?.fullAccess!=='boolean')throw problem('unauthenticated',401);
     return id;
   }

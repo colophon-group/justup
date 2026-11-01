@@ -101,7 +101,7 @@ def validate_manifest(manifest):
     files = manifest.get('files')
     required = {'runtime/bin/node', 'runtime/LICENSE', 'app/scripts/import-jobs.py'} | {
         'app/server/' + name + '.mjs' for name in
-        ('main', 'auth', 'http', 'store', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter')}
+        ('main', 'auth', 'http', 'store', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter', 'policies', 'processing-admission')}
     if not isinstance(files, dict) or not required <= files.keys():
         raise ValueError('Artifact is missing required runtime/application bytes.')
     if (manifest.get('codexVersion') != CODEX_VERSION or manifest.get('codexTarget') != CODEX_TARGET

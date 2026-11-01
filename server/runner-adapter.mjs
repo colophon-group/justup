@@ -51,7 +51,7 @@ export async function createRunnerDependencies(){
     const modelConfig=config.model??{},executor=isAbsolute(modelConfig.socketPath??'')?createBrokerExecutor({socketPath:modelConfig.socketPath}):undefined;
     const model=createCodexModel({config:modelConfig,...(executor?{execute:executor}:{})});
     const matching=createMatchingService({db:store.db,feed,tasks,...ownership,readingPreferences,config:{jev:config.jev??{},matching:config.matching}});
-    const intent=createIntentService({db:store.db,feed,tasks,...ownership,readingPreferences,model,matching}),companies=createCompanyService({db:store.db,feed,tasks,model,readingPreferences});
+    const intent=createIntentService({db:store.db,feed,tasks,...ownership,readingPreferences,model,matching}),companies=createCompanyService({db:store.db,feed,tasks,model,readingPreferences,...ownership});
     const workerId=`runner-${config.sourceCommit.slice(0,12)}-${createHash('sha256').update(config.buildIdentity).digest('hex').slice(0,12)}`;
     const statusPath=runnerStatusPath(config),capabilities=()=>({search:model.available('search_intent'),companyRequests:model.available('company_resolution'),aiMatching:matching.available()});
     const heartbeat=()=>writeRunnerStatus({path:statusPath,identity:workerId,config,capabilities:capabilities()});

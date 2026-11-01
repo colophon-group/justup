@@ -1,6 +1,7 @@
 // Same-origin application HTTP boundary. All mutation, cookie, policy and private route
 // checks are centralized here before feature service code receives a request.
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { policyState,requestLocale,validatePolicyConfig } from './policies.mjs';
 import { problem, boundedJson } from './store.mjs';
 
 const DISABLED = { sse: false };
@@ -9,7 +10,7 @@ const SAFE_ERRORS = new Map([
   ['invalid_input', 'Invalid request.'], ['invalid_credentials', 'Invalid username, password or invite code.'],
   ['registration_closed', 'Registration is closed.'], ['account_limit', 'The account limit has been reached.'],
   ['username_taken', 'That username is unavailable.'], ['unauthenticated', 'Sign in to continue.'],
-  ['policy_unavailable', 'Account access is unavailable until policies are approved.'],
+  ['policy_unavailable', 'Processing is unavailable until policies are approved for this language.'],
   ['deletion_unavailable', 'Account access is temporarily unavailable.'],
   ['forbidden', 'This request is not allowed.'], ['invalid_json', 'Send a bounded JSON object.'],
   ['identity_unverified','Verify your account to activate the free period.'], ['free_period_unavailable','The free period is unavailable.'],
@@ -22,15 +23,7 @@ const SAFE_ERRORS = new Map([
   ['preview_conflict', 'This preview changed. Reload it and try again.'],
   ['unsupported_requirements', 'Some requirements are unsupported.'],
 ]);
-function validPolicyUrl(value) {
-  try { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password; } catch { return false; }
-}
-export function policyState(config) {
-  const reviewed = config.policiesReviewed === true && validPolicyUrl(config.privacyUrl) && validPolicyUrl(config.usageUrl)
-    && typeof config.policyVersion === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(config.policyVersion);
-  return { privacyUrl: reviewed ? config.privacyUrl : null, usageUrl: reviewed ? config.usageUrl : null,
-    version: reviewed ? config.policyVersion : null, reviewed };
-}
+export {policyState} from './policies.mjs';
 function decodePath(value) { try { return decodeURIComponent(value); } catch { throw problem('invalid_input'); } }
 function cookies(header) {
   const result = {};
@@ -56,6 +49,7 @@ async function readBody(req, maxBytes) {
   return body;
 }
 export function createHandler({ auth, feed, tasks, db, services = [], config = {}, policyConfig=config, now = Date.now, logger = () => {}, afterPrivateTransaction = () => {} }) {
+  validatePolicyConfig(policyConfig);
   const origin = new URL(config.allowedOrigin ?? 'https://preview.justup.work');
   const insecure = config.allowInsecureLocalhost === true && origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);
   if (origin.origin !== (config.allowedOrigin ?? 'https://preview.justup.work') || (!insecure && origin.protocol !== 'https:')) throw new TypeError('Set one allowed HTTPS browser origin.');
@@ -68,9 +62,9 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   if (Buffer.byteLength(secret) < 32) throw new TypeError('CSRF secret must contain at least 32 bytes.');
   const maxBodyBytes = config.maxBodyBytes ?? 16_384;
   if (!Number.isInteger(maxBodyBytes) || maxBodyBytes < 1 || maxBodyBytes > 65_536) throw new TypeError('Invalid body limit.');
-  const policies = () => policyState(policyConfig), buckets = new Map();
-  function authentication() {
-    const reason = !policies().reviewed ? 'policy_unavailable'
+  const policies = (locale='en') => policyState(policyConfig,locale), buckets = new Map();
+  function authentication(locale) {
+    const reason = !policies(locale).reviewed ? 'policy_unavailable'
       : config.deletionReady?.() === false ? 'deletion_unavailable'
       : typeof auth.cleanup !== 'function' || config.authMaintenanceReady?.() === false ? 'dependency_unavailable' : null;
     const requiresInvitation = config.requiresInvitation !== false;
@@ -96,17 +90,18 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
     const ceiling = config.rateLimits?.[category] ?? (category === 'auth' ? 6 : category === 'mutation' ? 30 : 120);
     if (++bucket.count > ceiling) throw Object.assign(problem('rate_limit', 429), { retryAfter: Math.max(1, Math.ceil((bucket.until - at) / 1000)) });
   }
-  function capabilities() {
+  function capabilities(locale) {
     const result = { search: false, aiMatching: false, companyRequests: false, hiringWire: false };
     for (const service of services) Object.assign(result, typeof service.capabilities === 'function' ? service.capabilities() : service.capabilities);
     return { viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
-      sse:authentication().loginEnabled&&result.sse===true,
-      visitorSearch:policies().reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
+      search:authentication(locale).loginEnabled&&result.search===true,aiMatching:authentication(locale).loginEnabled&&result.aiMatching===true,companyRequests:authentication(locale).loginEnabled&&result.companyRequests===true,
+      sse:authentication(locale).loginEnabled&&result.sse===true,
+      visitorSearch:policies(locale).reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
   }
-  function sessionBody(viewer, token, guestToken, visitor=null) {
+  function sessionBody(viewer, token, guestToken, visitor=null,locale='en') {
     return { serverTime: new Date(now()).toISOString(), user: viewer?.account ?? null, expiresAt: viewer ? new Date(viewer.expiresAt).toISOString() : null,
-      access: viewer?.access ?? GUEST_ACCESS, visitor:visitorService?.publicVisitor(visitor)??null, csrfToken: csrf(token, guestToken), capabilities: capabilities(),
-      policies:policies(), authentication: authentication(), coverage: feed.coverage() };
+      access: viewer?.access ?? GUEST_ACCESS, visitor:visitorService?.publicVisitor(visitor)??null, csrfToken: csrf(token, guestToken), capabilities: capabilities(locale),
+      policies:policies(locale), authentication: authentication(locale), coverage: feed.coverage() };
   }
   return async function handler(req, res) {
     const requestId = randomUUID(), started = now(); let category = 'unknown';
@@ -129,6 +124,8 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       const parsedCookies = cookies(req.headers.cookie);
       const token = parsedCookies[cookieName] ?? null, viewer = token ? auth.session(token) : null;
       const sessionToken = viewer ? token : null;
+      const readingPreferences=services.find(s=>typeof s.preferences==='function');
+      const interfaceLocale=requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:viewer?readingPreferences?.preferences(viewer.account.id).interfaceLocale:null});
       const guestToken = parsedCookies[csrfCookie] ?? randomBytes(32).toString('base64url');
       const visitorToken=parsedCookies[visitorCookie]??null;
       const visitorRoute=Boolean(visitorService)&&/^\/visitor\/(?:searches(?:\/[^/]+(?:\/(?:confirm|results|options))?)?|search-options|tasks\/[^/]+|workspace(?:\/recovered-drafts\/[^/]+)?|viewed|session)$/.test(path);
@@ -144,35 +141,42 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         if (typeof supplied !== 'string' || !tokenPattern.test(supplied)
             || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected)) || (!viewer && !parsedCookies[csrfCookie])) throw problem('forbidden', 403);
         if (authRoute) {
-          const state = authentication();
+          const state = authentication(interfaceLocale);
           if (!state.loginEnabled) throw problem(state.reason, 503);
           if (path === '/auth/register' && !state.registrationEnabled) throw problem(state.registrationReason ?? 'registration_closed', 403);
         }
         body = await readBody(req,method==='PATCH'&&['/workspace','/visitor/workspace'].includes(path)?65_536:maxBodyBytes);
+        if(body.presentationLocale!==undefined&&body.presentationLocale!==interfaceLocale)throw problem('invalid_input');
       }
       if (method === 'GET' && path === '/session') {
         let visitor=null;
         if (!viewer) {
           const nextCookies=[cookie(csrfCookie, guestToken, now() + 3_600_000)];
-          if(visitorService&&policies().reviewed&&config.deletionReady?.()!==false)visitor=visitorService.currentSession(visitorToken);
+          if(visitorService&&policies(interfaceLocale).reviewed&&config.deletionReady?.()!==false)visitor=visitorService.currentSession(visitorToken,{locale:interfaceLocale});
           res.setHeader('Set-Cookie',nextCookies);
         }
-        return finish(200, sessionBody(viewer, sessionToken, guestToken,visitor));
+        return finish(200, sessionBody(viewer, sessionToken, guestToken,visitor,interfaceLocale));
       }
       if (authRoute) {
         let visitorHandoff={status:'none'},handoffRan=!visitorToken||!visitorService;
-        const afterAuthenticated=visitorToken&&visitorService?context=>{handoffRan=true;visitorHandoff=visitorService.handoff(visitorToken,context);return visitorHandoff;}:undefined;
+        const afterAuthenticated=context=>{
+          const locale=requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:readingPreferences?.preferences(context.accountId).interfaceLocale});
+          const state=authentication(locale);if(!state.loginEnabled)throw problem(state.reason,503);
+          if(visitorToken&&visitorService){handoffRan=true;visitorHandoff=visitorService.handoff(visitorToken,context);}
+          return visitorHandoff;
+        };
         const result = path === '/auth/register' ? await auth.register(body,{afterAuthenticated}) : await auth.login(body,{afterAuthenticated});
         const verifiedViewer=auth.session(result.token);
         if(!handoffRan)throw problem('dependency_unavailable',503);
         res.setHeader('Set-Cookie', [cookie(cookieName, result.token, result.expiresAt), cookie(csrfCookie, '', now()),cookie(visitorCookie,'',now())]);
-        return finish(path === '/auth/register' ? 201 : 200, {...sessionBody(verifiedViewer, result.token, guestToken),visitorHandoff});
+        return finish(path === '/auth/register' ? 201 : 200, {...sessionBody(verifiedViewer, result.token, guestToken,null,requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:readingPreferences?.preferences(verifiedViewer.account.id).interfaceLocale})),visitorHandoff});
       }
+      if(viewer&&mutation&&method!=='DELETE'&&path!=='/session/logout'){const state=authentication(interfaceLocale);if(!state.loginEnabled)throw problem(state.reason,503);}
       if(method==='POST'&&path==='/access/activate') {
         if(Object.keys(body).length)throw problem('invalid_input');
         if(typeof auth.activateFreePeriod!=='function')throw problem('dependency_unavailable',503);
         auth.activateFreePeriod(sessionToken);
-        return finish(200,sessionBody(auth.session(sessionToken),sessionToken,guestToken));
+        return finish(200,sessionBody(auth.session(sessionToken),sessionToken,guestToken,null,interfaceLocale));
       }
       if (method === 'POST' && path === '/session/logout') {
         auth.logout(token); res.setHeader('Set-Cookie', [cookie(cookieName, '', now()),cookie(visitorCookie,'',now()),cookie(csrfCookie,'',now())]);
@@ -209,12 +213,13 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         const revision = Number(revisionInput);
         const anonymous = path.startsWith('/visitor/');
         const readAuthority = () => {
-          const state = authentication();
-          if (!state.loginEnabled) throw problem(state.reason, 503);
           const current = token ? auth.session(token) : null;
-          if (!anonymous) { if (!current) throw problem('unauthenticated',401); return current; }
+          const locale=requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:current?readingPreferences?.preferences(current.account.id).interfaceLocale:null});
+          const state = authentication(locale);
+          if (!state.loginEnabled) throw problem(state.reason, 503);
+          if (!anonymous) { if (!current) throw problem('unauthenticated',401); return {...current,interfaceLocale:locale}; }
           if (current) throw problem('forbidden',403);
-          const principal = visitorService?.identity?.fromToken(visitorToken);
+          const principal = visitorService?.identity?.fromToken(visitorToken,{locale});
           if (!principal) throw problem('unauthenticated',401);
           return principal;
         };
@@ -231,26 +236,27 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       }
       if(visitorRoute) {
         if(method!=='DELETE'){
-          if(!policies().reviewed)throw problem('policy_unavailable',503);
+          if(!policies(interfaceLocale).reviewed)throw problem('policy_unavailable',503);
           if(config.deletionReady?.()===false)throw problem('deletion_unavailable',503);
           if(config.authMaintenanceReady?.()===false)throw problem('dependency_unavailable',503);
         }
         let ownerToken=visitorToken,opened;
-        if(method==='POST'&&path==='/visitor/searches'&&!viewer&&!visitorService.currentSession(ownerToken)){
+        if(method==='POST'&&path==='/visitor/searches'&&!viewer&&!visitorService.currentSession(ownerToken,{locale:interfaceLocale})){
           visitorService.admitCreation(body);
-          opened=visitorService.openSession(ownerToken);ownerToken=opened.token;
+          opened=visitorService.openSession(ownerToken,{locale:interfaceLocale});ownerToken=opened.token;
         }
         let result;
-        try{result=await visitorService.visitorRoute({method,path,url,body,viewer,visitorToken:ownerToken,requestId,db});}
+        try{result=await visitorService.visitorRoute({method,path,url,body,viewer,visitorToken:ownerToken,interfaceLocale,requestId,db});}
         catch(error){if(opened)visitorService.discardEmptySession(ownerToken);throw error;}
         if(opened)res.setHeader('Set-Cookie',cookie(visitorCookie,ownerToken,opened.principal.expiresAt));
         if(result!=null)return finish(result.status??200,result.body);
         throw problem('not_found',404);
       }
       if (!viewer) throw problem('unauthenticated', 401);
+      if(method==='GET'&&/^\/searches\/[^/]+\/results$/.test(path)){const state=authentication(interfaceLocale);if(!state.loginEnabled)throw problem(state.reason,503);}
       const idempotencyKey = req.headers['idempotency-key'] ?? null;
       if (idempotencyKey !== null && (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(idempotencyKey))) throw problem('invalid_input');
-      const ctx = { method, path, url, body, viewer, accountId: viewer.account.id, requestId, db, idempotencyKey };
+      const ctx = { method, path, url, body, viewer, accountId: viewer.account.id, requestId, db, idempotencyKey,interfaceLocale };
       if (method === 'GET' && /^\/tasks\/[^/]+$/.test(path)) {
         const task = tasks.get(viewer.account.id, decodePath(path.split('/')[2]));
         if (!task) throw problem('not_found', 404);

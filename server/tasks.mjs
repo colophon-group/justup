@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { boundedJson, problem, transaction, DAY_MS } from './store.mjs';
 
-const SAFE_TASK_ERRORS = new Set(['task_failed', 'task_interrupted', 'dependency_unavailable', 'provider_unavailable', 'provider_down', 'task_timeout', 'timeout', 'rate_limit', 'provider_rate_limit', 'invalid_output', 'unsupported_requirements', 'revision_conflict', 'preview_conflict']);
+const SAFE_TASK_ERRORS = new Set(['processing_unavailable', 'task_failed', 'task_interrupted', 'dependency_unavailable', 'provider_unavailable', 'provider_down', 'task_timeout', 'timeout', 'rate_limit', 'provider_rate_limit', 'invalid_output', 'unsupported_requirements', 'revision_conflict', 'preview_conflict']);
 const RETRYABLE_TASK_ERRORS = new Set(['dependency_unavailable', 'provider_unavailable', 'provider_down', 'task_timeout', 'timeout', 'rate_limit', 'provider_rate_limit']);
 const TERMINAL = new Set(['succeeded', 'warning', 'failed', 'cancelled']);
 const KIND = /^[a-z][a-z0-9_.-]{0,63}$/;
@@ -98,7 +98,7 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
         || Object.keys(result).length !== 1 || !['search', 'request', 'proposal'].includes(Object.keys(result)[0]))) throw new TypeError('Task projections must contain one typed result.');
     return { id: task.id, kind: task.kind, status: task.status, createdAt: task.createdAt, updatedAt: task.updatedAt,
       result: completed ? result : null,
-      error: failed ? { code: SAFE_TASK_ERRORS.has(task.errorCode) ? task.errorCode : 'task_failed', message: 'This task could not finish.', retryable: RETRYABLE_TASK_ERRORS.has(task.errorCode) } : null };
+      error: failed ? { code: SAFE_TASK_ERRORS.has(task.errorCode) ? task.errorCode : 'task_failed', message: task.errorCode==='processing_unavailable'?'Processing is paused until current policy and data protections are available.':'This task could not finish.', retryable: RETRYABLE_TASK_ERRORS.has(task.errorCode) } : null };
   }
   return { enqueue, get, claim, heartbeat, complete, recover, cancel, cancelOwner, deleteOwner, delete: deleteTask, publicView };
 }

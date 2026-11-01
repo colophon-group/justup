@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { randomBytes,createHash } from 'node:crypto';
 import { createApplication } from './main.mjs';
 import { createIntentService } from './intent.mjs';
+import { createCompanyService } from './companies.mjs';
 import { createMatchingService } from './matching.mjs';
 import { createVisitorIdentity,createVisitorService,visitorPrivateGeneration } from './visitor.mjs';
 import { mkdtempSync,mkdirSync,writeFileSync,rmSync,unlinkSync } from 'node:fs';
@@ -18,10 +19,10 @@ function interpretation({residual=false,filters={titleAny:['engineer']}}={}) {
   const bindings=Object.entries(filters).map(([field,values])=>({field,values}));
   return {title:'Engineering',configuration:{schemaVersion:1,filters:{...Object.fromEntries(FILTERS.map(k=>[k,null])),...filters},residualAi:residual?{condition:'A documented four day working week.',requirementIds:['ai']}:null},requirements:[{id:'role',text:Object.values(filters).flat().join(' ')||'Any job',handling:'primary',reason:'Stated criteria.',bindings,companyReference:null},...(residual?[{id:'ai',text:'A documented four day working week.',handling:'ai',reason:'Needs posting evidence.',bindings:[],companyReference:null}]:[])]};
 }
-async function setup(t,{model,provider,residual=false,visitor:visitorConfig,policiesReviewed=true,realAuth=false,runtime={}}={}) {
-  let time=START,modelCalls=0,providerCalls=0,failNextHandoff=false;
+async function setup(t,{model,companyModel,provider,residual=false,visitor:visitorConfig,policiesReviewed=true,realAuth=false,runtime={}}={}) {
+  let time=START,modelCalls=0,providerCalls=0,companyCalls=0,failNextHandoff=false;
   const accounts=new Map(['one','two'].map(id=>[id,{id,username:`test-${id}`,expiresAt:null,access:{kind:'paid',fullAccess:true,legacy:false,premium:false,billingEnabled:false,until:null}}]));
-  const sessions=new Map();let identity,intent,matching,visitor;
+  const sessions=new Map();let identity,intent,matching,visitor,companies;
   const config={dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:ORIGIN,policiesReviewed,privacyUrl:`${ORIGIN}/privacy`,usageUrl:`${ORIGIN}/usage`,policyVersion:'test-reviewed',visitor:visitorConfig,...(realAuth?{requiresInvitation:false}:{}),...runtime};
   const app=await createApplication({now:()=>time,config,
     authFactory:realAuth?undefined:({db,deleteAccountData})=>({cleanup:()=>{},registrationState:()=>({enabled:true,reason:null}),accessForAccount:id=>accounts.get(id)?.access??null,
@@ -34,7 +35,7 @@ async function setup(t,{model,provider,residual=false,visitor:visitorConfig,poli
       const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
       matching=createMatchingService({...deps,...ownership,provider:{available:()=>true,classify:async args=>{providerCalls++;return provider?provider(args):{decisions:args.jobs.map(j=>({id:j.id,decision:j.id.includes('rejected')?'rejected':'accepted'}))};}}});
       intent=createIntentService({...deps,...ownership,matching,model:{interpretIntent:async args=>{modelCalls++;return model?model(args):interpretation({residual});}}});
-      visitor=createVisitorService({...deps,identity,intent,matching});return [intent,matching,visitor];
+      visitor=createVisitorService({...deps,identity,intent,matching});companies=createCompanyService({...deps,...ownership,model:{resolveCompany:async args=>{companyCalls++;return companyModel?companyModel(args):{status:'unresolved',candidate:null,clarification:'Synthetic unresolved company'};}}});return [intent,matching,visitor,companies];
     }]});
   const rows=[['hidden-accepted',1,'Engineer'],['hidden-rejected',1.2,'Engineer'],['hidden-primary-excluded',1.5,'Designer'],['visible-accepted',3,'Engineer'],['visible-rejected',4,'Engineer']];
   app.store.importSnapshot({schemaVersion:1,snapshotAt:new Date(time).toISOString(),verifiedAt:new Date(time).toISOString(),jobs:rows.map(([id,age,title])=>{
@@ -46,10 +47,10 @@ async function setup(t,{model,provider,residual=false,visitor:visitorConfig,poli
     async function request(path,{method='GET',body,headers={}}={}){const res=await fetch(base+path,{method,headers:{Cookie:[...jar].map(([k,v])=>`${k}=${v}`).join('; '),...(method==='GET'?{}:{Origin:ORIGIN,'X-CSRF-Token':csrf,'Content-Type':'application/json'}),...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});for(const item of res.headers.getSetCookie()){const pair=item.split(';')[0],i=pair.indexOf('=');jar.set(pair.slice(0,i),pair.slice(i+1));}const value=await res.json();if(value.csrfToken)csrf=value.csrfToken;return {status:res.status,body:value,res};}
     return {request,jar,snapshot:()=>({jar:[...jar],csrf}),restore:snapshot=>{jar.clear();for(const [k,v]of snapshot.jar)jar.set(k,v);csrf=snapshot.csrf;},session:()=>request('/session'),login:username=>request('/auth/login',{method:'POST',body:{username}})};
   }
-  async function work(kind){const task=app.tasks.claim({workerId:'test-runner',kinds:[kind]});assert(task,`expected ${kind}`);const result=await (kind==='search_intent'?intent:matching).runTask(task);if(!result.committed)app.tasks.complete(task.id,task.leaseToken,result);return result;}
+  async function work(kind){const task=app.tasks.claim({workerId:'test-runner',kinds:[kind]});assert(task,`expected ${kind}`);const result=await (kind==='search_intent'?intent:kind==='company_resolution'?companies:matching).runTask(task);if(!result.committed)app.tasks.complete(task.id,task.leaseToken,result);return result;}
   async function create(c,key='create',query='Engineer'){const reply=await c.request('/visitor/searches',{method:'POST',body:{query,requestKey:key}});assert.equal(reply.status,202,JSON.stringify(reply.body));await work('search_intent');return reply.body.search.id;}
   const results=(c,id,suffix='')=>c.request(`/visitor/searches/${id}/results?revision=1${suffix}`);
-  return {app,config,client,work,create,results,time:()=>time,identity,intent,matching,visitor,accounts,sessions,advance:ms=>time+=ms,modelCalls:()=>modelCalls,providerCalls:()=>providerCalls,failHandoff:()=>failNextHandoff=true};
+  return {app,config,client,work,create,results,time:()=>time,identity,intent,matching,visitor,accounts,sessions,advance:ms=>time+=ms,modelCalls:()=>modelCalls,providerCalls:()=>providerCalls,companyCalls:()=>companyCalls,failHandoff:()=>failNextHandoff=true};
 }
 
 test('visitor submits, edits and retries its own search with filtered exact hidden count',async t=>{
@@ -226,12 +227,77 @@ test('a live private pending marker stops visitor writes and independent queued 
   const s=await setup(t,{runtime:{dbPath:join(dir,'state.sqlite'),privateGenerationPath:generationPath,backupDir},residual:true}),c=s.client();await c.session();const id=await s.create(c);await s.results(c,id);
   const owner=s.app.store.db.prepare('SELECT owner_id FROM demo_searches WHERE id=?').get(id).owner_id,queue=createVisitorIdentity({db:s.app.store.db,config:s.config,now:s.time});assert(queue.principal(owner));
   assert.equal(createVisitorIdentity({db:s.app.store.db,config:{...s.config,buildIdentity:'other-build'},now:s.time}).principal(owner),null);
-  const previous=s.app.store.db.prepare('SELECT checked_at FROM justup_visitor_admission').get().checked_at;
-  await c.session();await c.session();assert.equal(s.app.store.db.prepare('SELECT checked_at FROM justup_visitor_admission').get().checked_at,previous);
+  const previous=s.app.store.db.prepare('SELECT checked_at FROM justup_processing_admission').get().checked_at;
+  await c.session();await c.session();assert.equal(s.app.store.db.prepare('SELECT checked_at FROM justup_processing_admission').get().checked_at,previous);
   writeFileSync(generationPath+'.pending','retained');assert.equal(visitorPrivateGeneration(s.config),null);assert.equal(queue.principal(owner),null);
   const before=s.app.store.db.prepare('SELECT draft_json FROM demo_searches WHERE id=?').get(id).draft_json,count=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
   for(const method of ['POST','PATCH']){const path=method==='POST'?'/visitor/searches':`/visitor/searches/${id}`,body={query:'Private text must not persist',requestKey:method,...(method==='PATCH'?{expectedRevision:1}:{})};assert.equal((await c.request(path,{method,body})).status,503);}
   assert.equal((await s.results(c,id)).status,503);assert.equal(s.app.store.db.prepare('SELECT draft_json FROM demo_searches WHERE id=?').get(id).draft_json,before);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,count);await s.work('ai_match');assert.equal(s.providerCalls(),0);
   unlinkSync(generationPath+'.pending');s.advance(90_001);assert.equal(queue.principal(owner),null);s.identity.refreshAvailability();assert(queue.principal(owner));
   s.config.policiesReviewed=false;s.identity.refreshAvailability();assert.equal((await c.request('/visitor/session',{method:'DELETE',body:{}})).status,200);
+});
+
+test('current policy closure stops an existing signed-in account submission and queued interpretation',async t=>{
+  const s=await setup(t),c=s.client();await c.session();await c.login('one');
+  const queued=await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'before-close'}});assert.equal(queued.status,202);
+  s.config.policiesReviewed=false;
+  const before=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
+  const denied=await c.request('/searches',{method:'POST',body:{query:'Private blocked query',requestKey:'after-close'}});
+  assert.equal(denied.status,503);assert.equal(denied.body.error.code,'policy_unavailable');
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,before);
+  const blocked=await s.work('search_intent');assert.equal(blocked.committed,undefined);assert.equal(blocked.errorCode,'processing_unavailable');assert.equal(s.modelCalls(),0);
+  const paused=s.app.tasks.publicView(s.app.tasks.get('one',queued.body.task.id));assert.equal(paused.error.code,'processing_unavailable');assert.equal(paused.error.retryable,false);
+  assert.equal((await c.request('/session/logout',{method:'POST',body:{}})).status,200);
+});
+
+test('persisted account session survives a policy-closed restart while query and company processing stop',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'justup-account-policy-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),generationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(generationPath,'00000000-0000-4000-8000-000000000000\n');
+  const runtime={dbPath:join(dir,'state.sqlite'),privateGenerationPath:generationPath,backupDir},old=await setup(t,{runtime,realAuth:true}),c=old.client();await c.session();
+  const registered=await c.request('/auth/register',{method:'POST',body:{username:'policy-account',password:'Synthetic account password 123!'}});assert.equal(registered.status,201);
+  assert.equal((await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'before-restart'}})).status,202);
+  assert.equal((await c.request('/company-requests',{method:'POST',body:{input:'Synthetic Unlisted Company',scope:null,requestKey:'company-before-restart'}})).status,202);
+  const next=await setup(t,{runtime,realAuth:true,policiesReviewed:false}),persisted=next.client();persisted.restore(c.snapshot());const current=await persisted.session();assert.equal(current.body.user.id,registered.body.user.id);
+  const count=next.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
+  for(const [path,body] of [['/searches',{query:'Must not persist',requestKey:'denied'}],['/company-requests',{input:'Must not persist',scope:null,requestKey:'denied-company'}]])assert.equal((await persisted.request(path,{method:'POST',body})).status,503);
+  assert.equal(next.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,count);await next.work('search_intent');await next.work('company_resolution');assert.equal(next.modelCalls(),0);assert.equal(next.companyCalls(),0);
+  assert.equal((await persisted.request('/searches')).status,200);assert.equal((await persisted.request('/company-requests')).status,200);assert.equal((await persisted.request('/workspace')).status,200);
+  assert.equal((await persisted.request('/account',{method:'DELETE',body:{password:'Synthetic account password 123!'}})).status,200);assert.equal(next.app.store.db.prepare('SELECT count(*) n FROM demo_searches').get().n,0);
+});
+
+test('account pending deletion blocks new private writes and independent queued inference before commit',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'justup-account-pending-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),generationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(generationPath,'00000000-0000-4000-8000-000000000000\n');
+  const s=await setup(t,{runtime:{dbPath:join(dir,'state.sqlite'),privateGenerationPath:generationPath,backupDir}}),c=s.client();await c.session();await c.login('one');
+  assert.equal((await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'before-marker'}})).status,202);
+  const queue=createVisitorIdentity({db:s.app.store.db,config:s.config,now:s.time,accessForAccount:id=>s.accounts.get(id)?.access});assert(queue.principal('one'));
+  writeFileSync(generationPath+'.pending','retained');assert.equal(queue.principal('one'),null);
+  const before=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
+  for(const [path,body]of [['/searches',{query:'Must not persist',requestKey:'denied'}],['/company-requests',{input:'Must not persist',scope:null,requestKey:'denied-company'}],['/workspace',{expectedRevision:0,activeSearchId:null,drafts:{new:'Must not persist'}}]])assert.equal((await c.request(path,{method:path==='/workspace'?'PATCH':'POST',body})).status,503);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,before);await s.work('search_intent');assert.equal(s.modelCalls(),0);assert.equal((await c.request('/workspace')).status,200);unlinkSync(generationPath+'.pending');
+});
+
+test('policy revocation during interpretation or classification discards account and visitor private effects',async t=>{
+  for(const account of [false,true]){
+    let release;const s=await setup(t,{residual:true,model:()=>new Promise(resolve=>release=()=>resolve(interpretation({residual:true})))}),c=s.client();await c.session();if(account)await c.login('one');const prefix=account?'':'/visitor';
+    const created=await c.request(prefix+'/searches',{method:'POST',body:{query:'Engineer four day week',requestKey:'waiting'}});assert.equal(created.status,202);const work=s.work('search_intent');await Promise.resolve();s.config.policiesReviewed=false;s.identity.refreshAvailability();release();assert.equal((await work).committed,undefined);
+    assert.equal(s.app.store.db.prepare('SELECT accepted_json FROM demo_searches WHERE id=?').get(created.body.search.id).accepted_json,null);
+    let finish;const m=await setup(t,{residual:true,provider:({jobs})=>new Promise(resolve=>finish=()=>resolve({decisions:jobs.map(j=>({id:j.id,decision:'accepted'}))}))}),d=m.client();await d.session();if(account)await d.login('one');const id=account?(await d.request('/searches',{method:'POST',body:{query:'Engineer four day week',requestKey:'matching'}})).body.search.id:await m.create(d);if(account)await m.work('search_intent');await d.request(`${prefix}/searches/${id}/results?revision=1`);
+    const matching=m.work('ai_match');await Promise.resolve();m.config.policiesReviewed=false;m.identity.refreshAvailability();finish();assert.equal((await matching).committed,undefined);assert.equal(m.app.store.db.prepare("SELECT count(*) n FROM demo_match_jobs WHERE decision='accepted'").get().n,0);assert.equal(m.app.store.db.prepare('SELECT count(*) n FROM demo_match_cache').get().n,0);
+  }
+});
+
+test('guest device locale controls exact policy metadata and queued title context without translating the query',async t=>{
+  const denied=await setup(t),guest=denied.client();guest.jar.set('justup_interface_locale','de');const unreviewed=await guest.session();assert.equal(unreviewed.body.policies.locale,'de');assert.equal(unreviewed.body.policies.reviewed,false);assert.equal(unreviewed.body.policies.version,'product-draft-5');assert.equal(unreviewed.body.policies.privacyUrl,ORIGIN+'/privacy.de.html');assert.equal(denied.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+  assert.equal((await guest.request('/visitor/searches',{method:'POST',body:{query:'Original English query',presentationLocale:'de',requestKey:'unreviewed'}})).status,503);assert.equal(denied.modelCalls(),0);assert.equal(denied.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+  const de={privacyUrl:ORIGIN+'/privacy.de.html',usageUrl:ORIGIN+'/usage.de.html',version:'synthetic-reviewed-de',reviewed:true};let input;
+  const s=await setup(t,{runtime:{policyLocales:{de}},model:args=>{input=args;return interpretation();}}),c=s.client();c.jar.set('justup_interface_locale','de');const current=await c.session();assert.equal(current.body.policies.reviewedLocale,'de');assert.equal(current.body.policies.fallback,false);assert.equal(current.body.capabilities.visitorSearch,true);
+  const mismatched=await c.request('/visitor/searches',{method:'POST',body:{query:'Original English query',presentationLocale:'en',requestKey:'mismatched'}});assert.equal(mismatched.status,400);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+  const created=await c.request('/visitor/searches',{method:'POST',body:{query:'Original English query',presentationLocale:'de',requestKey:'reviewed'}});assert.equal(created.status,202);await s.work('search_intent');assert.equal(input.query,'Original English query');assert.equal(input.presentationLocale,'de');
+  assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Queued before exact review changes',requestKey:'scope-bound'}})).status,202);de.version='synthetic-new-version';s.identity.refreshAvailability();const calls=s.modelCalls();await s.work('search_intent');assert.equal(s.modelCalls(),calls);
+});
+
+test('company policy revocation during provider wait discards clarification and private evidence',async t=>{
+  let release,seen;const s=await setup(t,{companyModel:args=>{seen=args;return new Promise(resolve=>release=()=>resolve({status:'unresolved',candidate:null,clarification:'Must not commit'}));}}),c=s.client();await c.session();await c.login('one');
+  const created=await c.request('/company-requests',{method:'POST',body:{input:'Synthetic Private Company',scope:null,requestKey:'waiting-company'}});assert.equal(created.status,202);
+  const work=s.work('company_resolution');await Promise.resolve();assert.equal(seen.presentationLocale,'en');assert.equal(seen.input,'Synthetic Private Company');s.config.policiesReviewed=false;s.identity.refreshAvailability();release();assert.equal((await work).committed,undefined);
+  const row=s.app.store.db.prepare('SELECT status,clarification FROM demo_company_requests WHERE id=?').get(created.body.request.id);assert.equal(row.status,'pending');assert.equal(row.clarification,null);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_company_evidence').get().n,0);
 });
