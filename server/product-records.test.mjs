@@ -94,3 +94,23 @@ test('matching execution preserves confirmed numeric cost and keeps an ambiguous
   }
   const rows=f.db.prepare('SELECT cost_nanodollars,evaluated FROM justup_model_executions ORDER BY rowid').all();assert.deepEqual(rows.map(row=>row.cost_nanodollars),[840,null]);assert(rows.every(row=>row.evaluated===2));
 });
+
+test('policy closure or changed task binding suppresses new private evidence while retained cleanup remains available',async t=>{
+  let paused=false,key='reviewed-fr';
+  const viewer={account:{id:'owner'},access:{kind:'paid',fullAccess:true},interfaceLocale:'fr'};
+  const f=fixture(t,{ownerAuthority:(owner,{allowUnavailable=false,locale='fr'}={})=>owner==='owner'&&(allowUnavailable||!paused&&locale==='fr')?{...viewer,processingPolicy:{key}}:null});
+  assert.equal(f.records.observe({ownerId:'owner',event:'report_served',key:'before-pause',locale:'fr',outcome:'accepted'}),true);
+  const staged={ownerId:'owner',referenceId:'search-1',revision:1,task:'search_intent',reason:'edit_requires_review',locale:'fr'};
+  assert.equal(f.records.evaluations.stage(staged),true);
+  f.tasks.enqueue({ownerId:'owner',kind:'search_intent',requestKey:'queued',payload:{searchId:'search-1',presentationLocale:'fr',policyKey:key}});
+  const task=f.tasks.claim({workerId:'fixture'});let release;
+  const pending=f.records.runTask(task,()=>new Promise(resolve=>release=()=>resolve({status:'failed',errorCode:'processing_unavailable'})));
+  key='changed-fr';release();await pending;
+  assert.equal(f.db.prepare('SELECT count(*) n FROM justup_model_executions').get().n,0);
+  paused=true;
+  assert.equal(f.records.observe({ownerId:'owner',event:'report_served',key:'during-pause',locale:'fr',outcome:'accepted'}),false);
+  assert.equal(f.records.evaluations.stage({...staged,revision:2}),false);
+  f.records.taskFinished(task);assert.equal(f.db.prepare('SELECT count(*) n FROM justup_journey_events').get().n,1);
+  f.advance(RECORD_RETENTION_MS);assert.equal(f.records.cleanup(),true);
+  for(const table of ['justup_journey_events','justup_model_executions','justup_evaluation_candidates'])assert.equal(f.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0);
+});

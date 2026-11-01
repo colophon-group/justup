@@ -392,7 +392,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
         db.prepare('INSERT INTO justup_search_submissions VALUES(?,?,?,?,?)').run(ownerOf(ctx),requestKey,searchId,fingerprint,task.id);
         if(value)readingPreferences.saveOptions(ownerOf(ctx),searchId,value);
       }); } catch(e) { tasks.delete(ownerOf(ctx),task.id); throw e; }
-      if(editing)try{records?.evaluations.stage({ownerId:ownerOf(ctx),referenceId:searchId,revision:expected,task:'search_intent',reason:'edit_requires_review'});}catch{}
+      if(editing)try{records?.evaluations.stage({ownerId:ownerOf(ctx),referenceId:searchId,revision:expected,task:'search_intent',reason:'edit_requires_review',locale:ctx.interfaceLocale});}catch{}
       try{records?.observe({ownerId:ownerOf(ctx),event:'search_submitted',key:task.id,referenceId:searchId,viewer:ctx.viewer,locale:ctx.interfaceLocale,outcome:'accepted'});}catch{}
       return {status:202,body:{search:publicSearch(row(ownerOf(ctx),searchId)),task:tasks.publicView(task)}};
     }

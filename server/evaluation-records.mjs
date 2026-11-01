@@ -38,9 +38,9 @@ export function createEvaluationRecords({db,now=Date.now,erase,ownerAuthority}={
     if(prior&&(record.version<=prior.version||record.task!==prior.task||record.split!==prior.split))fail();
     db.prepare('INSERT INTO justup_evaluation_cases VALUES(?,?,?,?,?,?,?)').run(record.id,record.version,record.task,record.split,record.status,json,now());return true;
   }
-  function stage({ownerId,referenceId,revision,task,reason}) {
+  function stage({ownerId,referenceId,revision,task,reason,locale}) {
     try {
-      if(!token(ownerId)||!token(referenceId)||!Number.isSafeInteger(revision)||revision<0||!TASKS.includes(task)||!['edit_requires_review','candidate_rejected'].includes(reason)||!ownerAuthority(ownerId,{allowUnavailable:true}))return false;
+      if(!token(ownerId)||!token(referenceId)||!Number.isSafeInteger(revision)||revision<0||!TASKS.includes(task)||!['edit_requires_review','candidate_rejected'].includes(reason)||!ownerAuthority(ownerId,{locale}))return false;
       if(db.prepare('SELECT count(*) n FROM justup_evaluation_candidates').get().n>=200)return false;
       return db.prepare('INSERT OR IGNORE INTO justup_evaluation_candidates VALUES(?,?,?,?,?,?)').run(ownerId,referenceId,revision,task,reason,now()).changes===1;
     }catch{return false;}

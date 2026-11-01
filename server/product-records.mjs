@@ -43,7 +43,9 @@ export function createProductRecords({db,tasks,ownerAuthority,now=Date.now,befor
     compilation_failures INTEGER NOT NULL,repairs INTEGER NOT NULL,evaluated INTEGER,cache_hits INTEGER,insufficient INTEGER,
     PRIMARY KEY(owner_id,task_id,attempt)) STRICT;`);
   const context=new AsyncLocalStorage();
-  const authority=owner=>token(owner)?ownerAuthority(owner,{allowUnavailable:true}):null;
+  const authority=(owner,locale)=>token(owner)?ownerAuthority(owner,{locale}):null;
+  const retainedAuthority=owner=>token(owner)?ownerAuthority(owner,{allowUnavailable:true}):null;
+  const taskAuthority=task=>{const current=authority(task.ownerId,task.payload?.presentationLocale);return current&&(!current.processingPolicy||current.processingPolicy.key===task.payload?.policyKey);};
   const save=work=>{db.exec('SAVEPOINT product_record');try{const result=work();db.exec('RELEASE product_record');return result;}catch(error){db.exec('ROLLBACK TO product_record; RELEASE product_record');throw error;}};
   function erase(work) {
     const run=()=>{beforePrivateDelete?.();return work();};
@@ -61,7 +63,7 @@ export function createProductRecords({db,tasks,ownerAuthority,now=Date.now,befor
   function observe(data) {
     try {
       if(!data||Object.keys(data).some(k=>!['ownerId','event','key','viewer','locale','outcome','value','referenceId'].includes(k))||!EVENTS.has(data.event)||!token(data.key)||!OUTCOMES.has(data.outcome)||data.value!=null&&!number(data.value)||data.referenceId!=null&&!token(data.referenceId))return false;
-      const current=authority(data.ownerId);if(!current)return false;
+      const current=authority(data.ownerId,data.locale);if(!current)return false;
       const locale=data.locale??current.interfaceLocale??'en';if(!LOCALES.has(locale))return false;
       return save(()=>{
         const changed=db.prepare('INSERT OR IGNORE INTO justup_journey_events VALUES(?,?,?,?,?,?,?,?,?)').run(data.ownerId,hash(`${data.event}:${data.key}`),data.event,now(),accessSegment(data.viewer??current),locale,data.outcome,data.value??null,data.referenceId??null).changes===1;
@@ -85,7 +87,7 @@ export function createProductRecords({db,tasks,ownerAuthority,now=Date.now,befor
     finally {
       try {
         const current=tasks?.get(task.ownerId,task.id);
-        if(authority(task.ownerId)&&current&&current.status!=='cancelled'&&current.attempts===task.attempts&&(current.status!=='running'||current.leaseToken===task.leaseToken&&current.leaseUntil>now()))save(()=>{
+        if(taskAuthority(task)&&current&&current.status!=='cancelled'&&current.attempts===task.attempts&&(current.status!=='running'||current.leaseToken===task.leaseToken&&current.leaseUntil>now()))save(()=>{
           const output=result?.output,matching=task.kind==='ai_match',usageKnown=matching?number(output?.inputTokens)&&number(output?.outputTokens)&&output.ambiguousAttempts===0:!state.missingUsage&&state.inputTokens!=null;
           const code=result?.errorCode??result?.status??'failed',outcome=CODES.has(code)?code:'failed';
           const model=matching?JEV_MODEL:state.model??'unobserved';
@@ -98,13 +100,13 @@ export function createProductRecords({db,tasks,ownerAuthority,now=Date.now,befor
     }
   }
   function taskFinished(task) {
-    try{const current=tasks?.get(task.ownerId,task.id);if(task.kind==='search_intent'&&current?.attempts===task.attempts&&['succeeded','warning','failed'].includes(current.status))observe({ownerId:task.ownerId,event:'search_completed',key:task.id,referenceId:task.payload.searchId,outcome:current.status,locale:task.payload.presentationLocale});}catch{}
+    try{const current=tasks?.get(task.ownerId,task.id);if(taskAuthority(task)&&task.kind==='search_intent'&&current?.attempts===task.attempts&&['succeeded','warning','failed'].includes(current.status))observe({ownerId:task.ownerId,event:'search_completed',key:task.id,referenceId:task.payload.searchId,outcome:current.status,locale:task.payload.presentationLocale});}catch{}
   }
   function deleteAccountData(owner) {evaluations.deleteAccountData(owner);for(const table of ['justup_journey_events','justup_model_executions'])db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(owner);}
   function deleteReference(owner,reference) {evaluations.deleteReference(owner,reference);for(const row of db.prepare('SELECT task_id FROM justup_model_executions WHERE owner_id=?').all(owner)){const task=tasks?.get(owner,row.task_id);if(!task||task.payload?.searchId===reference||task.payload?.requestId===reference)db.prepare('DELETE FROM justup_model_executions WHERE owner_id=? AND task_id=?').run(owner,row.task_id);}
     db.prepare('DELETE FROM justup_journey_events WHERE owner_id=? AND reference_id=?').run(owner,reference);}
   function transferOwner(from,to) {
-    if(!db.isTransaction||!authority(to))throw new TypeError('Record handoff requires the authenticated transaction.');
+    if(!db.isTransaction||!retainedAuthority(to))throw new TypeError('Record handoff requires the authenticated transaction.');
     evaluations.transferOwner(from,to);
     for(const table of ['justup_journey_events','justup_model_executions']){db.prepare(`UPDATE OR IGNORE ${table} SET owner_id=? WHERE owner_id=?`).run(to,from);db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(from);}
   }
