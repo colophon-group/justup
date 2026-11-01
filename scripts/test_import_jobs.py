@@ -18,6 +18,51 @@ SNAPSHOT = "2026-10-31T16:00:00Z"
 COMPANY_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 COMPANY_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 COMPANY_OTHER = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+JOB_A = "11111111-1111-4111-8111-111111111111"
+JOB_B = "22222222-2222-4222-8222-222222222222"
+ZERO_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def feed_posting(identifier=JOB_A, **changes):
+    html = "<p>" + "Verifiable public role details. " * 12 + "</p>"
+    return {
+        "id": identifier, "companyId": COMPANY_A, "companyName": "Example", "companySlug": "example",
+        "companyWebsite": "https://employer.example/",
+        "title": "Engineer", "sourceUrl": "https://employer.example/jobs/1", "active": True, "reserved": False,
+        "hasContent": True, "firstSeenAt": "2026-10-28T16:00:00.000000Z",
+        "lastSeenAt": "2026-10-31T15:00:00.000000Z", "updatedAt": "2026-10-31T15:00:00.000000Z",
+        "locales": ["de", "en"], "locationDirectIds": [2657896], "locationNames": ["Zurich"],
+        "locationTypes": ["onsite"], "locationGeoTypes": ["city"], "employmentType": "full_time",
+        "salaryMin": None, "salaryMax": None, "salaryCurrency": None, "salaryPeriod": None,
+        "experienceMin": None, "experienceMax": None, "occupationId": None,
+        "occupationName": None, "seniorityId": None, "seniorityName": None,
+        "body": {"locale": "en", "html": html, "sha256": IMPORT.hashlib.sha256(html.encode()).hexdigest()},
+        "bodyStatus": "ready", **changes,
+    }
+
+
+def write_feed_bundle(directory, rows, *, batch_id="a" * 32, kind="snapshot", from_cursor=None,
+                      cutoff=SNAPSHOT, complete=True, scope=None, source_count=None):
+    directory = Path(directory)
+    directory.mkdir(mode=0o700, exist_ok=True)
+    part_name = f"batch-{batch_id}-part-0001.json"
+    payload = (json.dumps({"schemaVersion": 1, "rows": rows}, separators=(",", ":")) + "\n").encode()
+    parts = []
+    if rows:
+        part = directory / part_name
+        part.write_bytes(payload)
+        part.chmod(0o600)
+        parts.append({"file": part_name, "sha256": IMPORT.hashlib.sha256(payload).hexdigest(), "rows": len(rows)})
+    cursor = ({"updatedAt": rows[-1]["updatedAt"], "id": rows[-1]["id"]} if not complete
+              else {"updatedAt": cutoff, "id": ZERO_UUID})
+    manifest = {"schemaVersion": 1, "kind": kind, "fromCursor": from_cursor, "toCursor": cursor,
+                "cutoffAt": cutoff, "complete": complete, "scope": scope or {"kind": "all_eligible"},
+                "windowDays": 14, "sourceScopeRowCount": len(rows) if source_count is None else source_count,
+                "rows": len(rows), "parts": parts}
+    path = directory / f"batch-{batch_id}-manifest.json"
+    path.write_text(json.dumps(manifest))
+    path.chmod(0o600)
+    return path, manifest
 
 
 def posting(identifier="job-1", **changes):
@@ -93,60 +138,143 @@ class FakePublicHttp:
 
 
 class PublicImportTests(unittest.TestCase):
+    def test_feed_snapshot_binds_source_identity_and_body_without_old_asset_url(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, _ = write_feed_bundle(Path(root) / "feed", [feed_posting()], source_count=2)
+            result = IMPORT.import_feed_bundle(path, max_jobs=1, now=NOW)
+            self.assertEqual(result["schemaVersion"], 1)
+            self.assertTrue(result["selection"]["limitedCoverage"])
+            job = result["jobs"][0]
+            self.assertEqual(job["id"], JOB_A)
+            self.assertEqual(job["firstObserved"], "2026-10-28T16:00:00.000Z")
+            self.assertEqual(job["locations"][0]["id"], "2657896")
+            self.assertEqual(result["companyIdentities"], [{"companyId": COMPANY_A, "officialDomain": "employer.example"}])
+            self.assertEqual(job["evidence"]["bodySha256"], feed_posting()["body"]["sha256"])
+            self.assertIsNone(job["evidence"]["bodyUrl"])
+            self.assertTrue(job["evidence"]["aiEligible"])
+            self.assertNotIn(IMPORT.ASSET_ORIGIN, json.dumps(result))
+
+    def test_feed_keeps_structured_posting_when_description_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as root:
+            row = feed_posting(body=None, bodyStatus="hash_mismatch")
+            path, _ = write_feed_bundle(Path(root) / "feed", [row])
+            result = IMPORT.import_feed_bundle(path, max_jobs=1, now=NOW)
+            job = result["jobs"][0]
+            self.assertEqual(job["title"], "Engineer")
+            self.assertIsNone(job["bodyText"])
+            self.assertEqual(job["evidence"]["bodyError"], "body_hash_mismatch")
+            self.assertFalse(job["evidence"]["aiEligible"])
+
+    def test_feed_rejects_stale_cutoff_and_unverified_body_digest(self):
+        with tempfile.TemporaryDirectory() as root:
+            row = feed_posting()
+            row["body"]["sha256"] = "0" * 64
+            path, _ = write_feed_bundle(Path(root) / "feed", [row])
+            result = IMPORT.import_feed_bundle(path, max_jobs=1, now=NOW)
+            replay = IMPORT.import_feed_bundle(path, max_jobs=1, now=NOW + timedelta(hours=23))
+            self.assertEqual(replay["verifiedAt"], result["verifiedAt"])
+            self.assertIsNone(result["jobs"][0]["bodyText"])
+            self.assertEqual(result["jobs"][0]["evidence"]["bodyError"], "body_hash_mismatch")
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "24-hour"):
+                IMPORT.import_feed_bundle(path, max_jobs=1, now=NOW + timedelta(hours=24))
+
+    def test_feed_changes_preserve_unmentioned_jobs_and_explicit_closure(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / "feed"
+            initial_path, initial_manifest = write_feed_bundle(directory, [feed_posting(JOB_A), feed_posting(JOB_B,
+                updatedAt="2026-10-31T15:01:00.000000Z")])
+            initial = IMPORT.import_feed_bundle(initial_path, max_jobs=2, now=NOW)
+            closed = feed_posting(JOB_A, active=False, updatedAt="2026-10-31T16:02:00.000000Z")
+            changes_path, _ = write_feed_bundle(directory, [closed], batch_id="b" * 32, kind="changes",
+                from_cursor=initial_manifest["toCursor"], cutoff="2026-10-31T16:05:00Z")
+            result = IMPORT.import_feed_bundle(changes_path, previous=initial, max_jobs=2,
+                                               now=NOW + timedelta(minutes=5))
+            self.assertEqual([job["id"] for job in result["jobs"]], [JOB_B])
+            self.assertEqual(result["jobs"][0]["evidence"]["metadataFetchedAt"], initial["jobs"][0]["evidence"]["metadataFetchedAt"])
+            self.assertEqual(result["observations"], [{"id": JOB_A, "active": False, "reserved": False,
+                                                        "observedAt": "2026-10-31T16:05:00Z"}])
+            self.assertEqual(result["selection"]["feed"]["cursor"], {"updatedAt": "2026-10-31T16:05:00Z", "id": ZERO_UUID})
+
+    def test_feed_partial_page_is_staged_until_cursor_linked_completion(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / "feed"
+            initial_path, initial_manifest = write_feed_bundle(directory, [feed_posting()])
+            initial = IMPORT.import_feed_bundle(initial_path, max_jobs=2, now=NOW)
+            change = feed_posting(JOB_B, updatedAt="2026-10-31T16:01:00.000000Z")
+            partial_path, partial_manifest = write_feed_bundle(directory, [change], batch_id="b" * 32, kind="changes",
+                from_cursor=initial_manifest["toCursor"], cutoff="2026-10-31T16:05:00Z", complete=False)
+            staged = IMPORT.import_feed_bundle(partial_path, previous=initial, max_jobs=2, now=NOW + timedelta(minutes=5))
+            self.assertEqual(staged["stageVersion"], 1)
+            self.assertNotIn("schemaVersion", staged)
+            self.assertEqual({job["id"] for job in staged["candidate"]["jobs"]}, {JOB_A, JOB_B})
+            final_path, _ = write_feed_bundle(directory, [], batch_id="c" * 32, kind="changes",
+                from_cursor=partial_manifest["toCursor"], cutoff="2026-10-31T16:10:00Z")
+            final = IMPORT.import_feed_bundle(final_path, previous=staged, max_jobs=2, now=NOW + timedelta(minutes=10))
+            self.assertEqual(final["schemaVersion"], 1)
+            self.assertEqual({job["id"] for job in final["jobs"]}, {JOB_A, JOB_B})
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "cursor"):
+                IMPORT.import_feed_bundle(final_path, previous=initial, max_jobs=2, now=NOW + timedelta(minutes=10))
+
     def test_private_feed_bundle_checks_all_parts_before_exposing_rows(self):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root) / "feed"
             directory.mkdir(mode=0o700)
+            batch_id = "a" * 32
             payload = json.dumps({"schemaVersion": 1, "rows": [{"id": "job-1"}]}, separators=(",", ":")).encode()
-            part = directory / "part-0.json"
+            part = directory / f"batch-{batch_id}-part-0001.json"
             part.write_bytes(payload)
             part.chmod(0o600)
             manifest = {"schemaVersion": 1, "kind": "snapshot", "fromCursor": None,
-                        "toCursor": {"updatedAt": SNAPSHOT, "id": "job-1"}, "cutoffAt": SNAPSHOT,
-                        "complete": True, "parts": [{"file": part.name, "sha256": IMPORT.hashlib.sha256(payload).hexdigest(), "rows": 1}]}
-            path = directory / "manifest.json"
+                        "toCursor": {"updatedAt": SNAPSHOT, "id": "00000000-0000-0000-0000-000000000000"}, "cutoffAt": SNAPSHOT,
+                        "complete": True, "scope": {"kind": "all_eligible"}, "windowDays": 14,
+                        "sourceScopeRowCount": 1, "rows": 1,
+                        "parts": [{"file": part.name, "sha256": IMPORT.hashlib.sha256(payload).hexdigest(), "rows": 1}]}
+            path = directory / f"batch-{batch_id}-manifest.json"
             path.write_text(json.dumps(manifest))
             path.chmod(0o600)
-            result, rows = IMPORT.read_feed_bundle(directory)
+            result, rows, digest = IMPORT.read_feed_bundle(path)
             self.assertEqual(result, manifest)
-            self.assertEqual(rows, [{"id": "job-1"}])
+            self.assertEqual(digest, IMPORT.hashlib.sha256(path.read_bytes()).hexdigest())
+            self.assertEqual(list(rows), [{"id": "job-1"}])
 
             part.write_bytes(payload + b" ")
+            _, rows, _ = IMPORT.read_feed_bundle(path)
             with self.assertRaisesRegex(IMPORT.ImportFailure, "digest differs"):
-                IMPORT.read_feed_bundle(directory)
+                list(rows)
             part.write_bytes(payload)
             manifest["complete"] = False
             path.write_text(json.dumps(manifest))
-            with self.assertRaisesRegex(IMPORT.ImportFailure, "incomplete"):
-                IMPORT.read_feed_bundle(directory)
+            result, rows, _ = IMPORT.read_feed_bundle(path)
+            self.assertFalse(result["complete"])
+            self.assertEqual(len(list(rows)), 1)
             manifest["complete"] = True
             manifest["parts"][0]["file"] = "../outside.json"
             path.write_text(json.dumps(manifest))
             with self.assertRaisesRegex(IMPORT.ImportFailure, "declaration"):
-                IMPORT.read_feed_bundle(directory)
+                IMPORT.read_feed_bundle(path)
 
     def test_private_feed_bundle_refuses_public_files_symlinks_and_duplicate_fields(self):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root) / "feed"
             directory.mkdir(mode=0o700)
-            manifest = directory / "manifest.json"
+            manifest = directory / ("batch-" + "a" * 32 + "-manifest.json")
             valid = b'{"schemaVersion":1,"kind":"changes","complete":true,"cutoffAt":"2026-10-31T16:00:00Z","parts":[{"file":"part-0.json","sha256":"' + b"0" * 64 + b'","rows":0}]}'
             manifest.write_bytes(valid)
             manifest.chmod(0o644)
             with self.assertRaisesRegex(IMPORT.ImportFailure, "private"):
-                IMPORT.read_feed_bundle(directory)
+                IMPORT.read_feed_bundle(manifest)
             manifest.chmod(0o600)
             target = Path(root) / "outside.json"
             target.write_bytes(valid)
             manifest.unlink()
             manifest.symlink_to(target)
             with self.assertRaises(IMPORT.ImportFailure):
-                IMPORT.read_feed_bundle(directory)
+                IMPORT.read_feed_bundle(manifest)
             manifest.unlink()
             manifest.write_bytes(valid.replace(b'"kind":"changes",', b'"kind":"changes","kind":"snapshot",'))
             manifest.chmod(0o600)
             with self.assertRaisesRegex(IMPORT.ImportFailure, "duplicate"):
-                IMPORT.read_feed_bundle(directory)
+                IMPORT.read_feed_bundle(manifest)
 
     def test_company_selector_requires_bounded_unique_canonical_uuids_and_exact_schema(self):
         maximum = [f"00000000-0000-4000-8000-{index:012x}" for index in range(100)]

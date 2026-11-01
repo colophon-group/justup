@@ -1,11 +1,35 @@
 ---
-summary: Export and refresh a bounded public Jobseek snapshot for Justup.
-read_when: Preparing imported job evidence, investigating freshness, or reviewing the public import boundary.
+summary: Import bounded company jobs from a private feed or the existing public source.
+read_when: Preparing job evidence, checking freshness, or reviewing the read-only import boundary.
 ---
 
-# Import and refresh public jobs
+# Import and refresh company jobs
 
-The explicit operator command `scripts/import-jobs.py` copies public listing metadata and normalized description text into a private JSON export. It never connects to a database, writes to Jobseek, changes a crawler configuration or schedules work. No job content belongs in Git, issues, PRs, test fixtures or application logs. The feed exposes structured fields and the original source link; normalized description text remains server-side evidence for matching.
+The explicit operator command `scripts/import-jobs.py` copies allowlisted listing metadata and normalized description text into a private JSON export. It never connects to a database, writes to Jobseek, changes a crawler configuration or schedules work. No real job content belongs in Git, issues, PRs, test fixtures or application logs. The application exposes structured fields and the original employer link; normalized description text remains server-side evidence for matching.
+
+## Import a private feed batch
+
+The crawler-side exporter writes a versioned manifest and ordered data parts to a private directory. Transfer one immutable batch through the approved private path before running this command. The directory and files must be owned by the importing user and inaccessible to other users; symlinks and altered part digests are rejected. The importer reads only the fields and body evidence in that batch. It does not need the old Jobseek website, public search key or asset host.
+
+1. Supply the exact manifest, an existing private output directory outside Git, and the previous accepted export if this is a change batch. Keep the previous export until the next batch is accepted.
+
+   ```sh
+   python3 scripts/import-jobs.py \
+     --feed-manifest /private/feed/batch-<id>-manifest.json \
+     --previous /private/job-data/previous.json \
+     --max-jobs 500 \
+     --output /private/job-data/next.json
+   ```
+
+   Omit `--previous` for the first snapshot. A later change batch must match the previous cursor, company scope and import limit exactly. A full snapshot is required before the source verification becomes 24 hours old.
+2. Read the count receipt. `sourceScopeRowCount` is the source's count for its declared 14-day active scope; `limitedCoverage` is true for a company-only scope, a selected subset, or an unfinished change page. The importer never presents that subset as complete coverage. Verify sampled employer links and source counts; keep missing or unavailable descriptions out of AI matching.
+3. When `importable` is true, transfer the 0600 JSON export to the protected application data path and run the application store import. Only after that succeeds may the crawler exporter acknowledge the manifest digest from the receipt. When `importable` is false, the output is a non-importable staging file for a partial change page. Keep it durably, acknowledge that staged page, then use it as `--previous` with the next cursor-linked batch. A partial page cannot make the live application claim a fresh complete import.
+
+The producer reports closures and reservations as explicit rows. Missing rows are unknown, never inferred closures. Unchanged jobs keep their own previous observation time through change batches; the application's import verification time is the source cutoff, so replaying an old batch cannot make it fresh again. A full verified snapshot must run within the 24-hour freshness window to refresh unchanged jobs. Source and application capacity are bounded: at most 1,000 retained listings and 48 MiB of normalized body text. A wider product catalogue needs a reviewed capacity change and a verified import path, not a silent higher limit.
+
+## Import from the public source
+
+The existing public-source path remains available while its Jobseek-hosted bootstrap and asset endpoints operate. It is an explicit bounded export, not the recurrent private feed.
 
 1. Choose a fixed UTC snapshot time and a private output directory outside every Git checkout. Protect the directory with mode `0700`. The command requires the directory to exist, creates the export with mode `0600`, and replaces the destination atomically.
 2. Obtain the public bootstrap metadata from [the Jobseek public search key endpoint](https://jseek.co/api/typesense-key). Independently approve the public Typesense hostname before supplying it to `--typesense-host`; do not copy the scoped key into a command, file or log. The command fetches its own transient public scoped key, checks that the returned host exactly matches this argument, requires HTTPS on port 443 and refuses redirects. The approved hostname is an explicit network boundary, not an automatically trusted bootstrap suggestion.
@@ -66,7 +90,7 @@ This option selects a QA export, not an approved product launch segment. It does
 
 ## Description evidence
 
-For an accepted listing, the importer chooses the first valid non-`__none` locale, or `en`, and fetches the public asset at `https://jobseek-assets.colophon-group.org/job/{id}/{locale}/latest.html` with a Mozilla-compatible User-Agent. Each response is bounded to 512 KiB and must be valid UTF-8. It derives plain text deterministically, excludes script/style/template content and explicit hidden elements, removes controls and normalizes whitespace. No HTML is retained or sent to the browser. This parser does not execute page scripts or evaluate external stylesheets; it is bounded source-text normalization, not a browser rendering claim.
+For the public-source path, the importer chooses the first valid non-`__none` locale, or `en`, and fetches the public asset at `https://jobseek-assets.colophon-group.org/job/{id}/{locale}/latest.html` with a Mozilla-compatible User-Agent. For the private feed, the crawler exporter chooses an uploaded per-locale description, verifies its recorded source hash, and includes HTML bytes plus their SHA-256 digest in the protected batch. The importer checks that digest before retaining normalized text; a mismatch leaves structured listing facts available while the body remains unavailable to AI matching. Each body is bounded to 512 KiB and must be valid UTF-8. The importer derives plain text deterministically, excludes script/style/template content and explicit hidden elements, removes controls and normalizes whitespace. No HTML is retained or sent to the browser. This parser does not execute page scripts or evaluate external stylesheets; it is bounded source-text normalization, not a browser rendering claim.
 
 `evidence` records the public source label, metadata/body observation times, mutable body URL, SHA-256 of received bytes and normalized text, normalization version 1, received byte count, truncation/error flags and AI eligibility. A mutable `latest.html` URL is not an evidence version; hashes bind the observed version. Failed, invalid, oversized or deeply malformed content is unavailable to matching. A successful normalized description needs at least 200 characters for `aiEligible:true`; a shorter body can still have a structured listing. An oversized response is rejected, not silently clipped into apparently complete evidence. Across one import, retained normalized text is capped at 48 MiB measured as UTF-8 bytes. A body that cannot fit is marked `body_budget_exceeded`, with null text/hash and AI eligibility false; structured metadata remains usable. Once that budget is exhausted, later bodies are not fetched. The JSON exporter streams its encoding and refuses a file above 64 MiB. No provider credentials, private users, crawler settings or internal traces are requested.
 
@@ -85,4 +109,4 @@ The final export timestamp cannot replace a record's observation time. An older 
 
 The store retains at most 1,000 job bodies/metadata and 32 import summaries, prunes evidence older than 30 days, and enforces the existing 1 GiB SQLite page ceiling. The small identity registry persists independently of result eligibility; it retains latest activity/reservation observation but no bodies or account data. Future volume still requires resource review. These bounds are deployment capacity, not a reason to recreate accounts or replace the runtime when access widens.
 
-The current command does **not** schedule refreshes. The `fresh-job-feed` work, described in [operations](operations.md), still needs the authorized source/scheduler contract, monitored execution and failure recovery before a fresh-feed launch claim. The minimal integration is one operator-owned writer that chooses a fixed snapshot, passes the previous export for known-ID refresh, imports the completed bounded snapshot atomically, and retains the previous export until acceptance. It must report last successful verification and refresh failures; an API read cannot refresh evidence or invent success. No external source integration, recurrent network execution or host change is authorized by this guide.
+The current command does **not** schedule refreshes. The [operations guide](operations.md) must own the monitored transfer, application import, acknowledgement and failure recovery before a fresh-feed launch claim. An API read cannot refresh evidence or invent success. This guide authorizes no host change or service spend.
