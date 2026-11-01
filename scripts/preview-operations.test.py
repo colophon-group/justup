@@ -635,6 +635,22 @@ class OperatorUpgradeContracts(unittest.TestCase):
             self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
             self.assert_private_state_unchanged(fixture)
 
+    def test_failed_feed_preparation_keeps_verified_old_receipt_and_clears_its_lock(self):
+        with self.installation(add_feed=True) as fixture:
+            write = host.write_update_file
+            def fail_feed(path, data, mode=0o444):
+                if Path(path).name == 'preview-feed.py':
+                    raise OSError('simulated staging failure')
+                return write(path, data, mode)
+            with patch.object(host, 'write_update_file', side_effect=fail_feed):
+                with self.assertRaisesRegex(OSError, 'simulated staging failure'):
+                    host.upgrade_feed(fixture.new, fixture.previous,
+                                      fixture.before['planSha256'], fixture.after['planSha256'], 'a' * 64)
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+            self.assertEqual(list((fixture.base / '.preview-ops-updates').iterdir()), [])
+            self.assert_private_state_unchanged(fixture)
+
     def test_feed_crash_after_unit_install_leaves_pending_receipt_withdrawn(self):
         class Crash(BaseException):
             pass
@@ -649,6 +665,50 @@ class OperatorUpgradeContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'adoption is blocked'):
                 artifact.read_host_plan(fixture.base)
             self.assert_private_state_unchanged(fixture)
+
+    def test_feed_probe_requires_receiver_uid_and_actual_preview_cgroup(self):
+        with self.installation(add_feed=True) as fixture:
+            process = fixture.proc / '123'
+            process.mkdir()
+            uid = os.getuid()
+            (process / 'status').write_text('Uid:\t' + '\t'.join([str(uid)] * 4) + '\n')
+            (process / 'cmdline').write_bytes(b'/usr/bin/python3\x00/srv/justup_preview/ops/preview-feed.py\x00receive\x00')
+            (process / 'cgroup').write_text('0::/justup.slice/justup-preview.slice/justup-preview-feed@1.service\n')
+            host._probe_receiver_cgroup()
+            (process / 'cgroup').write_text('0::/system.slice/not-justup-preview.slice.service\n')
+            with self.assertRaisesRegex(ValueError, 'outside the preview slice'):
+                host._probe_receiver_cgroup()
+
+    def test_feed_unit_source_must_be_regular_protected_file(self):
+        with self.installation(add_feed=True) as fixture:
+            target = fixture.new / 'deploy/justup-preview' / host.FEED_UNITS[0]
+            source = fixture.root / 'other-unit'
+            source.write_bytes(target.read_bytes())
+            target.unlink()
+            target.symlink_to(source)
+            with self.assertRaisesRegex(ValueError, 'canonical'):
+                host.upgrade_feed(fixture.new, fixture.previous,
+                                  fixture.before['planSha256'], fixture.after['planSha256'], 'a' * 64)
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+
+    def test_feed_probe_accepts_only_the_forced_identity_command_in_key_options(self):
+        with self.installation(add_feed=True) as fixture:
+            home = fixture.root / 'deploy-home'
+            home.mkdir(mode=0o700)
+            ssh = home / '.ssh'
+            ssh.mkdir(mode=0o700)
+            key = ssh / 'authorized_keys'
+            key.write_bytes(b'restrict,command="/usr/bin/id" ssh-ed25519 synthetic-key\n')
+            key.chmod(0o600)
+            deploy = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(home))
+            with patch.object(host.pwd, 'getpwnam', return_value=deploy):
+                path, checksum, _ = host._feed_key_identity()
+                self.assertEqual(path, key)
+                self.assertEqual(checksum, host.digest(key))
+                key.write_bytes(b'ssh-ed25519 synthetic-key comment-command="/usr/bin/id"\n')
+                with self.assertRaisesRegex(ValueError, 'identity-probe'):
+                    host._feed_key_identity()
 
 
 class BoundaryContracts(unittest.TestCase):

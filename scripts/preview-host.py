@@ -23,7 +23,6 @@ import uuid
 import importlib.util
 import re
 import select
-import socket
 import stat
 import time
 
@@ -462,7 +461,12 @@ def _feed_key_identity():
     owned_path(key_path)
     data = key_path.read_bytes()
     lines = [line for line in data.splitlines() if line.strip()]
-    if len(lines) != 1 or b'command="/usr/bin/id"' not in lines[0]:
+    if len(lines) != 1:
+        raise ValueError('The deploy key must retain its exact identity-probe command.')
+    options, separator, key = lines[0].partition(b' ssh-ed25519 ')
+    if (not separator or not key or options.split(b',').count(b'command="/usr/bin/id"') != 1
+            or any(b'command=' in option for option in options.split(b',')
+                   if option != b'command="/usr/bin/id"')):
         raise ValueError('The deploy key must retain its exact identity-probe command.')
     return key_path, digest(key_path), deploy
 
@@ -484,7 +488,8 @@ def _probe_receiver_cgroup():
             if (len(ids) == 4 and all(value.isdigit() for value in ids)
                     and all(int(value) == api_uid for value in ids)
                     and b'preview-feed.py receive' in command):
-                if not any(SLICE in line for line in group.splitlines() if line.startswith('0::')):
+                if not any(SLICE in Path(line[3:]).parts for line in group.splitlines()
+                           if line.startswith('0::')):
                     raise ValueError('The feed receiver is outside the preview slice.')
                 return
         time.sleep(0.1)
@@ -501,7 +506,10 @@ def qualify_feed_units():
             or call('systemctl', 'show', '--property=ActiveState', '--value', socket_unit, capture=True) != 'inactive'
             or os.path.lexists(FEED_SOCKET)):
         raise ValueError('The new feed socket must begin disabled and inactive.')
-    call('/usr/bin/python3', str(BASE / 'ops/preview-feed.py'), 'prepare')
+    subprocess.run(['/usr/bin/python3', str(BASE / 'ops/preview-feed.py'), 'prepare'],
+                   check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=30,
+                   env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'PYTHONDONTWRITEBYTECODE': '1'})
     inbox = BASE / 'state/feed-inbox'
     receipt_dir = BASE / 'config/feed-receipts'
     api_uid = pwd.getpwnam(USER).pw_uid
@@ -528,7 +536,8 @@ def qualify_feed_units():
             raise ValueError('The feed socket permits an unexpected identity.')
         process = subprocess.Popen(['/usr/bin/python3', '-c', probe_code, str(FEED_SOCKET)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, preexec_fn=demote)
+                                   stderr=subprocess.DEVNULL, preexec_fn=demote,
+                                   env={'PATH': '/usr/bin:/bin', 'LANG': 'C'})
         ready, _, _ = select.select([process.stdout], [], [], 5)
         if not ready or process.stdout.readline() != b'ready\n':
             raise ValueError('The deploy UID could not reach the feed socket.')
@@ -628,10 +637,11 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
     os.fsync(fd)
     os.close(fd)
     sync_directory(BASE)
-    withdrawn = moved_old = moved_new = qualified = False
+    withdrawn = moved_old = moved_new = qualified = history_created = False
     installed_feed_units = []
     try:
         history.mkdir(mode=0o700)
+        history_created = True
         sync_directory(history_root)
         new_ops = history / 'prepared-ops'
         new_ops.mkdir(mode=0o755)
@@ -678,6 +688,20 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
                 'feedUnitsInstalled': add_feed,
                 'privateStateTouched': False, 'activated': False}
     except Exception:
+        if not withdrawn and history_created:
+            # Preparation has not changed live files. Discard only this new
+            # private history after re-proving the old receipt and inventory.
+            current = owned_path(marker)
+            if ((current.st_dev, current.st_ino) != (marker_meta.st_dev, marker_meta.st_ino)
+                    or marker.read_bytes() != marker_data):
+                raise ValueError('The old receipt changed; retain the pending lock for review.')
+            verify_operator_files(BASE / 'ops', scripts)
+            verify_operator_units(previous['files'])
+            guard()
+            owned_path(history, directory=True)
+            shutil.rmtree(history)
+            sync_directory(history_root)
+            qualified = True
         if withdrawn:
             # A missing receipt is the fail-closed state for a crash or a failed
             # rollback. Never restore it over unknown or partly replaced bytes.
@@ -865,7 +889,7 @@ def main():
             result = stop_preview()
         print(json.dumps({'ok': True, 'result': result}, sort_keys=True))
         return 0
-    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         # Do not publish raw command output, environment or provider responses.
         print(json.dumps({'ok': False, 'error': type(error).__name__}), file=sys.stderr)
         return 1
