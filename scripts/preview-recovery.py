@@ -196,7 +196,7 @@ def restore(snapshot, barrier, destination, prepare_command, now=None):
         # this module never guesses application table names or executes shell text.
         result = subprocess.run([*prepare_command, str(destination)], check=True, capture_output=True,
                                 env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
-                                     'JUSTUP_DEMO_DB_PATH': str(destination.parent / 'preview.sqlite')}, timeout=30)
+                                     'JUSTUP_DB_PATH': str(destination.parent / 'preview.sqlite')}, timeout=30)
         if len(result.stdout) > 4096:
             raise ValueError('Auth-owned restore receipt exceeds its bound.')
         receipt = json.loads(result.stdout)
