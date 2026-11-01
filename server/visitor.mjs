@@ -3,8 +3,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { POLICY_LOCALES } from './policies.mjs';
 import { problem } from './store.mjs';
-import { createProcessingAdmission } from './processing-admission.mjs';
-export { privateGeneration as visitorPrivateGeneration } from './processing-admission.mjs';
+import { createProcessingAdmission,privateGeneration as visitorPrivateGeneration } from './processing-admission.mjs';
+export { visitorPrivateGeneration };
 
 const DAY = 86_400_000;
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -30,6 +30,12 @@ export function createVisitorIdentity({db,now=Date.now,config={},accessForAccoun
   if(!db.prepare('PRAGMA table_info(justup_workspaces)').all().some(c=>c.name==='revision'))db.exec('ALTER TABLE justup_workspaces ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
   if(!db.prepare('PRAGMA table_info(justup_visitors)').all().some(c=>c.name==='interface_locale'))db.exec("ALTER TABLE justup_visitors ADD COLUMN interface_locale TEXT NOT NULL DEFAULT 'en'");
   const visitorRow=id=>db.prepare('SELECT * FROM justup_visitors WHERE id=? AND handed_to IS NULL AND expires_at>?').get(id,now());
+  // A not-yet-allocated cookie is valid only in the current deletion epoch.
+  // Isolated databases have no recovery file, so keep a per-instance nonce.
+  const isolated=config.dbPath==null||config.dbPath===':memory:';
+  let isolatedIssuanceEpoch=isolated?randomBytes(32).toString('base64url'):null;
+  const issuanceEpoch=()=>isolated?isolatedIssuanceEpoch:visitorPrivateGeneration(config);
+  const rotateIssuanceEpoch=()=>{if(isolated)isolatedIssuanceEpoch=randomBytes(32).toString('base64url');};
   const {processingAvailable,refreshAvailability,processingPolicy}=createProcessingAdmission({db,now,config,availability:visitorAvailability});
   function principal(id,{allowUnavailable=false,locale}={}) {
     if(typeof id!=='string')return null;
@@ -52,14 +58,21 @@ export function createVisitorIdentity({db,now=Date.now,config={},accessForAccoun
     return row?principal(row.id,options):null;
   }
   const tokenRetired=token=>TOKEN.test(token??'')&&Boolean(db.prepare('SELECT 1 FROM justup_visitors WHERE token_hash=? AND handed_to IS NOT NULL').get(hash(token)));
-  function open(token,{locale='en'}={}) {
+  function open(token,{locale='en',issuanceEpoch:expectedEpoch}={}) {
     if(!POLICY_LOCALES.includes(locale)||!processingAvailable(locale))throw problem('dependency_unavailable',503);
-    const current=fromToken(token,{locale});if(current)return {principal:current,token};
-    if(db.prepare('SELECT count(*) AS n FROM justup_visitors').get().n>=maxVisitors)throw problem('rate_limit',429);
-    token=TOKEN.test(token??'')?token:randomBytes(32).toString('base64url');const id=`visitor:${randomUUID()}`,at=now();
-    db.prepare('INSERT INTO justup_visitors(id,token_hash,created_at,expires_at) VALUES(?,?,?,?)').run(id,hash(token),at,at+ttl);
-    db.prepare('UPDATE justup_visitors SET interface_locale=? WHERE id=?').run(locale,id);
-    return {principal:principal(id,{locale}),token};
+    function allocate() {
+      const current=fromToken(token,{locale});if(current)return {principal:current,token};
+      if(!TOKEN.test(token??'')||expectedEpoch==null||expectedEpoch!==issuanceEpoch()||tokenRetired(token))throw problem('unauthenticated',401);
+      if(db.prepare('SELECT count(*) AS n FROM justup_visitors').get().n>=maxVisitors)throw problem('rate_limit',429);
+      const id=`visitor:${randomUUID()}`,at=now();
+      db.prepare('INSERT INTO justup_visitors(id,token_hash,created_at,expires_at,interface_locale) VALUES(?,?,?,?,?)').run(id,hash(token),at,at+ttl,locale);
+      const owner=principal(id,{locale});if(!owner)throw problem('dependency_unavailable',503);
+      return {principal:owner,token};
+    }
+    // A deletion writer must obtain this same SQLite write reservation before
+    // rotating its generation. Validate the hint after taking that reservation.
+    if(db.isTransaction)return allocate();
+    db.exec('BEGIN IMMEDIATE');try{const result=allocate();db.exec('COMMIT');return result;}catch(error){db.exec('ROLLBACK');throw error;}
   }
   function admit(owner,{creating=false}={}) {
     const row=visitorRow(owner);if(!row)throw problem('unauthenticated',401);
@@ -71,7 +84,7 @@ export function createVisitorIdentity({db,now=Date.now,config={},accessForAccoun
     if(!owner.startsWith('visitor:'))return;
     if(db.prepare('UPDATE justup_visitors SET matching_tasks=matching_tasks+1 WHERE id=? AND handed_to IS NULL AND expires_at>? AND matching_tasks<32').run(owner,now()).changes!==1)throw problem('task_limit',429);
   }
-  return {principal,fromToken,tokenRetired,open,admit,recordSubmission,admitMatching,processingAvailable,processingPolicy,refreshAvailability};
+  return {principal,fromToken,tokenRetired,open,admit,recordSubmission,admitMatching,processingAvailable,processingPolicy,refreshAvailability,issuanceEpoch,rotateIssuanceEpoch};
 }
 
 export function createVisitorService({db,feed,tasks,intent,matching,identity,config={},now=Date.now,beforePrivateDelete,withPrivateTransaction}={}) {
@@ -87,6 +100,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     const expired=db.prepare('SELECT id FROM justup_visitors WHERE expires_at<=?').all(now());
     if(!expired.length)return;
     deletion(()=>{for(const row of expired){intent.deleteAccountData(row.id);matching?.deleteAccountData?.(row.id);tasks.deleteOwner(row.id);deleteAccountData(row.id);db.prepare('DELETE FROM justup_visitors WHERE id=?').run(row.id);}});
+    identity.rotateIssuanceEpoch();
   }
   function semanticallyEmpty(owner) {
     if(!db.prepare('SELECT 1 FROM justup_visitors WHERE id=? AND handed_to IS NULL').get(owner))return false;
@@ -106,13 +120,15 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
   }
   function reclaimEmptyVisitor(owner) {
     if(!semanticallyEmpty(owner))return false;
-    return deletion(()=>{
+    const reclaimed=deletion(()=>{
       // The write transaction serializes this final check with a concurrent
       // draft, viewed action, search submission or another feature's work.
       if(!semanticallyEmpty(owner))return false;
       db.prepare('DELETE FROM justup_workspaces WHERE owner_id=?').run(owner);
       return db.prepare('DELETE FROM justup_visitors WHERE id=? AND handed_to IS NULL').run(owner).changes===1;
     });
+    if(reclaimed)identity.rotateIssuanceEpoch();
+    return reclaimed;
   }
   function workspace(owner) {
     const visible=new Set(feed.eligibleJobs({viewer:identity.principal(owner,{allowUnavailable:true})}).map(job=>job.id));
@@ -146,7 +162,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     db.prepare('DELETE FROM justup_recovered_drafts WHERE owner_id=?').run(owner);
     // An account deletion removes only its non-secret handoff receipts. A replay
     // of the spent cookie cannot recreate or attach the deleted account's data.
-    db.prepare('DELETE FROM justup_visitors WHERE handed_to=?').run(owner);
+    if(db.prepare('DELETE FROM justup_visitors WHERE handed_to=?').run(owner).changes)identity.rotateIssuanceEpoch();
   }
   function handoff(token,{db:authenticatedDb,accountId}={}) {
     if(authenticatedDb!==db||!db.isTransaction||typeof accountId!=='string'||!accountId)throw problem('unauthenticated',401);
@@ -206,7 +222,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
       return {status:200,body:tasks.publicView(task,intent.taskResult(task,privateCtx)??null)};
     }
     if(path==='/workspace'||/^\/workspace\/recovered-drafts\/[^/]+$/.test(path)||path==='/viewed')return stateRoute(privateCtx);
-    if(ctx.method==='DELETE'&&path==='/session') {deletion(()=>{intent.deleteAccountData(ownerId);matching?.deleteAccountData?.(ownerId);tasks.deleteOwner(ownerId);deleteAccountData(ownerId);db.prepare('DELETE FROM justup_visitors WHERE id=?').run(ownerId);});return {status:200,body:{deleted:true}};}
+    if(ctx.method==='DELETE'&&path==='/session') {deletion(()=>{intent.deleteAccountData(ownerId);matching?.deleteAccountData?.(ownerId);tasks.deleteOwner(ownerId);deleteAccountData(ownerId);db.prepare('DELETE FROM justup_visitors WHERE id=?').run(ownerId);});identity.rotateIssuanceEpoch();return {status:200,body:{deleted:true}};}
     return null;
   }
   function stateRoute(ctx) {
@@ -244,7 +260,8 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     return null;
   }
   return {identity,publicVisitor,cleanup,handoff,visitorRoute,route:stateRoute,deleteAccountData,
-    currentSession(token,options){cleanup();return identity.fromToken(token,options);},tokenRetired:token=>identity.tokenRetired(token),admitCreation:body=>intent.admitVisitorCreation(body),refreshAvailability:()=>identity.refreshAvailability(),
+    currentSession(token,options){cleanup();return identity.fromToken(token,options);},sessionExists:token=>identity.fromToken(token,{allowUnavailable:true})!==null,
+    tokenRetired:token=>identity.tokenRetired(token),issuanceEpoch:()=>identity.issuanceEpoch(),admitCreation:body=>intent.admitVisitorCreation(body),refreshAvailability:()=>identity.refreshAvailability(),
     discardEmptySession(token){const current=identity.fromToken(token,{allowUnavailable:true});if(current)reclaimEmptyVisitor(current.visitor.id);},
     openSession(token,options){cleanup();return identity.open(token,options);},
     capabilities:()=>({visitorSearch:POLICY_LOCALES.some(locale=>identity.processingAvailable(locale)),viewed:true,hiddenMatchCounts:typeof feed.restrictedLatestJobs==='function'})};

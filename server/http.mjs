@@ -74,6 +74,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   }
   const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
   const digest = (value) => createHmac('sha256', secret).update(value).digest('base64url');
+  const visitorHint = (seed,epoch) => digest(`visitor-owner:${epoch}:${seed}`);
   const csrf = (token, guestToken) => digest(token ? `session:${token}` : `guest:${guestToken}`);
   const cookie = (name, value, expiresAt) => `${name}=${value}; Path=/; HttpOnly; SameSite=Lax${insecure ? '' : '; Secure'}; Max-Age=${Math.max(0, Math.floor((expiresAt - now()) / 1000))}`;
   function limit(req, category) {
@@ -153,14 +154,15 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       if (method === 'GET' && path === '/session') {
         let visitor=null;
         if (!viewer) {
-          const retired=visitorService?.tokenRetired(visitorToken)||visitorService?.tokenRetired(digest(`visitor-owner:${guestToken}`));
+          if(visitorService&&policies(interfaceLocale).reviewed&&config.deletionReady?.()!==false)visitor=visitorService.currentSession(visitorToken,{locale:interfaceLocale});
+          const epoch=visitorService?.issuanceEpoch();
+          const retired=visitorService?.tokenRetired(visitorToken)||(epoch!=null&&visitorService?.tokenRetired(visitorHint(guestToken,epoch)));
           if(retired)guestToken=randomBytes(32).toString('base64url');
           const nextCookies=[cookie(csrfCookie, guestToken, now() + 3_600_000)];
-          if(visitorService&&policies(interfaceLocale).reviewed&&config.deletionReady?.()!==false)visitor=visitorService.currentSession(visitorToken,{locale:interfaceLocale});
           // This opaque ownership hint is stateless until an admitted search.
-          // Binding it to the pre-existing guest CSRF seed recovers a first POST
-          // whose entire response is lost without allocating another owner.
-          if(visitorService)nextCookies.push(cookie(visitorCookie,retired?digest(`visitor-owner:${guestToken}`):visitorToken??digest(`visitor-owner:${guestToken}`),visitor?.expiresAt??now()+86_400_000));
+          // Keep live ownership across epoch changes; replace unknown hints only
+          // here, never during a POST whose entire response could be lost.
+          if(visitorService){const hint=visitorService.sessionExists(visitorToken)?visitorToken:epoch==null?null:visitorHint(guestToken,epoch);nextCookies.push(cookie(visitorCookie,hint??'',hint==null?now():visitor?.expiresAt??now()+86_400_000));}
           res.setHeader('Set-Cookie',nextCookies);
         }
         return finish(200, sessionBody(viewer, sessionToken, guestToken,visitor,interfaceLocale));
@@ -265,10 +267,11 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         let ownerToken=visitorToken,opened;
         if(method==='POST'&&path==='/visitor/searches'&&!viewer&&!visitorService.currentSession(ownerToken,{locale:interfaceLocale})){
           visitorService.admitCreation(body);
-          // Unknown supplied cookies cannot choose the new ownership token.
-          ownerToken=digest(`visitor-owner:${guestToken}`);
-          if(visitorService.tokenRetired(ownerToken))throw problem('unauthenticated',401);
-          opened=visitorService.openSession(ownerToken,{locale:interfaceLocale});ownerToken=opened.token;
+          const epoch=visitorService.issuanceEpoch();
+          // Only the exact current pre-issued hint may become new ownership.
+          // A stale/deleted/unknown cookie must bootstrap through GET /session.
+          if(epoch==null||ownerToken!==visitorHint(guestToken,epoch)||visitorService.tokenRetired(ownerToken))throw problem('unauthenticated',401);
+          opened=visitorService.openSession(ownerToken,{locale:interfaceLocale,issuanceEpoch:epoch});ownerToken=opened.token;
         }
         let result;
         try{result=await visitorService.visitorRoute({method,path,url,body,viewer,visitorToken:ownerToken,interfaceLocale,requestId,db});}

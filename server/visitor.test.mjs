@@ -201,21 +201,88 @@ test('discarding more than the durable visitor cap worth of session cookies allo
 });
 
 test('losing the entire first search response reuses the prior stateless ownership cookie and one owner, search, task and inference',async t=>{
-  const s=await setup(t),c=s.client(),session=await c.session();assert.equal(session.body.visitor,null);
+  for(const storage of ['memory','file'])await t.test(storage,async t=>{
+  let runtime={};
+  if(storage==='file'){
+    const dir=mkdtempSync(join(tmpdir(),'justup-visitor-retry-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),privateGenerationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(privateGenerationPath,'00000000-0000-4000-8000-000000000000\n');runtime={dbPath:join(dir,'state.sqlite'),privateGenerationPath,backupDir};
+  }
+  const s=await setup(t,{runtime}),c=s.client(),session=await c.session();assert.equal(session.body.visitor,null);
   const previous=c.snapshot(),pendingCookie=c.jar.get('__Host-justup_visitor');assert(pendingCookie);assert.equal(JSON.stringify(session.body).includes(pendingCookie),false);
   const body={query:'Engineer',requestKey:'lost-first-response'},first=await c.request('/visitor/searches',{method:'POST',body});assert.equal(first.status,202);
+  // Another owner's completed deletion rotates issuance while this response is
+  // lost. Existing ownership must win over validation as an unallocated hint.
+  const epoch=s.visitor.issuanceEpoch(),other=s.client();await other.session();const unrelated=await other.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'unrelated'}});assert.equal(unrelated.status,202);
+  assert.equal((await other.request('/visitor/session',{method:'DELETE',body:{}})).status,200);
+  assert.notEqual(s.visitor.issuanceEpoch(),epoch);
   // Both headers and body disappeared: only cookies/CSRF established before the
   // POST survive. Repeated retries must not require its Set-Cookie response.
   for(let i=0;i<3;i++){c.restore(previous);const retry=await c.request('/visitor/searches',{method:'POST',body});assert.equal(retry.status,202);assert.equal(retry.body.search.id,first.body.search.id);assert.equal(retry.body.task.id,first.body.task.id);assert.equal(c.jar.get('__Host-justup_visitor'),pendingCookie);}
   assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_searches').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,1);
   await s.work('search_intent');c.restore(previous);const done=await c.request('/visitor/searches',{method:'POST',body});assert.equal(done.body.search.id,first.body.search.id);assert.equal(done.body.task.id,first.body.task.id);assert.equal(done.body.task.status,'succeeded');assert.equal(s.modelCalls(),1);
-  // A valid-format attacker-chosen cookie has no authority to choose a stored
-  // principal. New ownership is derived from its own prior CSRF cookie instead.
-  const other=s.client();await other.session();other.jar.set('__Host-justup_visitor','x'.repeat(43));const created=await other.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'chosen-token'}});assert.equal(created.status,202);assert.notEqual(other.jar.get('__Host-justup_visitor'),'x'.repeat(43));assert.notEqual(created.body.search.id,first.body.search.id);
+  // Unknown supplied cookies require a fresh session bootstrap. A first POST
+  // must not silently substitute another ownership token.
+  await other.session();other.jar.set('__Host-justup_visitor','x'.repeat(43));const chosen={query:'Engineer',requestKey:'chosen-token'};
+  assert.equal((await other.request('/visitor/searches',{method:'POST',body:chosen})).status,401);assert.equal(other.jar.get('__Host-justup_visitor'),'x'.repeat(43));
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);
+  await other.session();assert.notEqual(other.jar.get('__Host-justup_visitor'),'x'.repeat(43));const created=await other.request('/visitor/searches',{method:'POST',body:chosen});assert.equal(created.status,202);assert.notEqual(created.body.search.id,first.body.search.id);
   // A spent sign-in receipt cannot be reused as a new owner. A fresh session
   // supplies a new stateless binding without changing the transferred data.
   await c.login('one');c.restore(previous);assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'spent'}})).status,401);
   assert.equal((await c.session()).body.visitor,null);assert.notEqual(c.jar.get('__Host-justup_visitor'),pendingCookie);assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'fresh-after-spent'}})).status,202);
+  });
+});
+
+test('deleted and reclaimed ownership cookies cannot recreate or read a future private workspace, even when the deletion response is lost',async t=>{
+  for(const storage of ['memory','file'])for(const removing of ['session','last-search'])await t.test(`${storage}/${removing}`,async t=>{
+    let runtime={};
+    if(storage==='file'){
+      const dir=mkdtempSync(join(tmpdir(),'justup-visitor-epoch-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),privateGenerationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(privateGenerationPath,'00000000-0000-4000-8000-000000000000\n');
+      runtime={dbPath:join(dir,'state.sqlite'),privateGenerationPath,backupDir};
+    }
+    const s=await setup(t,{runtime}),c=s.client();await c.session();const id=await s.create(c),beforeDelete=c.snapshot(),oldToken=c.jar.get('__Host-justup_visitor'),oldOwner=s.identity.fromToken(oldToken).visitor.id;
+    const path=removing==='session'?'/visitor/session':`/visitor/searches/${id}`;
+    assert.equal((await c.request(path,{method:'DELETE',body:{}})).status,200);
+    // Discard all DELETE headers and body, retaining the prior seed and hint.
+    c.restore(beforeDelete);const body={query:'Future private query',requestKey:'future'};
+    for(let i=0;i<2;i++)assert.equal((await c.request('/visitor/searches',{method:'POST',body})).status,401);
+    for(const table of ['justup_visitors','demo_searches','demo_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+    assert.equal((await c.request('/visitor/workspace')).status,401);
+    const fresh=await c.session();assert.equal(fresh.body.visitor,null);assert.notEqual(c.jar.get('__Host-justup_visitor'),oldToken);
+    assert.equal(c.jar.get('__Host-justup_csrf'),beforeDelete.jar.find(([key])=>key==='__Host-justup_csrf')[1],'the same guest CSRF seed is safe across epochs');
+    assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+    const future=await c.request('/visitor/searches',{method:'POST',body});assert.equal(future.status,202);assert.notEqual(s.identity.fromToken(c.jar.get('__Host-justup_visitor')).visitor.id,oldOwner);
+    const old=s.client();old.restore(beforeDelete);
+    for(const path of ['/visitor/searches','/visitor/workspace',`/visitor/searches/${future.body.search.id}/results?revision=0`])assert.equal((await old.request(path)).status,401);
+    assert.equal((await old.request('/visitor/searches',{method:'POST',body})).status,401);
+    assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_searches').get().n,1);
+  });
+});
+
+test('an unallocated hint invalidated by unrelated deletion requires session bootstrap without creating private state',async t=>{
+  const s=await setup(t),pending=s.client(),other=s.client();await pending.session();const old=pending.snapshot();await other.session();await s.create(other);
+  assert.equal((await other.request('/visitor/session',{method:'DELETE',body:{}})).status,200);
+  const body={query:'Engineer',requestKey:'stale-unallocated'};
+  assert.equal((await pending.request('/visitor/searches',{method:'POST',body})).status,401);assert.deepEqual(pending.snapshot(),old);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+  await pending.session();assert.equal((await pending.request('/visitor/searches',{method:'POST',body})).status,202);
+});
+
+test('issuance is rechecked after admission and before allocating a durable owner',async t=>{
+  const s=await setup(t),c=s.client();await c.session();const original=s.visitor.openSession;
+  s.visitor.openSession=(token,options)=>{s.identity.rotateIssuanceEpoch();return original(token,options);};
+  const body={query:'Engineer',requestKey:'changed-during-admission'};
+  assert.equal((await c.request('/visitor/searches',{method:'POST',body})).status,401);
+  for(const table of ['justup_visitors','demo_searches','demo_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+  s.visitor.openSession=original;await c.session();assert.equal((await c.request('/visitor/searches',{method:'POST',body})).status,202);
+});
+
+test('removing a handoff receipt with its deleted account cannot revive the spent visitor hint in isolated storage',async t=>{
+  const s=await setup(t),c=s.client();await c.session();await s.create(c);const prior=c.snapshot();await c.login('one');
+  assert.equal((await c.request('/account',{method:'DELETE',body:{}})).status,200);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+  c.restore(prior);assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'spent-after-delete'}})).status,401);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+  await c.session();assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'new-after-delete'}})).status,202);
 });
 
 test('deleting the last search reclaims an empty visitor so discarded cookies cannot fill the retained-principal cap',async t=>{
@@ -273,6 +340,7 @@ test('current policy closure revokes existing visitor reads, query writes and qu
   const pending=await c.request(`/visitor/searches/${id}`,{method:'PATCH',body:{query:'Persisted pending edit',requestKey:'pending-edit',expectedRevision:1}});assert.equal(pending.status,202);
   const before=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,modelCalls=s.modelCalls(),providerCalls=s.providerCalls();
   s.config.policiesReviewed=false;s.identity.refreshAvailability();
+  const cookie=c.jar.get('__Host-justup_visitor');assert.equal((await c.session()).body.visitor,null);assert.equal(c.jar.get('__Host-justup_visitor'),cookie,'policy closure must retain live ownership for explicit cleanup');
   assert.equal((await s.results(c,id)).status,503);
   assert.notEqual((await c.request(`/visitor/searches/${id}`,{method:'PATCH',body:{query:'Must not persist',requestKey:'denied',expectedRevision:1}})).status,202);
   assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,before);assert.equal(JSON.parse(s.app.store.db.prepare('SELECT draft_json FROM demo_searches WHERE id=?').get(id).draft_json).query,'Persisted pending edit');

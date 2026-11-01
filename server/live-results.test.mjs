@@ -179,7 +179,7 @@ test('search revision, cross-owner identity and logout cannot authorize stale ro
 
 test('visitor cookies, same-origin checks, connection caps and service close enforce the transport boundary', async t => {
   const s = await setup(t, { maxConnectionsPerOwner: 1 }); s.importJobs([job('hidden', AT - DAY), job('eligible')]);
-  const visitor = s.identity.open(null); s.search(visitor.principal.visitor.id, 'visitor-search');
+  const visitor = s.identity.open(createHash('sha256').update('isolated-visitor-fixture').digest('base64url'),{issuanceEpoch:s.identity.issuanceEpoch()}); s.search(visitor.principal.visitor.id, 'visitor-search');
   const stream = await s.connect('a', { visitorToken: visitor.token }); const first = await stream.next(); assert.deepEqual(ids(first), ['eligible']); assert(!JSON.stringify(first).includes('"hidden"'));
   const capped = await s.connect('a', { visitorToken: visitor.token }); assert.equal(capped.res.status, 429); stream.close();
   const origin = await s.connect('a', { headers: { Origin: 'https://elsewhere.example' } }); assert.equal(origin.res.status, 403);
