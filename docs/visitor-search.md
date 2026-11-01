@@ -5,9 +5,11 @@ read_when: Wiring signed-out search, draft persistence, viewed actions or curren
 
 # Visitor search and sign-in
 
-The API gives a visitor a separate temporary principal. It never gives that principal an account, session token, or full access. Its fixed lifetime is 24 hours from creation. `GET /api/v1/session` sets `__Host-justup_visitor` with HttpOnly, Secure, SameSite=Lax and Path=/; explicitly enabled loopback HTTP uses `justup_visitor`. The account and CSRF cookie names remain independent. The private database stores only a hash of the random ownership token. No ownership token or internal visitor ID appears in JSON.
+The API gives a visitor a separate temporary principal. It never gives that principal an account, session token, or full access. Its fixed lifetime is 24 hours from creation. `GET /api/v1/session` sets only the independent guest CSRF cookie and reads existing ownership; it never allocates a durable visitor. The first admitted `POST /visitor/searches`, after Origin, CSRF, current policy/deletion checks and input admission, sets `__Host-justup_visitor` with HttpOnly, Secure, SameSite=Lax and Path=/; explicitly enabled loopback HTTP uses `justup_visitor`. Before that submission, `session.visitor` is null and unsent text remains in browser memory. Invalid or unavailable submissions do not retain an empty visitor. The private database stores only a hash of the random ownership token. No ownership token or internal visitor ID appears in JSON.
 
 The session adds `visitor: {expiresAt: string} | null` and `capabilities.visitorSearch`. Account sessions have `visitor:null`. Visitor search opens only with approved policy configuration and an available private-deletion barrier. Unreviewed `product-draft-4` is not authorization to enable it. Interpretation still requires the exact same-build runner heartbeat; the API has no provider credentials and runs no inference. Each mutation requires the exact Origin, a session-derived CSRF token, bounded JSON and the existing peer limits. Company requests and other account operations remain account-only.
+
+Existing visitor reads and mutations also check current policy, deletion and maintenance availability. A restart with unreviewed policies revokes processing of persisted work before routes open. API composition publishes one non-secret SQLite admission proof bound to its source/build, reviewed policy version and current private generation. Startup first disables prior proof. Successful maintenance refreshes it every minute; active authority checks refresh at most once per 30 seconds unless its state changes. The independent queue rejects absent, disabled, wrong-build, future or at-least-90-second-old proof, and rechecks it before inference and before committing. Thus API loss has a bounded 90-second fail-closed window; this is not a claim of instantaneous propagation from periodic refresh. Queue reads also require the current private-generation file to be regular, stable and free of a pending deletion marker. Its default is `private-generation` beside the database; unreadable or missing state denies visitor work. The queue never clears a marker. Explicit authenticated-cookie deletion and expired-state cleanup remain available independently of processing admission, subject to the real deletion barrier.
 
 ## Browser routes
 
@@ -25,7 +27,7 @@ All paths below have `/api/v1` before them. Queries and drafts belong only in JS
 | `GET /visitor/workspace` | Workspace snapshot below. |
 | `PATCH /visitor/workspace` | Workspace compare-and-set body below. |
 | `POST /visitor/viewed` | `{jobId}` → `{viewed:true}`; record only an outbound company-posting activation, not an impression. |
-| `DELETE /visitor/session` | `{}` → `{deleted:true}`; deletes all temporary state and revokes the cookie. Read session again to start an empty visitor. |
+| `DELETE /visitor/session` | `{}` → `{deleted:true}`; deletes all temporary state. The next admitted search creates fresh ownership. |
 
 The signed-in equivalents remain `/searches`, `/tasks/:id`, `/workspace` and `/viewed`. Both result paths return the same hidden-count states. A signed-in browser cannot dispatch through `/visitor/*`. An unauthenticated browser cannot use private `/searches`, `/workspace`, company requests or account operations.
 
