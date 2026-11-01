@@ -2,7 +2,7 @@
 // changing anonymous retention, admission, workspace state or shared-browser isolation.
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { POLICY_LOCALES } from './policies.mjs';
-import { problem } from './store.mjs';
+import { problem,transaction } from './store.mjs';
 import { createProcessingAdmission,privateGeneration as visitorPrivateGeneration } from './processing-admission.mjs';
 export { visitorPrivateGeneration };
 
@@ -91,6 +91,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
   if(!identity||!intent||!feed||!tasks||!db)throw new TypeError('Visitor services are required.');
   const ownerOf=viewer=>viewer?.visitor?.id??viewer?.account?.id??null;
   const publicVisitor=viewer=>viewer?.visitor?{expiresAt:new Date(viewer.expiresAt).toISOString()}:null;
+  const emptyWorkspace=()=>({revision:0,state:{activeSearchId:null,drafts:{}},viewed:[],recoveredDrafts:[]});
   function deletion(work) {
     if(typeof beforePrivateDelete!=='function'||typeof withPrivateTransaction!=='function')throw problem('deletion_unavailable',503);
     if(db.isTransaction){beforePrivateDelete();return work();}
@@ -136,22 +137,57 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     const state=db.prepare('SELECT state_json,revision FROM justup_workspaces WHERE owner_id=?').get(owner);
     return {recoveredDrafts:db.prepare('SELECT id,text,created_at FROM justup_recovered_drafts WHERE owner_id=? ORDER BY created_at,id').all(owner).map(r=>({id:r.id,text:r.text,createdAt:new Date(r.created_at).toISOString()})),revision:state?.revision??0,state:state?JSON.parse(state.state_json):{activeSearchId:null,drafts:{}},viewed:db.prepare('SELECT job_id AS jobId,first_viewed_at AS at FROM justup_viewed WHERE owner_id=? ORDER BY first_viewed_at,job_id').all(owner).filter(r=>visible.has(r.jobId)).map(r=>({jobId:r.jobId,firstViewedAt:new Date(r.at).toISOString()}))};
   }
-  function writeWorkspace(owner,body) {
+  function validateWorkspace(owner,body) {
     keys(body,['expectedRevision','activeSearchId','drafts']);
     if(!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0)throw problem('invalid_input');
     if(body.activeSearchId!==null&&(typeof body.activeSearchId!=='string'||body.activeSearchId.length>128))throw problem('invalid_input');
     if(!body.drafts||typeof body.drafts!=='object'||Array.isArray(body.drafts)||Object.keys(body.drafts).length>100)throw problem('invalid_input');
-    const own=new Set(db.prepare('SELECT id FROM justup_searches WHERE owner_id=?').all(owner).map(r=>r.id));
+    const own=new Set(owner?db.prepare('SELECT id FROM justup_searches WHERE owner_id=?').all(owner).map(r=>r.id):[]);
     if(body.activeSearchId!==null&&!own.has(body.activeSearchId))throw problem('not_found',404);
     for(const [id,draft] of Object.entries(body.drafts))if((id!=='new'&&!own.has(id))||typeof draft!=='string'||draft.length>4000||/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(draft))throw problem('invalid_input');
     const state={activeSearchId:body.activeSearchId,drafts:body.drafts};
     const json=JSON.stringify(state);if(Buffer.byteLength(json)>60_000)throw problem('invalid_input');
+    return {state,json};
+  }
+  function writeWorkspace(owner,body) {
+    const {json}=validateWorkspace(owner,body);
     savepoint(db,()=>{
       if(!identity.principal(owner,{allowUnavailable:true}))throw problem('unauthenticated',401);
       const current=workspace(owner).revision;if(current!==body.expectedRevision)throw problem('revision_conflict',409);
       db.prepare('INSERT INTO justup_workspaces(owner_id,state_json,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,revision=excluded.revision').run(owner,json,now(),current+1);
     });
     return workspace(owner);
+  }
+  function bootstrapWorkspace(token,options,body) {
+    const {state}=validateWorkspace(null,body);
+    if(body.expectedRevision!==0)throw problem('revision_conflict',409);
+    if(!Object.values(state.drafts).some(text=>text.length>0))return {workspace:emptyWorkspace()};
+    // No owner can survive without its first saved private draft, including a
+    // failed validation/write. A lost response retains the pre-issued cookie.
+    return transaction(db,()=>{
+      const opened=identity.open(token,options);
+      return {...opened,workspace:writeWorkspace(opened.principal.visitor.id,body)};
+    });
+  }
+  function searchCreated({ownerId,searchId,query,rawQuery=query}) {
+    if(!db.isTransaction)throw new TypeError('Search association requires its creation transaction.');
+    const saved=db.prepare('SELECT state_json,revision FROM justup_workspaces WHERE owner_id=?').get(ownerId);
+    const state=saved?JSON.parse(saved.state_json):{activeSearchId:null,drafts:{}},draft=state.drafts.new;
+    // A newer draft or tab selection belongs to the concurrent user action.
+    // Replayed request keys never invoke this callback again.
+    if(draft!==undefined){if(typeof draft!=='string'||draft.trim()!==query)return;}
+    else if(state.activeSearchId!==null)return;
+    const next={activeSearchId:state.activeSearchId??searchId,drafts:{...state.drafts,[searchId]:draft??rawQuery}};delete next.drafts.new;
+    const revision=saved?.revision??0,{json}=validateWorkspace(ownerId,{expectedRevision:revision,...next});
+    db.prepare('INSERT INTO justup_workspaces(owner_id,state_json,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,revision=excluded.revision').run(ownerId,json,now(),revision+1);
+  }
+  function searchDeleted({ownerId,searchId}) {
+    if(!db.isTransaction)throw new TypeError('Search association requires its deletion transaction.');
+    const saved=db.prepare('SELECT state_json,revision FROM justup_workspaces WHERE owner_id=?').get(ownerId);if(!saved)return;
+    const state=JSON.parse(saved.state_json);if(!Object.hasOwn(state.drafts,searchId)&&state.activeSearchId!==searchId)return;
+    delete state.drafts[searchId];if(state.activeSearchId===searchId)state.activeSearchId=null;
+    const {json}=validateWorkspace(ownerId,{expectedRevision:saved.revision,...state});
+    db.prepare('UPDATE justup_workspaces SET state_json=?,revision=revision+1,updated_at=? WHERE owner_id=? AND revision=?').run(json,now(),ownerId,saved.revision);
   }
   function recoveryBudget(owner) {
     const budget=db.prepare('SELECT count(*) AS n,coalesce(sum(length(CAST(text AS BLOB))),0) AS bytes FROM justup_recovered_drafts WHERE owner_id=?').get(owner);
@@ -249,7 +285,13 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
       })};
     }
     if(ctx.method==='GET'&&ctx.path==='/workspace')return {status:200,body:workspace(owner)};
-    if(ctx.method==='PATCH'&&ctx.path==='/workspace')return {status:200,body:writeWorkspace(owner,ctx.body)};
+    if(ctx.method==='PATCH'&&ctx.path==='/workspace'){
+      const {state}=validateWorkspace(owner,ctx.body);
+      if(ctx.viewer.visitor&&state.activeSearchId===null&&!Object.values(state.drafts).some(text=>text.length>0)){
+        return {status:200,body:deletion(()=>{const result=writeWorkspace(owner,ctx.body);return reclaimEmptyVisitor(owner)?emptyWorkspace():result;})};
+      }
+      return {status:200,body:writeWorkspace(owner,ctx.body)};
+    }
     if(ctx.method==='POST'&&ctx.path==='/viewed'){
       keys(ctx.body,['jobId']);if(typeof ctx.body.jobId!=='string'||ctx.body.jobId.length>128)throw problem('invalid_input');
       return savepoint(db,()=>{
@@ -264,7 +306,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     }
     return null;
   }
-  return {identity,publicVisitor,cleanup,handoff,visitorRoute,route:stateRoute,deleteAccountData,
+  return {identity,publicVisitor,cleanup,handoff,visitorRoute,route:stateRoute,deleteAccountData,emptyWorkspace,bootstrapWorkspace,searchCreated,searchDeleted,
     currentSession(token,options){cleanup();return identity.fromToken(token,options);},sessionExists:token=>identity.fromToken(token,{allowUnavailable:true})!==null,
     tokenRetired:token=>identity.tokenRetired(token),issuanceEpoch:()=>identity.issuanceEpoch(),admitCreation:body=>intent.admitVisitorCreation(body),refreshAvailability:()=>identity.refreshAvailability(),
     discardEmptySession(token){const current=identity.fromToken(token,{allowUnavailable:true});if(current)reclaimEmptyVisitor(current.visitor.id);},

@@ -140,7 +140,7 @@ export function primaryMatches(job, {filters:f}) {
   return true;
 }
 
-export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability,ownerAuthority,visitorIdentity,readingPreferences,records}={}) {
+export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability,ownerAuthority,visitorIdentity,readingPreferences,records,onSearchCreated,onSearchDeleted}={}) {
   if(!db||!feed||!tasks) throw new TypeError('Search dependencies are required.');
   db.exec(`CREATE TABLE IF NOT EXISTS justup_searches(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,accepted_json TEXT,draft_json TEXT,task_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
     CREATE INDEX IF NOT EXISTS justup_searches_owner ON justup_searches(owner_id);
@@ -343,7 +343,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     }
     if(ctx.method==='DELETE'&&ctx.path===`/searches/${id}`) {
       if(typeof beforePrivateDelete!=='function') throw err('deletion_unavailable',503,'Deletion is temporarily unavailable.');
-      const remove=()=>{const barrier=beforePrivateDelete();if(barrier&&typeof barrier.then==='function') throw new TypeError('Deletion barrier must be synchronous.');purgeSearch(ownerOf(ctx),id);};
+      const remove=()=>{const barrier=beforePrivateDelete();if(barrier&&typeof barrier.then==='function') throw new TypeError('Deletion barrier must be synchronous.');purgeSearch(ownerOf(ctx),id);const result=onSearchDeleted?.({ownerId:ownerOf(ctx),searchId:id});if(result&&typeof result.then==='function')throw new TypeError('Search deletion hooks must be synchronous.');};
       if(withPrivateTransaction)withPrivateTransaction(remove);
       else try{tx(db,remove);}finally{if(!db.isTransaction)afterPrivateTransaction?.();}
       return {status:200,body:{deleted:true}};
@@ -380,8 +380,10 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       if(!available()) throw err('dependency_unavailable',503,'Search interpretation is temporarily unavailable.');
       if(creating&&db.prepare('SELECT count(*) n FROM justup_searches WHERE owner_id=?').get(ownerOf(ctx)).n>=20) throw err('task_limit',429,'The search limit has been reached.');
       const searchId=creating?randomUUID():id;
-      const task=tasks.enqueue({ownerId:ownerOf(ctx),kind:'search_intent',requestKey,payload:{searchId,query,expectedRevision:expected,...(presentationLocale?{presentationLocale}:{}),...(authority(ownerOf(ctx),false,presentationLocale)?.processingPolicy?{policyKey:authority(ownerOf(ctx),false,presentationLocale).processingPolicy.key}:{})}});
-      try { tx(db,()=>{
+      let task;
+      tx(db,()=>{
+        const current=authority(ownerOf(ctx),false,presentationLocale);if(!current)throw err('unauthenticated',401);
+        task=tasks.enqueue({ownerId:ownerOf(ctx),kind:'search_intent',requestKey,payload:{searchId,query,expectedRevision:expected,...(presentationLocale?{presentationLocale}:{}),...(current.processingPolicy?{policyKey:current.processingPolicy.key}:{})}});
         if(ctx.viewer.visitor)visitorIdentity?.recordSubmission(ownerOf(ctx));
         if(creating) db.prepare('INSERT INTO justup_searches VALUES(?,?,0,NULL,?,?,?,?)').run(searchId,ownerOf(ctx),JSON.stringify({query,taskId:task.id}),task.id,now(),now());
         else {
@@ -391,7 +393,8 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
         }
         db.prepare('INSERT INTO justup_search_submissions VALUES(?,?,?,?,?)').run(ownerOf(ctx),requestKey,searchId,fingerprint,task.id);
         if(value)readingPreferences.saveOptions(ownerOf(ctx),searchId,value);
-      }); } catch(e) { tasks.delete(ownerOf(ctx),task.id); throw e; }
+        if(creating){const result=onSearchCreated?.({ownerId:ownerOf(ctx),searchId,query,rawQuery:ctx.body.query});if(result&&typeof result.then==='function')throw new TypeError('Search creation hooks must be synchronous.');}
+      });
       if(editing)try{records?.evaluations.stage({ownerId:ownerOf(ctx),referenceId:searchId,revision:expected,task:'search_intent',reason:'edit_requires_review',locale:ctx.interfaceLocale});}catch{}
       try{records?.observe({ownerId:ownerOf(ctx),event:'search_submitted',key:task.id,referenceId:searchId,viewer:ctx.viewer,locale:ctx.interfaceLocale,outcome:'accepted'});}catch{}
       return {status:202,body:{search:publicSearch(row(ownerOf(ctx),searchId)),task:tasks.publicView(task)}};

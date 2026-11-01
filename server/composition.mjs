@@ -45,7 +45,7 @@ export function createApiServices(deps){
   const readingPreferences=createReadingPreferencesService({...deps,ownerAuthority:identity.principal});
   const heartbeat=()=>readRunnerStatus({config:{dbPath:config.dbPath,runnerStatusPath:config.runnerStatusPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},now}).capabilities;
   const matching=createMatchingService({...deps,...ownership,readingPreferences,config:apiConfig,readOnlyProvider:true,availability:()=>heartbeat().aiMatching});
-  const intent=createIntentService({...deps,...ownership,readingPreferences,config:apiConfig,model:undefined,matching,availability:()=>heartbeat().search});
+  const intent=createIntentService({...deps,...ownership,readingPreferences,config:apiConfig,model:undefined,matching,availability:()=>heartbeat().search,onSearchCreated:event=>visitor.searchCreated(event),onSearchDeleted:event=>visitor.searchDeleted(event)});
   const companies=createCompanyService({...deps,...ownership,readingPreferences,config:apiConfig,model:undefined,availability:()=>heartbeat().companyRequests});
   const visitor=createVisitorService({...deps,config:apiConfig,identity,intent,matching});
   const liveResults=createLiveResultsService({...deps,intent});
