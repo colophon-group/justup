@@ -347,7 +347,7 @@ class ArtifactContracts(unittest.TestCase):
 
 class OperatorUpgradeContracts(unittest.TestCase):
     @contextmanager
-    def installation(self, *, add_feed=False):
+    def installation(self, *, add_feed=False, add_drill=False):
         with tempfile.TemporaryDirectory() as temp, ExitStack() as patches:
             root = Path(temp).resolve()
             old_source, new_source, base, units, proc = [root / name for name in ('old', 'new', 'mount', 'units', 'proc')]
@@ -357,6 +357,10 @@ class OperatorUpgradeContracts(unittest.TestCase):
                 if not path.name.endswith('.test.py'):
                     shutil.copyfile(path, old_source / 'scripts' / path.name)
             shutil.copytree(old_source, new_source)
+            if add_drill:
+                # Generate the complete predecessor plan from its actual file
+                # set; never filter a candidate plan to invent a predecessor.
+                (old_source / 'scripts/preview-failure-drill.py').unlink()
             if not add_feed:
                 artifact_source = new_source / 'scripts/preview-artifact.py'
                 artifact_source.write_text(artifact_source.read_text() + '\n# fixture revised operator bytes\n')
@@ -561,6 +565,158 @@ class OperatorUpgradeContracts(unittest.TestCase):
                     self.upgrade(fixture)
             self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
             self.assertEqual(host.digest(fixture.base / 'ops/preview-artifact.py'), fixture.before['files']['scripts/preview-artifact.py'])
+            self.assert_private_state_unchanged(fixture)
+
+    def drill_upgrade(self, fixture):
+        return host.upgrade_drill(fixture.new, fixture.previous, fixture.before['planSha256'],
+                                  fixture.after['planSha256'], 'a' * 64)
+
+    def test_drill_adoption_verifies_the_helper_before_publishing_the_new_receipt(self):
+        with self.installation(add_drill=True) as fixture:
+            self.assertEqual(set(fixture.after['files']) - set(fixture.before['files']), host.DRILL_ADDITIONS)
+            self.assertFalse((fixture.base / 'ops/preview-failure-drill.py').exists())
+            publish = host.publish_receipt
+            def checked_publication(marker, temporary, data):
+                self.assertFalse(marker.exists())
+                helper = fixture.base / 'ops/preview-failure-drill.py'
+                self.assertEqual(host.digest(helper), fixture.after['files']['scripts/preview-failure-drill.py'])
+                self.assertEqual(stat.S_IMODE(helper.stat().st_mode), 0o555)
+                return publish(marker, temporary, data)
+            with patch.object(host, 'publish_receipt', side_effect=checked_publication) as publication:
+                result = self.drill_upgrade(fixture)
+            publication.assert_called_once()
+            self.assertTrue(result['drillHelperInstalled'])
+            self.assertFalse(result['feedUnitsInstalled'])
+            self.assertFalse(result['activated'])
+            self.assertFalse(result['privateStateTouched'])
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.after['planSha256'])
+            self.assertEqual(stat.S_IMODE(fixture.marker.stat().st_mode), 0o444)
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+            history = next((fixture.base / '.preview-ops-updates').iterdir())
+            self.assertEqual(json.loads((history / 'previous-plan.json').read_text()), fixture.before)
+            self.assertEqual(json.loads((history / 'new-plan.json').read_text()), fixture.after)
+            self.assertFalse((history / 'previous-ops/preview-failure-drill.py').exists())
+            self.assertEqual(host.digest(fixture.base / 'ops/preview-artifact.py'), fixture.after['files']['scripts/preview-artifact.py'])
+            self.assertFalse(any('preview-failure-drill.py' in str(argument)
+                                 for command in fixture.commands for argument in command))
+            self.assert_private_state_unchanged(fixture)
+
+    def test_drill_inventory_and_boundary_rejections_happen_before_any_write(self):
+        for condition in ('missing-helper', 'extra-script', 'removed-script', 'changed-unit',
+                          'native-pins', 'license', 'resource', 'uid'):
+            with self.subTest(condition=condition), self.installation(add_drill=True) as fixture, ExitStack() as changes:
+                if condition == 'missing-helper':
+                    (fixture.new / 'scripts/preview-failure-drill.py').unlink()
+                elif condition == 'extra-script':
+                    (fixture.new / 'scripts/preview-unapproved.py').write_text('unapproved fixture')
+                elif condition == 'removed-script':
+                    (fixture.new / 'scripts/preview-recovery.py').unlink()
+                elif condition == 'changed-unit':
+                    (fixture.new / 'deploy/justup-preview' / host.UNITS[-1]).write_text('changed fixture unit')
+                elif condition in {'native-pins', 'license'}:
+                    asset = 'runtime.json' if condition == 'native-pins' else 'codex-LICENSE'
+                    path = fixture.new / 'deploy/justup-preview' / asset
+                    path.write_bytes(path.read_bytes() + b'\nchanged fixture\n')
+                elif condition == 'resource':
+                    changes.enter_context(patch.object(host, 'DISK_LIMIT', host.DISK_LIMIT + 4096))
+                else:
+                    changes.enter_context(patch.object(host, 'MODEL_USER', 'unapproved-model-fixture'))
+                fixture.after = host.plan(fixture.new, 'a' * 64)
+                original_receipt = fixture.marker.read_bytes()
+                with patch.object(host, 'write_update_file') as write, self.assertRaises(ValueError):
+                    self.drill_upgrade(fixture)
+                write.assert_not_called()
+                self.assertEqual(fixture.marker.read_bytes(), original_receipt)
+                self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+                self.assertFalse((fixture.base / '.preview-ops-updates').exists())
+                self.assertFalse((fixture.base / 'ops/preview-failure-drill.py').exists())
+                self.assert_private_state_unchanged(fixture)
+
+    def test_drill_adoption_is_not_an_ordinary_or_feed_upgrade_and_cannot_repeat(self):
+        with self.installation(add_drill=True) as fixture:
+            for upgrade in (host.upgrade_ops, host.upgrade_feed):
+                with self.subTest(command=upgrade.__name__), self.assertRaises(ValueError):
+                    upgrade(fixture.new, fixture.previous, fixture.before['planSha256'],
+                            fixture.after['planSha256'], 'a' * 64)
+                self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+                self.assertFalse((fixture.base / '.preview-ops-updates').exists())
+            self.assert_private_state_unchanged(fixture)
+        with self.installation() as fixture:
+            with self.assertRaisesRegex(ValueError, 'exact reviewed helper addition'):
+                self.drill_upgrade(fixture)
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+            self.assert_private_state_unchanged(fixture)
+
+    def test_drill_post_swap_or_publication_failure_restores_old_inventory_before_receipt(self):
+        for failure in ('new-inventory-verification', 'receipt-publication'):
+            with self.subTest(failure=failure), self.installation(add_drill=True) as fixture:
+                publish, verify = host.publish_receipt, host.verify_operator_files
+                injected = False
+                def verify_inventory(path, expected):
+                    nonlocal injected
+                    if (failure == 'new-inventory-verification' and not injected
+                            and path == fixture.base / 'ops' and (path / 'preview-failure-drill.py').exists()):
+                        self.assertFalse(fixture.marker.exists())
+                        injected = True
+                        raise OSError('fixture new inventory failure')
+                    return verify(path, expected)
+                def publish_receipt(marker, temporary, data):
+                    nonlocal injected
+                    self.assertFalse(marker.exists())
+                    if not injected:
+                        self.assertEqual(failure, 'receipt-publication')
+                        injected = True
+                        raise OSError('fixture publication failure')
+                    self.assertFalse((fixture.base / 'ops/preview-failure-drill.py').exists())
+                    verify(fixture.base / 'ops', {Path(name).name: digest for name, digest
+                                                in fixture.before['files'].items() if name.startswith('scripts/')})
+                    return publish(marker, temporary, data)
+                with (patch.object(host, 'verify_operator_files', side_effect=verify_inventory),
+                      patch.object(host, 'publish_receipt', side_effect=publish_receipt),
+                      self.assertRaises(OSError)):
+                    self.drill_upgrade(fixture)
+                self.assertTrue(injected)
+                self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
+                self.assertFalse((fixture.base / 'ops/preview-failure-drill.py').exists())
+                self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+                self.assert_private_state_unchanged(fixture)
+
+    def test_drill_crash_after_adoption_leaves_receipt_absent_and_lock_retained(self):
+        class Crash(BaseException):
+            pass
+        with self.installation(add_drill=True) as fixture:
+            rename = Path.rename
+            def crash_after_swap(path, target):
+                result = rename(path, target)
+                if path.name == 'prepared-ops' and target == fixture.base / 'ops':
+                    raise Crash()
+                return result
+            with patch.object(Path, 'rename', crash_after_swap), self.assertRaises(Crash):
+                self.drill_upgrade(fixture)
+            self.assertTrue((fixture.base / 'ops/preview-failure-drill.py').exists())
+            self.assertFalse(fixture.marker.exists())
+            self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
+            with self.assertRaisesRegex(ValueError, 'adoption is blocked'):
+                artifact.read_host_plan(fixture.base)
+            self.assert_private_state_unchanged(fixture)
+
+    def test_drill_failed_rollback_verification_cannot_republish_the_old_receipt(self):
+        with self.installation(add_drill=True) as fixture:
+            verify = host.verify_operator_files
+            def fail_rollback(path, expected):
+                if (path == fixture.base / 'ops' and not fixture.marker.exists()
+                        and not (path / 'preview-failure-drill.py').exists()):
+                    raise ValueError('fixture old inventory cannot be verified')
+                return verify(path, expected)
+            with (patch.object(host, 'verify_operator_files', side_effect=fail_rollback),
+                  patch.object(host, 'publish_receipt', side_effect=OSError('fixture publication failure')) as publication,
+                  self.assertRaisesRegex(ValueError, 'old inventory cannot be verified')):
+                self.drill_upgrade(fixture)
+            publication.assert_called_once()
+            self.assertFalse(fixture.marker.exists())
+            self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
+            with self.assertRaisesRegex(ValueError, 'adoption is blocked'):
+                artifact.read_host_plan(fixture.base)
             self.assert_private_state_unchanged(fixture)
 
     def test_feed_upgrade_publishes_only_after_exact_unit_and_probe_proof(self):

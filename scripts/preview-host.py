@@ -52,6 +52,7 @@ PROC_ROOT = Path('/proc')
 UPGRADE_LOCK = '.preview-ops-upgrade.lock'
 FEED_UNITS = ('justup-preview-feed.socket', 'justup-preview-feed@.service')
 FEED_ADDITIONS = {'scripts/preview-feed.py', *(f'deploy/justup-preview/{name}' for name in FEED_UNITS)}
+DRILL_ADDITIONS = {'scripts/preview-failure-drill.py'}
 FEED_SOCKET = Path('/run/justup-preview-feed.sock')
 
 
@@ -595,7 +596,14 @@ def upgrade_feed(root, previous_plan_path, previous_sha, expected, host_fingerpr
     return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, add_feed=True)
 
 
-def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, *, add_feed=False):
+def upgrade_drill(root, previous_plan_path, previous_sha, expected, host_fingerprint):
+    """Adopt only the prepared drill helper; never execute it or change units."""
+    return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, add_drill=True)
+
+
+def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, *, add_feed=False, add_drill=False):
+    if add_feed and add_drill:
+        raise ValueError('Feed and drill additions require separate reviewed transitions.')
     reviewed(root, expected, host_fingerprint)
     require_operator()
     root = Path(root).absolute()
@@ -623,6 +631,9 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
         if (set(new_files) - set(old_files) != FEED_ADDITIONS or set(old_files) - set(new_files)
                 or any(old_files[key] != new_files[key] for key in old_files if key != 'scripts/preview-host.py')):
             raise ValueError('Feed upgrade accepts only the exact reviewed script and unit additions.')
+    elif add_drill:
+        if set(new_files) - set(old_files) != DRILL_ADDITIONS or set(old_files) - set(new_files):
+            raise ValueError('Drill upgrade accepts only the exact reviewed helper addition without removals.')
     elif old_files.keys() != new_files.keys():
         raise ValueError('Operator updates cannot change inventory paths.')
     scripts = {Path(name).name: checksum for name, checksum in previous['files'].items() if name.startswith('scripts/')}
@@ -717,6 +728,7 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
         return {'previousPlanSha256': previous_sha, 'planSha256': expected, 'operatorFiles': len(new_scripts),
                 'feedUnitsInstalled': add_feed,
                 'feedInboxPrepared': add_feed,
+                'drillHelperInstalled': add_drill,
                 'privateStateTouched': False, 'activated': False}
     except Exception:
         if not withdrawn and history_created:
@@ -874,7 +886,7 @@ def teardown(erase_data=False, expected_plan=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
@@ -903,6 +915,11 @@ def main():
                 raise ValueError('The exact previous reviewed plan file is required.')
             result = upgrade_feed(args.source_root, args.previous_plan, args.previous_plan_sha,
                                   args.reviewed_plan_sha, args.host_machine_sha)
+        elif args.command == 'upgrade-drill':
+            if args.previous_plan is None:
+                raise ValueError('The exact previous reviewed plan file is required.')
+            result = upgrade_drill(args.source_root, args.previous_plan, args.previous_plan_sha,
+                                   args.reviewed_plan_sha, args.host_machine_sha)
         elif args.command == 'prove':
             result = proof()
         elif args.command == 'guard':
