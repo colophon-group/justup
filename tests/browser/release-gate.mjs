@@ -30,7 +30,7 @@ export function validateGateConfig(value) {
   const f = value.frontend, api = value.api, policies = value.policies, scenario = value.scenario;
   requireThat(record(f) && f.deploymentMode === 'preview' && ['sourceSha', 'treeSha'].every(key => hash(f[key], 40))
     && ['assetsSha256', 'workerSha256', 'artifactSha256', 'runtimeConfigSha256'].every(key => hash(f[key])), 'Supply exact frontend identities.');
-  requireThat(record(api) && api.sourceCommit === f.sourceSha && api.schemaVersion === 1
+  requireThat(record(api) && api.sourceCommit === f.sourceSha && api.schemaVersion === 2
     && plain(api.buildIdentity) && /^[A-Za-z0-9_.:-]{1,128}$/.test(api.runnerIdentity ?? '')
     && /^[a-f0-9-]{36}$/.test(api.importGeneration ?? ''), 'Supply compatible API, runner and import identities.');
   validatePolicyEvidence(policies, value.origin);

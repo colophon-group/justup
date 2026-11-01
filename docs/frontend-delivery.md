@@ -106,7 +106,7 @@ First run the exact-byte smoke above against the retained artifact. Then prepare
   },
   "api": {
     "sourceCommit": "<same source commit as frontend>",
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "buildIdentity": "<fixed backend build identity>",
     "runnerIdentity": "<fixed runner identity>",
     "importGeneration": "<recorded snapshot generation UUID>"
@@ -165,6 +165,8 @@ First run the exact-byte smoke above against the retained artifact. Then prepare
   }
 }
 ```
+
+`api.schemaVersion` is the application database schema reported by `/api/v1/version`; full acceptance now requires version 2 and rejects stale application version 1. This does not change independent search/import, runner, SSE, source or JEV wire schema versions.
 
 The former English-only `policies.version`, `privacySha256` and `usageSha256` fields are no longer accepted. Migrate release evidence by listing **all five** interface locales in `policies.admittedLocales`, each with the seven exact server policy-state fields above and both approved document hashes. Locale keys and fields are strict; repeated JSON keys, including escaped equivalents, reject the file. Partial locale maps cannot pass full acceptance. The URLs must be the candidate origin’s exact English root or `.de.html`, `.fr.html`, `.it.html` and `.es.html` notice routes; query strings, fragments, foreign origins and alternate paths are rejected. The live UI journey always runs once for each of the five fixed locales; a scenario cannot narrow that set.
 
