@@ -55,3 +55,40 @@ test('safe transient task failures report retryable while validation and unknown
     assert.equal(tasks.publicView({ ...task, status: 'failed', errorCode: code }).error.retryable, false);
   }
 });
+
+test('private Wire work reserves its system owner and cannot produce a public task envelope', t => {
+  const {tasks}=setup(t);
+  assert.throws(()=>tasks.enqueue(input({kind:'hiring_wire'})),{code:'invalid_input'});
+  assert.throws(()=>tasks.enqueue(input({ownerId:'__hiring_wire__'})),{code:'invalid_input'});
+  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'}));
+  assert.equal(tasks.get('a',wire.id),null);
+  assert.throws(()=>tasks.publicView(wire),{status:404});
+});
+test('all foreground kinds claim before older Wire work with one global lease', t => {
+  const {tasks,db,advance}=setup(t),other=createTasks({db,now:()=>100_001});
+  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'}));advance(1);
+  const foreground=tasks.enqueue(input({kind:'future_foreground'}));
+  assert.equal(tasks.hasForeground(),true);
+  const claimed=tasks.claim({workerId:'worker'});
+  assert.equal(claimed.id,foreground.id);assert.equal(other.claim({workerId:'racing-worker'}),null);
+  tasks.complete(claimed.id,claimed.leaseToken,{status:'succeeded'});
+  assert.equal(tasks.hasForeground(),false);assert.equal(other.claim({workerId:'racing-worker'}).id,wire.id);
+});
+test('Wire pause compares the live lease, never resurrects a task and bounds interruptions', t => {
+  const {tasks,advance}=setup(t,{maxAttempts:2});
+  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'}));
+  const first=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.pauseWire(wire.id,'wrong-lease'),false);
+  assert.equal(tasks.pauseWire(wire.id,first.leaseToken),true);
+  assert.equal(tasks.get(wire.ownerId,wire.id).status,'pending');
+  assert.equal(tasks.pauseWire(wire.id,first.leaseToken),false);
+  const second=tasks.claim({workerId:'worker'});
+  assert.notEqual(second.leaseToken,first.leaseToken);
+  assert.equal(tasks.pauseWire(wire.id,second.leaseToken),true);
+  assert.equal(tasks.get(wire.ownerId,wire.id).status,'failed');
+  assert.equal(tasks.get(wire.ownerId,wire.id).errorCode,'task_preempted');
+  assert.equal(tasks.pauseWire(wire.id,second.leaseToken),false);
+  const cancelled=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'cancelled'}));
+  const lease=tasks.claim({workerId:'worker',leaseMs:1000});advance(1001);
+  assert.equal(tasks.pauseWire(cancelled.id,lease.leaseToken),false);
+});
