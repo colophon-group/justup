@@ -44,9 +44,18 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
   const pendingViewed = useRef(new Map<string, Promise<void> | null>());
   const lastSaveAt = useRef(0);
   const reclaimed = useRef(false);
-  const project = useCallback(() => savedWorkspace(current.current,
-    scope === "visitor" && (!hasVisitor || reclaimed.current) && stored.current?.revision === 0 && current.current.searches.length === 0
-      && stored.current.viewed.length === 0 && stored.current.recoveredDrafts.length === 0), [current, scope, hasVisitor]);
+  const recoveredCreate = useRef<{ local: SavedWorkspaceState; remote: SavedWorkspaceState } | null>(null);
+  const project = useCallback(() => {
+    const local = savedWorkspace(current.current,
+      scope === "visitor" && (!hasVisitor || reclaimed.current) && stored.current?.revision === 0 && current.current.searches.length === 0
+        && stored.current.viewed.length === 0 && stored.current.recoveredDrafts.length === 0);
+    // A lost create keeps its field visible for same-key retry. Its unchanged
+    // preflight text is already durable; only subsequent edits are new writes.
+    if (!recoveredCreate.current) return local;
+    const projected = mergeWorkspaceEdits(recoveredCreate.current.local, local, recoveredCreate.current.remote);
+    if (local.activeSearchId === null && local.drafts.new !== recoveredCreate.current.local.drafts.new) projected.activeSearchId = null;
+    return projected;
+  }, [current, scope, hasVisitor]);
   const valid = (generation: number) => guard.current.generation === generation && !guard.current.controller.signal.aborted;
   const noteSnapshot = useCallback((next: WorkspaceSnapshot) => {
     stored.current = next; setSnapshot(next);
@@ -79,6 +88,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
     stored.current = null; ready.current = false; saving.current = null;
     lastSaveAt.current = 0; base.current = { activeSearchId: null, drafts: {} };
     reclaimed.current = false;
+    recoveredCreate.current = null;
     pendingViewed.current.clear(); heldConflict.current = null; setConflict(null); setSnapshot(null); setViewed(new Set()); setViewError("");
     if (scope) reading.current = read();
     return () => { controller.abort(); ready.current = false; };
@@ -126,6 +136,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
           noteSnapshot(updated); base.current = updated.state; setSyncError("");
           reclaimed.current = clearing && updated.revision === 0;
           if (reclaimed.current) {
+            recoveredCreate.current = null;
             // Canonical revision zero is the response bound to our successful
             // clear. Renew its stale hint without remounting newer typed text.
             await onVisitorRebootstrap();
@@ -140,7 +151,9 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
             if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
             reading.current = read(); await reading.current;
             if (ready.current && stored.current && (stored.current.revision === 0 || fingerprint(stored.current.state) === fingerprint(next))) {
-              reclaimed.current = stored.current.revision === 0; return;
+              reclaimed.current = stored.current.revision === 0;
+              if (reclaimed.current) recoveredCreate.current = null;
+              return;
             }
           }
           if (valid(generation) && error instanceof ApiError && (
@@ -214,6 +227,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
       drafts: Object.fromEntries(Object.entries(held.remote.state.drafts).filter(([id]) => id === "new" || known.has(id))),
     };
     const saved = choice === "saved" ? remote : mergeWorkspaceEdits(held.base, savedWorkspace(current.current), remote);
+    recoveredCreate.current = null;
     heldConflict.current = null; setConflict(null); base.current = held.remote.state;
     apply({ type: "restored", searches: held.searches, saved, preserveLocal: false, authoritative: true });
     setSyncError("");
@@ -229,6 +243,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
       const next = await client.recoverDraft(scope, draftId, action, stored.current.revision, guard.current.controller.signal);
       if (!valid(generation)) return;
       noteSnapshot(next); base.current = next.state;
+      recoveredCreate.current = null;
       apply({ type: "restored", searches: current.current.searches, saved: next.state, preserveLocal: false });
       setSyncError("");
       return true;
@@ -250,10 +265,19 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
       if (valid(generation) && !isAbortError(error)) setViewError(`Viewed status is not synced yet. ${errorText(error)}`);
     });
   };
-  const refreshAfterCreate = async (creation?: { id: string; submitted: string }) => {
+  const refreshAfterCreate = async (creation?: { id: string; submitted: string }, unresolvedSubmitted?: string) => {
+    const generation = guard.current.generation;
+    const local = savedWorkspace(current.current);
     await saving.current?.catch(() => {});
+    if (!valid(generation)) return;
+    if (creation) recoveredCreate.current = null;
     reading.current = read(creation, !creation);
     await reading.current;
+    if (!creation && unresolvedSubmitted !== undefined && valid(generation) && ready.current) {
+      // Bind this baseline to the raw text flushed for this exact request. Do
+      // not identify its search by matching query text or discard newer typing.
+      recoveredCreate.current = { local: { ...local, drafts: { ...local.drafts, new: unresolvedSubmitted } }, remote: base.current };
+    }
   };
   return { flush, refreshAfterCreate, syncError: syncError || viewError, conflict, deletedSearchDrafts: conflict ? deletedSearchDrafts(conflict, state) : [], resolveConflict, recoveredDrafts: snapshot?.recoveredDrafts ?? [], recover, recovering, loading, viewed, markViewed,
     retry: () => { if (!ready.current) reading.current = read(); else void flush().catch(() => {}); } };

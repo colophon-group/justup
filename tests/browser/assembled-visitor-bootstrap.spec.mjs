@@ -42,12 +42,19 @@ test('real draft storage and lost-PATCH recovery hand off exact text without mod
   expect(runtime.calls.filter(call => call.path === '/api/v1/auth/login')).toHaveLength(1);
 });
 
-test('a lost real create response recovers the same request key and retains raw outer whitespace', async ({ page }) => {
+for (const autosaveDelay of [0, 6500]) test(`a lost real create response recovers the same request key and retains raw outer whitespace after ${autosaveDelay ? 'background autosave' : 'immediate retry'}`, async ({ page }) => {
+  await page.clock.install();
   runtime.loseNext('POST', '/visitor/searches'); const raw = '  Engineer  ';
   await page.goto(runtime.origin); await page.locator('#query').fill(raw); await page.locator('#job-search button[type=submit]').click();
   await expect(page.locator('#search-status')).toContainText(/unavailable|unreadable/);
   const id = runtime.db.prepare('SELECT id FROM justup_searches').get().id;
   expect(runtime.workspaces()[0].drafts[id]).toBe(raw);
+  if (autosaveDelay) {
+    // Exercise the ordinary background writer before retrying the ambiguous
+    // request; a forced submission flush alone missed this resurrection bug.
+    await page.clock.runFor(autosaveDelay);
+    await page.waitForLoadState('networkidle');
+  }
   await page.locator('#job-search button[type=submit]').click();
   await expect(page.getByRole('tab', { name: 'Engineering', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible();
@@ -55,8 +62,41 @@ test('a lost real create response recovers the same request key and retains raw 
   const creates = runtime.calls.filter(call => call.path === '/api/v1/visitor/searches' && call.method === 'POST');
   expect(creates).toHaveLength(2); expect(creates[1].body.requestKey).toBe(creates[0].body.requestKey);
   expect(runtime.modelCalls()).toBe(1); expect(runtime.count('justup_searches')).toBe(1);
+  await page.locator('#add-search').click();
+  await expect(page.locator('#query')).toHaveValue('');
+  await page.getByRole('tab', { name: 'Engineering', exact: true }).click();
+  await expect(page.locator('#query')).toHaveValue(raw);
   await login(page); await expect(page.locator('#query')).toHaveValue(raw);
   expect(runtime.workspaces()[0].drafts[id]).toBe(raw);
+});
+
+test('newer independent text after a lost create survives autosave, tab changes and sign-in without another interpretation', async ({ page }) => {
+  await page.clock.install();
+  runtime.loseNext('POST', '/visitor/searches'); const raw = '  Engineer  ';
+  await page.goto(runtime.origin); await page.waitForLoadState('networkidle'); await page.locator('#query').fill(raw);
+  const recovering = runtime.holdNext('GET', '/visitor/workspace');
+  await page.locator('#job-search button[type=submit]').click(); await recovering.arrived;
+  const newer = 'A genuinely newer unsent search\nwithout night shifts  ';
+  await page.locator('#query').fill(newer); recovering.release();
+  await expect(page.locator('#search-status')).toContainText(/unavailable|unreadable/);
+  const id = runtime.db.prepare('SELECT id FROM justup_searches').get().id;
+  await page.clock.runFor(6500); await page.waitForLoadState('networkidle');
+  await expect(page.locator('#query')).toHaveValue(newer);
+  await expect(page.getByRole('tab').first()).toHaveAttribute('aria-selected', 'false');
+  await expect.poll(() => runtime.workspaces()[0].drafts.new).toBe(newer);
+  expect(runtime.workspaces()[0].drafts[id]).toBe(raw);
+  expect(runtime.workspaces()[0].activeSearchId).toBeNull();
+  await page.getByRole('tab').first().click();
+  await expect(page.getByRole('tab', { name: 'Engineering', exact: true })).toBeVisible();
+  await expect(page.locator('#query')).toHaveValue(raw);
+  await page.locator('#add-search').click(); await expect(page.locator('#query')).toHaveValue(newer);
+  await expect(page.getByRole('tab').first()).toHaveAttribute('aria-selected', 'false');
+  await login(page); await expect(page.locator('#query')).toHaveValue(newer);
+  await expect(page.getByRole('tab').first()).toHaveAttribute('aria-selected', 'false');
+  expect(runtime.workspaces()[0].drafts.new).toBe(newer);
+  expect(runtime.workspaces()[0].drafts[id]).toBe(raw);
+  expect(runtime.calls.filter(call => call.path === '/api/v1/visitor/searches' && call.method === 'POST')).toHaveLength(1);
+  expect(runtime.modelCalls()).toBe(1); expect(runtime.count('justup_searches')).toBe(1);
 });
 
 for (const lost of [false, true]) test(`real clear/rebootstrap preserves typing while the clearing reply is ${lost ? 'lost' : 'held'}`, async ({ page }) => {

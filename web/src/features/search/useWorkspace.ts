@@ -15,6 +15,7 @@ interface Mutation {
   key: string;
   submission?: SearchSubmission;
   attempted?: boolean;
+  submittedText?: string;
 }
 interface Operation { controller: AbortController; token: symbol }
 export function useWorkspace(
@@ -137,6 +138,7 @@ export function useWorkspace(
     try {
       if (search || !mutation.attempted) await persistence.flush(active.controller.signal);
       if (active !== operation.current) return;
+      mutation.submittedText ??= submittedText;
       mutation.attempted = true;
       mutation.submission ??= search
         ? await client.editSearch(
@@ -166,7 +168,7 @@ export function useWorkspace(
       }
       if (!search) {
         if (!mutation.submission.task && mutation.submission.search.status === "ready") apply({ type: "submitted", search: mutation.submission.search, previousId: snapshot.selectedId });
-        await persistence.refreshAfterCreate({ id: mutation.submission.search.id, submitted: submittedText });
+        await persistence.refreshAfterCreate({ id: mutation.submission.search.id, submitted: mutation.submittedText ?? submittedText });
         if (active !== operation.current) return;
       }
       const result = mutation.submission.task
@@ -185,7 +187,7 @@ export function useWorkspace(
     } catch (error) {
       if (active !== operation.current || isAbortError(error)) return;
       if (!search && mutation.attempted && !mutation.submission && error instanceof ApiError && (error.status === 0 || error.status >= 500 || error.code === "invalid_response")) {
-        await persistence.refreshAfterCreate();
+        await persistence.refreshAfterCreate(undefined, mutation.submittedText);
         if (active !== operation.current) return;
       }
       if (error instanceof TaskFailure) {
