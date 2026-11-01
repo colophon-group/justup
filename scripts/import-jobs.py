@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import tempfile
 from typing import NamedTuple
@@ -30,6 +31,10 @@ JSON_LIMIT = 8 * 1024 * 1024
 MAX_JOBS = 1000
 MAX_COMPANY_IDS = 100
 COMPANY_SELECTOR_LIMIT = 16 * 1024
+FEED_MANIFEST_LIMIT = 64 * 1024
+FEED_PARTS_LIMIT = 64
+FEED_ROWS_LIMIT = 100_000
+FEED_BYTES_LIMIT = 64 * 1024 * 1024
 SOURCE_COMPANY_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 SOURCE_FIELDS = (
     "id", "company_id", "company_name", "company_slug", "title", "source_url",
@@ -56,6 +61,76 @@ class BodyRead(NamedTuple):
     data: bytes
     url: str | None
     expected_sha256: str | None = None
+
+
+def _unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ImportFailure("Feed bundle contains duplicate fields.")
+        value[key] = item
+    return value
+
+
+def _private_file(path, limit):
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o077:
+                raise ImportFailure("Feed bundle file is not private and regular.")
+            data = handle.read(limit + 1)
+    except (OSError, ValueError) as exc:
+        raise ImportFailure("Feed bundle file could not be read.") from exc
+    if len(data) > limit:
+        raise ImportFailure("Feed bundle exceeds its size limit.")
+    return data
+
+
+def _feed_json(data):
+    try:
+        return json.loads(data.decode("utf-8"), object_pairs_hook=_unique_object)
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        raise ImportFailure("Feed bundle contains invalid JSON.") from exc
+
+
+def read_feed_bundle(directory):
+    """Read an immutable private batch only after every part passes its digest."""
+    directory = Path(directory).expanduser()
+    try:
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
+            raise ImportFailure("Feed bundle directory must be private and regular.")
+    except OSError as exc:
+        raise ImportFailure("Feed bundle directory could not be read.") from exc
+    manifest = _feed_json(_private_file(directory / "manifest.json", FEED_MANIFEST_LIMIT))
+    if (not isinstance(manifest, dict) or type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] != 1
+            or manifest.get("kind") not in ("snapshot", "changes") or manifest.get("complete") is not True
+            or not isinstance(manifest.get("parts"), list) or not 1 <= len(manifest["parts"]) <= FEED_PARTS_LIMIT):
+        raise ImportFailure("Feed bundle manifest is incomplete or unsupported.")
+    utc(manifest.get("cutoffAt"))
+    rows, total_bytes, names = [], 0, set()
+    for part in manifest["parts"]:
+        if not isinstance(part, dict) or set(part) != {"file", "sha256", "rows"}:
+            raise ImportFailure("Feed bundle part declaration is invalid.")
+        name, digest, count = part["file"], part["sha256"], part["rows"]
+        if (not isinstance(name, str) or not re.fullmatch(r"part-[a-zA-Z0-9-]+\.json", name) or name in names
+                or not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest)
+                or type(count) is not int or count < 0 or len(rows) + count > FEED_ROWS_LIMIT):
+            raise ImportFailure("Feed bundle part declaration is invalid.")
+        names.add(name)
+        data = _private_file(directory / name, FEED_BYTES_LIMIT - total_bytes)
+        total_bytes += len(data)
+        if not hmac.compare_digest(hashlib.sha256(data).hexdigest(), digest):
+            raise ImportFailure("Feed bundle part digest differs from its manifest.")
+        content = _feed_json(data)
+        if (not isinstance(content, dict) or set(content) != {"schemaVersion", "rows"}
+                or type(content["schemaVersion"]) is not int or content["schemaVersion"] != 1
+                or not isinstance(content["rows"], list) or len(content["rows"]) != count
+                or any(not isinstance(row, dict) for row in content["rows"])):
+            raise ImportFailure("Feed bundle part is invalid.")
+        rows.extend(content["rows"])
+    return manifest, rows
 
 
 def utc(value):

@@ -93,6 +93,61 @@ class FakePublicHttp:
 
 
 class PublicImportTests(unittest.TestCase):
+    def test_private_feed_bundle_checks_all_parts_before_exposing_rows(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / "feed"
+            directory.mkdir(mode=0o700)
+            payload = json.dumps({"schemaVersion": 1, "rows": [{"id": "job-1"}]}, separators=(",", ":")).encode()
+            part = directory / "part-0.json"
+            part.write_bytes(payload)
+            part.chmod(0o600)
+            manifest = {"schemaVersion": 1, "kind": "snapshot", "fromCursor": None,
+                        "toCursor": {"updatedAt": SNAPSHOT, "id": "job-1"}, "cutoffAt": SNAPSHOT,
+                        "complete": True, "parts": [{"file": part.name, "sha256": IMPORT.hashlib.sha256(payload).hexdigest(), "rows": 1}]}
+            path = directory / "manifest.json"
+            path.write_text(json.dumps(manifest))
+            path.chmod(0o600)
+            result, rows = IMPORT.read_feed_bundle(directory)
+            self.assertEqual(result, manifest)
+            self.assertEqual(rows, [{"id": "job-1"}])
+
+            part.write_bytes(payload + b" ")
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "digest differs"):
+                IMPORT.read_feed_bundle(directory)
+            part.write_bytes(payload)
+            manifest["complete"] = False
+            path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "incomplete"):
+                IMPORT.read_feed_bundle(directory)
+            manifest["complete"] = True
+            manifest["parts"][0]["file"] = "../outside.json"
+            path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "declaration"):
+                IMPORT.read_feed_bundle(directory)
+
+    def test_private_feed_bundle_refuses_public_files_symlinks_and_duplicate_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / "feed"
+            directory.mkdir(mode=0o700)
+            manifest = directory / "manifest.json"
+            valid = b'{"schemaVersion":1,"kind":"changes","complete":true,"cutoffAt":"2026-10-31T16:00:00Z","parts":[{"file":"part-0.json","sha256":"' + b"0" * 64 + b'","rows":0}]}'
+            manifest.write_bytes(valid)
+            manifest.chmod(0o644)
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "private"):
+                IMPORT.read_feed_bundle(directory)
+            manifest.chmod(0o600)
+            target = Path(root) / "outside.json"
+            target.write_bytes(valid)
+            manifest.unlink()
+            manifest.symlink_to(target)
+            with self.assertRaises(IMPORT.ImportFailure):
+                IMPORT.read_feed_bundle(directory)
+            manifest.unlink()
+            manifest.write_bytes(valid.replace(b'"kind":"changes",', b'"kind":"changes","kind":"snapshot",'))
+            manifest.chmod(0o600)
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "duplicate"):
+                IMPORT.read_feed_bundle(directory)
+
     def test_company_selector_requires_bounded_unique_canonical_uuids_and_exact_schema(self):
         maximum = [f"00000000-0000-4000-8000-{index:012x}" for index in range(100)]
         invalid = [
