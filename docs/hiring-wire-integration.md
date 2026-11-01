@@ -70,6 +70,24 @@ queue-only fake cleanup tests do not establish that native boundary. Release mus
 include that transport contract and its fake native-protocol tests before claiming
 running-turn preemption is fully qualified. No scheduler is activated by this PR.
 
+If the trusted transport reports `cleanup_unproven`, the runner inserts one durable
+`hiring_wire_cleanup_halt` row using its exact live system-task lease, retains the
+task as running and continues its lease heartbeat while the process remains alive.
+It marks readiness unavailable and stops all claims and weekly schedule actions.
+The guard also blocks task completion, pause and expired-lease recovery. Restart
+or elapsed lease time cannot clear it. Only the fixed safe reason, task ID and
+timestamp are retained; no protocol text or provider data enters this guard.
+
+There is no public or automatic clear operation. Recovery requires a reviewed
+operator procedure: stop the runner; establish broker idle state and prove that
+the native invocation and its descendants are gone and its private invocation
+storage has been cleaned; then perform one reviewed database transaction that
+marks the held task failed with `task_interrupted`, clears its lease fields and
+deletes the singleton guard. Restart only after that transaction commits. This
+error does not qualify for the scheduler's automatic dependency retry. A new
+edition attempt requires an explicit reviewed decision. These instructions do
+not authorize a live recovery or establish the required native proof.
+
 ## Verification and release boundary
 
 The integration suite uses real SQLite with a deterministic synthetic source and
@@ -77,6 +95,8 @@ fake editorial transport. It verifies enabled weekly publication, restart and
 crash-gap idempotence, default disabled behavior, zero editorial calls without
 source/qualification, bounded retries, factual/quality failure closure, private
 configuration separation, expiry/archive behavior and cleanup-gated preemption.
+It also reopens a halted SQLite database after the lease has elapsed and verifies
+that recovery, foreground claims and scheduler ticks remain blocked.
 Tasks and runner suites independently verify owner isolation, atomic priority,
 one global lease, cancellation and bounded pause behavior.
 

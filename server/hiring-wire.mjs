@@ -132,6 +132,9 @@ export function createHiringWireService({db,tasks=null,now=Date.now,source=null,
         return {status:'succeeded',output,committed:true};
       });
     } catch(error) {
+      // This trusted transport failure means native cleanup was not proved.
+      // Preserve it for the runner's durable halt rather than releasing a lease.
+      if(error?.code==='cleanup_unproven')throw error;
       const preempted=signal?.aborted&&signal.reason?.code==='task_preempted';
       const code=preempted?'task_preempted':['dependency_unavailable','task_timeout','revision_conflict','invalid_output'].includes(error.code)?error.code:'invalid_output';
       if(attempt)tx(db,()=>{

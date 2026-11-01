@@ -49,6 +49,7 @@ export async function createHiringWireRunner({db,tasks,now=Date.now,hiringWire,s
   ) STRICT;`);
   const scheduled=end=>db.prepare('SELECT * FROM hiring_wire_schedule WHERE period_end=?').get(end);
   function beforeClaim() {
+    if(tasks.halted?.())return {state:'cleanup_unproven'};
     if(hiringWire?.enabled!==true)return {state:'disabled'};
     const at=now(),end=hiringWirePeriodEnd(at),endAt=Date.parse(end);
     if(at-endAt>LAG)return {state:'publication_window_closed',periodEnd:end};

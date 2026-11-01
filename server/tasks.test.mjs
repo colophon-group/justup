@@ -92,3 +92,13 @@ test('Wire pause compares the live lease, never resurrects a task and bounds int
   const lease=tasks.claim({workerId:'worker',leaseMs:1000});advance(1001);
   assert.equal(tasks.pauseWire(cancelled.id,lease.leaseToken),false);
 });
+test('unknown cleanup halt requires the exact live system lease and keeps one durable safe reason',t=>{
+  const {tasks,db}=setup(t);
+  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'})),lease=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.haltWire(wire.id,'wrong-token'),false);assert.equal(tasks.halted(),false);
+  assert.equal(tasks.haltWire(wire.id,lease.leaseToken),true);assert.equal(tasks.haltWire(wire.id,lease.leaseToken),true);
+  assert.equal(db.prepare('SELECT count(*) n FROM hiring_wire_cleanup_halt').get().n,1);
+  assert.deepEqual({...db.prepare('SELECT reason FROM hiring_wire_cleanup_halt').get()},{reason:'cleanup_unproven'});
+  assert.equal(tasks.heartbeat(wire.id,lease.leaseToken),true);
+  assert.equal(tasks.complete(wire.id,lease.leaseToken,{status:'failed'}),false);
+});

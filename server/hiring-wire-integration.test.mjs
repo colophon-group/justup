@@ -137,3 +137,27 @@ test('preempted weekly editorial awaits cleanup, publishes nothing, then resumes
   await runner.runOnce();assert.equal(published(api).state,'published');assert.equal(fake.cancels(),2);
   assert.equal(s.db.prepare("SELECT count(*) n FROM demo_tasks WHERE kind='hiring_wire'").get().n,1);
 });
+test('unproven native cleanup durably halts claim/recovery/scheduling across reopen and elapsed lease',async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'wire-halt-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  const path=join(directory,'halt.sqlite'),s=state(t,{path});let unready=0;
+  const fake=fakes({cancel:()=>{throw Object.assign(Error('fixed cleanup failure'),{code:'cleanup_unproven'});}});
+  const {wire,api}=await composition(s,fake);
+  const runner=createRunner({tasks:s.tasks,beforeClaim:wire.beforeClaim,onHalt:()=>unready++,handlers:{hiring_wire:wire.runTask}});
+  t.after(()=>runner.stop());await runner.runOnce();
+  const held=s.db.prepare("SELECT id,lease_token FROM demo_tasks WHERE kind='hiring_wire'").get();
+  assert.equal(unready,1);assert.equal(runner.ready(),false);assert.equal(s.tasks.halted(),true);
+  assert.equal(published(api).state,'unavailable');assert.equal(s.tasks.get('__hiring_wire__',held.id).status,'running');
+  assert.equal(s.tasks.complete(held.id,held.lease_token,{status:'succeeded'}),false);
+  assert.equal(s.tasks.pauseWire(held.id,held.lease_token),false);
+  s.tasks.enqueue({ownerId:'account',kind:'search_intent',requestKey:'foreground',payload:{}});
+  assert.equal(await runner.runOnce(),false);assert.deepEqual(wire.beforeClaim(),{state:'cleanup_unproven'});
+  assert.equal(s.db.prepare('SELECT count(*) n FROM hiring_wire_cleanup_halt').get().n,1);
+  runner.stop();s.db.close();
+  const restarted=state(t,{path,at:AT+86_400_000}),next=await composition(restarted,fake);
+  restarted.tasks.recover();assert.equal(restarted.tasks.claim({workerId:'restart'}),null);
+  assert.equal(restarted.tasks.get('__hiring_wire__',held.id).status,'running');
+  assert.deepEqual(next.wire.beforeClaim(),{state:'cleanup_unproven'});
+  assert.equal(await next.runner.runOnce(),false);assert.equal(fake.calls(),1);
+  assert.equal(restarted.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,2);
+  assert.equal(restarted.db.prepare('SELECT count(*) n FROM hiring_wire_schedule').get().n,1);
+});
