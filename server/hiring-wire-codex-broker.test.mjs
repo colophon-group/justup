@@ -125,6 +125,25 @@ test('invocation disposal failure never acknowledges cancellation or releases th
   assert.equal(released,false);assert.deepEqual(replies.at(-1),{ok:false,executionId:'wire-1',error:{code:'cleanup_unproven'},cleanup:'unproven'});
 });
 
+test('delayed unproven native cleanup preserves invocation and auth copyback without releasing the slot',async()=>{
+  const socket=new EventEmitter(),replies=[],events=[];socket.destroyed=false;
+  socket.write=value=>replies.push(JSON.parse(value));socket.end=socket.write;socket.destroy=()=>{socket.destroyed=true;};
+  let rejectCancel,entered;const cancelling=new Promise(resolve=>entered=resolve);
+  const connection=handleHiringWireCodexConnection(socket,{
+    firstFrame:{profile:'hiring_wire',operation:'open',executionId:'wire-1',descriptor:WIRE_PROFILE_DESCRIPTOR},
+    openSession:async()=>({session:{step:async()=>{},cancel:()=>new Promise((_,reject)=>{events.push('cancel');rejectCancel=reject;entered();})},
+      dispose:()=>{events.push('dispose-and-copyback');}}),
+    release:()=>{events.push('release');}
+  });
+  await tick();socket.emit('data',Buffer.from(`${JSON.stringify({profile:'hiring_wire',operation:'cancel',executionId:'wire-1'})}\n`));
+  await cancelling;await tick();assert.deepEqual(events,['cancel']);
+  assert.deepEqual(replies,[{ok:true,executionId:'wire-1',type:'opened'}]);
+  rejectCancel(Object.assign(Error('private native failure'),{code:'cleanup_unproven'}));await connection.done;
+  assert.deepEqual(events,['cancel']);
+  assert.deepEqual(replies.at(-1),{ok:false,executionId:'wire-1',error:{code:'cleanup_unproven'},cleanup:'unproven'});
+  await connection.cancel();assert.deepEqual(events,['cancel']);
+});
+
 test('pending-step cancellation is idempotent and holds both client and global slot until cleanup',async t=>{
   let enter,finishCancel,beginCancel;const entered=new Promise(resolve=>enter=resolve),cancelling=new Promise(resolve=>beginCancel=resolve);
   const f=await fixture(t,{step:async()=>{enter();return new Promise(()=>{});},cancel:()=>new Promise(resolve=>{finishCancel=resolve;beginCancel();})});

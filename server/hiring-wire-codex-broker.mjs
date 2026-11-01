@@ -44,7 +44,9 @@ export function handleHiringWireCodexConnection(socket,{firstFrame,openSession,r
       let cleanupError;
       try{await openedPromise;}catch(error){if(error?.code==='cleanup_unproven')cleanupError='cleanup_unproven';}
       try{await session?.cancel();}catch{cleanupError='cleanup_unproven';}
-      try{await dispose?.();}catch{cleanupError='cleanup_unproven';}
+      // Native exit proof comes before auth copyback or removing invocation
+      // storage. Preserve that private evidence and the busy slot if uncertain.
+      if(!cleanupError)try{await dispose?.();}catch{cleanupError='cleanup_unproven';}
       // A failed cleanup quarantines the shared slot. Neither a socket close nor
       // a failure reply grants the queue permission to hand it to foreground work.
       if(!cleanupError)try{await release();}catch{cleanupError='cleanup_unproven';}

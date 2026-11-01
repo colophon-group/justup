@@ -90,6 +90,10 @@ deletes the singleton guard. Restart only after that transaction commits. This
 error does not qualify for the scheduler's automatic dependency retry. A new
 edition attempt requires an explicit reviewed decision. These instructions do
 not authorize a live recovery or establish the required native proof.
+Native cleanup uncertainty preserves the private invocation and skips auth-refresh
+copyback/disposal while the broker stays busy. A reviewed operator handles that
+retained storage only after proving idle state; a queue restart is not permission
+to erase it or copy its authentication material.
 
 ## Verification and release boundary
 

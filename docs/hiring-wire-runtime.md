@@ -187,6 +187,14 @@ cleanup, then sends `type:"cancelled"` or a terminal reply marked `cleanup:"comp
 The client awaits that proof for at most five seconds; socket closure alone never
 proves cleanup. Repeated cancellation shares the same pending result. Unproven
 cleanup prevents queue handoff to interactive work and requires runtime recovery.
+If native exit or opening cleanup cannot be proved, the broker also skips
+invocation disposal and auth-refresh copyback: private invocation storage remains
+available for reviewed recovery, and its still-running process cannot race auth
+refresh or lose its recovery evidence. Only after native cleanup succeeds may
+disposal run, followed by slot release and acknowledgement. Disposal failure
+also keeps the slot quarantined. A reviewed operator must prove native/broker idle
+and handle retained private invocation storage before clearing the durable queue
+halt; no automatic clear operation is provided by the Wire handler.
 Protected host UID, descriptor/network isolation, descendant termination
 and real trace retention still need evidence from the exact deployed candidate.
 
