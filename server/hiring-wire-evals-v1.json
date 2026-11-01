@@ -1,0 +1,14 @@
+{
+  "version": "hiring-wire-facts-evals-v1",
+  "thresholds": {"factualAcceptance": 1, "unsafeAcceptance": 0, "maxDeterministicMs": 1000, "providerCalls": 0},
+  "reviewed": [
+    {"id": "fixed-boundary-distinct", "current": 3, "previous": 2, "angle": "increase"},
+    {"id": "zero-baseline", "current": 3, "previous": 0, "angle": "new_activity"},
+    {"id": "lower-activity", "current": 1, "previous": 2, "angle": "decrease"}
+  ],
+  "heldOut": [
+    {"id": "unchanged-activity", "current": 2, "previous": 2, "angle": "steady"},
+    {"id": "no-current-activity", "current": 0, "previous": 2, "angle": "decrease"}
+  ],
+  "rejectedClaims": ["hires", "headcount", "growth", "revenue", "percentage", "companyUrl", "headline"]
+}

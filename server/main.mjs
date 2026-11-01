@@ -6,10 +6,13 @@ import { randomUUID } from 'node:crypto';
 import { dirname, resolve, isAbsolute, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { openStore } from './store.mjs';
+import { SCHEMA_VERSION, migrateDatabaseFile } from './schema.mjs';
 import { createFeed } from './feed.mjs';
 import { createTasks } from './tasks.mjs';
-import { createHandler } from './http.mjs';
+import { createHandler,policyState } from './http.mjs';
+import { validatePolicyConfig,policyJson,policyScopes } from './policies.mjs';
 import { runtimeEnv, booleanEnv, integerEnv } from './config.mjs';
+import { createEmailVerificationApi } from './email-verification.mjs';
 
 // Hold a durable pending marker across the SQL transaction. Backup/restore must
 // reject any pending marker, including one retained after a process crash.
@@ -80,6 +83,7 @@ export function createDeletionBarrier({ generationPath, backupDir, dbPath, db } 
     beforePrivateDelete, afterPrivateTransaction };
 }
 export async function createApplication({ config = {}, now = Date.now, serviceFactories = [], authFactory, logger } = {}) {
+  validatePolicyConfig(config);
   const path = config.dbPath ?? ':memory:';
   if (path !== ':memory:' && !config.sharedState) mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
   const store = openStore(path, { sharedState: config.sharedState === true });
@@ -88,7 +92,15 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
     const tasks = createTasks({ db: store.db, now });
     const deletion = createDeletionBarrier({ generationPath: config.privateGenerationPath, backupDir: config.backupDir, dbPath: path, db: store.db });
     const withPrivateTransaction = (work) => { try { return store.transaction(work); } finally { deletion.afterPrivateTransaction(); } };
-    const services = serviceFactories.flatMap((factory) => factory({ db: store.db, feed, tasks, config, now, beforePrivateDelete: deletion.beforePrivateDelete, afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction }));
+    let auth,maintenanceReady=false;
+    const accessForAccount=id=>auth?.accessForAccount?.(id)??null;
+    const visitorAvailability=()=>maintenanceReady&&deletion.ready()&&Object.values(policyScopes(config)).some(p=>p.reviewed);
+    const services = serviceFactories.flatMap((factory) => factory({ db: store.db, feed, tasks, config, now, accessForAccount,visitorAvailability,beforePrivateDelete: deletion.beforePrivateDelete, afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction }));
+    const verification=createEmailVerificationApi({db:store.db,tasks,config,now,getAuth:()=>auth,
+      availability:()=>config.readiness?.().capabilities?.emailVerification===true,
+      processingAvailability:visitorAvailability,beforePrivateDelete:deletion.beforePrivateDelete,
+      afterPrivateTransaction:deletion.afterPrivateTransaction,withPrivateTransaction});
+    services.push(verification);
     if (services.some((s) => !s || typeof s.then === 'function')) throw new TypeError('Service factories must synchronously return services.');
     const deleteAccountData = (ownerId) => {
       deletion.beforePrivateDelete();
@@ -99,20 +111,22 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
       tasks.deleteOwner(ownerId);
     };
     const createAuth = authFactory ?? (await import('./auth.mjs')).createAuth;
-    const auth = createAuth({ db: store.db, config, now, deleteAccountData });
-    let maintenanceReady = false;
+    auth = createAuth({ db: store.db, config, now, deleteAccountData,identityProofVerifier:verification.verifyIdentityProof,
+      onAccessTransition:data=>{try{services.find(s=>typeof s.observe==='function'&&typeof s.onModelMetric==='function')?.observe(data);}catch{}} });
     function maintainAuth() {
       try {
         if (typeof auth.cleanup !== 'function') return;
         const result = auth.cleanup();
         if (result && typeof result.then === 'function') throw new TypeError('Authentication cleanup must be synchronous.');
+        for(const service of services)service.cleanup?.();
         maintenanceReady = true;
       } catch { maintenanceReady = false; }
-      finally { try { deletion.afterPrivateTransaction(); } catch { maintenanceReady = false; } }
+      finally { try { deletion.afterPrivateTransaction(); } catch { maintenanceReady = false; }for(const service of services)try{service.refreshAvailability?.();}catch{maintenanceReady=false;} }
     }
     maintainAuth();
     const maintenanceTimer = setInterval(maintainAuth, 60_000); maintenanceTimer.unref();
     const handler = createHandler({ auth, feed, tasks, db: store.db, services,
+      policyConfig:config,
       config: { ...config, deletionReady: deletion.ready, authMaintenanceReady: () => maintenanceReady },
       afterPrivateTransaction: deletion.afterPrivateTransaction, now, logger });
     const server = createServer({ requestTimeout: 15_000, headersTimeout: 10_000, maxHeaderSize: 16_384 }, handler);
@@ -121,6 +135,7 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
     return { server, store, feed, tasks, auth, services, beforePrivateDelete: deletion.beforePrivateDelete,
       afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction, close: async () => {
       clearInterval(maintenanceTimer);
+      for (const service of services) await service.close?.();
       if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
       deletion.afterPrivateTransaction();
       store.close();
@@ -135,8 +150,9 @@ export async function createConfiguredApplication({ config = {}, ...options } = 
   return createApplication({ ...options, config: { ...configured, readiness: createApiReadiness({ config: configured, now: options.now ?? Date.now }) },
     serviceFactories: [createApiServices] });
 }
-export async function prepareRestoredDatabase({ dbPath, authFactory } = {}) {
+export async function prepareRestoredDatabase({ dbPath, authFactory, migrateV1 = false } = {}) {
   if (typeof dbPath !== 'string' || dbPath === ':memory:' || !lstatSync(dbPath).isFile() || lstatSync(dbPath).isSymbolicLink()) throw new Error('Use an existing restored application database file.');
+  if (migrateV1) migrateDatabaseFile(dbPath);
   const store = openStore(dbPath);
   try {
     const createAuth = authFactory ?? (await import('./auth.mjs')).createAuth;
@@ -147,7 +163,7 @@ export async function prepareRestoredDatabase({ dbPath, authFactory } = {}) {
     const result = auth.invalidateAllSessions();
     if (result && typeof result.then === 'function' || !Number.isSafeInteger(result?.sessionsDeleted) || result.sessionsDeleted < 0
         || store.db.isTransaction) throw new Error('Restored session invalidation failed.');
-    return { schemaVersion: 1, sessionsInvalidated: true, remainingSessions: 0, sessionsDeleted: result.sessionsDeleted };
+    return { schemaVersion: SCHEMA_VERSION, sessionsInvalidated: true, remainingSessions: 0, sessionsDeleted: result.sessionsDeleted };
   } finally { store.close(); }
 }
 export function readImportFile(path) {
@@ -156,7 +172,7 @@ export function readImportFile(path) {
   catch { throw new Error('Invalid job import file.'); }
 }
 export function configFromEnv(env = process.env) {
-  return {
+  return validatePolicyConfig({
     servicesEnabled: booleanEnv(env, 'SERVICES_ENABLED'), runnerStatusPath: runtimeEnv(env, 'RUNNER_STATUS_PATH'),
     dbPath: runtimeEnv(env, 'DB_PATH'), sharedState: booleanEnv(env, 'SHARED_STATE'), allowedOrigin: runtimeEnv(env, 'ORIGIN'),
     allowInsecureLocalhost: booleanEnv(env, 'ALLOW_LOCAL_HTTP'),
@@ -166,20 +182,25 @@ export function configFromEnv(env = process.env) {
     accountExpiresAt: integerEnv(env, 'ACCOUNT_EXPIRES_AT', { nullable: true }),
     privacyUrl: runtimeEnv(env, 'PRIVACY_URL'), usageUrl: runtimeEnv(env, 'USAGE_URL'), policyVersion: runtimeEnv(env, 'POLICY_VERSION'),
     policiesReviewed: booleanEnv(env, 'POLICIES_REVIEWED'),
+    policyLocales: policyJson(runtimeEnv(env,'POLICY_LOCALES')), policyFallbacks: policyJson(runtimeEnv(env,'POLICY_FALLBACKS')),
+    policyAssetProof: policyJson(runtimeEnv(env,'POLICY_ASSET_PROOF')),
     sourceCommit: runtimeEnv(env, 'SOURCE_COMMIT'), buildIdentity: runtimeEnv(env, 'BUILD_ID'),
     csrfSecret: runtimeEnv(env, 'CSRF_SECRET'), cursorSecret: runtimeEnv(env, 'CURSOR_SECRET'),
+    emailVerificationEnabled:booleanEnv(env,'EMAIL_VERIFICATION_ENABLED'),
     privateGenerationPath: runtimeEnv(env, 'PRIVATE_GENERATION_PATH'), backupDir: runtimeEnv(env, 'BACKUP_DIR'),
-  };
+  });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const config = configFromEnv();
   process.umask(config.sharedState ? 0o007 : 0o077);
   const args = process.argv.slice(2);
   if (!config.dbPath || (!config.allowedOrigin && args.length === 0)) throw new Error('Set explicit JUSTUP_DB_PATH and JUSTUP_ORIGIN.');
-  if (args[0] === '--prepare-restored-db' && args.length === 2) {
+  if (args[0] === '--migrate-db' && args.length === 1) {
+    console.log(JSON.stringify(migrateDatabaseFile(config.dbPath)));
+  } else if (args[0] === '--prepare-restored-db' && (args.length === 2 || args.length === 3 && args[2] === '--migrate-v1')) {
     const restored = resolve(args[1]);
     if (restored === resolve(config.dbPath) || !lstatSync(restored).isFile() || lstatSync(restored).isSymbolicLink()) throw new Error('Use a separate restored application database file.');
-    console.log(JSON.stringify(await prepareRestoredDatabase({ dbPath: restored })));
+    console.log(JSON.stringify(await prepareRestoredDatabase({ dbPath: restored, migrateV1: args[2] === '--migrate-v1' })));
   } else if (args[0] === '--import' && args.length === 2) {
     const store = openStore(config.dbPath, { sharedState: config.sharedState });
     try { console.log(JSON.stringify(store.importSnapshot(readImportFile(args[1])))); }

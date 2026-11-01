@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, closing
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -54,15 +54,32 @@ def profiles(*, attested=False):
     return result
 
 
+def wire_config(*, private=False):
+    return {'enabled': True, 'attestationPath': '/srv/justup_preview/' + ('model/config' if private else 'broker') + '/hiring-wire-reviewed.json',
+            'providerCatalogueSha256': 'd' * 64, 'modelUid': 1234, 'socketPath': '/srv/justup_preview/broker/model.sock'}
+
+
+def wire_report(manifest, config):
+    return {'version': 1, 'approved': True, 'profile': 'hiring_wire', 'model': 'gpt-6.1-sol',
+            'cliVersion': manifest['codexVersion'], 'cliSource': model.CODEX_SOURCE_COMMIT, 'nodeVersion': manifest['nodeVersion'],
+            'policyVersion': 'hiring-wire-codex-v1', 'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': 'f' * 64,
+            'socketPath': config['socketPath'], 'descriptor': deepcopy(model.WIRE_DESCRIPTOR),
+            'modelCatalogueSha256': model.WIRE_CATALOGUE_SHA256, 'dynamicToolsSha256': model.WIRE_DYNAMIC_TOOLS_SHA256,
+            'providerCatalogue': {'verified': True, 'transport': 'responses_lite', 'sha256': config['providerCatalogueSha256'],
+                                  'toolSchemaSha256': model.WIRE_DESCRIPTOR['toolSchemaSha256'], 'stockTools': 0, 'tools': list(model.WIRE_TOOLS)},
+            'executorBoundary': 'dedicated_uid_broker', 'modelUid': config['modelUid'], 'fd': 3,
+            'deniedPathsVerified': True, 'retentionVerified': True, 'qualityVerified': True, 'sharedSlotVerified': True}
+
+
 def payload():
     files = {'runtime/bin/node': b'fixture runtime', 'runtime/LICENSE': b'fixture license',
              'app/scripts/import-jobs.py': b'# canonical importer fixture\n',
              'app/server/main.mjs': b'export const ready = true;'}
     files.update({'app/server/' + name + '.mjs': b'export {};' for name in
-                 ('auth', 'http', 'store', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter')})
+                 ('auth', 'http', 'store', 'schema', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter', 'policies', 'processing-admission')})
     files.update(CODEX_FIXTURES)
     manifest = {'formatVersion': 2, 'sourceCommit': 'a' * 40, 'sourceTree': 'b' * 40,
-                'schemaVersion': 1, 'nodeVersion': '24.22.2', 'platform': 'linux-arm64',
+                'schemaVersion': 2, 'nodeVersion': '24.22.2', 'platform': 'linux-arm64',
                 'nodeArchiveSha256': artifact.NODE_ARCHIVE_SHA256, 'entrypoint': 'app/server/main.mjs',
                 'codexVersion': artifact.CODEX_VERSION, 'codexTarget': artifact.CODEX_TARGET,
                 'codexArchiveSha256': artifact.CODEX_ARCHIVE_SHA256, 'codexEntrypoint': artifact.CODEX_ENTRYPOINT,
@@ -99,6 +116,7 @@ class ArtifactContracts(unittest.TestCase):
                      'app/server/demo-composition.mjs', 'app/server/demo-runner-adapter.mjs',
                      'app/server/hiring-wire-fixtures.mjs', 'app/server/hiring-wire-evals-v1.json',
                      'app/scripts/hiring-wire/arbitrary.mjs', 'app/scripts/hiring-wire/../enqueue.mjs',
+                     'app/scripts/company-requests/arbitrary.mjs', 'app/scripts/company-requests/../setup.mjs',
                      'app/server/evals/luna-wire-catalogue.mjs',
                      'app/server/./evals/luna-wire-catalogue.mjs', 'app/server//evals/luna-wire-catalogue.mjs',
                      'runtime/codex/bin/codex-code-mode-host', 'runtime/codex/codex-path/rg', 'runtime/codex/codex-resources/zsh/bin/zsh'):
@@ -107,7 +125,8 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_wire_catalogue_and_fixed_operator_scripts_are_bounded_runtime_assets(self):
         manifest, _ = payload()
-        for name in ('app/scripts/hiring-wire/enqueue.mjs', 'app/scripts/hiring-wire/check-snapshot.mjs'):
+        for name in ('app/scripts/hiring-wire/enqueue.mjs', 'app/scripts/hiring-wire/check-snapshot.mjs',
+                     'app/scripts/company-requests/setup.mjs'):
             self.assertTrue(artifact.allowed(name))
         manifest['files']['app/server/hiring-wire-codex.mjs'] = artifact.sha(b'export {};')
         manifest['files'].update({name: artifact.sha(b'export {};') for name in artifact.WIRE_MODULES})
@@ -145,7 +164,7 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_canonical_importer_and_runtime_adapter_are_required_together(self):
         manifest, _ = payload()
-        for name in ('app/scripts/import-jobs.py', 'app/server/config.mjs', 'app/server/composition.mjs', 'app/server/runner-adapter.mjs'):
+        for name in ('app/scripts/import-jobs.py', 'app/server/config.mjs', 'app/server/composition.mjs', 'app/server/runner-adapter.mjs', 'app/server/policies.mjs', 'app/server/processing-admission.mjs'):
             with self.subTest(name=name):
                 incomplete = deepcopy(manifest)
                 del incomplete['files'][name]
@@ -154,6 +173,19 @@ class ArtifactContracts(unittest.TestCase):
                     artifact.validate_manifest(incomplete)
         for obsolete in ('app/scripts/import-demo-jobs.py', 'app/server/model-schemas/company-domain-proposal.schema.json'):
             self.assertFalse(artifact.allowed(obsolete))
+
+    def test_email_artifact_graph_cannot_omit_a_fixed_provider_module(self):
+        manifest, _ = payload()
+        manifest['files'].update({name: 'b' * 64 for name in artifact.EMAIL_MODULES})
+        manifest['buildIdentity'] = artifact.identity(manifest)
+        artifact.validate_manifest(manifest)
+        for name in artifact.EMAIL_MODULES:
+            partial = deepcopy(manifest)
+            del partial['files'][name]
+            partial['buildIdentity'] = artifact.identity(partial)
+            with self.subTest(missing=name), self.assertRaisesRegex(ValueError, 'Email verification'):
+                artifact.validate_manifest(partial)
+
     def test_inventory_accepts_exact_bytes_and_rejects_changed_payload(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'candidate.tar'
@@ -517,6 +549,46 @@ class BoundaryContracts(unittest.TestCase):
         owner.start()
         self.addCleanup(owner.stop)
 
+    def test_email_provider_configuration_matches_actual_node_and_stays_queue_only(self):
+        manifest, _ = payload()
+        manifest['files'].update({name: 'b' * 64 for name in artifact.EMAIL_MODULES})
+        base = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
+                'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
+        enabled = {'enabled': True, 'apiKey': 'synthetic_key', 'verificationKey': 'v' * 32,
+                   'maxDaily': 10, 'maxMonthly': 100}
+        admitted = [{}, {'emailVerification': {'enabled': False}}, {'emailVerification': enabled}]
+        rejected = [{'emailVerification': value} for value in (
+            {'enabled': True}, {'enabled': False, 'apiKey': 'forbidden'},
+            {**enabled, 'maxDaily': 11}, {**enabled, 'maxMonthly': 101},
+            {**enabled, 'maxDaily': True}, {**enabled, 'verificationKey': 'é' * 32},
+            {**enabled, 'apiKey': 'key\nvalue'}, {**enabled, 'host': 'caller.example'})]
+        for extra in admitted:
+            queue.validate_configuration({**base, **extra}, manifest)
+        for extra in rejected:
+            with self.assertRaises(ValueError):
+                queue.validate_configuration({**base, **extra}, manifest)
+        api = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
+               'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_EMAIL_VERIFICATION_ENABLED': 'true'}
+        self.assertEqual(launcher.child_environment(api, manifest)['JUSTUP_EMAIL_VERIFICATION_ENABLED'], 'true')
+        for key in ('RESEND_API_KEY', 'JUSTUP_RESEND_API_KEY', 'JUSTUP_EMAIL_VERIFICATION_KEY', 'STRIPE_SANDBOX_SECRET_KEY'):
+            with self.assertRaises(ValueError):
+                launcher.child_environment({**api, key: 'synthetic_secret'}, manifest)
+        script = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const input=JSON.parse(readFileSync(0,'utf8'));
+const {bindRunnerConfig}=await import(input.adapter);
+for(const extra of input.admitted)bindRunnerConfig({...input.base,...extra},input.environment);
+for(const extra of input.rejected)assert.throws(()=>bindRunnerConfig({...input.base,...extra},input.environment));
+"""
+        result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
+                                input=json.dumps({'base': base, 'admitted': admitted, 'rejected': rejected,
+                                                  'environment': queue.child_environment(manifest, 'f' * 64),
+                                                  'adapter': (HERE.parent / 'server/runner-adapter.mjs').resolve().as_uri()}),
+                                capture_output=True, timeout=15,
+                                env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_exact_size_sparse_image_is_rejected_before_mount_or_reserve_checks(self):
         with tempfile.TemporaryDirectory() as temp:
             image = Path(temp) / 'preview.disk'
@@ -701,8 +773,22 @@ class BoundaryContracts(unittest.TestCase):
                   'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
         model.validate_configuration(broker, release, manifest)
         queue.validate_configuration(runner, manifest)
-        unsupported = [{'hiringWire': {'enabled': False}},
-                       {'sourceCoverage': {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}}]
+        manifest['files'].update({name: 'b' * 64 for name in model.WIRE_MODULES})
+        manifest['files']['app/server/hiring-wire-sol-catalogue.json'] = model.WIRE_CATALOGUE_SHA256
+        source = {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}
+        runner_cases = [runner, {**runner, 'hiringWire': {'enabled': False}},
+                        {**runner, 'hiringWire': wire_config(), 'sourceCoverage': source},
+                        {**runner, 'hiringWire': wire_config(),
+                         'sourceCoverage': {**source, 'sourceVersion': 'jobseek-coverage-v2'}}]
+        broker_cases = [broker, {**broker, 'hiringWire': {'enabled': False}}, {**broker, 'hiringWire': wire_config(private=True)}]
+        with patch.object(queue.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1234)), patch.object(model.os, 'getuid', return_value=1234):
+            for admitted in runner_cases:
+                queue.validate_configuration(admitted, manifest)
+            for admitted in broker_cases:
+                model.validate_configuration(admitted, release, manifest)
+        unsupported = [{'hiringWire': {'enabled': False, 'command': 'caller'}},
+                       {'sourceCoverage': {**source, 'sourceVersion': 'caller-version'}}, {'modulePath': '/caller/module.mjs'}]
+        unsupported.extend({'sourceCoverage': {**source, 'sourceVersion': value}} for value in (None, 2, [], 'jobseek-coverage-v3'))
         for extra in unsupported:
             with self.subTest(extra=extra):
                 with self.assertRaises(ValueError):
@@ -715,25 +801,35 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 const input = JSON.parse(readFileSync(0, 'utf8'));
 const { bindRunnerConfig } = await import(input.adapterUrl);
-const bound = bindRunnerConfig(input.runner, input.environment);
-assert.equal(bound.sourceCommit, input.environment.JUSTUP_SOURCE_COMMIT);
-assert.equal(bound.buildIdentity, input.environment.JUSTUP_BUILD_ID);
-assert.equal(bound.hostPlanSha256, input.environment.JUSTUP_HOST_PLAN_SHA256);
+const { validWireConfiguration } = await import(input.wireUrl);
+for (const runner of input.runners) {
+  const bound = bindRunnerConfig(runner, input.environment);
+  assert.equal(bound.sourceCommit, input.environment.JUSTUP_SOURCE_COMMIT);
+  assert.equal(bound.buildIdentity, input.environment.JUSTUP_BUILD_ID);
+  assert.equal(bound.hostPlanSha256, input.environment.JUSTUP_HOST_PLAN_SHA256);
+}
 const source = readFileSync(new URL(input.brokerUrl), 'utf8');
 // Evaluate the actual executable's key guard without starting its fd/auth boundary.
 const guard = source.match(/Object\.keys\(supplied\)\.some\(key=>!\[[^\]]*\]\.includes\(key\)\)/)?.[0];
 assert.ok(guard, 'The broker key boundary must remain independently testable.');
-assert.equal(runInNewContext(guard, { supplied: input.broker }), false);
+for (const broker of input.brokers) {
+  assert.equal(runInNewContext(guard, { supplied: broker }), false);
+  assert.equal(validWireConfiguration(broker.hiringWire), true);
+}
+assert.equal(runInNewContext(guard, { supplied: { ...input.broker, sourceCoverage: input.sourceCoverage } }), true);
 for (const extra of input.unsupported) {
   assert.throws(() => bindRunnerConfig({ ...input.runner, ...extra }, input.environment));
-  assert.equal(runInNewContext(guard, { supplied: { ...input.broker, ...extra } }), true);
+  if (extra.hiringWire) assert.equal(validWireConfiguration(extra.hiringWire), false);
+  else assert.equal(runInNewContext(guard, { supplied: { ...input.broker, ...extra } }), true);
 }
 process.stdout.write('actual_node_configuration_boundaries_match\n');
 """
         result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
-                                input=json.dumps({'runner': runner, 'broker': broker, 'unsupported': unsupported,
+                                input=json.dumps({'runner': runner, 'broker': broker, 'runners': runner_cases, 'brokers': broker_cases,
+                                                  'sourceCoverage': source, 'unsupported': unsupported,
                                                   'environment': queue.child_environment(manifest, 'f' * 64),
                                                   'adapterUrl': (HERE.parent / 'server/runner-adapter.mjs').resolve().as_uri(),
+                                                  'wireUrl': (HERE.parent / 'server/hiring-wire-codex-broker.mjs').resolve().as_uri(),
                                                   'brokerUrl': (HERE.parent / 'server/model-broker.mjs').resolve().as_uri()}),
                                 capture_output=True, timeout=15,
                                 env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
@@ -759,6 +855,86 @@ process.stdout.write('actual_node_configuration_boundaries_match\n');
         self.assertEqual(env['JUSTUP_HOST_PLAN_SHA256'], 'f' * 64)
         self.assertEqual(env['LISTEN_PID'], '1234')
         self.assertNotIn('TYPESAFE_AI_TOKEN', env)
+
+    def test_wire_source_configuration_requires_its_exact_graph_and_stays_outside_shared_state(self):
+        manifest, _ = payload()
+        config = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
+                  'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
+        source = {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}
+        with self.assertRaisesRegex(ValueError, 'exact artifact'):
+            queue.validate_configuration({**config, 'sourceCoverage': source}, manifest)
+        self.assertEqual(model.WIRE_MODULES, artifact.WIRE_MODULES)
+        manifest['files'].update({name: 'b' * 64 for name in model.WIRE_MODULES})
+        manifest['files']['app/server/hiring-wire-sol-catalogue.json'] = model.WIRE_CATALOGUE_SHA256
+        with patch.object(Path, 'read_text', side_effect=AssertionError('Configuration must not read source bytes')):
+            queue.validate_configuration({**config, 'sourceCoverage': source}, manifest)
+            queue.validate_configuration({**config, 'sourceCoverage': {**source, 'sourceVersion': 'jobseek-coverage-v2'}}, manifest)
+        with patch.object(queue.pwd, 'getpwnam', side_effect=AssertionError('Disabled Wire must not inspect a UID')):
+            queue.validate_configuration({**config, 'hiringWire': {'enabled': False}}, manifest)
+        for change in ({'directory': 'relative/source'}, {'directory': '/source/../other'}, {'directory': '/source//input'},
+                       {'directory': '/srv/justup_preview/state'}, {'directory': '/srv/justup_preview/state/backups'},
+                       {'directory': '/srv/justup_preview/state/history'}, {'sourceVersion': 'unreviewed'}, {'enabled': True}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                queue.validate_configuration({**config, 'sourceCoverage': {**source, **change}}, manifest)
+        for private in (False, True):
+            wire = wire_config(private=private)
+            self.assertTrue(model.validate_wire_configuration(wire, private=private, model_uid=1234))
+            for change in ({'attestationPath': '/unreviewed/proof.json'}, {'modelUid': 1}, {'modelUid': True},
+                           {'socketPath': '/tmp/model.sock'}, {'enabled': 1}, {'buildIdentity': 'a' * 64}):
+                with self.subTest(private=private, change=change), self.assertRaises(ValueError):
+                    model.validate_wire_configuration({**wire, **change}, private=private, model_uid=1234)
+
+    def test_wire_launcher_proof_matches_actual_node_descriptor_and_independent_attestation(self):
+        manifest, _ = payload()
+        config = wire_config()
+        report = wire_report(manifest, config)
+        model.validate_wire_attestation(report, config, manifest, 'f' * 64)
+        rejected = []
+        for change in ({'profile': 'search_intent'}, {'model': 'gpt-6-luna'}, {'buildIdentity': 'e' * 64},
+                       {'hostPlanSha256': 'e' * 64}, {'modelUid': 1}, {'fd': 4}, {'qualityVerified': False},
+                       {'sharedSlotVerified': False}, {'approved': 1}, {'dynamicToolsSha256': 'e' * 64},
+                       {'descriptor': {**report['descriptor'], 'maxToolCalls': 13}},
+                       {'providerCatalogue': {**report['providerCatalogue'], 'stockTools': 1}},
+                       {'providerCatalogue': {**report['providerCatalogue'], 'tools': ['shell']}},
+                       {'providerCatalogue': {**report['providerCatalogue'], 'sha256': 'e' * 64}}, {'extra': True}):
+            bad = {**report, **change}
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                model.validate_wire_attestation(bad, config, manifest, 'f' * 64)
+            rejected.append(bad)
+        script = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const { wireAttestationMatches } = await import(input.policyUrl);
+assert.equal(wireAttestationMatches(input.report, input.config), true);
+for (const report of input.rejected) assert.equal(wireAttestationMatches(report, input.config), false);
+process.stdout.write('independent_wire_policy_matches\n');
+"""
+        result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
+                                input=json.dumps({'report': report, 'rejected': rejected,
+                                                  'config': {**config, 'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': 'f' * 64},
+                                                  'policyUrl': (HERE.parent / 'server/hiring-wire-codex-policy.mjs').resolve().as_uri()}),
+                                capture_output=True, timeout=15, env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('independent_wire_policy_matches', result.stdout)
+
+    def test_wire_proof_requires_root_immutable_file_and_protected_ancestors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp).resolve() / 'proof.json'
+            path.write_text('{"synthetic":true}')
+            size = path.stat().st_size
+            def metadata(entry, change=None):
+                change = change or {}
+                if entry == path:
+                    return SimpleNamespace(st_mode=stat.S_IFREG | change.get('file_mode', 0o440), st_uid=change.get('file_uid', 0),
+                                           st_nlink=change.get('links', 1), st_size=change.get('size', size))
+                return SimpleNamespace(st_mode=stat.S_IFDIR | change.get('parent_mode', 0o750), st_uid=change.get('parent_uid', 0))
+            with patch.object(Path, 'lstat', lambda entry: metadata(entry)):
+                self.assertEqual(model.read_wire_attestation(path), {'synthetic': True})
+            for change in ({'file_mode': 0o640}, {'file_uid': 1234}, {'links': 2}, {'size': 16_385},
+                           {'parent_mode': 0o770}, {'parent_uid': 1234}):
+                with self.subTest(change=change), patch.object(Path, 'lstat', lambda entry: metadata(entry, change)), self.assertRaises(ValueError):
+                    model.read_wire_attestation(path)
 
     def test_task_specific_static_and_observed_proof_cannot_approve_sibling_tools(self):
         configured = profiles()
@@ -823,6 +999,70 @@ process.stdout.write('actual_node_configuration_boundaries_match\n');
                        {'JUSTUP_ACCOUNT_EXPIRES_AT': '1.5'}, {'JUSTUP_ACCOUNT_TTL_MS': str(2 ** 53)}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 launcher.child_environment({**config, **change}, manifest)
+
+    def test_policy_locale_launcher_matches_actual_node_configuration(self):
+        manifest, _ = payload()
+        base = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
+                'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_POLICIES_REVIEWED': 'false'}
+        entry = {'privacyUrl': base['JUSTUP_ORIGIN'] + '/privacy.de.html',
+                 'usageUrl': base['JUSTUP_ORIGIN'] + '/usage.de.html',
+                 'version': 'synthetic-reviewed', 'reviewed': True}
+        variants = [base, {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': entry})},
+                    {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': entry}),
+                     'JUSTUP_POLICY_FALLBACKS': '{"it":"de"}'},
+                    {**base, 'JUSTUP_POLICY_LOCALES': '[]'},
+                    {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': {**entry, 'reviewed': 'true'}})},
+                    {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': {**entry, 'privacyUrl': 'https://other.example/privacy.de.html'}})},
+                    {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': {**entry, 'usageUrl': entry['usageUrl'] + '?x=1'}})},
+                    {**base, 'JUSTUP_POLICY_FALLBACKS': '{"it":"de"}'},
+                    {**base, 'JUSTUP_POLICY_LOCALES': 'x' * 8193}]
+        legacy = {**base, 'JUSTUP_POLICIES_REVIEWED': 'true', 'JUSTUP_POLICY_VERSION': 'synthetic-reviewed',
+                  'JUSTUP_PRIVACY_URL': base['JUSTUP_ORIGIN'] + '/privacy.html',
+                  'JUSTUP_USAGE_URL': base['JUSTUP_ORIGIN'] + '/usage.html'}
+        variants += [legacy, {**legacy, 'JUSTUP_PRIVACY_URL': legacy['JUSTUP_USAGE_URL'], 'JUSTUP_USAGE_URL': legacy['JUSTUP_PRIVACY_URL']},
+                     {**legacy, 'JUSTUP_PRIVACY_URL': base['JUSTUP_ORIGIN'] + '/arbitrary.html'},
+                     {**legacy, 'JUSTUP_USAGE_URL': base['JUSTUP_ORIGIN'] + '/usage.fr.html'},
+                     {**legacy, 'JUSTUP_PRIVACY_URL': legacy['JUSTUP_PRIVACY_URL'] + '?x=1'},
+                     {**legacy, 'JUSTUP_USAGE_URL': legacy['JUSTUP_USAGE_URL'] + '#reviewed'},
+                     {**legacy, 'JUSTUP_PRIVACY_URL': legacy['JUSTUP_PRIVACY_URL'] + '/'},
+                     {**legacy, 'JUSTUP_POLICY_LOCALES': '{}', 'JUSTUP_USAGE_URL': legacy['JUSTUP_PRIVACY_URL']}]
+        proof = {'origin': base['JUSTUP_ORIGIN'], 'sourceCommit': manifest['sourceCommit'], 'assetsSha256': 'c' * 64,
+                 'locales': {'de': {'version': entry['version'], 'privacySha256': 'd' * 64, 'usageSha256': 'e' * 64}}}
+        localized = {**base, 'JUSTUP_POLICIES_REVIEWED': 'true', 'JUSTUP_POLICY_LOCALES': json.dumps({'de': entry})}
+        variants += [localized, {**localized, 'JUSTUP_POLICY_ASSET_PROOF': json.dumps(proof)}]
+        for change in ({'origin': 'https://other.example'}, {'sourceCommit': 'f' * 40}, {'assetsSha256': 'bad'},
+                       {'locales': {}}, {'locales': {'ja': proof['locales']['de']}}, {'extra': True}):
+            variants.append({**localized, 'JUSTUP_POLICY_ASSET_PROOF': json.dumps({**proof, **change})})
+        accepted = []
+        for variant in variants:
+            try:
+                launcher.child_environment(variant, manifest)
+                accepted.append(True)
+            except ValueError:
+                accepted.append(False)
+        script = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const input=JSON.parse(readFileSync(0,'utf8'));
+const {configFromEnv}=await import(input.apiUrl);
+const {policyState}=await import(input.policyUrl);
+for(const [index,env]of input.variants.entries()){
+  let accepted=false;
+  try{const config=configFromEnv({...env,JUSTUP_SOURCE_COMMIT:input.sourceCommit});
+    const reviewed=env.JUSTUP_POLICIES_REVIEWED==='true'&&env.JUSTUP_POLICY_ASSET_PROOF!==undefined;
+    assert.equal(policyState(config,'de').reviewed,reviewed);accepted=true;}catch{}
+  assert.equal(accepted,input.accepted[index],`Policy config compatibility case ${index}`);
+}
+process.stdout.write('actual_node_policy_configuration_matches\n');
+"""
+        result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
+                                input=json.dumps({'variants': variants, 'accepted': accepted, 'sourceCommit': manifest['sourceCommit'],
+                                    'apiUrl': (HERE.parent / 'server/main.mjs').resolve().as_uri(),
+                                    'policyUrl': (HERE.parent / 'server/policies.mjs').resolve().as_uri()}),
+                                capture_output=True, timeout=15,
+                                env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('actual_node_policy_configuration_matches', result.stdout)
 
     def test_api_configuration_rejects_aliases_links_and_nonprivate_modes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -999,7 +1239,8 @@ class RecoveryContracts(unittest.TestCase):
         barrier = root / 'private-generation'
         barrier.write_text(str(uuid.uuid4()) + '\n')
         db = root / 'preview.sqlite'
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute('PRAGMA user_version=2')
             conn.execute('CREATE TABLE private_records (value TEXT)')
             conn.execute('INSERT INTO private_records VALUES (?)', ('private fixture',))
         return db, folder, barrier
@@ -1014,7 +1255,7 @@ class RecoveryContracts(unittest.TestCase):
             db, folder, barrier = self.fixture(root)
             snapshot = self.make_backup(db, folder, barrier)
             recovery.validate_restore(snapshot, barrier, now=1001)
-            with sqlite3.connect(snapshot) as conn:
+            with closing(sqlite3.connect(snapshot)) as conn, conn:
                 self.assertEqual(conn.execute('SELECT value FROM private_records').fetchone(), ('private fixture',))
             barrier.write_text(str(uuid.uuid4()) + '\n')
             with self.assertRaisesRegex(ValueError, 'private deletion'):
@@ -1033,7 +1274,7 @@ class RecoveryContracts(unittest.TestCase):
             pending.write_text(str(uuid.uuid4()) + '\n')
             barrier.write_text(str(uuid.uuid4()) + '\n')
             writer.execute('DELETE FROM private_records')
-            with sqlite3.connect(db) as reader:
+            with closing(sqlite3.connect(db)) as reader, reader:
                 self.assertEqual(reader.execute('SELECT count(*) FROM private_records').fetchone()[0], 1)
             with self.assertRaisesRegex(ValueError, 'transaction is pending'):
                 self.make_backup(db, folder, barrier)
@@ -1043,7 +1284,7 @@ class RecoveryContracts(unittest.TestCase):
             # Only the transaction owner removes/fsyncs this after COMMIT.
             pending.unlink()
             snapshot = self.make_backup(db, folder, barrier)
-            with sqlite3.connect(snapshot) as reader:
+            with closing(sqlite3.connect(snapshot)) as reader, reader:
                 self.assertEqual(reader.execute('SELECT count(*) FROM private_records').fetchone()[0], 0)
 
     def test_retained_pending_marker_blocks_backup_and_restore_after_crash(self):
@@ -1099,7 +1340,7 @@ class RecoveryContracts(unittest.TestCase):
             snapshot = self.make_backup(db, folder, barrier)
             before = barrier.read_bytes()
             destination = root / 'restored.sqlite'
-            good = "import json; print(json.dumps({'schemaVersion':1,'sessionsInvalidated':True,'remainingSessions':0,'sessionsDeleted':2}))"
+            good = "import json; print(json.dumps({'schemaVersion':2,'sessionsInvalidated':True,'remainingSessions':0,'sessionsDeleted':2}))"
             result = recovery.restore(snapshot, barrier, destination, [sys.executable, '-c', good], now=1001)
             self.assertTrue(result['sessionsInvalidated'])
             self.assertFalse(result['activated'])
@@ -1118,7 +1359,7 @@ class RecoveryContracts(unittest.TestCase):
             db, folder, barrier = self.fixture(root)
             snapshot = self.make_backup(db, folder, barrier)
             destination = root / 'restored.sqlite'
-            command = "from pathlib import Path; import uuid,json; Path(" + repr(str(barrier)) + ").write_text(str(uuid.uuid4())+'\\n'); print(json.dumps({'schemaVersion':1,'sessionsInvalidated':True,'remainingSessions':0,'sessionsDeleted':0}))"
+            command = "from pathlib import Path; import uuid,json; Path(" + repr(str(barrier)) + ").write_text(str(uuid.uuid4())+'\\n'); print(json.dumps({'schemaVersion':2,'sessionsInvalidated':True,'remainingSessions':0,'sessionsDeleted':0}))"
             with self.assertRaisesRegex(ValueError, 'changed during restore'):
                 recovery.restore(snapshot, barrier, destination, [sys.executable, '-c', command], now=1001)
             self.assertFalse(destination.exists())
@@ -1136,7 +1377,203 @@ class RecoveryContracts(unittest.TestCase):
                 self.make_backup(db, folder, barrier)
 
 
+class SchemaOperationsContracts(unittest.TestCase):
+    def database(self, path, epoch=2):
+        prefix = 'justup_' if epoch == 2 else 'demo_'
+        with closing(sqlite3.connect(path)) as db, db:
+            db.executescript(f"CREATE TABLE {prefix}imports(id TEXT); CREATE TABLE {prefix}jobs(id TEXT); CREATE TABLE job_source_identities(id TEXT); PRAGMA user_version={epoch};")
+
+    def test_actual_api_and_queue_launchers_refuse_retained_epoch_one_release_before_executing_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            release = base / 'releases' / ('b' * 64)
+            release.mkdir(parents=True)
+            (base / 'current').symlink_to(release)
+            (base / 'state').mkdir()
+            self.database(base / 'state/preview.sqlite')
+            old, _ = payload()
+            old['schemaVersion'] = 1
+            with patch.object(artifact, 'verify_directory', return_value=old), patch.object(artifact, 'read_host_plan', return_value='f' * 64), patch.object(artifact, 'check_database_schema', wraps=artifact.check_database_schema) as check:
+                with patch.object(launcher, 'BASE', base), patch.object(launcher, 'module', return_value=artifact), patch.object(launcher.subprocess, 'Popen') as execute:
+                    self.assertEqual(launcher.main(), 1)
+                    execute.assert_not_called()
+                with patch.object(queue, 'BASE', base), patch.object(queue, 'artifact_module', return_value=artifact), patch.object(queue.os, 'getuid', return_value=1001), patch.object(queue.os, 'umask', return_value=0o007), patch.object(queue.os, 'execve') as execute:
+                    self.assertEqual(queue.main(), 1)
+                    execute.assert_not_called()
+                self.assertEqual(check.call_count, 2)
+            with self.assertRaisesRegex(ValueError, 'epoch'):
+                artifact.check_database_schema(base / 'state/preview.sqlite', old)
+
+    def test_switch_stops_writers_and_checks_actual_database_before_changing_links(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            release = base / 'releases' / ('b' * 64)
+            release.mkdir(parents=True)
+            (base / 'current').symlink_to(release)
+            (base / 'state').mkdir()
+            self.database(base / 'state/preview.sqlite')
+            old, _ = payload()
+            old['schemaVersion'] = 1
+            before = (base / 'current').readlink()
+            with patch.object(host, 'BASE', base), patch.object(host, 'require_operator'), patch.object(host, 'artifact_module', return_value=artifact), patch.object(artifact, 'verify_directory', return_value=old), patch.object(host, 'stop_preview') as stop:
+                with self.assertRaisesRegex(ValueError, 'epoch'):
+                    host.switch('b' * 64)
+                stop.assert_called_once()
+                self.assertEqual((base / 'current').readlink(), before)
+                self.assertFalse((base / 'previous').exists())
+
+    def test_migration_requires_idle_identities_before_backup_or_sql_and_keeps_failed_maintenance_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            (base / 'backups').mkdir()
+            barrier = base / 'private-generation'
+            barrier.write_text(str(uuid.uuid4()) + '\n')
+            database = base / 'preview.sqlite'
+            self.database(database, 1)
+            current = {'schemaVersion': 1, 'sourceCommit': 'a' * 40, 'buildIdentity': 'b' * 64}
+            target = {**current, 'schemaVersion': 2, 'buildIdentity': 'c' * 64}
+            boundary = SimpleNamespace(require_operator=lambda: None, require_idle_preview=lambda: (_ for _ in ()).throw(ValueError('dedicated identity still running')))
+            with patch.object(recovery.os, 'geteuid', return_value=0), patch.object(recovery, 'backup') as save, patch.object(recovery.subprocess, 'run') as execute:
+                with self.assertRaisesRegex(ValueError, 'still running'):
+                    recovery.migrate_live(database, base / 'backups', barrier, target, ['fixed-target-node'], current, base=base, host=boundary)
+                save.assert_not_called()
+                execute.assert_not_called()
+            self.assertTrue((base / '.preview-schema-migration.lock').exists())
+            with self.assertRaisesRegex(ValueError, 'blocked'):
+                artifact.read_host_plan(base)
+            with closing(sqlite3.connect(database)) as db, db:
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
+
+    def test_protected_migration_runs_exact_target_after_idle_and_backup_with_no_credential_environment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            folder = base / 'backups'
+            folder.mkdir()
+            barrier = base / 'private-generation'
+            barrier.write_text(str(uuid.uuid4()) + '\n')
+            database = base / 'preview.sqlite'
+            with closing(sqlite3.connect(database)) as db, db:
+                db.executescript((HERE.parent / 'server/fixtures/schema-v1.sql').read_text())
+                db.execute("INSERT INTO demo_jev_usage VALUES('project','original',100,3,192000,0,8064000,1)")
+            current = {'schemaVersion': 1, 'sourceCommit': 'a' * 40, 'buildIdentity': 'b' * 64}
+            target = {**current, 'schemaVersion': 2, 'buildIdentity': 'c' * 64}
+            idle = []
+            def stop_and_prove_idle():
+                self.assertTrue((base / '.preview-schema-migration.lock').exists())
+                idle.append(True)
+            boundary = SimpleNamespace(require_operator=lambda: None, require_idle_preview=stop_and_prove_idle, USER='fixture-api', STATE_GROUP='fixture-state')
+            command = [shutil.which('node'), str(HERE.parent / 'server/main.mjs'), '--migrate-db']
+            real_run = subprocess.run
+            def child(argv, **kwargs):
+                self.assertEqual(argv, command)
+                self.assertEqual(idle, [True])
+                self.assertEqual(len(list(folder.glob('backup-*.sqlite'))), 1)
+                self.assertEqual(kwargs.pop('user'), 1001)
+                self.assertEqual(kwargs.pop('group'), 1002)
+                self.assertEqual(kwargs.pop('extra_groups'), [])
+                self.assertEqual(kwargs['umask'], 0o007)
+                self.assertEqual(set(kwargs['env']), {'PATH','LANG','JUSTUP_DB_PATH','JUSTUP_SHARED_STATE'})
+                return real_run(argv, **kwargs)
+            before = barrier.read_bytes()
+            with patch.object(recovery.os, 'geteuid', return_value=0), patch.object(recovery.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), patch.object(recovery.grp, 'getgrnam', return_value=SimpleNamespace(gr_gid=1002)), patch.object(recovery.subprocess, 'run', side_effect=child):
+                result = recovery.migrate_live(database, folder, barrier, target, command, current, base=base, host=boundary)
+            self.assertEqual(result['schemaVersion'], 2)
+            self.assertTrue(result['writersStopped'])
+            self.assertFalse(result['activated'])
+            self.assertFalse((base / '.preview-schema-migration.lock').exists())
+            self.assertEqual(barrier.read_bytes(), before)
+            with closing(sqlite3.connect(database)) as db:
+                self.assertEqual(db.execute('SELECT calls,cost_nano,ambiguous FROM justup_jev_usage').fetchone(), (3,8064000,1))
+            snapshot = folder / result['backup']
+            self.assertEqual(recovery.validate_restore(snapshot, barrier)['schemaVersion'], 1)
+
+    def test_forward_restore_uses_actual_migration_and_auth_helper_without_restoring_ledger_or_generation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            folder = base / 'backups'
+            folder.mkdir()
+            barrier = base / 'private-generation'
+            barrier.write_text(str(uuid.uuid4()) + '\n')
+            database = base / 'preview.sqlite'
+            with closing(sqlite3.connect(database)) as db, db:
+                db.executescript((HERE.parent / 'server/fixtures/schema-v1.sql').read_text())
+                db.execute("INSERT INTO auth_accounts VALUES('account-a','synthetic-user',?,?,100,NULL)", (bytes(range(16)), bytes(range(64))))
+                db.execute("INSERT INTO auth_sessions VALUES(?,'account-a',100,9999999999999)", (bytes(range(32)),))
+                db.execute("INSERT INTO job_source_identities VALUES('closed-source','company-original',10,200,0,1)")
+                db.execute("INSERT INTO demo_jev_usage VALUES('project','project-original',100,9,576000,0,24192000,2)")
+                db.execute("INSERT INTO demo_jev_reservations VALUES('reservation-original','account-a','project-original',100,64000,0,2688000,'ambiguous',150)")
+            ledger = base / 'jev.jsonl'
+            ledger.write_bytes(b'{"schemaVersion":1,"kind":"approval","resourceSlug":"demo-jev-evaluation-budget"}\n{"kind":"reserve","reservedNanodollars":2688000}\n')
+            before_generation, before_ledger = barrier.read_bytes(), ledger.read_bytes()
+            saved = recovery.backup(database, folder, barrier, 'a' * 40, 'b' * 64, now=1000, schema_version=1)
+            snapshot = folder / saved['backup']
+            destination = base / 'restored-forward.sqlite'
+            command = [shutil.which('node'), str(HERE.parent / 'server/main.mjs'), '--prepare-restored-db']
+            with self.assertRaisesRegex(ValueError, 'explicit forward'):
+                recovery.restore(snapshot, barrier, destination, command, now=1001)
+            self.assertFalse(destination.exists())
+            result = recovery.restore(snapshot, barrier, destination, command, now=1001, migrate_v1=True)
+            self.assertTrue(result['sessionsInvalidated'])
+            with closing(sqlite3.connect(destination)) as db, db:
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 2)
+                self.assertEqual(db.execute('SELECT count(*) FROM auth_sessions').fetchone()[0], 0)
+                self.assertEqual(db.execute('SELECT password_hash FROM auth_accounts').fetchone()[0], bytes(range(64)))
+                self.assertEqual(db.execute('SELECT * FROM job_source_identities').fetchone(), ('closed-source','company-original',10,200,0,1))
+                self.assertEqual(db.execute('SELECT calls,input_tokens,cost_nano,ambiguous FROM justup_jev_usage').fetchone(), (9,576000,24192000,2))
+                self.assertEqual(db.execute('SELECT state,cost_nano FROM justup_jev_reservations').fetchone(), ('ambiguous',2688000))
+            self.assertEqual(barrier.read_bytes(), before_generation)
+            self.assertEqual(ledger.read_bytes(), before_ledger)
+            with closing(sqlite3.connect(database)) as db, db:
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
+                self.assertEqual(db.execute('SELECT count(*) FROM auth_sessions').fetchone()[0], 1)
+
+
 class HTTPVerificationContracts(unittest.TestCase):
+    def policy_assets(self, manifest, locales=('en',)):
+        pages, entries = {}, {}
+        for locale in locales:
+            entries[locale] = {'version': 'approved-v1'}
+            suffix = '' if locale == 'en' else '.' + locale
+            for kind in ('privacy', 'usage'):
+                body = ('<html lang="' + locale + '"><head><meta name="justup-policy-version" content="approved-v1"></head>'
+                        '<body data-policy="' + kind + '" data-policy-version="approved-v1">Synthetic policy</body></html>')
+                pages[kind + suffix + '.html'] = body
+                entries[locale][kind + 'Sha256'] = hashlib.sha256(body.encode()).hexdigest()
+        assets = [{'path': path, 'sha256': hashlib.sha256(body.encode()).hexdigest(), 'bytes': len(body.encode())}
+                  for path, body in sorted(pages.items())]
+        digest = hashlib.sha256(json.dumps(assets, separators=(',', ':')).encode()).hexdigest()
+        frontend = {'sourceSha': manifest['sourceCommit'], 'treeSha': manifest['sourceTree'], 'assetsSha256': digest,
+                    'workerSha256': 'd' * 64, 'artifactSha256': 'e' * 64, 'assets': assets}
+        proof = {'origin': 'https://preview.example', 'sourceCommit': manifest['sourceCommit'], 'assetsSha256': digest, 'locales': entries}
+        return frontend, pages, proof
+
+    def test_policy_asset_verification_runs_with_flags_off_and_never_infers_reviewed_bytes(self):
+        manifest, _ = payload()
+        frontend, pages, proof = self.policy_assets(manifest, ('en', 'fr'))
+        calls = []
+        def fetch(url, as_json=True):
+            self.assertFalse(as_json, 'Static policy verification must not require processing admission or call an API.')
+            calls.append(url)
+            return pages.get(url.removeprefix('https://preview.example/'), '<html>missing-page fallback</html>'), {}
+        options = {'frontend_release': frontend, 'policy_asset_proof': proof, 'fetch': fetch}
+        report = http.verify('https://preview.example', manifest, 'policies', **options)
+        self.assertEqual(report['policyAssetProof'], proof)
+        self.assertFalse(report['shareable'])
+        self.assertEqual(len(calls), 4)
+        for change in ({'origin': 'https://other.example'}, {'sourceCommit': 'f' * 40}, {'assetsSha256': 'f' * 64},
+                       {'locales': {'fr': {**proof['locales']['fr'], 'privacySha256': 'f' * 64}}},
+                       {'locales': {'fr': {**proof['locales']['fr'], 'version': 'unreviewed-replacement'}}}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                http.verify('https://preview.example', manifest, 'policies', **{**options, 'policy_asset_proof': {**proof, **change}})
+        for replacement in ('<html>SPA fallback</html>', pages['privacy.fr.html'] + ' ', pages['usage.fr.html']):
+            previous = pages['privacy.fr.html']
+            pages['privacy.fr.html'] = replacement
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                http.verify('https://preview.example', manifest, 'policies', **options)
+            pages['privacy.fr.html'] = previous
+        with self.assertRaises(ValueError):
+            http.verify('https://preview.example', manifest, 'policies', **{**options, 'policy_asset_proof': None})
+
     def test_https_redirect_cannot_downgrade_or_leave_the_fixed_origin(self):
         handler = http.FixedOriginRedirect()
         request = Request('https://preview.example/api/v1/health')
@@ -1147,7 +1584,7 @@ class HTTPVerificationContracts(unittest.TestCase):
     def responses(self):
         manifest, _ = payload()
         values = {'/api/v1/health': {'ready': True},
-                  '/api/v1/version': {'sourceCommit': manifest['sourceCommit'], 'buildIdentity': manifest['buildIdentity'], 'schemaVersion': 1,
+                  '/api/v1/version': {'sourceCommit': manifest['sourceCommit'], 'buildIdentity': manifest['buildIdentity'], 'schemaVersion': 2,
                                       'runner': {'ready': False, 'identity': None}, 'importGeneration': None},
                   '/api/v1/session': {'user': None, 'access': {'kind': 'guest', 'fullAccess': False, 'billingEnabled': False},
                                       'capabilities': {name: False for name in ('sse', 'follows', 'viewed', 'preferences', 'hiddenMatchCounts')}}}
@@ -1176,25 +1613,32 @@ class HTTPVerificationContracts(unittest.TestCase):
         manifest, values, _ = self.responses()
         values['/api/v1/version'].update({'runner': {'ready': True, 'identity': 'runner-build'}, 'importGeneration': 'import-generation'})
         values['/api/v1/session'].update({'serverTime': '2026-10-31T18:00:00Z', 'coverage': {'stale': False},
-            'policies': {'reviewed': True, 'version': 'approved-v1', 'privacyUrl': 'https://preview.example/privacy', 'usageUrl': 'https://preview.example/usage'}})
+            'policies': {'reviewed': True, 'locale': 'en', 'reviewedLocale': 'en', 'fallback': False, 'version': 'approved-v1',
+                         'privacyUrl': 'https://preview.example/privacy.html', 'usageUrl': 'https://preview.example/usage.html'}})
         values['/api/v1/session']['capabilities'].update({name: True for name in http.FIRST_RELEASE_CAPABILITIES})
         values['/api/v1/jobs?limit=12'] = {'items': [{'firstObserved': '2026-10-28T18:00:00Z', 'sourceUrl': 'https://employer.example/role'}]}
-        def fetch(url, as_json=True):
+        frontend, pages, proof = self.policy_assets(manifest)
+        def fetch(url, as_json=True, headers=None):
             path = url.removeprefix('https://preview.example')
             if not as_json:
+                if path.lstrip('/') in pages:
+                    return pages[path.lstrip('/')], {'x-robots-tag': 'noindex, nofollow'}
                 return '<html>candidate</html>', {'x-robots-tag': 'noindex, nofollow'}
-            return deepcopy(values[path]), {'cache-control': 'private, no-store', 'x-robots-tag': 'noindex, nofollow'}
-        frontend = {'sourceSha': manifest['sourceCommit'], 'treeSha': manifest['sourceTree'],
-                    'assetsSha256': 'c' * 64, 'workerSha256': 'd' * 64, 'artifactSha256': 'e' * 64}
+            value = deepcopy(values[path])
+            if path == '/api/v1/session' and headers and headers.get('Accept-Language') != 'en':
+                locale = headers['Accept-Language']
+                value['policies'].update({'locale': locale, 'reviewed': False, 'reviewedLocale': None, 'fallback': False})
+            return value, {'cache-control': 'private, no-store', 'x-robots-tag': 'noindex, nofollow'}
+        retained = {key: frontend[key] for key in ('sourceSha', 'treeSha', 'assetsSha256', 'workerSha256', 'artifactSha256')}
         runtime = {'publicOrigin': 'https://preview.example', 'apiOrigin': 'https://api.example',
                    'apiPrefix': '/api/v1', 'deploymentMode': 'preview'}
         runtime_sha = hashlib.sha256(json.dumps(runtime, separators=(',', ':')).encode()).hexdigest()
         configuration = {'vars': {'PUBLIC_ORIGIN': runtime['publicOrigin'], 'API_ORIGIN': runtime['apiOrigin'],
                                   'DEPLOYMENT_MODE': 'preview', 'RUNTIME_CONFIG_SHA256': runtime_sha,
-                                  'RELEASE_JSON': json.dumps(frontend)}}
-        deployed = {**frontend, 'runtimeConfigSha256': runtime_sha, 'apiPrefix': '/api/v1', 'deploymentMode': 'preview'}
+                                  'RELEASE_JSON': json.dumps(retained)}}
+        deployed = {**retained, 'runtimeConfigSha256': runtime_sha, 'apiPrefix': '/api/v1', 'deploymentMode': 'preview'}
         options = {'runner_identity': 'runner-build', 'import_generation': 'import-generation', 'policy_version': 'approved-v1',
-                   'fetch': fetch, 'frontend_release': frontend, 'frontend_config': configuration}
+                   'fetch': fetch, 'frontend_release': frontend, 'frontend_config': configuration, 'policy_asset_proof': proof}
         values['/__release/version'] = dict(deployed)
         for change in ({'DEPLOYMENT_MODE': 'production'}, {'DEPLOYMENT_MODE': ''}, {'PUBLIC_ORIGIN': 'https://other.example'},
                        {'API_ORIGIN': 'https://api2.example'}, {'RUNTIME_CONFIG_SHA256': 'f' * 64},

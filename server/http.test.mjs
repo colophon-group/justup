@@ -12,16 +12,17 @@ async function setup(t, options = {}) {
     session: (value) => value === token && signedIn ? { account, expiresAt: Date.now() + 60_000, access: { kind: 'account', fullAccess: true, legacy: false, billingEnabled: false, until: null } } : null,
     register: async () => { signedIn = true; mutations++; return { account, token, expiresAt: Date.now() + 60_000 }; },
     login: async () => { signedIn = true; mutations++; return { account, token, expiresAt: Date.now() + 60_000 }; },
+    ...(options.activation?{activateFreePeriod:()=>{if(options.activationError)throw Object.assign(new Error('safe'),options.activationError);mutations++;}}:{}),
     logout: () => { signedIn = false; mutations++; },
     deleteAccount: async () => { if (options.deleteError) throw Object.assign(new Error('safe'), { code: 'invalid_credentials', status: 401 }); signedIn = false; mutations++; return { deleted: true }; },
   };
   const calls = [], logs = [];
-  const feed = { coverage: () => ({ kind: 'imported_snapshot', verifiedAt: null, stale: true }), generation: () => null,
+  const feed = options.feed ?? { coverage: () => ({ kind: 'imported_snapshot', verifiedAt: null, stale: true }), generation: () => null,
     list: ({ viewer }) => ({ items: [{ id: viewer ? 'preview' : 'public' }] }), companies: () => ({ items: [] }), company: () => ({ id: 'co' }) };
   const task = { id: 'task-a', status: 'succeeded', kind: 'search_intent', payload: { secret: 'private' }, output: { hiddenJob: 'never-serialize' } };
   const tasks = { get: (owner, id) => owner === account.id && id === task.id ? task : null, publicView: (row, result) => ({ id: row.id, status: row.status, result }) };
   const config = { allowedOrigin: ORIGIN, csrfSecret: 'x'.repeat(32), inviteCode: 'test-invite', policiesReviewed: true,
-    privacyUrl: `${ORIGIN}/privacy`, usageUrl: `${ORIGIN}/usage`, policyVersion: 'reviewed-1', ...options.config };
+    privacyUrl: `${ORIGIN}/privacy.html`, usageUrl: `${ORIGIN}/usage.html`, policyVersion: 'reviewed-1', ...options.config };
   const services = options.services ?? [{ capabilities: { search: true }, route: async (ctx) => { calls.push(ctx); return ctx.path === '/searches' ? { status: 202, body: { ok: true } } : null; } }];
   const server = createServer(createHandler({ auth, feed, tasks, services, config, logger: (v) => logs.push(v) }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -48,6 +49,35 @@ test('session and auth set opaque host-only secure cookies and honest capabiliti
   assert.ok(!cookie.includes('Domain=')); assert.equal(result.body.user.username, 'tester');
   assert.equal(result.res.headers.get('cache-control'), 'private, no-store');
   const session = await s.request('/session', { headers: { Cookie: result.cookie } }); assert.equal(session.body.csrfToken, result.body.csrfToken);
+});
+
+test('explicit locale headers select current request metadata and reject invalid or duplicate values before auth',async t=>{
+  const s=await setup(t);
+  const localized=await s.request('/session',{headers:{'X-Justup-Locale':'it','Accept-Language':'en'}});
+  assert.equal(localized.body.policies.locale,'it');assert.equal(localized.body.policies.reviewed,false);
+  for(const value of ['it-IT','it,fr','en,en',''])assert.equal((await s.request('/session',{headers:{'X-Justup-Locale':value}})).res.status,400);
+  assert.equal((await s.request('/session',{headers:[['X-Justup-Locale','en'],['X-Justup-Locale','en']]})).res.status,400);
+  const blocked=await s.request('/auth/login',{method:'POST',headers:{Origin:ORIGIN,'X-CSRF-Token':s.guest.body.csrfToken,Cookie:s.guestCookie,'Content-Type':'application/json','X-Justup-Locale':'it'},body:'{}'});
+  assert.equal(blocked.res.status,503);assert.equal(blocked.body.error.code,'policy_unavailable');assert.equal(s.mutations(),0);
+});
+
+test('public catalogue passes bounded pagination without viewer state and rejects private projections', async t => {
+  const calls = [], feed = { coverage: () => ({}), companies: args => { calls.push(args); return { items: [], coverage: {}, nextCursor: null }; } };
+  const s = await setup(t, { feed });
+  const result = await s.request('/companies?q=Example&limit=50&cursor=opaque');
+  assert.equal(result.res.status, 200);
+  assert.deepEqual(calls.pop(), { q: 'Example', limit: 50, cursor: 'opaque' });
+  assert.equal(result.res.headers.get('set-cookie'), null);
+  await s.request('/companies');
+  assert.deepEqual(calls.pop(), { q: '', limit: 20, cursor: null });
+  for (const query of ['scope=followed', 'ownerId=private', 'requested=true', 'q=a&q=b']) {
+    const denied = await s.request(`/companies?${query}`);
+    assert.equal(denied.res.status, 400);
+    assert.equal(denied.body.error.code, 'invalid_query');
+  }
+  for (const limit of ['0', '51', '1.5', '01', '']) {
+    assert.equal((await s.request(`/companies?limit=${limit}`)).res.status, 400);
+  }
 });
 test('policy and invite gates close both login and registration before auth code', async (t) => {
   const s = await setup(t, { config: { policiesReviewed: false } });
@@ -142,4 +172,12 @@ test('explicit public edition reads can report capability while public writes re
   assert.equal((await s.request('/hiring-wire')).body.edition.period,'2026-10-26');
   const denied=await s.request('/hiring-wire',{method:'POST',headers:{Origin:ORIGIN,'X-CSRF-Token':s.guest.body.csrfToken,Cookie:s.guestCookie,'Content-Type':'application/json'},body:'{}'});
   assert.equal(denied.res.status,401);assert.equal(reads,1);
+});
+
+test('access activation requires signed-in Origin and CSRF, an empty body and returns the refreshed session',async t=>{
+  const s=await setup(t,{activation:true}),login=await s.login(),headers={Origin:ORIGIN,'X-CSRF-Token':login.body.csrfToken,Cookie:login.cookie,'Content-Type':'application/json'};
+  assert.equal((await s.request('/access/activate',{method:'POST',headers:{...headers,Origin:'https://elsewhere.example'},body:'{}'})).res.status,403);
+  assert.equal((await s.request('/access/activate',{method:'POST',headers,body:'{"fullAccess":true}'})).res.status,400);
+  const activated=await s.request('/access/activate',{method:'POST',headers,body:'{}'});assert.equal(activated.res.status,200);assert.equal(activated.body.user.id,'account-a');assert.equal(activated.res.headers.getSetCookie().length,0);assert.equal(activated.res.headers.get('x-robots-tag'),'noindex');
+  const rejected=await setup(t,{activation:true,activationError:{code:'identity_unverified',status:403}}),account=await rejected.login();const result=await rejected.request('/access/activate',{method:'POST',headers:{Origin:ORIGIN,'X-CSRF-Token':account.body.csrfToken,Cookie:account.cookie,'Content-Type':'application/json'},body:'{}'});assert.equal(result.res.status,403);assert.equal(result.body.error.code,'identity_unverified');
 });

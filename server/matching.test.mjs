@@ -8,7 +8,7 @@ import { createMatchingService } from './matching.mjs';
 
 const START = Date.parse('2026-10-31T16:00:00Z');
 const owner = 'owner-1';
-const viewer = { account: { id: owner }, expiresAt: new Date(START + 86_400_000).toISOString(), access: { kind: 'demo', fullAccess: true } };
+const viewer = { account: { id: owner }, expiresAt: new Date(START + 86_400_000).toISOString(), access: { kind: 'free', fullAccess: true } };
 const configuration = { schemaVersion: 1, filters: { titleAny: ['engineer'] }, residualAi: { condition: 'A documented four day week.', requirementIds: ['r1'] } };
 function makeJob(i, extra = {}) {
   const bodyText = 'The job offers a documented four day working week, with regular office hours. '.repeat(4);
@@ -18,7 +18,8 @@ function makeJob(i, extra = {}) {
 }
 function setup(t, { count = 10, decisions = () => 'accepted', matching = {}, provider: suppliedProvider } = {}) {
   const db = new DatabaseSync(':memory:'); db.exec('PRAGMA foreign_keys=ON;'); t.after(() => db.close());
-  let time = START, generation = 'import-1', stale = false;
+  let time = START, generation = 'import-1', stale = false,currentAccess=viewer.access;
+  const authority=id=>({account:{id},access:currentAccess});
   let jobs = Array.from({ length: count }, (_, i) => makeJob(i));
   let calls = 0;
   const tasksMap = new Map();
@@ -43,13 +44,13 @@ function setup(t, { count = 10, decisions = () => 'accepted', matching = {}, pro
   const provider = suppliedProvider ?? { available: () => true, classify: async ({ jobs: batch }) => { calls++;
     return { decisions: [...batch].reverse().map((j) => ({ id: j.id, decision: decisions(j) })),
       usage: { inputTokens: 100, outputTokens: 24 }, costNanodollars: 4200, attempts: 1, ambiguousAttempts: 0 }; } };
-  const service = createMatchingService({ db, feed, tasks, provider, config: { matching }, now: () => time });
+  const service = createMatchingService({ db, feed, tasks, provider, config: { matching }, ownerAuthority:authority,revisionIsCurrent:()=>true, now: () => time });
   const page = (overrides = {}) => service.page({ ownerId: owner, searchId: 'search-1', revision: 1,
     configuration, jobs: feed.eligibleJobs(), viewer, coverage: feed.coverage(), generation, ...overrides });
   const run = async () => { const task = tasks.claim(); assert(task, 'expected queued work'); return service.runTask(task); };
   return { db, service, page, run, tasks, tasksMap, provider, feed, calls: () => calls,
     time: () => time, advance: (ms) => { time += ms; }, setJobs: (value) => { jobs = value; },
-    jobs: () => jobs, setGeneration: (v) => { generation = v; }, setStale: (v) => { stale = v; } };
+    jobs: () => jobs,authority,setAccess:value=>currentAccess=value, setGeneration: (v) => { generation = v; }, setStale: (v) => { stale = v; } };
 }
 
 test('only supplied primary candidates are evaluated and public pages preserve newest-first order', async (t) => {
@@ -64,8 +65,8 @@ test('only supplied primary candidates are evaluated and public pages preserve n
 
 test('an older accepted row waits for the newest unresolved row', async (t) => {
   const s = setup(t, { count: 3 }); const first = s.page();
-  const scan = s.db.prepare('SELECT id FROM demo_match_scans').get();
-  s.db.prepare("UPDATE demo_match_jobs SET decision='accepted' WHERE scan_id=? AND position=2").run(scan.id);
+  const scan = s.db.prepare('SELECT id FROM justup_match_scans').get();
+  s.db.prepare("UPDATE justup_match_jobs SET decision='accepted' WHERE scan_id=? AND position=2").run(scan.id);
   const waiting = s.page({ cursor: first.continuation.cursor }); assert.deepEqual(waiting.items, []); assert.equal(waiting.continuation.state, 'pending');
   await s.run();
   assert.deepEqual(s.page({ cursor: waiting.continuation.cursor }).items.map((j) => j.id), s.jobs().map((j) => j.id));
@@ -103,8 +104,8 @@ test('provider failure pauses and retains the condition, cursor, scan position a
   const s = setup(t, { count: 2, provider }); const first = s.page(); const task = await s.run();
   assert.equal(task.status, 'warning'); assert.equal(task.output.pause, 'provider_unavailable');
   const paused = s.page({ cursor: first.continuation.cursor }); assert.equal(paused.continuation.state, 'paused'); assert.deepEqual(paused.items, []);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_jobs WHERE decision IS NULL').get().n, 2);
-  assert.equal(s.db.prepare('SELECT condition FROM demo_match_scans').get().condition, configuration.residualAi.condition);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_jobs WHERE decision IS NULL').get().n, 2);
+  assert.equal(s.db.prepare('SELECT condition FROM justup_match_scans').get().condition, configuration.residualAi.condition);
   failing = false; s.advance(5001); s.page({ cursor: paused.continuation.cursor }); await s.run();
   assert.equal(s.page({ cursor: paused.continuation.cursor }).items.length, 2);
 });
@@ -120,7 +121,7 @@ test('API heartbeat readiness queues without credentials and cannot enable provi
   let requests = 0, ready = true;
   t.mock.method(globalThis, 'fetch', async () => { requests++; throw new Error('HTTP forbidden in API role'); });
   const s = setup(t, { count: 2 });
-  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, now: s.time,
+  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, now: s.time,
     readOnlyProvider: true, availability: () => ready });
   const args = { ownerId: owner, searchId: 'api-search', revision: 1, configuration, jobs: s.jobs(), viewer };
   assert.equal(api.available(), true); assert.equal(api.readiness().executionAvailable, false);
@@ -129,7 +130,7 @@ test('API heartbeat readiness queues without credentials and cannot enable provi
   const task = s.tasks.claim(); assert.equal(task.kind, 'ai_match');
   const result = await api.runTask(task);
   assert.equal(result.output.pause, 'dependency_unavailable'); assert.equal(requests, 0);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_jobs WHERE decision IS NULL').get().n, 2);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_jobs WHERE decision IS NULL').get().n, 2);
   // The actual worker instance can consume the API's queued scan and the
   // keyless API can subsequently deliver its exact committed decisions.
   s.advance(5001); api.page({ ...args, cursor: initial.continuation.cursor });
@@ -141,10 +142,10 @@ test('API heartbeat readiness queues without credentials and cannot enable provi
     configuration: { ...configuration, residualAi: { condition: 'A different unresolved condition.' } } });
   assert.equal(paused.continuation.state, 'paused'); assert.equal(paused.ai.status, 'dependency_unavailable');
   assert.equal(api.available(), false);
-  const brokenHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,
+  const brokenHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true,
     readOnlyProvider: true, availability: () => { throw new Error('heartbeat unavailable'); } });
   assert.equal(brokenHeartbeat.available(), false);
-  const workerCannotBorrowHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,
+  const workerCannotBorrowHeartbeat = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true,
     provider: { available: () => false }, availability: () => true });
   assert.equal(workerCannotBorrowHeartbeat.available(), false);
 });
@@ -153,30 +154,31 @@ test('API role prohibits execution even if a provider is accidentally injected a
   let executed = 0;
   const s = setup(t, { count: 1 });
   // The default keyless API provider creates and cleans its accounting schema.
-  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, now: s.time,
+  const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, now: s.time,
     readOnlyProvider: true, availability: () => true });
-  s.db.prepare('INSERT INTO demo_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('account', owner, START, 1, 100, 10, 4200, 0);
-  s.db.prepare('INSERT INTO demo_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('project', 'project', START, 1, 100, 10, 4200, 0);
-  s.db.prepare('INSERT INTO demo_jev_reservations VALUES(?,?,?,?,?,?,?,?,?)').run('reservation', owner, 'project', START, 100, 10, 4200, 'reserved', START);
-  const guarded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, now: s.time,
+  s.db.prepare('INSERT INTO justup_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('account', owner, START, 1, 100, 10, 4200, 0);
+  s.db.prepare('INSERT INTO justup_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('project', 'project', START, 1, 100, 10, 4200, 0);
+  s.db.prepare('INSERT INTO justup_jev_reservations VALUES(?,?,?,?,?,?,?,?,?)').run('reservation', owner, 'project', START, 100, 10, 4200, 'reserved', START);
+  const guarded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, now: s.time,
     readOnlyProvider: true, availability: () => true,
     provider: { available: () => true, classify: async () => { executed++; return { decisions: [] }; } } });
   guarded.page({ ownerId: owner, searchId: 'guarded', revision: 1, configuration, jobs: s.jobs(), viewer });
   const task = s.tasks.claim(), result = await guarded.runTask(task);
   assert.equal(result.output.pause, 'dependency_unavailable'); assert.equal(executed, 0);
   s.db.exec('BEGIN IMMEDIATE'); api.deleteAccountData(owner); s.db.exec('COMMIT');
-  assert.equal(s.db.prepare("SELECT count(*) AS n FROM demo_jev_usage WHERE scope='account'").get().n, 0);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_jev_reservations').get().n, 0);
-  assert.equal(s.db.prepare("SELECT calls FROM demo_jev_usage WHERE scope='project'").get().calls, 1);
+  assert.equal(s.db.prepare("SELECT count(*) AS n FROM justup_jev_usage WHERE scope='account'").get().n, 0);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_jev_reservations').get().n, 0);
+  assert.equal(s.db.prepare("SELECT calls FROM justup_jev_usage WHERE scope='project'").get().calls, 1);
 });
 
 test('cursors bind owner, revision, condition, access, import generation and ten-minute expiry', (t) => {
   const s = setup(t); const result = s.page(); const cursor = result.continuation.cursor;
   assert(!cursor.includes('synthetic')); assert.equal(cursor.length, 43);
   for (const changes of [{ revision: 2 }, { configuration: { ...configuration, residualAi: { condition: 'Another requirement' } } },
-    { viewer: { ...viewer, access: { kind: 'demo', fullAccess: false } } }, { generation: 'import-2' }]) {
+ { generation: 'import-2' }]) {
     assert.throws(() => s.page({ ...changes, cursor }), { code: 'stale_cursor', status: 409 });
   }
+  s.setAccess({...viewer.access,fullAccess:false});assert.throws(()=>s.page({cursor}),{code:'stale_cursor'});s.setAccess(viewer.access);
   assert.throws(() => s.page({ ownerId: 'other', cursor }), { code: 'forbidden' });
   assert.throws(() => s.page({ viewer: null, cursor }), { code: 'unauthenticated' });
   s.advance(600_000); assert.throws(() => s.page({ cursor }), { code: 'stale_cursor', status: 409 });
@@ -185,7 +187,8 @@ test('cursors bind owner, revision, condition, access, import generation and ten
 test('delivery rechecks eligible/primary membership and evidence before serializing', async (t) => {
   const s = setup(t, { count: 4 }); const result = s.page(); await s.run();
   s.setJobs([s.jobs()[1], s.jobs()[2], { ...s.jobs()[3], bodyText: 'Changed evidence. '.repeat(30) }]);
-  const end = s.page({ cursor: result.continuation.cursor, jobs: [s.jobs()[0], s.jobs()[2]] });
+  assert.throws(()=>s.page({cursor:result.continuation.cursor,jobs:[s.jobs()[0],s.jobs()[2]]}),{code:'stale_cursor'});
+  const end = s.page({ jobs: [s.jobs()[0], s.jobs()[2]] });
   assert.deepEqual(end.items.map((j) => j.id), [makeJob(1).id]);
 });
 
@@ -195,7 +198,7 @@ test('exact decisions deduplicate repeated searches but invalidate changed condi
   s.page({ searchId: 'search-3', configuration: { ...configuration, residualAi: { condition: 'A different condition' } } }); await s.run(); assert.equal(s.calls(), 2);
   s.setJobs(s.jobs().map((j) => ({ ...j, bodyText: j.bodyText + ' New evidence.' })));
   s.page({ searchId: 'search-4' }); await s.run(); assert.equal(s.calls(), 3);
-  const upgraded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks, provider: s.provider,
+  const upgraded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, provider: s.provider,
     now: s.time, config: { matching: { classifierVersion: 'test-next-classifier' } } });
   assert.equal(upgraded.page({ ownerId: owner, searchId: 'search-4', revision: 1, configuration, jobs: s.jobs(), viewer }).items.length, 0);
 });
@@ -217,16 +220,16 @@ test('concurrent page requests share one pending task and a canceled lease canno
   const first = s.page(); s.page(); s.page({ cursor: first.continuation.cursor }); assert.equal(s.tasksMap.size, 1);
   const task = s.tasks.claim(), promise = s.service.runTask(task);
   s.service.deleteSearchData(owner, 'search-1'); finish(); const result = await promise;
-  assert.equal(result.committed, undefined); assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_cache').get().n, 0);
+  assert.equal(result.committed, undefined); assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_cache').get().n, 0);
   assert.equal(s.tasksMap.size, 0); assert.throws(() => s.page({ cursor: first.continuation.cursor }), { code: 'stale_cursor' });
 });
 
 test('search/account cleanup removes private scans, cursors, cache links, decisions and tasks', async (t) => {
   const s = setup(t, { count: 2 }); s.page(); await s.run(); s.page({ searchId: 'search-2' });
   s.service.deleteSearchData(owner, 'search-1');
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_cache').get().n, 0);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_cache').get().n, 0);
   s.service.deleteAccountData(owner);
-  for (const table of ['demo_match_scans', 'demo_match_jobs', 'demo_match_cursors', 'demo_match_cache', 'demo_match_cache_links'])
+  for (const table of ['justup_match_scans', 'justup_match_jobs', 'justup_match_cursors', 'justup_match_cache', 'justup_match_cache_links'])
     assert.equal(s.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 0);
   assert.equal(s.tasksMap.size, 0);
 });
@@ -235,7 +238,7 @@ test('malformed provider result remains pending and exposes only safe provider s
   const s = setup(t, { count: 2, provider: { available: () => true, classify: async () => ({ decisions: [{ id: 'unexpected', decision: 'accepted' }] }) } });
   const first = s.page(); await s.run(); const end = s.page({ cursor: first.continuation.cursor });
   assert.equal(end.ai.status, 'provider_unavailable'); assert.deepEqual(end.items, []);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_cache').get().n, 0);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_cache').get().n, 0);
 });
 
 test('fake 5/12/24 candidate matrix measures scan progress and buffer starvation without model claims', async (t) => {
