@@ -30,3 +30,5 @@ Application artifacts declare database epoch 2. Current protected API/queue laun
 The feed's Python contracts also run the actual feed adapter and pinned Node SQLite importer against synthetic private batches, including partial catch-up and recovery after database commit. They substitute the local identity, Python interpreter and host configuration; they do not establish target-host confinement or real-source coverage.
 
 Every accepted receipt read syncs the validated file and its parent directory before returning proof. A synchronization failure blocks acknowledgement on both publication and replay; a durable historical receipt remains replayable after a later build switch.
+
+`justup-incident-watch.py` is a Mac LaunchAgent tool for optional read-only IRM polling and a fixed Codex incident prompt. It does not run on the application host or deliver phone pages. Read [incident alerting](../docs/incident-alerting.md) before configuring it; `test_incident_watch.py` uses only synthetic local responses.

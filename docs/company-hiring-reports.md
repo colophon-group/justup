@@ -100,6 +100,12 @@ career pages count once. Closing a current listing cannot rewrite historical
 discovery activity. These measures describe listing activity, not hires or
 headcount. No raw source scope IDs/revisions or posting IDs/bodies are public.
 
+## Display approved career pages
+
+Public company HTML and client navigation read the report’s `sourceChecks` through a bounded, validated projection. Only approved public HTTPS career links appear. Each link retains its supplied last-check date; an absent date produces no invented check status. A missing report leaves company identity readable, and a failed browser report read offers a separate retry. Legacy identity-source URLs never substitute for approved report links.
+
+The browser integration currently consumes this source-link projection only. Report history, sampled roles and salary units still need the complete report presentation and deployed source qualification described below.
+
 ## Verify source identity and release readiness
 
 The existing public importer reads Jobseek's `company` collection in at most

@@ -20,6 +20,7 @@ test('explicit API-off preview retains bytes, refuses production and verifies un
     const config = JSON.parse(await readFile(join(artifact, 'wrangler.json'), 'utf8'));
     assert.equal(config.workers_dev, true); assert.equal(config.routes, undefined);
     assert.equal(config.vars.API_DISABLED, 'true'); assert.equal(config.vars.API_ORIGIN, undefined);
+    assert.equal(config.vars.API_INGRESS_SECRET, undefined);
     assert.equal(config.vars.RUNTIME_CONFIG_SHA256, digest(JSON.stringify({ publicOrigin: config.vars.PUBLIC_ORIGIN, apiOrigin: null, apiPrefix: '/api/v1', deploymentMode: 'preview' })));
     assert.deepEqual(await verifyArtifact(artifact), release);
     assert.throws(() => configure(artifact, 'justup-preview-test', 'https://preview.justup.test', 'disabled', 'production'), error => /Disabled API.*only/.test(error.stderr.toString()));
@@ -84,12 +85,14 @@ test('artifact builds committed source, ignores dirty input and filters operator
     await assert.rejects(prepare(sha, join(repository, '..artifact'), repository), /outside the source/);
     const sourceAlias = join(temporary, 'source-link'); await symlink(repository, sourceAlias);
     await assert.rejects(prepare(sha, join(sourceAlias, 'artifact'), repository), /outside the source/);
-    execFileSync(process.execPath, [new URL('scripts/frontend-configure.mjs', root).pathname, first, 'justup-preview-test', 'https://preview.justup.test', 'https://api.justup.test']);
+    execFileSync(process.execPath, [new URL('scripts/frontend-configure.mjs', root).pathname, first, 'justup-preview-test', 'https://preview.justup.test', 'https://api.justup.test'], { env: { ...process.env, API_INGRESS_SECRET: 'SYNTHETIC_RUNTIME_SECRET_MUST_NOT_BE_PUBLIC' } });
     const config = JSON.parse(await readFile(join(first, 'wrangler.json'), 'utf8'));
     assert.equal(config.assets.run_worker_first, true); assert.equal(config.compatibility_date, '2026-10-30');
     assert.equal(config.no_bundle, true); assert.equal(config.find_additional_modules, false);
     assert.equal(config.workers_dev, false); assert.equal(config.preview_urls, false);
     assert.equal(config.vars.DEPLOYMENT_MODE, 'preview');
+    assert.equal(config.vars.API_INGRESS_SECRET, undefined);
+    assert.doesNotMatch(JSON.stringify(config), /SYNTHETIC_RUNTIME_SECRET_MUST_NOT_BE_PUBLIC/);
     const version = { ...JSON.parse(config.vars.RELEASE_JSON), runtimeConfigSha256: config.vars.RUNTIME_CONFIG_SHA256, deploymentMode: config.vars.DEPLOYMENT_MODE };
     const fetchFixture = async url => {
       const path = new URL(url).pathname;

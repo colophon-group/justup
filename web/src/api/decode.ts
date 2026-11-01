@@ -4,6 +4,7 @@ import { parseInterfaceLocale } from "../i18n/locales.ts";
 import type {
   Company,
   CompanyCataloguePage,
+  CompanySourceReport,
   CompanyRequest,
   CompanyRequestPrefill,
   Coverage,
@@ -173,6 +174,32 @@ export function decodeCoverage(value: unknown): Coverage {
       : { verifiedAt: o.verifiedAt === null ? null : date(o.verifiedAt) }),
     ...(o.stale == null ? {} : { stale: flag(o.stale, "coverage status") }),
   };
+}
+// Career links need explicit report approval; syntactically safe legacy URLs are insufficient.
+export function decodeCompanySourceReport(value: unknown, expectedCompanyId: string): CompanySourceReport {
+  const o = record(value, "company report");
+  const companyId = text(o.companyId, "company report identity");
+  if (companyId !== expectedCompanyId) fail("company report identity");
+  const asOf = date(o.asOf), checks = record(o.sourceChecks, "source checks");
+  if (!["available", "partial", "unavailable"].includes(String(checks.state))) fail("source check state");
+  const entries: unknown[] = Array.isArray(checks.items) && checks.items.length <= 2000 ? checks.items : fail("source checks");
+  const items: CompanySourceReport["sourceChecks"]["items"] = entries.map(value => {
+    const item = record(value, "source check");
+    const trackedSince = date(item.trackedSince);
+    const lastVerifiedAt = item.lastVerifiedAt === null ? null : date(item.lastVerifiedAt);
+    if (Date.parse(trackedSince) > Date.parse(asOf) || (lastVerifiedAt && Date.parse(lastVerifiedAt) > Date.parse(asOf))) fail("source check timestamp");
+    if (item.publicLink === null) return { publicLink: null, trackedSince, lastVerifiedAt };
+    const link = record(item.publicLink, "approved career link");
+    const url = safePublicCompanyURL(link.url), approvedAt = date(link.approvedAt);
+    if (!url || url !== link.url || url.length > 2048 || /[^\u0021-\u007e]|%/u.test(url) || new URL(url).search || new URL(url).hash
+      || link.status !== "approved" || !["employer-careers", "ats-careers", "reviewed-redirect"].includes(String(link.provenance))
+      || Date.parse(approvedAt) > Date.parse(asOf)) return fail("approved career link");
+    return { publicLink: { url, status: "approved", provenance: link.provenance as NonNullable<CompanySourceReport["sourceChecks"]["items"][number]["publicLink"]>["provenance"], approvedAt }, trackedSince, lastVerifiedAt };
+  });
+  const linked = items.filter(item => item.publicLink !== null).length;
+  const state = linked === 0 ? "unavailable" : linked === items.length ? "available" : "partial";
+  if (checks.state !== state) fail("source check state");
+  return { companyId, asOf, sourceChecks: { state, items } };
 }
 export function decodeCompany(value: unknown): Company {
   const o = record(value, "company");

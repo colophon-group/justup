@@ -155,10 +155,11 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
         <label htmlFor="auth-password">{t("Password")}</label><input id="auth-password" name="password" type="password" autoComplete={registration ? 'new-password' : 'current-password'} required disabled={busy} value={password} onChange={event => setPassword(event.target.value)} />
         <label className="check-label" id="auth-register-choice" hidden={!registrationEnabled}><input id="auth-register" type="checkbox" disabled={!registrationEnabled || busy} checked={registration} onChange={event => setRegistration(event.target.checked)} />{" "}{t("Create an account")}</label>
         <div id="auth-invite-field" hidden={!registration || !requiresInvitation}><label htmlFor="auth-invite">{t("Invitation code")}</label><input id="auth-invite" type="password" autoComplete="off" required={registration && requiresInvitation} disabled={busy || !requiresInvitation} value={invitation} onChange={event => setInvitation(event.target.value)} /></div>
+        <p id="registration-age-notice" className="small-print" hidden={!registration || !registrationEnabled}>{t("By creating an account, you confirm you are at least 18 and legally able to agree to the Usage terms.")}</p>
         <button id="auth-submit" className="button dark" disabled={busy}>{t("Continue ↗")}</button>
         <p id="auth-status" role="status">{notice(authError)}</p>
       </form>
-      <p id="sign-in-unavailable" role="status" hidden={loginEnabled}>{reviewed ? t("Account access is unavailable right now. Please try again later.") : t("Account access is unavailable while the privacy and usage notices are being reviewed.")}</p>
+      <p id="sign-in-unavailable" role="status" hidden={loginEnabled}>{!session || reviewed ? t("Account access is unavailable right now. Please try again later.") : t("Account access is unavailable until the published notices and data protections are verified for this service.")}</p>
       {policyLinks?.fallbackLocale ? <p className="small-print" id="policy-language-fallback">{t("For account access, the reviewed notices are in {language}.", {language: localeName[policyLinks.fallbackLocale]})}</p> : null}
       <p className="small-print">{t("Before signing in, read our")}{" "}<a href={policyLinks?.privacy ?? policyDocument(locale, "privacy")}>{t("Privacy notice")}</a>{" "}{t("and")}{" "}<a href={policyLinks?.usage ?? policyDocument(locale, "usage")}>{t("Usage terms")}</a>.</p>
     </Dialog>

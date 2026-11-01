@@ -43,6 +43,7 @@ Choose the task you are doing. The [product guide](product-design.md) defines ac
 | Choose placement, isolation and recovery for a release | [Deployment plan](deployment-plan.md) |
 | Build and verify the exact website assets | [Frontend delivery](frontend-delivery.md) and [frontend deployment directory](../deploy/frontend/README.md) |
 | Configure, start, observe or recover the API and worker | [Operations](operations.md), [preview deployment directory](../deploy/justup-preview/README.md) and [repository scripts](../scripts/README.md) |
+| Configure phone pages and the local Codex incident watcher | [Incident alerting](incident-alerting.md) |
 | Migrate or restore the application database | [Database schema](schema.md) |
 | Approve which language and policy assets may process private work | [Processing admission](processing-admission.md) |
 | Run weekly news through the API and shared worker | [Hiring Wire integration](hiring-wire-integration.md) |

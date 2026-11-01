@@ -370,6 +370,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
               client={client}
               id={route.id}
               initialCompany={initialPublicPage?.company?.id === route.id ? initialPublicPage.company : undefined}
+              initialSourceReport={initialPublicPage?.companySourceReport?.companyId === route.id ? initialPublicPage.companySourceReport : undefined}
             />
           ) : null}
           {interactive ? <CompanyRequestPage

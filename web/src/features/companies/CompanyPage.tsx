@@ -3,15 +3,26 @@ import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 // Reports render only supplied company facts and evidence, never fabricated analytics.
 import { useEffect, useState } from 'react';
 import { type ApiClient, errorText, isAbortError } from '../../api/client';
-import type { Company } from '../../api/types';
+import type { Company, CompanySourceReport } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
 import { coverageLabel, reportDate } from './presentation';
 
-export interface CompanyPageProps { client: ApiClient; id: string; initialCompany?: Company | undefined }
-export function CompanyPage({ client, id, initialCompany }: CompanyPageProps) {
+export interface CompanyPageProps { client: ApiClient; id: string; initialCompany?: Company | undefined; initialSourceReport?: CompanySourceReport | undefined }
+export function CompanyPage({ client, id, initialCompany, initialSourceReport }: CompanyPageProps) {
   const { t, locale, notice } = useInterfaceLocale();
   const [company, setCompany] = useState<Company | null>(initialCompany ?? null);
+  const [sourceReport, setSourceReport] = useState<CompanySourceReport | null>(initialSourceReport ?? null);
+  const [sourceError, setSourceError] = useState(false);
+  const [sourceRetry, setSourceRetry] = useState(0);
   const [error, setError] = useState('');
+  useEffect(() => {
+    if (initialSourceReport?.companyId === id && sourceRetry === 0) return;
+    const controller = new AbortController(); setSourceReport(null); setSourceError(false);
+    client.getCompanySourceReport(id, controller.signal).then(report => {
+      if (!controller.signal.aborted) setSourceReport(report);
+    }).catch(failure => { if (!isAbortError(failure) && !controller.signal.aborted) setSourceError(true); });
+    return () => controller.abort();
+  }, [client, id, initialSourceReport, sourceRetry]);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     if (initialCompany?.id === id && retry === 0) return;
@@ -38,8 +49,11 @@ export function CompanyPage({ client, id, initialCompany }: CompanyPageProps) {
     {history.length ? <section aria-label={t("Historical hiring")}><h2>{t("Hiring over time.")}</h2><p className="small-print">{t("Listing activity reported by the source data.")}</p><ol className="hiring-history">{history.map((point, index) => <li key={`${point.date}:${index}`}><span className="history-bar" style={{ height: `${Math.max(2, point.count / maximum * 100)}%` }} aria-hidden="true" /><b>{point.count.toLocaleString(locale)}</b><small>{reportDate(point.date, locale)}</small></li>)}</ol></section> : <p className="helper">{t("Historical hiring data is not available for this company.")}</p>}
     {company.hiringRoles?.length ? <section><h2>{t("Hiring roles.")}</h2><ul>{company.hiringRoles.map((role, index) => <li key={`${role.name}:${index}`}>{role.name}{role.count !== undefined ? ` · ${role.count.toLocaleString(locale)}` : ''}</li>)}</ul></section> : null}
     {company.reportedSalaries?.length ? <section><h2>{t("Reported salaries.")}</h2><ul>{company.reportedSalaries.map((salary, index) => <li key={index}>{salary.role ? `${salary.role} ` : ''}{salary.text}</li>)}</ul></section> : null}
-    <section className="tracked-sources"><h2>{t("At the source.")}</h2><p>{company.lastSuccessfulCheckAt ? <>{t("Last successful check")}{" "}<time dateTime={company.lastSuccessfulCheckAt}>{reportDate(company.lastSuccessfulCheckAt, locale)}</time></> : t("No successful check reported.")}</p>
-      <p>{t("Verified career-page links are unavailable.")}</p>
-    </section>
+    {sourceReport?.companyId === id && sourceReport.sourceChecks.items.some(item => item.publicLink) ? <section className="tracked-sources"><h2>{t("At the source.")}</h2>
+      <ul>{sourceReport.sourceChecks.items.map((item, index) => item.publicLink ? <li key={`${item.publicLink.url}:${index}`}>
+        <a href={item.publicLink.url} target="_blank" rel="noopener noreferrer">{new URL(item.publicLink.url).hostname}{new URL(item.publicLink.url).pathname === '/' ? '' : new URL(item.publicLink.url).pathname} ↗</a>
+        {item.lastVerifiedAt ? <p>{t("Last checked")}{" "}<time dateTime={item.lastVerifiedAt}>{reportDate(item.lastVerifiedAt, locale)}</time></p> : null}
+      </li> : null)}</ul>
+    </section> : sourceError ? <section className="tracked-sources"><h2>{t("At the source.")}</h2><button className="button outline" onClick={() => setSourceRetry(value => value + 1)}>{t("Try again")}</button></section> : null}
   </section>;
 }
