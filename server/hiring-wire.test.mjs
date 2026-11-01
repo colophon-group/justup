@@ -125,3 +125,11 @@ test('weekly continuity reads prior editions and retains the configured complete
   assert.equal(service.publicRoute({method:'GET',path:'/hiring-wire/editions/2026-11-02'}).body.state,'unavailable');
   assert.equal(read(service).edition.id,'2026-12-28');
 });
+test('continuous source outages still enforce attempt and pending-edition retention',async t=>{
+  const {service,runner,db}=setup(t,{source:{authoritative:false}});
+  db.prepare("INSERT INTO hiring_wire_editions(period_id,period_end,status,created_at,publication_outcome) VALUES ('2025-01-06','2025-01-06T00:00:00.000Z','pending',?,'dependency_unavailable')").run(AT-31*86_400_000);
+  const insert=db.prepare("INSERT INTO hiring_wire_executions(id,period_id,task_id,started_at,outcome) VALUES (?,'outage','fake-task',?,'failed')");
+  for(let i=0;i<300;i++)insert.run(`outage-${i}`,AT-1000+i);
+  service.enqueuePeriod(END);assert.equal(db.prepare("SELECT count(*) n FROM hiring_wire_editions WHERE period_id='2025-01-06'").get().n,0);
+  await runner.runOnce();assert.equal(read(service).state,'unavailable');assert.equal(db.prepare('SELECT count(*) n FROM hiring_wire_executions').get().n,256);
+});

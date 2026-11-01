@@ -61,6 +61,7 @@ export function createHiringWireService({db,tasks=null,now=Date.now,source=null,
     if(!tasks?.enqueue)throw wireError('dependency_unavailable');
     const period=periodFor(periodEnd),end=iso(periodEnd);
     if(end>now() || now()-end>publicationLagMs)throw wireError('invalid_input');
+    tx(db,cleanup);
     let requestKey=`edition-${period.id}`;
     for(let retry=0;retry<8;retry++) {
       const task=tasks.enqueue({ownerId:WIRE_OWNER,kind:'hiring_wire',requestKey,payload:{periodEnd}});
@@ -133,6 +134,7 @@ export function createHiringWireService({db,tasks=null,now=Date.now,source=null,
       if(attempt)tx(db,()=>{
         db.prepare("UPDATE hiring_wire_executions SET outcome='failed',finished_at=?,error_code=? WHERE id=? AND outcome='running'").run(now(),code,attempt);
         db.prepare("UPDATE hiring_wire_editions SET publication_outcome=? WHERE period_id=? AND status='pending'").run(code,period.id);
+        cleanup();
       });
       return {status:'failed',errorCode:code};
     }
