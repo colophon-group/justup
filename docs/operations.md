@@ -137,7 +137,7 @@ Provision `/srv/justup_preview/config/api.json` as a regular mode-0600 file owne
 | `JUSTUP_ACCOUNT_TTL_MS`, `JUSTUP_ACCOUNT_EXPIRES_AT` | Optional positive milliseconds (duration/UTC epoch) or `none`. Stored only on new accounts; omission leaves accounts durable. |
 | `JUSTUP_POLICIES_REVIEWED` | Defaults to `false`; only `true` after approval of the actual pages. |
 | `JUSTUP_PRIVACY_URL`, `JUSTUP_USAGE_URL`, `JUSTUP_POLICY_VERSION` | Legacy English-only approved static HTTPS page identities/version on the frontend origin. |
-| `JUSTUP_POLICY_LOCALES`, `JUSTUP_POLICY_FALLBACKS` | Exact fixed-locale policy identities and explicitly approved fallback map; see [processing admission](processing-admission.md). The global reviewed flag remains required. |
+| `JUSTUP_POLICY_LOCALES`, `JUSTUP_POLICY_FALLBACKS`, `JUSTUP_POLICY_ASSET_PROOF` | Exact fixed-locale identities, explicit fallbacks and operator-reviewed retained page hashes bound to origin/candidate; see [processing admission](processing-admission.md). Non-English admission needs its asset proof plus the independent global and per-locale review flags. |
 | `JUSTUP_SERVICES_ENABLED` | Defaults to `false`; `true` selects the fixed reviewed intent/company/matching composition, never an arbitrary module path. |
 
 The launcher fixes port 8787, shared SQLite mode, heartbeat/work/backup/generation paths, source commit and build identity itself. API and queue use `UMask=0007` and the core's explicit shared-state mode for group-0660 SQLite/WAL/SHM; operations never races with chmod of live database files. It discards inherited operator environment variables. The API receives no Doppler access token, JEV/model credential, socket access, Docker access or administrator environment. Do not put secrets into the artifact or browser bundle.
@@ -199,6 +199,7 @@ python3 scripts/preview-verify.py --base-url "$JUSTUP_PREVIEW_FIXED_ORIGIN" \
   --approved-policy-version "$JUSTUP_PREVIEW_POLICY_VERSION" \
   --frontend-release /private/artifacts/frontend/release.json \
   --frontend-config /private/artifacts/frontend/wrangler.json \
+  --policy-asset-proof /private/evidence/reviewed-policy-assets.json \
   --report /private/evidence/http-preview-check.json
 ```
 

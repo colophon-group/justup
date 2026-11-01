@@ -967,6 +967,13 @@ process.stdout.write('independent_wire_policy_matches\n');
                      {**legacy, 'JUSTUP_USAGE_URL': legacy['JUSTUP_USAGE_URL'] + '#reviewed'},
                      {**legacy, 'JUSTUP_PRIVACY_URL': legacy['JUSTUP_PRIVACY_URL'] + '/'},
                      {**legacy, 'JUSTUP_POLICY_LOCALES': '{}', 'JUSTUP_USAGE_URL': legacy['JUSTUP_PRIVACY_URL']}]
+        proof = {'origin': base['JUSTUP_ORIGIN'], 'sourceCommit': manifest['sourceCommit'], 'assetsSha256': 'c' * 64,
+                 'locales': {'de': {'version': entry['version'], 'privacySha256': 'd' * 64, 'usageSha256': 'e' * 64}}}
+        localized = {**base, 'JUSTUP_POLICIES_REVIEWED': 'true', 'JUSTUP_POLICY_LOCALES': json.dumps({'de': entry})}
+        variants += [localized, {**localized, 'JUSTUP_POLICY_ASSET_PROOF': json.dumps(proof)}]
+        for change in ({'origin': 'https://other.example'}, {'sourceCommit': 'f' * 40}, {'assetsSha256': 'bad'},
+                       {'locales': {}}, {'locales': {'ja': proof['locales']['de']}}, {'extra': True}):
+            variants.append({**localized, 'JUSTUP_POLICY_ASSET_PROOF': json.dumps({**proof, **change})})
         accepted = []
         for variant in variants:
             try:
@@ -982,13 +989,15 @@ const {configFromEnv}=await import(input.apiUrl);
 const {policyState}=await import(input.policyUrl);
 for(const [index,env]of input.variants.entries()){
   let accepted=false;
-  try{const config=configFromEnv(env);assert.equal(policyState(config,'de').reviewed,false);accepted=true;}catch{}
+  try{const config=configFromEnv({...env,JUSTUP_SOURCE_COMMIT:input.sourceCommit});
+    const reviewed=env.JUSTUP_POLICIES_REVIEWED==='true'&&env.JUSTUP_POLICY_ASSET_PROOF!==undefined;
+    assert.equal(policyState(config,'de').reviewed,reviewed);accepted=true;}catch{}
   assert.equal(accepted,input.accepted[index],`Policy config compatibility case ${index}`);
 }
 process.stdout.write('actual_node_policy_configuration_matches\n');
 """
         result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
-                                input=json.dumps({'variants': variants, 'accepted': accepted,
+                                input=json.dumps({'variants': variants, 'accepted': accepted, 'sourceCommit': manifest['sourceCommit'],
                                     'apiUrl': (HERE.parent / 'server/main.mjs').resolve().as_uri(),
                                     'policyUrl': (HERE.parent / 'server/policies.mjs').resolve().as_uri()}),
                                 capture_output=True, timeout=15,
@@ -1309,6 +1318,51 @@ class RecoveryContracts(unittest.TestCase):
 
 
 class HTTPVerificationContracts(unittest.TestCase):
+    def policy_assets(self, manifest, locales=('en',)):
+        pages, entries = {}, {}
+        for locale in locales:
+            entries[locale] = {'version': 'approved-v1'}
+            suffix = '' if locale == 'en' else '.' + locale
+            for kind in ('privacy', 'usage'):
+                body = ('<html lang="' + locale + '"><head><meta name="justup-policy-version" content="approved-v1"></head>'
+                        '<body data-policy="' + kind + '" data-policy-version="approved-v1">Synthetic policy</body></html>')
+                pages[kind + suffix + '.html'] = body
+                entries[locale][kind + 'Sha256'] = hashlib.sha256(body.encode()).hexdigest()
+        assets = [{'path': path, 'sha256': hashlib.sha256(body.encode()).hexdigest(), 'bytes': len(body.encode())}
+                  for path, body in sorted(pages.items())]
+        digest = hashlib.sha256(json.dumps(assets, separators=(',', ':')).encode()).hexdigest()
+        frontend = {'sourceSha': manifest['sourceCommit'], 'treeSha': manifest['sourceTree'], 'assetsSha256': digest,
+                    'workerSha256': 'd' * 64, 'artifactSha256': 'e' * 64, 'assets': assets}
+        proof = {'origin': 'https://preview.example', 'sourceCommit': manifest['sourceCommit'], 'assetsSha256': digest, 'locales': entries}
+        return frontend, pages, proof
+
+    def test_policy_asset_verification_runs_with_flags_off_and_never_infers_reviewed_bytes(self):
+        manifest, _ = payload()
+        frontend, pages, proof = self.policy_assets(manifest, ('en', 'fr'))
+        calls = []
+        def fetch(url, as_json=True):
+            self.assertFalse(as_json, 'Static policy verification must not require processing admission or call an API.')
+            calls.append(url)
+            return pages.get(url.removeprefix('https://preview.example/'), '<html>missing-page fallback</html>'), {}
+        options = {'frontend_release': frontend, 'policy_asset_proof': proof, 'fetch': fetch}
+        report = http.verify('https://preview.example', manifest, 'policies', **options)
+        self.assertEqual(report['policyAssetProof'], proof)
+        self.assertFalse(report['shareable'])
+        self.assertEqual(len(calls), 4)
+        for change in ({'origin': 'https://other.example'}, {'sourceCommit': 'f' * 40}, {'assetsSha256': 'f' * 64},
+                       {'locales': {'fr': {**proof['locales']['fr'], 'privacySha256': 'f' * 64}}},
+                       {'locales': {'fr': {**proof['locales']['fr'], 'version': 'unreviewed-replacement'}}}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                http.verify('https://preview.example', manifest, 'policies', **{**options, 'policy_asset_proof': {**proof, **change}})
+        for replacement in ('<html>SPA fallback</html>', pages['privacy.fr.html'] + ' ', pages['usage.fr.html']):
+            previous = pages['privacy.fr.html']
+            pages['privacy.fr.html'] = replacement
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                http.verify('https://preview.example', manifest, 'policies', **options)
+            pages['privacy.fr.html'] = previous
+        with self.assertRaises(ValueError):
+            http.verify('https://preview.example', manifest, 'policies', **{**options, 'policy_asset_proof': None})
+
     def test_https_redirect_cannot_downgrade_or_leave_the_fixed_origin(self):
         handler = http.FixedOriginRedirect()
         request = Request('https://preview.example/api/v1/health')
@@ -1348,25 +1402,32 @@ class HTTPVerificationContracts(unittest.TestCase):
         manifest, values, _ = self.responses()
         values['/api/v1/version'].update({'runner': {'ready': True, 'identity': 'runner-build'}, 'importGeneration': 'import-generation'})
         values['/api/v1/session'].update({'serverTime': '2026-10-31T18:00:00Z', 'coverage': {'stale': False},
-            'policies': {'reviewed': True, 'version': 'approved-v1', 'privacyUrl': 'https://preview.example/privacy', 'usageUrl': 'https://preview.example/usage'}})
+            'policies': {'reviewed': True, 'locale': 'en', 'reviewedLocale': 'en', 'fallback': False, 'version': 'approved-v1',
+                         'privacyUrl': 'https://preview.example/privacy.html', 'usageUrl': 'https://preview.example/usage.html'}})
         values['/api/v1/session']['capabilities'].update({name: True for name in http.FIRST_RELEASE_CAPABILITIES})
         values['/api/v1/jobs?limit=12'] = {'items': [{'firstObserved': '2026-10-28T18:00:00Z', 'sourceUrl': 'https://employer.example/role'}]}
-        def fetch(url, as_json=True):
+        frontend, pages, proof = self.policy_assets(manifest)
+        def fetch(url, as_json=True, headers=None):
             path = url.removeprefix('https://preview.example')
             if not as_json:
+                if path.lstrip('/') in pages:
+                    return pages[path.lstrip('/')], {'x-robots-tag': 'noindex, nofollow'}
                 return '<html>candidate</html>', {'x-robots-tag': 'noindex, nofollow'}
-            return deepcopy(values[path]), {'cache-control': 'private, no-store', 'x-robots-tag': 'noindex, nofollow'}
-        frontend = {'sourceSha': manifest['sourceCommit'], 'treeSha': manifest['sourceTree'],
-                    'assetsSha256': 'c' * 64, 'workerSha256': 'd' * 64, 'artifactSha256': 'e' * 64}
+            value = deepcopy(values[path])
+            if path == '/api/v1/session' and headers and headers.get('Accept-Language') != 'en':
+                locale = headers['Accept-Language']
+                value['policies'].update({'locale': locale, 'reviewed': False, 'reviewedLocale': None, 'fallback': False})
+            return value, {'cache-control': 'private, no-store', 'x-robots-tag': 'noindex, nofollow'}
+        retained = {key: frontend[key] for key in ('sourceSha', 'treeSha', 'assetsSha256', 'workerSha256', 'artifactSha256')}
         runtime = {'publicOrigin': 'https://preview.example', 'apiOrigin': 'https://api.example',
                    'apiPrefix': '/api/v1', 'deploymentMode': 'preview'}
         runtime_sha = hashlib.sha256(json.dumps(runtime, separators=(',', ':')).encode()).hexdigest()
         configuration = {'vars': {'PUBLIC_ORIGIN': runtime['publicOrigin'], 'API_ORIGIN': runtime['apiOrigin'],
                                   'DEPLOYMENT_MODE': 'preview', 'RUNTIME_CONFIG_SHA256': runtime_sha,
-                                  'RELEASE_JSON': json.dumps(frontend)}}
-        deployed = {**frontend, 'runtimeConfigSha256': runtime_sha, 'apiPrefix': '/api/v1', 'deploymentMode': 'preview'}
+                                  'RELEASE_JSON': json.dumps(retained)}}
+        deployed = {**retained, 'runtimeConfigSha256': runtime_sha, 'apiPrefix': '/api/v1', 'deploymentMode': 'preview'}
         options = {'runner_identity': 'runner-build', 'import_generation': 'import-generation', 'policy_version': 'approved-v1',
-                   'fetch': fetch, 'frontend_release': frontend, 'frontend_config': configuration}
+                   'fetch': fetch, 'frontend_release': frontend, 'frontend_config': configuration, 'policy_asset_proof': proof}
         values['/__release/version'] = dict(deployed)
         for change in ({'DEPLOYMENT_MODE': 'production'}, {'DEPLOYMENT_MODE': ''}, {'PUBLIC_ORIGIN': 'https://other.example'},
                        {'API_ORIGIN': 'https://api2.example'}, {'RUNTIME_CONFIG_SHA256': 'f' * 64},

@@ -36,7 +36,7 @@ export function createApiServices(deps){
   const identityConfig={...apiConfig,dbPath:config.dbPath??':memory:',sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity,privateGenerationPath:config.privateGenerationPath};
   // Policy closure and exact metadata changes must reach the published proof,
   // without reading any provider configuration from the caller.
-  for(const key of ['policyVersion','policiesReviewed','policyLocales','policyFallbacks','privacyUrl','usageUrl','allowedOrigin','allowInsecureLocalhost'])Object.defineProperty(identityConfig,key,{enumerable:true,get:()=>config[key]});
+  for(const key of ['policyVersion','policiesReviewed','policyLocales','policyFallbacks','policyAssetProof','privacyUrl','usageUrl','allowedOrigin','allowInsecureLocalhost'])Object.defineProperty(identityConfig,key,{enumerable:true,get:()=>config[key]});
   const identity=createVisitorIdentity({...deps,config:identityConfig});
   const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
   const readingPreferences=createReadingPreferencesService({...deps,ownerAuthority:identity.principal});

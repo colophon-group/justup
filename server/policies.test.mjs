@@ -8,7 +8,8 @@ import { createProcessingAdmission } from './processing-admission.mjs';
 import { configFromEnv } from './main.mjs';
 const origin='https://preview.example';
 const entry=(locale,reviewed=true)=>({privacyUrl:`${origin}/privacy${locale==='en'?'':'.'+locale}.html`,usageUrl:`${origin}/usage${locale==='en'?'':'.'+locale}.html`,version:'synthetic-reviewed',reviewed});
-const config={allowedOrigin:origin,policiesReviewed:true,privacyUrl:origin+'/privacy.html',usageUrl:origin+'/usage.html',policyVersion:'synthetic-reviewed'};
+const config={allowedOrigin:origin,sourceCommit:'a'.repeat(40),policiesReviewed:true,privacyUrl:origin+'/privacy.html',usageUrl:origin+'/usage.html',policyVersion:'synthetic-reviewed'};
+const assetProof=locales=>({origin,sourceCommit:config.sourceCommit,assetsSha256:'b'.repeat(64),locales:Object.fromEntries(locales.map(locale=>[locale,{version:'synthetic-reviewed',privacySha256:'c'.repeat(64),usageSha256:'d'.repeat(64)}]))});
 
 test('legacy English approval, exact locale reviews and explicit fallback never imply another locale approval',()=>{
   assert.equal(policyState(config,'en').reviewed,true);
@@ -21,12 +22,27 @@ test('legacy English approval, exact locale reviews and explicit fallback never 
     assert.equal(policyState({...config,...patch},'en').reviewed,false);
     assert.throws(()=>validatePolicyConfig({...config,...patch}),/legacy English policy/);
   }
-  const localized={...config,policyLocales:{en:entry('en'),de:entry('de',false)}};
+  const localized={...config,policyAssetProof:assetProof(['en','de']),policyLocales:{en:entry('en'),de:entry('de',false)}};
   assert.equal(policyState(localized,'de').reviewed,false);
   const fallback={...localized,policyFallbacks:{de:'en'}};validatePolicyConfig(fallback);
   assert.deepEqual(policyState(fallback,'de'),{...entry('en'),reviewed:true,locale:'de',reviewedLocale:'en',fallback:true});
   assert.equal(policyState({...fallback,policiesReviewed:false},'de').reviewed,false);
   for(const patch of [{policyLocales:{de:entry('en')}},{policyLocales:{de:{...entry('de'),privacyUrl:origin+'/privacy.de.html?tracking=1'}}},{policyLocales:{xx:entry('de')}},{policyFallbacks:{de:'fr'}},{policyFallbacks:{de:'de'}},{policyLocales:{de:{...entry('de'),version:''}}}])assert.throws(()=>validatePolicyConfig({...config,...patch}),/policy/);
+});
+
+test('localized approval needs exact retained asset proof and changed hashes revoke queued policy identity',()=>{
+  const c={...config,dbPath:':memory:',buildIdentity:'synthetic-build',policyLocales:{fr:entry('fr')}};
+  assert.equal(policyState(c,'fr').reviewed,false);
+  c.policyAssetProof=assetProof(['fr']);validatePolicyConfig(c);assert.equal(policyState(c,'fr').reviewed,true);
+  for(const patch of [{origin:'https://other.example'},{sourceCommit:'e'.repeat(40)},{assetsSha256:'bad'},{extra:true},{locales:{fr:{version:'synthetic-reviewed',privacySha256:'c'.repeat(64)}}}])assert.throws(()=>validatePolicyConfig({...c,policyAssetProof:{...c.policyAssetProof,...patch}}),/asset proof/);
+  assert.equal(policyState({...c,policiesReviewed:false},'fr').reviewed,false);
+  assert.equal(policyState({...c,policyLocales:{fr:entry('fr',false)}},'fr').reviewed,false);
+  assert.equal(policyState({...c,policyAssetProof:{...c.policyAssetProof,locales:{fr:{...c.policyAssetProof.locales.fr,version:'other'}}}},'fr').reviewed,false);
+  const db=new DatabaseSync(':memory:');try{
+    const api=createProcessingAdmission({db,config:c,now:()=>100_000,availability:()=>true});const prior=api.processingPolicy('fr').key;
+    c.policyAssetProof.locales.fr.privacySha256='f'.repeat(64);api.refreshAvailability();assert.notEqual(api.processingPolicy('fr').key,prior);
+    delete c.policyAssetProof;api.refreshAvailability();assert.equal(api.processingAvailable('fr'),false);
+  }finally{db.close();}
 });
 
 test('saved account override or browser default ignores guest locale cookies while guests retain their explicit choice',()=>{

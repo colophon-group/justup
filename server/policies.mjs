@@ -9,8 +9,23 @@ function legacyPolicy(config) {
   return config.privacyUrl===origin+'/privacy.html'&&config.usageUrl===origin+'/usage.html'&&url(config.privacyUrl,config)&&url(config.usageUrl,config)&&version(config.policyVersion)
     ?{privacyUrl:config.privacyUrl,usageUrl:config.usageUrl,version:config.policyVersion,reviewed:true}:null;
 }
+function validateAssetProof(config) {
+  const proof=config.policyAssetProof;if(proof===undefined)return;
+  const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+  if(!object(proof)||Object.keys(proof).sort().join(',')!=='assetsSha256,locales,origin,sourceCommit'
+    ||proof.origin!==(config.allowedOrigin??'https://preview.justup.work')||!url(proof.origin+'/privacy.html',config)
+    ||!/^[a-f0-9]{40}$/.test(proof.sourceCommit??'')||proof.sourceCommit!==config.sourceCommit||!sha(proof.assetsSha256)
+    ||!object(proof.locales)||!Object.keys(proof.locales).length||Object.entries(proof.locales).some(([locale,entry])=>!POLICY_LOCALES.includes(locale)||!object(entry)
+      ||Object.keys(entry).sort().join(',')!=='privacySha256,usageSha256,version'||!version(entry.version)||!sha(entry.privacySha256)||!sha(entry.usageSha256)))throw new TypeError('Invalid policy asset proof.');
+}
+function assetBinding(config,locale,entry) {
+  try{validateAssetProof(config);}catch{return null;}
+  const proof=config.policyAssetProof,bound=proof?.locales[locale];
+  return bound&&bound.version===entry?.version?{origin:proof.origin,sourceCommit:proof.sourceCommit,assetsSha256:proof.assetsSha256,...bound}:null;
+}
 export function validatePolicyConfig(config={}) {
   const origin=config.allowedOrigin??'https://preview.justup.work';
+  validateAssetProof(config);
   if(config.policiesReviewed===true&&!config.policyLocales?.en&&(config.policyLocales===undefined||['privacyUrl','usageUrl','policyVersion'].some(key=>config[key]!==undefined))&&!legacyPolicy(config))throw new TypeError('Invalid legacy English policy configuration.');
   for(const [locale,entry] of Object.entries(config.policyLocales??{})) {
     if(!POLICY_LOCALES.includes(locale)||!object(entry)||Object.keys(entry).sort().join(',')!=='privacyUrl,reviewed,usageUrl,version'||typeof entry.reviewed!=='boolean'||!version(entry.version))throw new TypeError('Invalid policy locale configuration.');
@@ -28,12 +43,12 @@ export function policyState(config={},locale='en') {
   const fallback=config.policyFallbacks?.[locale];
   const target=local?.reviewed===true?locale:fallback??locale;
   const entry=target===locale?local:config.policyLocales?.[target];
-  const reviewed=config.policiesReviewed===true&&entry?.reviewed===true;
+  const reviewed=config.policiesReviewed===true&&entry?.reviewed===true&&(locale==='en'&&target==='en'||assetBinding(config,target,entry)!==null);
   const suffix=locale==='en'?'':`.${locale}`,origin=config.allowedOrigin??'https://preview.justup.work';
   return {privacyUrl:entry?.privacyUrl??`${origin}/privacy${suffix}.html`,usageUrl:entry?.usageUrl??`${origin}/usage${suffix}.html`,version:entry?.version??'product-draft-5',reviewed,
     locale,reviewedLocale:reviewed?target:null,fallback:reviewed&&target!==locale};
 }
-export function policyScopes(config) {return Object.fromEntries(POLICY_LOCALES.map(locale=>[locale,policyState(config,locale)]));}
+export function policyScopes(config) {return Object.fromEntries(POLICY_LOCALES.map(locale=>{const policy=policyState(config,locale),binding=assetBinding(config,policy.reviewedLocale??locale,policy);return [locale,{...policy,...(binding?{assetProof:binding}:{})}];}));}
 export function policyJson(value) {
   if(value===undefined)return undefined;
   if(typeof value!=='string'||value.length>8192)throw new TypeError('Invalid policy locale configuration.');

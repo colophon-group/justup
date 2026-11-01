@@ -65,8 +65,10 @@ test('composed public reads allocate no visitors and localized first-search retr
   const {createConfiguredApplication}=await import('./main.mjs');
   const f=fixture(t);f.write();const origin='http://127.0.0.1:18787';
   const de={privacyUrl:origin+'/privacy.de.html',usageUrl:origin+'/usage.de.html',version:'reviewed-de',reviewed:true};
+  const policyAssetProof={origin,sourceCommit,assetsSha256:'b'.repeat(64),locales:{de:{version:de.version,privacySha256:'c'.repeat(64),usageSha256:'d'.repeat(64)}}};
   const app=await createConfiguredApplication({config:{...f.config,dbPath:':memory:',servicesEnabled:true,
-    allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,policyLocales:{de}},now:()=>AT});
+    allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,policyLocales:{de},
+    policyAssetProof},now:()=>AT});
   t.after(async()=>{app.server.closeAllConnections();await app.close();});
   await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));
   const endpoint=`http://127.0.0.1:${app.server.address().port}/api/v1`;
@@ -92,7 +94,7 @@ test('composed public reads allocate no visitors and localized first-search retr
   const task=app.tasks.get(visitor.id,first.task.id);assert.equal(task.payload.presentationLocale,'de');assert.match(task.payload.policyKey,/^[a-f0-9]{64}$/);
   assert.equal(app.store.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name='justup_visitor_admission'").get(),undefined);
   assert.equal(JSON.parse(app.store.db.prepare('SELECT policy_scope FROM justup_processing_admission').get().policy_scope).de.reviewed,true);
-  de.version='reviewed-de-replacement';app.services.find(service=>typeof service.refreshAvailability==='function').refreshAvailability();
+  policyAssetProof.locales.de.privacySha256='e'.repeat(64);app.services.find(service=>typeof service.refreshAvailability==='function').refreshAvailability();
   const intent=app.services.find(service=>typeof service.runTask==='function'&&typeof service.snapshot==='function');
   const claimed=app.tasks.claim({workerId:'fixture',kinds:['search_intent']});
   assert.equal((await intent.runTask(claimed)).errorCode,'processing_unavailable');

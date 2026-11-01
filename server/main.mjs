@@ -174,6 +174,7 @@ export function configFromEnv(env = process.env) {
     privacyUrl: runtimeEnv(env, 'PRIVACY_URL'), usageUrl: runtimeEnv(env, 'USAGE_URL'), policyVersion: runtimeEnv(env, 'POLICY_VERSION'),
     policiesReviewed: booleanEnv(env, 'POLICIES_REVIEWED'),
     policyLocales: policyJson(runtimeEnv(env,'POLICY_LOCALES')), policyFallbacks: policyJson(runtimeEnv(env,'POLICY_FALLBACKS')),
+    policyAssetProof: policyJson(runtimeEnv(env,'POLICY_ASSET_PROOF')),
     sourceCommit: runtimeEnv(env, 'SOURCE_COMMIT'), buildIdentity: runtimeEnv(env, 'BUILD_ID'),
     csrfSecret: runtimeEnv(env, 'CSRF_SECRET'), cursorSecret: runtimeEnv(env, 'CURSOR_SECRET'),
     privateGenerationPath: runtimeEnv(env, 'PRIVATE_GENERATION_PATH'), backupDir: runtimeEnv(env, 'BACKUP_DIR'),
