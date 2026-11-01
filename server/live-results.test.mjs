@@ -18,7 +18,7 @@ const DAY = 86_400_000, AT = Date.parse('2026-11-01T12:00:00Z'), ORIGIN = 'https
 const FILTERS = ['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'];
 const paid = { kind: 'paid', fullAccess: true, premium: false, until: null };
 function job(id, first = AT - 3 * DAY, title = 'Engineer') {
-  const bodyText = 'The role provides a documented four day working week with full compensation. '.repeat(5);
+  const bodyText = `Synthetic posting ${id}. ` + 'The role provides a documented four day working week with full compensation. '.repeat(5);
   return { id, companyId: 'example', companyName: 'Example', companySlug: 'example', title,
     sourceUrl: `https://example.org/jobs/${id}`, active: true, reserved: false, hasContent: true,
     firstObserved: new Date(first).toISOString(), lastObserved: null, locales: ['en'], locations: [], employmentTypes: [], seniority: null, salary: null, bodyText,
@@ -35,6 +35,7 @@ async function setup(t, options = {}) {
   const accounts = new Map();
   const app = await createApplication({ now: () => time, config: { allowedOrigin: ORIGIN, policiesReviewed: true,
     privacyUrl: `${ORIGIN}/privacy`, usageUrl: `${ORIGIN}/usage`, policyVersion: 'fixture',
+    dbPath: ':memory:', sourceCommit: 'a'.repeat(40), buildIdentity: 'fixture-build',
     ...storage, requiresInvitation: false, verificationTtlMs, liveResults: { pollMs: 10, heartbeatMs: 30, ...transportOptions } },
     serviceFactories: [deps => {
       identity = createVisitorIdentity(deps);
@@ -131,6 +132,11 @@ test('residual snapshots wait for newest resolution, retain older accepted match
   const stream = await s.connect(); const pending = await stream.next(); assert.deepEqual(ids(pending), []); assert.equal(pending.data.searches[0].continuation.state, 'pending');
   const scan = s.app.store.db.prepare("SELECT id FROM demo_match_scans WHERE cohort='visible'").get();
   s.app.store.db.prepare("UPDATE demo_match_jobs SET decision='accepted' WHERE scan_id=? AND position=1").run(scan.id);
+  // Seed the durable decision a completed older batch would commit, while the
+  // newer candidate remains unresolved. Import reconciliation must reuse it.
+  s.app.store.db.prepare(`INSERT INTO demo_match_cache
+    SELECT j.cache_key,s.owner_id,s.condition_hash,j.evidence_hash,s.classifier,'accepted',?,?
+    FROM demo_match_jobs j JOIN demo_match_scans s ON s.id=j.scan_id WHERE s.id=? AND j.position=1`).run(AT, AT + DAY, scan.id);
   const late = await stream.next(); assert.deepEqual(ids(late), []); assert(late.data.searches[0].reconciliation.retainedItemIds.includes('second'));
   assert.equal(s.app.store.db.prepare('SELECT delivered FROM demo_match_scans WHERE id=?').get(scan.id).delivered, 0);
   await s.work(); const resolved = await stream.next(); assert.deepEqual(ids(resolved), ['first','second']);
