@@ -114,6 +114,8 @@ Prioritize AI work needed for visible results. Count recent hidden matches with 
 
 Use one SSE connection per open workspace, carrying search revision and event identity. Deliver only accepted, eligible results. Support authoritative refresh and deduplication on reconnect. Reconcile closures, expiration, access changes and postings crossing the preview cutoff even when no new posting arrives. A superseded revision cannot repopulate a changed or deleted search.
 
+The implemented [live-results transport](live-results.md) polls a shared SQLite change fingerprint and the canonical search snapshot with bounded connections, heartbeat, lifetime and backpressure. Deliverable prefixes and authoritative retained-ID membership have separate meanings, so newer pending AI work cannot remove older accepted rows. Cookie authority and policy/deletion protections are rechecked throughout delivery. Reconnect always obtains a fresh canonical projection; bounded opaque resume metadata carries no posting payload. Local contracts do not replace the required deployed edge and browser verification.
+
 ## 5. Companies and requests
 
 Serve the public catalogue, coverage projection and requested-company view from the companies module. Coverage information is an input to this backend. Company identity, requested coverage scope and setup progress remain separate records.

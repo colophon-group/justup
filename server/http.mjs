@@ -62,6 +62,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   const cookieName = insecure ? 'justup_session' : '__Host-justup_session';
   const visitorCookie = insecure ? 'justup_visitor' : '__Host-justup_visitor';
   const visitorService=services.find(service=>typeof service.visitorRoute==='function');
+  const liveResults=services.find(service=>typeof service.openStream==='function');
   const csrfCookie = insecure ? 'justup_csrf' : '__Host-justup_csrf';
   const secret = config.csrfSecret ?? randomBytes(32);
   if (Buffer.byteLength(secret) < 32) throw new TypeError('CSRF secret must contain at least 32 bytes.');
@@ -98,7 +99,9 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   function capabilities() {
     const result = { search: false, aiMatching: false, companyRequests: false, hiringWire: false };
     for (const service of services) Object.assign(result, typeof service.capabilities === 'function' ? service.capabilities() : service.capabilities);
-    return { viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED, visitorSearch:policies.reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
+    return { viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
+      sse:authentication().loginEnabled&&result.sse===true,
+      visitorSearch:policies.reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
   }
   function sessionBody(viewer, token, guestToken, visitor=null) {
     return { serverTime: new Date(now()).toISOString(), user: viewer?.account ?? null, expiresAt: viewer ? new Date(viewer.expiresAt).toISOString() : null,
@@ -196,6 +199,31 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         runner: (typeof config.readiness === 'function' ? config.readiness().runner : null) ?? { ready: false, identity: null },
         importGeneration: feed.generation(),
       });
+      if (method === 'GET' && ['/workspace/events','/visitor/workspace/events'].includes(path)) {
+        if (!liveResults) throw problem('dependency_unavailable', 503);
+        if ((req.headers.origin != null && req.headers.origin !== origin.origin)
+            || (req.headers['sec-fetch-site'] != null && !['same-origin','none'].includes(req.headers['sec-fetch-site']))) throw problem('forbidden', 403);
+        const searchId = url.searchParams.get('searchId'), revisionInput = url.searchParams.get('revision');
+        if ([...url.searchParams.keys()].sort().join(',') !== 'revision,searchId'
+            || typeof searchId !== 'string' || !searchId || searchId.length > 128
+            || !/^[1-9][0-9]{0,8}$/.test(revisionInput ?? '')) throw problem('invalid_input');
+        const revision = Number(revisionInput);
+        const anonymous = path.startsWith('/visitor/');
+        const readAuthority = () => {
+          const state = authentication();
+          if (!state.loginEnabled) throw problem(state.reason, 503);
+          const current = token ? auth.session(token) : null;
+          if (!anonymous) { if (!current) throw problem('unauthenticated',401); return current; }
+          if (current) throw problem('forbidden',403);
+          const principal = visitorService?.identity?.fromToken(visitorToken);
+          if (!principal) throw problem('unauthenticated',401);
+          return principal;
+        };
+        afterPrivateTransaction();
+        liveResults.openStream({req,res,readAuthority,searchId,revision,authorityKey:digest(`${anonymous?'visitor':'session'}:${anonymous?visitorToken:token}`),
+          lastEventId:req.headers['last-event-id']??null});
+        return;
+      }
       // Only explicit read-only public projections run without account ownership.
       // The fixed runtime composes these services; mutations never use this hook.
       if (method === 'GET') for (const service of services) {

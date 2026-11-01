@@ -124,6 +124,7 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
     return { server, store, feed, tasks, auth, services, beforePrivateDelete: deletion.beforePrivateDelete,
       afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction, close: async () => {
       clearInterval(maintenanceTimer);
+      for (const service of services) await service.close?.();
       if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
       deletion.afterPrivateTransaction();
       store.close();

@@ -19,7 +19,7 @@ The browser application lives in `web/` and deploys its compiled React/Vite arti
 
 ## HTTP rules
 
-All browser calls use same-origin `/api/v1` routes. Bodies and responses are JSON except health text if needed. Times are ISO 8601 UTC; job discovery timestamps always retain their source value. IDs come from the server. Private records derive ownership from the session, never a supplied account ID.
+All browser calls use same-origin `/api/v1` routes. Bodies and responses are JSON except the workspace event streams, which use `text/event-stream`. Times are ISO 8601 UTC; job discovery timestamps always retain their source value. IDs come from the server. Private records derive ownership from the session, never a supplied account ID.
 
 API responses use `Cache-Control: private, no-store` and `X-Robots-Tag: noindex` in both preview and production frontend modes. Do not send hidden job IDs, titles, bodies or URLs and rely on browser blur for access control. Mutation requests require the session cookie, an allowed `Origin` and `X-CSRF-Token`. Authentication uses a host-only, HttpOnly, Secure, SameSite=Lax opaque session cookie. Local test HTTP is a separately explicit configuration.
 
@@ -79,6 +79,9 @@ Accounts with `access.fullAccess:true` can read eligible imported jobs first obs
 | `DELETE /searches/:id` | Delete that search and invalidate its tasks/cursors. |
 | `GET /tasks/:id` | Owner-only pending/running/succeeded/warning/failed task result. |
 | `GET /searches/:id/results?revision=…&cursor=…&limit=12` | Confirmed eligible matches and truthful scan status. |
+| `GET /workspace/events?searchId=…&revision=…` | Cookie-authorized active-search SSE snapshots with opaque resume identity. Visitors use `/visitor/workspace/events` with the same required parameters. |
+
+The [live-results contract](live-results.md) defines prefix arrivals separately from complete retained-ID reconciliation. A partial or pending prefix cannot erase older displayed rows. Close and reopen on active-tab changes: inactive tabs cannot enqueue scans or classification work through a stream. The transport rechecks current cookie authority and protection gates throughout the connection, reconciles access/closure/expiry, and refreshes authoritatively on reconnect. It does not advance ordinary result cursors or delivery offsets. Events are limited to 1 MiB. Deployed edge delivery and browser reader stability remain release-gate evidence.
 
 Long work returns `202` with `{search,task:{id,status:"pending"}}` or `{request,task:{id,status:"pending"}}`. Poll the owner-only task with bounded backoff. Its completed result contains the accepted search/request or a warning/clarification. `requestKey` makes retried submissions idempotent. The runner stores leases, uses execution/time/output limits and recovers interrupted work without duplicating acceptance.
 
