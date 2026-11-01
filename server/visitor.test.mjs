@@ -318,6 +318,21 @@ test('current policy closure stops an existing signed-in account submission and 
   assert.equal((await c.request('/session/logout',{method:'POST',body:{}})).status,200);
 });
 
+test('policy-paused stored workspace reads retain current paid viewed access without admitting processing',async t=>{
+  const s=await setup(t),c=s.client();await c.session();await c.login('one');
+  assert.equal((await c.request('/viewed',{method:'POST',body:{jobId:'hidden-accepted'}})).status,200);
+  assert.deepEqual((await c.request('/workspace')).body.viewed.map(item=>item.jobId),['hidden-accepted']);
+  s.config.policiesReviewed=false;s.identity.refreshAvailability();assert.equal(s.identity.principal('one'),null);
+  const workspace=await c.request('/workspace');assert.equal(workspace.status,200);
+  assert.deepEqual(workspace.body.viewed.map(item=>item.jobId),['hidden-accepted']);
+  const count=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
+  assert.equal((await c.request('/searches',{method:'POST',body:{query:'Must stay blocked',requestKey:'policy-paused'}})).status,503);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,count);assert.equal(s.modelCalls(),0);
+  s.accounts.get('one').access={...s.accounts.get('one').access,fullAccess:false};
+  assert.deepEqual((await c.request('/workspace')).body.viewed,[]);
+  assert.equal(s.app.store.db.prepare("SELECT count(*) n FROM justup_viewed WHERE owner_id='one'").get().n,1);
+});
+
 test('persisted account session survives a policy-closed restart while query and company processing stop',async t=>{
   const dir=mkdtempSync(join(tmpdir(),'justup-account-policy-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),generationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(generationPath,'00000000-0000-4000-8000-000000000000\n');
   const runtime={dbPath:join(dir,'state.sqlite'),privateGenerationPath:generationPath,backupDir},old=await setup(t,{runtime,realAuth:true}),c=old.client();await c.session();

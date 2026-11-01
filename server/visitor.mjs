@@ -115,7 +115,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     });
   }
   function workspace(owner) {
-    const visible=new Set(feed.eligibleJobs({viewer:identity.principal(owner)}).map(job=>job.id));
+    const visible=new Set(feed.eligibleJobs({viewer:identity.principal(owner,{allowUnavailable:true})}).map(job=>job.id));
     const state=db.prepare('SELECT state_json,revision FROM justup_workspaces WHERE owner_id=?').get(owner);
     return {recoveredDrafts:db.prepare('SELECT id,text,created_at FROM justup_recovered_drafts WHERE owner_id=? ORDER BY created_at,id').all(owner).map(r=>({id:r.id,text:r.text,createdAt:new Date(r.created_at).toISOString()})),revision:state?.revision??0,state:state?JSON.parse(state.state_json):{activeSearchId:null,drafts:{}},viewed:db.prepare('SELECT job_id AS jobId,first_viewed_at AS at FROM justup_viewed WHERE owner_id=? ORDER BY first_viewed_at,job_id').all(owner).filter(r=>visible.has(r.jobId)).map(r=>({jobId:r.jobId,firstViewedAt:new Date(r.at).toISOString()}))};
   }
