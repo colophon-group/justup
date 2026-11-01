@@ -17,11 +17,11 @@ BASE = Path('/srv/justup_preview')
 CONFIG_PATH = BASE / 'queue/config/runner.json'
 LEDGER_PATH = BASE / 'queue/budget/jev.jsonl'
 CONFIG_KEYS = {'dbPath', 'sharedState', 'runnerStatusPath',
-               'model', 'jev', 'matching', 'verificationTtlMs', 'hiringWire'}
+               'model', 'jev', 'matching', 'verificationTtlMs', 'hiringWire', 'sourceCoverage'}
 MODEL_KEYS = {'enabled', 'isolationVerified', 'cliVersion', 'socketPath', 'attestationPath',
               'taskProfiles', 'companyResearchVerified'}
 BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49'
-BUDGET_IDENTITIES = {'canonical-v1': 'jev-evaluation-budget', 'legacy-demo-v1': 'demo-jev-evaluation-budget'}
+BUDGET_IDENTITIES = {'canonical-v1': 'jev-evaluation-budget', 'legacy-v1': 'demo-jev-evaluation-budget'}
 
 
 def budget_identity(budget):
@@ -49,6 +49,16 @@ def validate_configuration(config, manifest):
             or config.get('sharedState') is not True
             or config.get('runnerStatusPath') != str(BASE / 'state/runner-status.json')):
         raise ValueError('Queue configuration differs from the fixed candidate and state boundary.')
+    if 'sourceCoverage' in config:
+        source = config['sourceCoverage']
+        if (not isinstance(source, dict) or set(source) != {'directory', 'sourceVersion'}
+                or source.get('sourceVersion') != 'jobseek-coverage-v1'
+                or not isinstance(source.get('directory'), str)):
+            raise ValueError('Source coverage must use the reviewed queue-only reader configuration.')
+        directory = Path(source['directory'])
+        if (not directory.is_absolute() or str(directory) != source['directory'] or '..' in directory.parts
+                or directory.is_relative_to(BASE / 'state')):
+            raise ValueError('Source coverage requires a canonical path outside shared state and backups.')
     model = config.get('model', {})
     if (not isinstance(model, dict) or set(model) - MODEL_KEYS
             or ('socketPath' in model and model['socketPath'] != str(BASE / 'broker/model.sock'))

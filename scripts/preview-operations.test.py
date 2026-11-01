@@ -925,12 +925,13 @@ class BoundaryContracts(unittest.TestCase):
     def test_budget_identity_defaults_canonical_and_requires_explicit_exact_legacy_selection(self):
         canonical = {'approval': {'resourceId': queue.BUDGET_RESOURCE, 'resourceSlug': 'jev-evaluation-budget'}}
         self.assertEqual(queue.budget_identity(canonical), canonical['approval'])
-        legacy = {'identityProfile': 'legacy-demo-v1',
+        legacy = {'identityProfile': 'legacy-v1',
                   'approval': {'resourceId': queue.BUDGET_RESOURCE, 'resourceSlug': 'demo-jev-evaluation-budget'}}
         self.assertEqual(queue.budget_identity(legacy), legacy['approval'])
         for config in ({'approval': legacy['approval']}, {**legacy, 'identityProfile': 'canonical-v1'},
-                       {**canonical, 'identityProfile': 'legacy-demo-v1'}, {**canonical, 'identityProfile': None},
-                       {**canonical, 'identityProfile': 'legacy'}, {**canonical, 'resetLedger': True},
+                       {**canonical, 'identityProfile': 'legacy-v1'}, {**canonical, 'identityProfile': None},
+                       {**canonical, 'identityProfile': 'legacy'}, {**canonical, 'identityProfile': 'legacy-demo-v1'},
+                       {**canonical, 'resetLedger': True},
                        {'approval': {**canonical['approval'], 'resourceId': 'https://other.example/approval'}}):
             with self.subTest(config=config), self.assertRaises(ValueError):
                 queue.budget_identity(config)
@@ -949,10 +950,25 @@ class BoundaryContracts(unittest.TestCase):
                 identity = queue.budget_identity({'identityProfile': profile, 'approval': header})
                 queue.validate_ledger(ledger, expected_identity=identity)
                 self.assertEqual(ledger.read_bytes(), original)
-                wrong = {**identity, 'resourceSlug': 'jev-evaluation-budget' if profile == 'legacy-demo-v1' else 'demo-jev-evaluation-budget'}
+                wrong = {**identity, 'resourceSlug': 'jev-evaluation-budget' if profile == 'legacy-v1' else 'demo-jev-evaluation-budget'}
                 with self.assertRaisesRegex(ValueError, 'selected exact budget identity'):
                     queue.validate_ledger(ledger, expected_identity=wrong)
                 self.assertEqual(ledger.read_bytes(), original)
+
+    def test_queue_source_coverage_is_optional_exact_and_kept_outside_shared_state(self):
+        manifest, _ = payload()
+        config = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
+                  'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
+        self.assertIs(queue.validate_configuration(config, manifest), config)
+        source = {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}
+        with patch.object(Path, 'read_text', side_effect=AssertionError('configuration validation must not read source data')):
+            queue.validate_configuration({**config, 'sourceCoverage': source}, manifest)
+        for change in ({'directory': 'relative/source'}, {'directory': '/source/../other'}, {'directory': '/source//input'},
+                       {'directory': '/srv/justup_preview/state'}, {'directory': '/srv/justup_preview/state/backups'},
+                       {'directory': '/srv/justup_preview/state/history'}, {'sourceVersion': 'unreviewed'},
+                       {'enabled': True}, {'model': {}}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                queue.validate_configuration({**config, 'sourceCoverage': {**source, **change}}, manifest)
 
     def test_policy_gate_requires_reviewed_urls_and_version(self):
         manifest, _ = payload()
