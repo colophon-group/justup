@@ -153,6 +153,23 @@ test('the cleanup reserve does not bypass active work and recycles only after pr
   assert.equal(tasks.enqueue(input({ownerId:'next',kind:'billing_terminate',requestKey:'two',payload:{operationId:'two'}})).status,'pending');
   assert.equal(tasks.enqueue(input()).id,ordinary.id);
 });
+test('ordinary receipt expiry cannot erase an unproved termination receipt', t => {
+  const {tasks,db,advance}=setup(t,{maxActiveTasks:1,maxStoredTasks:1,maxCleanupReceipts:1});
+  const ordinary=tasks.enqueue(input());
+  let lease=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.complete(ordinary.id,lease.leaseToken,{status:'succeeded'}),true);
+  const termination=tasks.enqueue(input({ownerId:'closing',kind:'billing_terminate',requestKey:'termination',payload:{operationId:'operation'}}));
+  lease=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.complete(termination.id,lease.leaseToken,{status:'failed'}),true);
+  advance(31*24*60*60*1000);
+  const next=tasks.enqueue(input({requestKey:'new-ordinary'}));
+  assert.equal(next.status,'pending');
+  assert.equal(tasks.get('a',ordinary.id),null);
+  assert.equal(tasks.get('closing',termination.id).status,'failed');
+  assert.equal(tasks.enqueue(input({ownerId:'closing',kind:'billing_terminate',requestKey:'termination',payload:{operationId:'operation'}})).id,termination.id);
+  assert.throws(()=>tasks.enqueue(input({ownerId:'other',kind:'billing_terminate',requestKey:'later',payload:{operationId:'later'}})),{code:'task_limit'});
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_tasks WHERE kind=?').get('billing_terminate').n,1);
+});
 test('deletion and cancellation invalidate running work and public view omits private material', (t) => {
   const { tasks, db } = setup(t); const one = tasks.enqueue(input()); const lease = tasks.claim({ workerId: 'worker' });
   const view = tasks.publicView(lease); assert.equal(view.result, null); assert.equal(view.error, null);
