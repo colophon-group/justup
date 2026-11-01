@@ -21,7 +21,7 @@ import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from uuid import UUID
 
 GROUP_ID = re.compile(r'[A-Z0-9]{8,32}\Z')
@@ -120,7 +120,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def fetch_groups(config: dict, token: str, *, opener=None) -> list[str]:
-    opener = opener or build_opener(NoRedirect())
+    opener = opener or build_opener(NoRedirect(), ProxyHandler({}))
     found: list[str] = []
     for state in ('new', 'acknowledged'):
         pages = None
