@@ -2,7 +2,7 @@ import { policyDocument } from "../i18n/policies.ts";
 import { useAccountLocale } from "../i18n/useAccountLocale.ts";
 import { localeName } from "../i18n/locales.ts";
 import { useInterfaceLocale } from "../i18n/LocaleProvider.tsx";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiClient, errorText, isAbortError } from "../api/client.ts";
 import type { CompanyRequestPrefill, Session } from "../api/types.ts";
 import { AccountControls } from "../features/account/AccountControls.tsx";
@@ -15,11 +15,14 @@ import { useRoute } from "./useRoute.ts";
 import { coverageDescription } from "../shared/coverage.ts";
 
 export function App() {
-  const { t, locale, notice: localizeNotice } = useInterfaceLocale();
+  const { t, locale, explicitRequestLocale, notice: localizeNotice } = useInterfaceLocale();
   const expiryHandler = useRef<() => void>(() => {});
   const [client] = useState(
     () => new ApiClient({ onSessionExpired: () => expiryHandler.current() }),
   );
+  useLayoutEffect(() => {
+    client.setExplicitRequestLocale(explicitRequestLocale);
+  }, [client, explicitRequestLocale]);
   const [session, setSession] = useState<Session | null>(null),
     [notice, setNotice] = useState("Connecting to the edition…"),
     [connecting, setConnecting] = useState(true),
@@ -125,12 +128,12 @@ export function App() {
     document.title = `Justup — ${route.page === "companies" ? t("Company catalogue") : route.page === "company" ? t("Hiring report") : route.page === "request" ? t("Request a company") : t("Fresh work. Clear sources.")}`;
   }, [route.page, t]);
   const interfaceLanguage = useAccountLocale(client, session);
-  const previousLocale = useRef(locale);
+  const previousLocale = useRef({ locale, explicitRequestLocale });
   useEffect(() => {
-    if (previousLocale.current === locale) return;
-    previousLocale.current = locale;
+    if (previousLocale.current.locale === locale && previousLocale.current.explicitRequestLocale === explicitRequestLocale) return;
+    previousLocale.current = { locale, explicitRequestLocale };
     void refreshSession();
-  }, [locale, refreshSession]);
+  }, [locale, explicitRequestLocale, refreshSession]);
   const coverage = session?.coverage;
   return (
     <>

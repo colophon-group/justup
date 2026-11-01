@@ -1,3 +1,4 @@
+import { parseInterfaceLocale, type InterfaceLocale } from "../i18n/locales.ts";
 // Same-origin transport owns credentials, timeouts and response validation, not UI state.
 import {
   decodeCompany,
@@ -60,6 +61,7 @@ const ignored = (value: unknown): void => {
 };
 const id = encodeURIComponent;
 export class ApiClient {
+  private explicitRequestLocale: InterfaceLocale | null = null;
   private csrfToken: string | null = null;
   private sessionVersion = 0;
   private readonly fetcher: typeof fetch;
@@ -69,6 +71,11 @@ export class ApiClient {
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.onSessionExpired = options.onSessionExpired;
     this.timeoutMs = options.timeoutMs ?? 20_000;
+  }
+  // Request-only route presentation; never persists a preference or changes a query.
+  setExplicitRequestLocale(locale: InterfaceLocale | null): void {
+    if (locale !== null && parseInterfaceLocale(locale) === null) throw new TypeError('Invalid explicit interface locale.');
+    this.explicitRequestLocale = locale;
   }
   setSession(session: Session | null): void {
     this.sessionVersion++;
@@ -92,6 +99,7 @@ export class ApiClient {
       );
     const body = mutation && options.body === undefined ? {} : options.body;
     const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.explicitRequestLocale !== null) headers["X-Justup-Locale"] = this.explicitRequestLocale;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (mutation && this.csrfToken) headers["X-CSRF-Token"] = this.csrfToken;
     if (options.key) headers["Idempotency-Key"] = options.key;

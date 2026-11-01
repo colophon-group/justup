@@ -7,6 +7,7 @@ import { readGuestLocale, serializeGuestLocale } from './guestPreference.ts';
 interface AccountPreference { accountId: string; locale: InterfaceLocale | null }
 interface LocaleContextValue {
   locale: InterfaceLocale;
+  explicitRequestLocale: InterfaceLocale | null;
   override: InterfaceLocale | null;
   setOverride: (locale: InterfaceLocale | null) => void;
   setAccountPreference: (preference: AccountPreference | null) => void;
@@ -15,7 +16,7 @@ interface LocaleContextValue {
   notice: (text: string) => string;
 }
 const initial: LocaleContextValue = {
-  locale: 'en', override: null, setOverride: () => {}, setAccountPreference: () => {}, onManualLocaleChange: () => {},
+  locale: 'en', explicitRequestLocale: null, override: null, setOverride: () => {}, setAccountPreference: () => {}, onManualLocaleChange: () => {},
   t: (key, params) => translate('en', key, params), notice: text => text,
 };
 const LocaleContext = createContext<LocaleContextValue>(initial);
@@ -31,6 +32,7 @@ export function InterfaceLocaleProvider({ children, initialLocale, hydrationLoca
   const [accountPreference, setAccountPreference] = useState<AccountPreference | null>(null);
   const [hydrating, setHydrating] = useState(hydrationLocale !== undefined);
   useEffect(() => { setHydrating(false); }, []);
+  const explicitRequestLocale = initialLocale ?? null;
   const override = accountPreference ? accountPreference.locale : guestOverride;
   const locale = resolvePresentationLocale({explicitLocale: initialLocale, hydrationLocale, hydrating, accountOverride: accountPreference, guestOverride, browserLanguages: languages});
   // Only manual visitor choice writes this presentation-only cookie. Account choices never do.
@@ -41,7 +43,7 @@ export function InterfaceLocaleProvider({ children, initialLocale, hydrationLoca
   const onManualLocaleChange = useCallback((selected: InterfaceLocale | null) => { onLocaleChange?.(selected); }, [onLocaleChange]);
   const t = useCallback((key: MessageKey, params?: Record<string, string | number>) => translate(locale, key, params), [locale]);
   const notice = useCallback((text: string) => translateNotice(locale, text), [locale]);
-  const value = useMemo(() => ({ locale, override, setOverride, setAccountPreference, onManualLocaleChange, t, notice }), [locale, override, setOverride, onManualLocaleChange, t, notice]);
+  const value = useMemo(() => ({ locale, explicitRequestLocale, override, setOverride, setAccountPreference, onManualLocaleChange, t, notice }), [locale, explicitRequestLocale, override, setOverride, onManualLocaleChange, t, notice]);
   useEffect(() => { document.documentElement.lang = locale; }, [locale]);
   return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 }
