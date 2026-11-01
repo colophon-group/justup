@@ -54,7 +54,7 @@ async function setup(t,{model,provider,residual=false,visitor:visitorConfig,poli
 
 test('visitor submits, edits and retries its own search with filtered exact hidden count',async t=>{
   const s=await setup(t),a=s.client(),b=s.client();const session=await a.session();await b.session();
-  assert.equal(session.body.user,null);assert.equal(session.body.access.fullAccess,false);assert.equal(session.body.capabilities.visitorSearch,true);assert.equal(session.body.visitor,null);assert.equal(a.jar.has('__Host-justup_visitor'),false);
+  assert.equal(session.body.user,null);assert.equal(session.body.access.fullAccess,false);assert.equal(session.body.capabilities.visitorSearch,true);assert.equal(session.body.visitor,null);assert.match(a.jar.get('__Host-justup_visitor'),/^[A-Za-z0-9_-]{43}$/);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
   const id=await s.create(a),current=await a.session(),token=a.jar.get('__Host-justup_visitor');assert(token);assert(!JSON.stringify(current.body).includes(token));assert.deepEqual(Object.keys(current.body.visitor),['expiresAt']);
   const page=await s.results(a,id);assert.deepEqual(page.body.items.map(j=>j.id),['visible-accepted','visible-rejected']);assert.deepEqual(page.body.hiddenMatches,{status:'exact',count:2});
   assert.equal(JSON.stringify(page.body).includes('hidden-'),false);assert.equal(page.res.headers.get('x-robots-tag'),'noindex');
@@ -191,12 +191,30 @@ test('a full recovery stash rejects the whole handoff and preserves both owners 
 
 test('discarding more than the durable visitor cap worth of session cookies allocates nothing and a protected first search still works',async t=>{
   const s=await setup(t,{runtime:{rateLimits:{read:1000}}});
-  for(let i=0;i<205;i++){const read=await s.client().session();assert.equal(read.status,200);assert.equal(read.body.visitor,null);assert.equal(read.res.headers.getSetCookie().some(c=>c.startsWith('__Host-justup_visitor=')),false);}
+  for(let i=0;i<205;i++){const read=await s.client().session();assert.equal(read.status,200);assert.equal(read.body.visitor,null);assert.equal(read.res.headers.getSetCookie().some(c=>c.startsWith('__Host-justup_visitor=')),true);}
   assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
   const c=s.client();await c.session();
   for(const [headers,body] of [[{Origin:'https://elsewhere.example'},{query:'Engineer',requestKey:'invalid'}],[{'X-CSRF-Token':'x'.repeat(43)},{query:'Engineer',requestKey:'invalid'}],[{},{query:'',requestKey:'invalid'}]]){assert.notEqual((await c.request('/visitor/searches',{method:'POST',body,headers})).status,202);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);}
   const created=await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'first'}});assert.equal(created.status,202);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);
   const cookie=created.res.headers.getSetCookie().find(c=>c.startsWith('__Host-justup_visitor='));for(const flag of ['HttpOnly','Secure','SameSite=Lax','Path=/'])assert(cookie.includes(flag));
+});
+
+test('losing the entire first search response reuses the prior stateless ownership cookie and one owner, search, task and inference',async t=>{
+  const s=await setup(t),c=s.client(),session=await c.session();assert.equal(session.body.visitor,null);
+  const previous=c.snapshot(),pendingCookie=c.jar.get('__Host-justup_visitor');assert(pendingCookie);assert.equal(JSON.stringify(session.body).includes(pendingCookie),false);
+  const body={query:'Engineer',requestKey:'lost-first-response'},first=await c.request('/visitor/searches',{method:'POST',body});assert.equal(first.status,202);
+  // Both headers and body disappeared: only cookies/CSRF established before the
+  // POST survive. Repeated retries must not require its Set-Cookie response.
+  for(let i=0;i<3;i++){c.restore(previous);const retry=await c.request('/visitor/searches',{method:'POST',body});assert.equal(retry.status,202);assert.equal(retry.body.search.id,first.body.search.id);assert.equal(retry.body.task.id,first.body.task.id);assert.equal(c.jar.get('__Host-justup_visitor'),pendingCookie);}
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_searches').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,1);
+  await s.work('search_intent');c.restore(previous);const done=await c.request('/visitor/searches',{method:'POST',body});assert.equal(done.body.search.id,first.body.search.id);assert.equal(done.body.task.id,first.body.task.id);assert.equal(done.body.task.status,'succeeded');assert.equal(s.modelCalls(),1);
+  // A valid-format attacker-chosen cookie has no authority to choose a stored
+  // principal. New ownership is derived from its own prior CSRF cookie instead.
+  const other=s.client();await other.session();other.jar.set('__Host-justup_visitor','x'.repeat(43));const created=await other.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'chosen-token'}});assert.equal(created.status,202);assert.notEqual(other.jar.get('__Host-justup_visitor'),'x'.repeat(43));assert.notEqual(created.body.search.id,first.body.search.id);
+  // A spent sign-in receipt cannot be reused as a new owner. A fresh session
+  // supplies a new stateless binding without changing the transferred data.
+  await c.login('one');c.restore(previous);assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'spent'}})).status,401);
+  assert.equal((await c.session()).body.visitor,null);assert.notEqual(c.jar.get('__Host-justup_visitor'),pendingCookie);assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'fresh-after-spent'}})).status,202);
 });
 
 test('current policy closure revokes existing visitor reads, query writes and queued interpretation/classification while cleanup stays available',async t=>{

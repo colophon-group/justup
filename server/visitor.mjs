@@ -72,11 +72,12 @@ export function createVisitorIdentity({db,now=Date.now,config={},accessForAccoun
     const row=db.prepare('SELECT id FROM justup_visitors WHERE token_hash=? AND handed_to IS NULL AND expires_at>?').get(hash(token),now());
     return row?principal(row.id,options):null;
   }
+  const tokenRetired=token=>TOKEN.test(token??'')&&Boolean(db.prepare('SELECT 1 FROM justup_visitors WHERE token_hash=? AND handed_to IS NOT NULL').get(hash(token)));
   function open(token) {
     if(!processingAvailable())throw problem('dependency_unavailable',503);
     const current=fromToken(token);if(current)return {principal:current,token};
     if(db.prepare('SELECT count(*) AS n FROM justup_visitors').get().n>=maxVisitors)throw problem('rate_limit',429);
-    token=randomBytes(32).toString('base64url');const id=`visitor:${randomUUID()}`,at=now();
+    token=TOKEN.test(token??'')?token:randomBytes(32).toString('base64url');const id=`visitor:${randomUUID()}`,at=now();
     db.prepare('INSERT INTO justup_visitors(id,token_hash,created_at,expires_at) VALUES(?,?,?,?)').run(id,hash(token),at,at+ttl);
     return {principal:principal(id),token};
   }
@@ -89,7 +90,7 @@ export function createVisitorIdentity({db,now=Date.now,config={},accessForAccoun
     if(!owner.startsWith('visitor:'))return;
     if(db.prepare('UPDATE justup_visitors SET matching_tasks=matching_tasks+1 WHERE id=? AND handed_to IS NULL AND expires_at>? AND matching_tasks<32').run(owner,now()).changes!==1)throw problem('task_limit',429);
   }
-  return {principal,fromToken,open,admit,recordSubmission,admitMatching,processingAvailable,refreshAvailability};
+  return {principal,fromToken,tokenRetired,open,admit,recordSubmission,admitMatching,processingAvailable,refreshAvailability};
 }
 
 export function createVisitorService({db,feed,tasks,intent,matching,identity,config={},now=Date.now,beforePrivateDelete,withPrivateTransaction}={}) {
@@ -224,7 +225,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     return null;
   }
   return {identity,publicVisitor,cleanup,handoff,visitorRoute,route:stateRoute,deleteAccountData,
-    currentSession(token){cleanup();return identity.fromToken(token);},admitCreation:body=>intent.admitVisitorCreation(body),refreshAvailability:()=>identity.refreshAvailability(),
+    currentSession(token){cleanup();return identity.fromToken(token);},tokenRetired:token=>identity.tokenRetired(token),admitCreation:body=>intent.admitVisitorCreation(body),refreshAvailability:()=>identity.refreshAvailability(),
     discardEmptySession(token){const current=identity.fromToken(token);if(current&&!db.prepare('SELECT 1 FROM demo_searches WHERE owner_id=?').get(current.visitor.id))db.prepare('DELETE FROM justup_visitors WHERE id=?').run(current.visitor.id);},
     openSession(token){cleanup();return identity.open(token);},
     capabilities:()=>({visitorSearch:identity.processingAvailable(),viewed:true,hiddenMatchCounts:typeof feed.restrictedLatestJobs==='function'})};

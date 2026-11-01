@@ -126,7 +126,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       const parsedCookies = cookies(req.headers.cookie);
       const token = parsedCookies[cookieName] ?? null, viewer = token ? auth.session(token) : null;
       const sessionToken = viewer ? token : null;
-      const guestToken = parsedCookies[csrfCookie] ?? randomBytes(32).toString('base64url');
+      let guestToken = parsedCookies[csrfCookie] ?? randomBytes(32).toString('base64url');
       const visitorToken=parsedCookies[visitorCookie]??null;
       const visitorRoute=Boolean(visitorService)&&/^\/visitor\/(?:searches(?:\/[^/]+(?:\/(?:confirm|results))?)?|tasks\/[^/]+|workspace(?:\/recovered-drafts\/[^/]+)?|viewed|session)$/.test(path);
       const authRoute = method === 'POST' && ['/auth/register', '/auth/login'].includes(path);
@@ -150,8 +150,14 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       if (method === 'GET' && path === '/session') {
         let visitor=null;
         if (!viewer) {
+          const retired=visitorService?.tokenRetired(visitorToken)||visitorService?.tokenRetired(digest(`visitor-owner:${guestToken}`));
+          if(retired)guestToken=randomBytes(32).toString('base64url');
           const nextCookies=[cookie(csrfCookie, guestToken, now() + 3_600_000)];
           if(visitorService&&policies().reviewed&&config.deletionReady?.()!==false)visitor=visitorService.currentSession(visitorToken);
+          // This opaque ownership hint is stateless until an admitted search.
+          // Binding it to the pre-existing guest CSRF seed recovers a first POST
+          // whose entire response is lost without allocating another owner.
+          if(visitorService)nextCookies.push(cookie(visitorCookie,retired?digest(`visitor-owner:${guestToken}`):visitorToken??digest(`visitor-owner:${guestToken}`),visitor?.expiresAt??now()+86_400_000));
           res.setHeader('Set-Cookie',nextCookies);
         }
         return finish(200, sessionBody(viewer, sessionToken, guestToken,visitor));
@@ -210,6 +216,9 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         let ownerToken=visitorToken,opened;
         if(method==='POST'&&path==='/visitor/searches'&&!viewer&&!visitorService.currentSession(ownerToken)){
           visitorService.admitCreation(body);
+          // Unknown supplied cookies cannot choose the new ownership token.
+          ownerToken=digest(`visitor-owner:${guestToken}`);
+          if(visitorService.tokenRetired(ownerToken))throw problem('unauthenticated',401);
           opened=visitorService.openSession(ownerToken);ownerToken=opened.token;
         }
         let result;
