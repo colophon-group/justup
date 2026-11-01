@@ -120,7 +120,22 @@ termination operation and provider idempotency keys after an exhausted or missin
 task, with a five-second cooldown. One owner-bound termination reservation is
 separate from ordinary operation history limits. A full shared task queue leaves
 billing durably closed with that pending reservation; a later password-confirmed
-retry can enqueue it when capacity returns. Shared queue limits remain unchanged.
+retry can enqueue it when capacity returns. The queue keeps 96 active tasks
+separate from 2,048 ordinary retained receipts and a default reserve of 16 billing
+termination receipts (hard maximum 96). Ordinary completed history does not spend
+active capacity or evict earlier request-key receipts.
+
+After the generic runner observes terminal completion, billing records the
+outcome in its existing private operation. A bounded startup/before-claim check
+recovers completion-observation crash gaps. This queue-side observation removes
+no receipt. API maintenance and password-confirmed retries release only fully
+absorbed receipts, together with their task pointer, inside the existing private
+deletion transaction and backup-generation barrier. Failed outcomes may be
+absorbed while all original uncertainty, provider idempotency keys and mutation
+times remain in canonical owner storage; absorption never proves deletion.
+Unknown or mismatched task evidence is retained beyond ordinary receipt expiry.
+This lets delayed final deletion reuse the bounded reserve without early
+ordinary receipt eviction or a new queue, service or outbox.
 
 Provider bindings and operation reservations exist **before** the first external
 mutation. Their foreign keys use `ON DELETE RESTRICT`, so an older or unaware
@@ -141,7 +156,8 @@ redemption tombstone is created.
 The termination operation then reports `billing_operator_reconciliation_required`
 with `retryable:false`; ordinary retry cannot manufacture the missing evidence.
 
-Only fresh termination proof allows the existing atomic local deletion to erase
+Only fresh termination proof and no remaining owned termination receipt allow
+the existing atomic local deletion to erase
 all owned billing, ordinary/welcome redemption, identity and private application
 rows. Session is rechecked after waits and during final SQL. Temporary accounts
 with a persisted non-null deadline cannot start checkout, avoiding a network

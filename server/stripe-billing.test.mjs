@@ -539,9 +539,10 @@ test('failed terminal outcomes are absorbed without deletion authority and retri
   assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
 });
 
-for(const mismatch of ['output','operation','owner','error'])test(`unabsorbed ${mismatch} evidence retains its cleanup receipt and original operation pointer`,async t=>{
+for(const mismatch of ['output','operation','owner','error','canonical_resource'])test(`unabsorbed ${mismatch} evidence retains its cleanup receipt and original operation pointer`,async t=>{
   const f=await fixture(t);f.start();await f.work();await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
   const op=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get(),task=f.app.tasks.claim({workerId:'unknown-result',kinds:['billing_terminate'],leaseMs:90_000});
+  if(mismatch==='canonical_resource')f.app.store.db.prepare("UPDATE justup_billing_operations SET resource_kind='unabsorbed_mutation',resource_id='retained-unknown-evidence' WHERE id=?").run(op.id);
   if(mismatch==='operation')f.app.store.db.prepare('UPDATE justup_tasks SET payload_json=? WHERE id=?').run(JSON.stringify({...task.payload,operationId:'unowned-operation'}),task.id);
   if(mismatch==='owner')f.app.store.db.prepare('UPDATE justup_tasks SET owner_id=? WHERE id=?').run('unowned-account',task.id);
   assert.equal(f.app.tasks.complete(task.id,task.leaseToken,{status:'failed',output:mismatch==='output'?{unknownMutation:'only-in-task'}:null,errorCode:mismatch==='error'?'unknown_provider_mutation':'provider_unavailable'}),true);
@@ -549,6 +550,7 @@ for(const mismatch of ['output','operation','owner','error'])test(`unabsorbed ${
   assert.ok(f.app.store.db.prepare('SELECT 1 FROM justup_tasks WHERE id=?').get(task.id));assert.equal(f.app.tasks.delete(mismatch==='owner'?'unowned-account':task.ownerId,task.id),false);
   f.advance(5001);await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
   const after=f.app.store.db.prepare('SELECT * FROM justup_billing_operations WHERE id=?').get(op.id);assert.equal(after.task_id,task.id);assert.equal(after.attempt,op.attempt);assert.equal(after.created_at,op.created_at);
+  if(mismatch==='canonical_resource')assert.equal(after.resource_id,'retained-unknown-evidence');
   assert.equal(f.app.store.db.prepare("SELECT count(*) n FROM justup_tasks WHERE kind='billing_terminate'").get().n,1);
   assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,null);
 });
@@ -566,4 +568,40 @@ test('protected release and final deleteOwner roll back with the private deletio
   assert.ok(f.app.auth.session(f.owner.token));assert.ok(f.app.tasks.get(f.owner.account.id,owned.id));assert.ok(f.app.store.db.prepare('SELECT 1 FROM justup_billing_accounts WHERE account_id=?').get(f.owner.account.id));
   f.app.afterPrivateTransaction();f.app.tasks.deleteOwner=original;assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});f.app.afterPrivateTransaction();
   assert.equal(f.app.store.db.prepare('SELECT count(*) n FROM justup_tasks WHERE owner_id=?').get(f.owner.account.id).n,0);assert.equal(existsSync(`${privateGenerationPath}.pending`),false);
+});
+
+
+test('committed provider proof cannot erase a running or not-yet-observed terminal cleanup receipt',async t=>{
+  const f=await fixture(t);f.start();await f.work();await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const task=f.app.tasks.claim({workerId:'commit-before-observation',kinds:['billing_terminate'],leaseMs:90_000}),result=await f.queue.runTask(task);
+  assert.equal(result.status,'succeeded');assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,f.now());
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});assert.equal(f.app.tasks.get(task.ownerId,task.id).status,'running');
+  assert.equal(f.app.tasks.complete(task.id,task.leaseToken,{status:'succeeded',output:null}),true);
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});assert.ok(f.app.tasks.get(task.ownerId,task.id));
+  assert.equal(f.api.handleBilling(f.ctx(undefined,'/account/billing','GET')).body.billing.termination.status,'pending');
+  f.queue.taskFinished(task);f.api.cleanup();assert.equal(f.app.tasks.get(task.ownerId,task.id),null);assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
+});
+
+test('unabsorbed successful cleanup evidence survives 31 days and cannot be overridden by provider proof',async t=>{
+  const f=await fixture(t,{storage:{sessionTtlMs:40*86_400_000}});f.start();await f.work();await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const op=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();
+  const runner=f.realRunner({handler:async(task,options)=>({...await f.queue.runTask(task,options),output:{unknownMutation:'only-in-receipt'}})});assert.equal(await runner.runOnce(),true);
+  assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,f.now());
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});assert.ok(f.app.tasks.get(f.owner.account.id,op.task_id));
+  f.advance(31*86_400_000);f.api.refreshAvailability();f.app.tasks.enqueue({ownerId:'retention-probe',kind:'synthetic_retention_probe',requestKey:'after-31-days',payload:{}});
+  assert.equal(f.app.store.db.prepare("SELECT count(*) n FROM justup_tasks WHERE kind='billing_checkout'").get().n,0);
+  f.queue.reconcileCompletedTasks();f.api.cleanup();const retained=f.app.tasks.get(f.owner.account.id,op.task_id);assert.deepEqual(retained.output,{unknownMutation:'only-in-receipt'});
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});assert.ok(f.app.auth.session(f.owner.token));
+  assert.equal(f.app.store.db.prepare('SELECT task_id,created_at FROM justup_billing_operations WHERE id=?').get(op.id).task_id,op.task_id);
+});
+
+
+test('billing completion hooks preserve the Wire pre-claim fence and survive a records callback failure',async t=>{
+  const f=await fixture(t);f.start();await f.work();await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const op=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get(),events=[];
+  const blocked=createRunner({tasks:f.app.tasks,handlers:{billing_terminate:f.queue.runTask},...createBillingRunnerHooks({billing:{taskFinished:()=>events.push('billing'),reconcileCompletedTasks:()=>events.push('billing-maintenance')},onTaskFinished:()=>events.push('records'),beforeClaim:async()=>{events.push('wire');throw Error('synthetic Wire fence');}})});
+  await assert.rejects(blocked.runOnce(),/synthetic Wire fence/);assert.deepEqual(events,['wire']);assert.equal(f.app.tasks.get(f.owner.account.id,op.task_id).attempts,0);
+  const hooks=createBillingRunnerHooks({billing:{taskFinished:task=>{events.push('billing');f.queue.taskFinished(task);},reconcileCompletedTasks:()=>f.queue.reconcileCompletedTasks()},onTaskFinished:()=>{events.push('records');throw Error('synthetic records failure');},beforeClaim:async()=>{events.push('wire');}});
+  const runner=createRunner({tasks:f.app.tasks,handlers:{billing_terminate:f.queue.runTask},...hooks});assert.equal(await runner.runOnce(),true);assert.deepEqual(events,['wire','wire','records','billing']);
+  assert.ok(f.app.tasks.get(f.owner.account.id,op.task_id));f.api.cleanup();assert.equal(f.app.tasks.get(f.owner.account.id,op.task_id),null);
 });
