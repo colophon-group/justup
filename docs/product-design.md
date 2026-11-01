@@ -1,5 +1,5 @@
 ---
-summary: Justup's product behavior, accepted first-release scope and open decisions.
+summary: Accepted first-release product behavior and user experience for Justup.
 read_when: Designing search, accounts, company coverage or release scope.
 ---
 
@@ -7,9 +7,9 @@ read_when: Designing search, accounts, company coverage or release scope.
 
 Brand: **Justup**. Intended domain: `justup.work`.
 
-This guide defines the product behavior and accepted first-release scope, with open decisions called out explicitly. The current [web application](../web/README.md) uses React, strict TypeScript and a Vite build against a same-origin API. The interface consumes validated API responses and shows unavailable states for missing services. The integrated service and preview deployment have not yet been verified. The release target below describes required behavior, not a claim that each feature already works.
+This guide defines the accepted first-release experience. It is a product contract, not a claim that every path is live. For implemented behavior and release readiness, use the [web application guide](../web/README.md), [API guide](api.md) and [development and release guide](development-process.md).
 
-The [backend design for user-facing features](backend-design.md) defines the application boundaries, Luna interpretation and company discovery, AI filtering, weekly Hiring Wire editions, and tuning collections.
+The [backend design for user-facing features](backend-design.md) defines the application boundaries, Luna interpretation and company discovery, AI filtering, weekly Hiring Wire editions, and tuning collections. Explicitly proposed options below remain open; resolve them in issues before treating them as release behavior.
 
 ## 1. Product intent
 
@@ -23,11 +23,9 @@ The central promise is: **Fresh jobs. No paid placement.** Listings come directl
 
 The brand promise includes: **See what we cover. Ask for what you need.** Explain limits in ordinary language: publication time means first observed by our backend, missing information remains unknown, and catalogue presence is distinct from working job monitoring. A requested company appears in the catalogue as soon as the requester accepts its discovered identity; monitoring follows a separate crawler-configuration step. Premium users receive priority handling for company requests; this benefit is stated openly.
 
-The initial audience hypothesis is people actively searching now, who return frequently enough to value new results. The first occupation and geography to target remain open; launch scope should follow the collection's actual fresh coverage.
+## 2. Product requirements
 
-## 2. Requirements and proposals
-
-Product requirements:
+The first release requires:
 
 - Listings come directly from employers’ own career pages. Exclude recruitment agency listings and reposts sourced from job aggregators or social media.
 - Publication time is when the backend first observed the posting.
@@ -42,7 +40,7 @@ Product requirements:
 - Luna interprets search requirements and can configure JEV or another inexpensive, sufficiently accurate System One classifier when structured filters cannot fully express them. AI filtering runs after primary filters.
 - Later submissions use the current configuration, previous search text, and edited search text to generate a configuration diff.
 - Anonymous access is limited, with the latest results hidden.
-- New users receive one free week, followed by a small recurring fee. $3/week and $10/month are pricing hypotheses for a later financial model.
+- New users receive one free week, followed by a recurring fee at prices approved before payment activation.
 - Existing Jobseek users receive their first month free.
 - Results show extracted structured values, without full posting text. Summaries may come later if their cost is justified.
 - Result cards do not expand. Users open the original company posting for further details.
@@ -53,8 +51,6 @@ Product requirements:
 - Company setup has two steps: discover the company with brand assets, description, and other metadata, then configure its crawler. The backend runs discovery through a Codex-powered Luna agent at low reasoning, returning the found company for the user to accept or reject. On acceptance, publish the catalogue entry promptly without waiting for crawler configuration.
 - Company lookup surfaces matching companies already being configured before offering new discovery. Users can request higher priority for an existing setup task.
 - Coverage, request status, and known collection limitations are communicated transparently.
-
-The remaining sections distinguish proposed behavior from settled requirements. Open decisions are listed at the end.
 
 ## 3. The main experience
 
@@ -67,7 +63,7 @@ The screen has four main elements:
 3. One compact options line for posting languages and “Followed only,” with actionable search warnings when needed.
 4. A list of compact job results, always ordered by recency, newest first.
 
-Account and billing controls remain secondary. The account icon opens Settings as an overlay, preserving the underlying route and reading position. Keep the large Justup masthead but omit a secondary JUSTUP.WORK header link. Settings includes account identity, sign-in/logout, access status, language and reduced-motion preferences. The current interface uses a real server session and invite-only username/password flow when enabled; it does not yet provide the release access and billing flows. A small “Companies” entry opens the company browser and request workflow. The model translates job-search intent; the results list remains the center of the experience.
+Account and billing controls remain secondary. The account icon opens Settings as an overlay, preserving the underlying route and reading position. Keep the large Justup masthead but omit a secondary JUSTUP.WORK header link. Settings includes account identity, sign-in/logout, access status, language and reduced-motion preferences. A small “Companies” entry opens the company browser and request workflow. The model translates job-search intent; the results list remains the center of the experience.
 
 Tell users next to the field: “Be as specific as you need. Every nuance shapes your search.” Unsupported requirements must still be identified honestly; this copy is not permission to pretend unavailable criteria were applied.
 
@@ -102,7 +98,7 @@ Use these topic phrases naturally in useful copy: fresh jobs, company career pag
 
 Google recommends [descriptive, concise titles](https://developers.google.com/search/docs/appearance/title-link), [relevant page descriptions](https://developers.google.com/search/docs/appearance/snippet), and [helpful content for people](https://developers.google.com/search/docs/fundamentals/creating-helpful-content). The first release requires stable, crawlable public URLs for the landing page, catalogue and factual company reports, rendered independently of saved search state. The source now supplies these paths through shared server rendering and client navigation. Release verification must still establish real source availability, canonical metadata and indexing behavior on the approved deployment. See [Google’s JavaScript guidance](https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics).
 
-The paid-placement distinction is supported by competitors’ own descriptions: [LinkedIn says promoted jobs may appear higher](https://www.linkedin.com/help/linkedin/answer/a512429/promoted-jobs-in-your-job-search-results), and [Indeed describes prominent placement for Sponsored Jobs](https://www.indeed.com/hire/resources/howtohub/faq?co=US). The landing page states Justup’s policies directly, without broad claims about competitors’ job quality or completeness.
+The landing page states Justup’s own source and placement rules directly, without broad claims about competitors.
 
 ### Refinement
 
@@ -122,7 +118,7 @@ Every tab can be deleted, including the last one, after confirmation. Deleting t
 
 Tabs persist across reloads locally for visitors and across sessions for accounts. Preserve a visitor's search when they sign in. No search should overwrite another tab's state.
 
-On smaller screens, use a scrollable tab strip or a compact tab switcher while preserving the same interaction. A proposed initial limit on stored tabs may be introduced for usability and cost, but the number is undecided.
+On smaller screens, use a scrollable tab strip or a compact tab switcher while preserving the same interaction.
 
 ### Live results over SSE
 
@@ -130,7 +126,7 @@ While the workspace is open, deliver matching postings through a persistent SSE 
 
 Use one connection per open workspace to carry updates for its search tabs, rather than one connection per search. New postings use the stored search configuration without another interpretation request. Events belong to a particular search revision; updates for a previous revision cannot enter the newly edited search.
 
-Keep cards ordered by first-observed publication time, even if JEV decisions arrive out of order. Insert new results automatically. When the user is further down, add them above the viewport, preserve the currently read row's position, and show a small “N new ↑” navigation cue. This cue takes the user to results already inserted; it does not gate their insertion. Preserve focus, selection, and existing row nodes. Do not auto-scroll or show an idle “Up to date” label. New postings begin unviewed; receiving an update does not mark them as viewed. See the proposed [motion language](motion-design.md) for persistent New markers and arrival behavior.
+Keep cards ordered by first-observed publication time, even if JEV decisions arrive out of order. Insert new results automatically. When the user is further down, add them above the viewport, preserve the currently read row's position, and show a small “N new ↑” navigation cue. This cue takes the user to results already inserted; it does not gate their insertion. Preserve focus, selection, and existing row nodes. Do not auto-scroll or show an idle “Up to date” label. New postings begin unviewed; receiving an update does not mark them as viewed. See the [motion guide](motion-design.md) for persistent New markers and arrival behavior.
 
 Scrolling into older matches is a continuous job-by-job stream. Background pages refill a small ordered matching buffer; they are not shown as UI pages. Each job's reveal deliberately paces consumption, including when the next match is already ready. The current list uses a 450 ms ink reveal cadence. When the buffer is empty and candidates or JEV decisions remain, show “Looking for more matches…”; an empty filtered page does not establish that the search has ended. Show “No more matches in the last 14 days” only after all remaining evaluations and buffered reveals have completed, then prompt for company requests. See the [infinite-scroll specification](motion-design.md#infinite-scroll-the-reveal-is-the-pacing-mechanism).
 
@@ -215,7 +211,7 @@ Say when a listing was checked. Do not promise that an external vacancy is guara
 
 ### Company browser and visible coverage
 
-Provide a small, searchable catalogue of discovered companies. Omit company locations from profiles, catalogue rows and discovery confirmations: this metadata is unavailable. Job locations remain visible, and globe highlights describe hiring locations rather than company headquarters. Show company name, brand assets, a concise description, website, and relevant available metadata. Keep coverage visible alongside that identity: monitored career-page links and regions, monitoring status, last successful check when available, without position totals. JEV may still be evaluating candidates, so a total would imply knowledge we do not have. Publish a requested company as soon as the requester accepts the discovery result; crawler setup must not hold up that publication. A company remains in the catalogue when it has no fresh positions; the catalogue does not expose archived postings.
+Provide a small, searchable catalogue of discovered companies. Omit company locations from profiles, catalogue rows and discovery confirmations: this metadata is unavailable. Job locations remain visible, and globe highlights describe evidenced hiring locations rather than company headquarters. Show company name, brand assets, a concise description, website, and relevant available metadata. Keep coverage visible alongside that identity: monitored career-page links and regions, monitoring status, last successful check when available, without position totals. JEV may still be evaluating candidates, so a total would imply knowledge we do not have. Publish a requested company as soon as the requester accepts the discovery result; crawler setup must not hold up that publication. A company remains in the catalogue when it has no fresh positions; the catalogue does not expose archived postings.
 
 Use clear statuses such as “Monitoring setup pending,” “Setting up monitoring,” “Monitoring,” and “Collection interrupted.” When only some regions or career pages are covered, show that scope. Until collection has been verified, show that positions are not available yet rather than claiming zero vacancies. A successful check with no fresh positions is different from an interrupted collection or a company we do not yet monitor. The catalogue overview shows the actively monitored count, without totals for companies being added or needing attention. Report catalogued and actively monitored company counts separately; pending requests without discovered identities do not inflate either count.
 
@@ -225,13 +221,11 @@ Company search and job-search empty states should provide a “Request a company
 
 ### Company profiles and hiring footprint
 
-Company profiles link to the main search for their positions; do not repeat a “Latest from…” job list inside the profile. A stylized interactive globe provides visual character with the brand palette, without a legend or explanatory note. Use plain product language such as “Being added” and “First seen on Justup”; implementation terms such as backend, crawler and configuration belong in technical documentation. This does not change technical terms in actual job titles or the user’s own search text.
+Company profiles link to the main search for their positions; do not repeat a “Latest from…” job list inside the profile. A stylized interactive globe shows countries where the company is evidenced to hire; show a neutral globe when the footprint is unknown. Use plain product language such as “Being added” and “First seen on Justup”; implementation terms such as backend, crawler and configuration belong in technical documentation. This does not change technical terms in actual job titles or the user’s own search text.
 
 Keep company-profile source information compact beneath the company name: last check and a link to each tracked career page. Do not show a status table, scope table, or repeated position counts in that area. Companies with no career pages added yet show “Not checked yet” without invented links.
 
-Keep the globe circular, using an orthographic projection in a square rendering area. Do not separate the description with a horizontal rule. Display tracked career-page addresses as the link text; the design must not depend on human-readable board labels being available.
-
-Company globes must support worldwide hiring. Start over each company’s hiring countries, with a neutral orientation for unknown footprints. Scrolling over the sphere rotates it; there is no zoom or automatic spin. Dragging and keyboard arrows offer additional control, with Home restoring the initial orientation. Preserve normal page scrolling outside the sphere and vertical touch scrolling. The current browser does not display a globe; unknown hiring footprints remain neutral until evidence is available.
+Keep the globe circular in a square rendering area, with no automatic spin or zoom. Its highlights must derive from verified job or career-source hiring countries, never headquarters or guessed company locations. Provide wheel and pointer rotation on the sphere, keyboard arrows and Home, and touch rotation without trapping vertical page scrolling. Reduced motion must preserve the information and controls. Display tracked career-page addresses as the link text; the design must not depend on human-readable board labels being available.
 
 ### Followed companies
 
@@ -241,7 +235,7 @@ Each search tab has a compact “Followed only” toggle beside the posting-lang
 
 When no companies are followed, show a link to browse the catalogue. When followed companies yield no matching positions, explain that the user can change the query or turn off the limit. Companies still being added can be followed before jobs become available. Submitting a new company request automatically follows that company. The user can unfollow it while its request remains visible under Requested. Reloading or revisiting an existing request must preserve an explicit unfollow choice. A manual follow does not itself request setup priority.
 
-Persist follows with the account in the service. The current API does not yet enable follow or viewed-position writes; these remain first-release requirements.
+Persist follows with the account in the service.
 
 ### Request a company
 
@@ -264,13 +258,13 @@ Acceptance must be tied to the exact candidate shown to the user. If another req
 
 The requester sees: discovering company → confirm found company → listed in catalogue / monitoring setup pending → setting up monitoring → monitoring. Rejection returns to company lookup with the user's text preserved. Show the catalogue link immediately after acceptance. If either step needs more information or is blocked, show which step, the reason, and any available next action. Catalogue publication is the first completion milestone; the full request is complete once the requested scope is successfully monitored. That does not require the company to have a fresh vacancy at that moment. Once monitoring is active, normal collection and matching rules apply, including live SSE delivery.
 
-**Premium users receive priority handling for their company requests in both steps.** Show the priority on the request and describe it in the subscription offer. Keep discovery quick for all users while prioritizing premium work within each step's queue. Priority affects processing order; it does not mean guaranteed immediate completion. Publish a turnaround estimate only when operational evidence supports it. Free requests remain accepted and visible in the queue.
+**Users in an active free period or paid subscription receive priority handling for company requests in both steps.** Show the priority on the request and explain it in the access and subscription offers. Keep discovery quick for all users while prioritizing premium work within each step's queue. Priority affects processing order; it does not mean guaranteed immediate completion. Publish a turnaround estimate only when operational evidence supports it. Free requests remain accepted and visible in the queue.
 
-Duplicate requests share the same company record and setup work while each requester can follow progress. When a premium user requests a company already in the queue, give its pending setup work premium priority. The catalogue entry is public after acceptance of the discovered company, and working monitoring later joins the service's common coverage; ordinary job-access rules apply to every user. Priority never changes job-result ordering or freshness.
+Duplicate requests share the same company record and setup work while each requester can follow progress. When a user with active free or paid access requests a company already in the queue, give its pending setup work priority. The catalogue entry is public after acceptance of the discovered company, and working monitoring later joins the service's common coverage; ordinary job-access rules apply to every user. Priority never changes job-result ordering or freshness.
 
-“Request higher priority” attaches the user to the existing setup request and records their demand for that company. Both free and premium users can request a priority increase; premium requests receive preferential handling. Show that the priority request was recorded and the current setup status. Repeated clicks by the same user must not create additional tasks or repeatedly increase priority. If configuration is already running, retain that work and record the user's interest without restarting it. Exact ordering among requests remains an operational decision.
+“Request higher priority” attaches the user to the existing setup request and records their demand for that company. Any signed-in user can request a priority increase; requests made during an active free period or paid subscription receive preferential handling. Other requests remain in the ordinary queue. Show that the priority request was recorded and the current setup status. Repeated clicks by the same user must not create additional tasks or repeatedly increase priority. If configuration is already running, retain that work and record the user's interest without restarting it. Exact ordering among requests remains an operational decision.
 
-Let requesters see progress in the product and provide separate in-product updates when the company is catalogued and when monitoring becomes active. The first links to the catalogue entry; the second also links to its job search. Proposed request limits, queue ordering within each priority, and handling of subscription expiry while a request is pending must be defined before launch.
+Let requesters see progress in the product and provide separate in-product updates when the company is catalogued and when monitoring becomes active. The first links to the catalogue entry; the second also links to its job search. Set request limits and ordering within each priority before launch. A request accepted while free or paid priority access is active keeps that priority while pending, even if the access period ends; a new request after expiry uses the ordinary queue. Work already running is never interrupted to recalculate priority.
 
 ## 6. Compact structured results
 
@@ -286,7 +280,7 @@ When a user activates the link to a position's full description on the company s
 
 Viewed state belongs to the user and the position, not to an individual search or tab. Store it against the stable posting identity with a first-viewed timestamp. The same position remains viewed when it appears in another search, after a search edit, or after a reload. Duplicate URLs for the same posting share the state; genuinely distinct postings have separate states. Repeated clicks do not create duplicate viewed records.
 
-For signed-in users, persist viewed state in the backend so it follows the account across sessions and devices. For visitors, the proposed behavior is to persist it locally in that browser and merge those observations into the account on sign-in. Account-specific state must not remain visible to another user on a shared browser.
+For signed-in users, persist viewed state in the backend so it follows the account across sessions and devices. For visitors, keep viewed state in their own browser scope and merge those observations into the account on sign-in. Account-specific state must not remain visible to another user on a shared browser.
 
 Viewed positions remain in their normal newest-first location; viewing does not reorder or automatically hide them. Preserve viewed state if a posting expires or closes, while still removing the posting from the website under the freshness rules. Keeping that state does not create a browsable archive of expired positions.
 
@@ -307,7 +301,7 @@ When a result expires while the user is viewing it, remove its active content an
 
 ## 7. Access, free periods, and payment
 
-### Proposed access states
+### Access states
 
 | State | Experience |
 | --- | --- |
@@ -318,11 +312,11 @@ When a result expires while the user is viewing it, remove its active content an
 | Signed in, free period ended without subscription | Searches remain saved; return to limited visitor results with an upgrade action. |
 | Cancelled subscription with time remaining | Full access until the paid-through time. |
 
-Premium subscribers also receive priority handling for company requests. The request workflow remains available to free users. Whether the free week and legacy welcome month include premium request priority is a decision to settle before launch.
+Active paid subscribers and users in either the ordinary free week or former-Jobseek welcome month receive the same priority handling for company requests. The request workflow remains available without active priority access. An accepted request keeps its recorded priority after free or paid access expires; new requests use the access level active when they are accepted.
 
 Limited visitor results must still contain only jobs first observed by the backend less than 14 days ago. The proposed latest-results cutoff hides postings first observed within the most recent 48 hours; it is an experiment to validate, not a decided requirement. Sparse markets may have no unlocked matches. Show that honestly rather than weakening the freshness promise.
 
-Show one aggregate notice with the number of recent matching postings withheld by access, for example “12 recent matches hidden,” and the sign-in or subscription action. It respects the active search, followed-company limit, freshness and JEV acceptance. Do not show overall position totals on the feed, catalogue or company profiles. While evaluation remains open, count only confirmed hidden matches and present the number as a lower bound (“At least 12 recent matches hidden”); do not invent an exact final total from unevaluated candidates. Update it as accepted matches become known, without revealing their identities. The end message describes the end of available visitor results rather than claiming that no other matches exist. The API does not yet provide hidden-match counts; the browser makes no count claim when that capability is unavailable. Do not return hidden listing data to the browser and merely blur it. Apply access rules to result queries and any individual listing retrieval alike.
+Show one aggregate notice with the number of recent matching postings withheld by access, for example “12 recent matches hidden,” and the sign-in or subscription action. It respects the active search, followed-company limit, freshness and JEV acceptance. Do not show overall position totals on the feed, catalogue or company profiles. While evaluation remains open, count only confirmed hidden matches and present the number as a lower bound (“At least 12 recent matches hidden”); do not invent an exact final total from unevaluated candidates. Update it as accepted matches become known, without revealing their identities. The end message describes the end of available visitor results rather than claiming that no other matches exist. Do not return hidden listing data to the browser and merely blur it. Apply access rules to result queries and any individual listing retrieval alike.
 
 ### Language and display
 
@@ -344,15 +338,15 @@ The strip moves continuously at a calm, constant speed in a fixed-height area. N
 
 ### Free period
 
-Proposed default: the free period begins when a verified account activates full search access, with no payment card required. Show the end date clearly. Full access ending does not delete tabs or force the user through onboarding again.
+The free period begins when a verified account activates full search access, with no payment card required. Show the end date clearly. Full access ending does not delete tabs or force the user through onboarding again.
 
-Existing Jobseek users receive one calendar month free instead of the ordinary week. Verify eligibility through account ownership, such as the same verified email; do not copy old preferences into the new profile without a choice. Offer an account-recovery path when identities differ. Define eligibility cutoff and prior-redemption handling before launch. Do not start a person's welcome month before they activate the new service.
+Verified former Jobseek account owners receive one calendar month free instead of the ordinary week. Require authoritative proof of that ownership; a matching name or unverified email is insufficient. Do not copy old preferences into the new profile without a choice. Offer an account-recovery path when identities differ. Eligibility includes verified owners of Jobseek accounts created before Jobseek closes account creation at retirement; Justup opens afterward. Preserve an authoritative way to prove that ownership before retiring Jobseek authentication. Erase all free-period redemption evidence when an account is deleted; a person who verifies again may qualify again. Do not start a person's welcome month before they activate the new service.
 
 ### Paid access
 
-The working offers are **$3 per week** or **$10 per month**. These are hypotheses, pending a financial model and willingness-to-pay validation. Currency, tax presentation, payment provider, and trial mechanics are undecided.
+Offer weekly and monthly paid continuation only after prices, currency, tax presentation and payment mechanics are approved and disclosed.
 
-Proposed payment behavior is an explicit subscription purchase after or during the free period, with no automatic charge from the cardless free period. The purchase screen states billing interval, renewal terms, and next charge. Cancellation is self-service; access continues through the paid period. Define failed-payment and refund behavior before taking payments.
+Payment requires an explicit subscription purchase after or during the free period, with no automatic charge from the cardless free period. The purchase screen states billing interval, renewal terms, and next charge. Cancellation is self-service; access continues through the paid period. Define failed-payment and refund behavior before taking payments.
 
 No financial viability claim is made here. The later model should account for collection and extraction costs, interpretation requests and retries, JEV candidate evaluations and reevaluations, hosting/search, payment fees, free and anonymous usage, abuse, support, taxes, acquisition, retention, and plan mix. Weekly and monthly billing must be assessed separately. Summary generation would be an additional budget line.
 
@@ -391,7 +385,7 @@ Viewed-position history is private account state. It is not public activity or a
 
 The application owns the experience, saved user state and authoritative access enforcement. Its backend supplies eligible structured listings, primary search and optional AI narrowing, fixed recency ordering, public company coverage and request progress. These boundaries follow the current product design. Backend retention is separate from website availability.
 
-The accepted [backend design](backend-design.md) selects Luna for interpretation and company discovery, JEV or another inexpensive, sufficiently accurate System One classifier for residual filtering, and a weekly Codex Sol session for Hiring Wire. The [deployment plan](deployment-plan.md) places frontend delivery and caching on Cloudflare and the application backend on existing Hetzner capacity. Application framework, authentication provider, payment provider and concrete execution budgets remain undecided.
+The accepted [backend design](backend-design.md) selects Luna for interpretation and company discovery, JEV or another inexpensive, sufficiently accurate System One classifier for residual filtering, and a weekly Codex Sol session for Hiring Wire. The [deployment plan](deployment-plan.md) places frontend delivery and caching on Cloudflare and the application backend on existing Hetzner capacity. Implementation and provider status belong in the linked service and operations guides.
 
 ## 10. Scope of the first release
 
@@ -401,9 +395,9 @@ Include the search workspace and tabs, persistent editable user search text, mod
 
 The first release includes live result delivery over SSE, the compact company catalogue, factual company hiring reports from available verified history, the interactive company globe, and two-step company requests with premium priority and visible progress. It also requires public landing, catalogue and company URLs and posting-language selection: any language by default, with an unrestricted user-selected set. Missing report evidence remains visibly unavailable rather than invented. Interactive Luna discovery at low reasoning returns a company for user acceptance; acceptance publishes the catalogue entry before crawler configuration completes. In-progress companies appear in company search with an action to request higher priority. The release also includes Hiring Wire with real weekly company-activity editions, their supporting figures and the accessible running strip described above. Hosting, reconnect recovery, news curation and delivery budgets still need to be defined and validated.
 
-The accepted working mockup is the minimum design and interaction baseline for the prerelease. Carry every accepted product design element into the production implementation; the mockup was the MVP, not a reduced or disposable visual exercise. Extend the same design language to real states it did not cover, including access activation, verification, billing, conflicts, recovery and unavailable data. The [interface readiness checklist](interface-readiness.md) records the required surfaces and remaining gaps. A missing backend capability is a release dependency, not a reason to silently remove its interface. Honest unavailable states preserve the report's layout and visual character without inventing facts; an unknown hiring footprint uses a neutral, still-interactive globe. Fake records, simulated account switches and mockup-only development controls are replaced with real behavior or isolated test fixtures, rather than shipped as product features.
+The accepted design and interaction baseline applies to the entire first release, including access activation, verification, billing, conflicts, recovery and unavailable data. The [interface readiness checklist](interface-readiness.md) records the required surfaces and remaining gaps. A missing backend capability is a release dependency. Honest unavailable states preserve the report's layout and visual character without inventing facts; an unknown hiring footprint uses a neutral, still-interactive globe. Product surfaces use actual records and account state; simulated data and controls belong only in isolated test fixtures.
 
-The proposed first release excludes email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries and an internal application tracker. Saving and hiding remain optional if they delay validating the search-to-source path.
+Email alerts, CV ingestion, automatic applications, recommendations unrelated to an active search, employer advertising, generated posting summaries and an internal application tracker are outside the accepted first-release path described here; adding one requires a separate product decision. Saving and hiding have no required first-release behavior in this guide.
 
 The chosen brand is Justup, with intended domain `justup.work`. The whole job row opens the company posting; the company identity remains a separate link into the catalogue. The accepted visual baseline is **Extra Orange**: orange coral `#F28A60`, a condensed ink-and-cream masthead, readable typewriter interface text, square controls, and company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible, with a subtle pulse on the live dot. The search field is pale and visibly editable; tabs include “+ New search.” Keep “Last 14 days” explicit. Remove footers and bottom coverage panels to keep scrolling stable. Keep Request a company prominent in the catalogue header. Search deletion requires a dialog naming the search, with explicit delete and keep actions. A floating back-to-top button appears after scrolling. The Requested filter uses the same clickable company-row component as the catalogue: logos, names, details, status, single separators and consistent arrows, with Follow beside the arrow and no website subtitle. The [motion guide](motion-design.md) defines arrivals and Viewed transitions. Transparency must appear in product behavior as well as messaging: visible company coverage, clear publication-age meaning, readable search interpretation, and honest request progress.
 
@@ -425,24 +419,6 @@ A company-link click records an outbound visit and marks the position as viewed 
 
 Validate the fresh inventory available in candidate launch segments and test interpretation on representative searches, including exclusions, alternatives, currencies, and refinements. Test whether people understand the hidden latest results and free-period offer. Set numerical success thresholds before running the launch experiment, using baseline evidence rather than invented targets.
 
-## 12. Decisions to resolve next
+## 12. Resolve remaining launch choices
 
-| Decision | Proposed starting point |
-| --- | --- |
-| Visual identity and copy | Extra Orange is the accepted visual baseline. Review remaining states and final copy. |
-| Initial audience | Select occupation/geography using actual fresh inventory and user research. |
-| Closure verification and posting identity | Set a maximum verification age and define how to distinguish genuinely new postings from duplicates or reopened records. The first-observed timestamp of the same posting never resets. |
-| Latest-results gate | Start by evaluating a 48-hour cutoff; validate visitor usefulness in sparse searches. |
-| Free-period start and card requirement | Activation of verified full access; cardless free period. |
-| Legacy eligibility | Verify ownership; one calendar month from activation, replacing the standard week. Define cutoff and redemption rules. |
-| Price and billing | Model $3/week and $10/month before selecting final prices and payment mechanics. |
-| Filters and missing data | Expose only supported fields; make inclusion of unknown values an explicit choice. |
-| AI-filter evaluation contract | Define candidate evidence, evaluation limits, reuse of valid decisions, progress behavior, quality targets, and a cost budget within the accepted backend design. |
-| SSE operations | Define persistent-connection hosting, reconnect recovery, delivery latency targets, and connection cost budgets. The transport choice is settled. |
-| Public discoverability and languages | Public landing, catalogue and company URLs, posting-language selection and the five interface locales are first-release scope. Verify crawlable rendering, production indexing configuration, locale notices and available report history; source routes and five interface locales are implemented; verify the combined source, backend projection and deployed behavior before release. |
-| Company globe | Required in the prerelease. Implement the worldwide interactive sphere with a neutral footprint when hiring-country evidence is unavailable; never infer company headquarters or hiring eligibility. Verify wheel, drag, keyboard and page-scroll behavior. |
-| Company-request operations | Define request limits, ordering within each step's priority queues, the effect of distinct users' priority-increase requests, discovery response and crawler-configuration turnaround targets, and priority handling after subscription expiry. Luna discovery at low reasoning, user acceptance, two-step setup, and premium request priority are settled; priority during free periods remains open. |
-| Tab limits and saving/hiding | Set limits from usability and cost; keep convenience features secondary to the core flow. |
-| Launch targets | Define minimum coverage, relevance, latency, cost, and funnel thresholds before launch. |
-
-The [backend design](backend-design.md) records the application architecture and tuning surfaces. Resolve decisions that affect the first-release value path, including the concrete search-configuration contract and financial model, before release. A preview deployment uses that product contract and temporary access and hosting conditions; it does not define a smaller product.
+Before release, settle pricing and payment presentation, verified former-Jobseek eligibility, the visitor access cutoff, source closure rules, launch audience, and numerical quality and capacity thresholds. Record the reason and decision in the relevant semantic-slug issue; update this guide only when the accepted product behavior changes. The [release guide](development-process.md) owns the verification gate. A restricted preview uses this product contract with temporary access and hosting settings.

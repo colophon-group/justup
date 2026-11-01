@@ -12,13 +12,7 @@ shell tool, start an MCP service, or depend on conversation history. The product
 owns aggregates, prior editions, its versioned selection recipe and publication.
 See [the edition contract](hiring-wire.md) for those responsibilities.
 
-The concrete transport is implemented and tested with synthetic streams and local
-private sockets. **The profile remains unqualified by default.** No native model
-run, account-availability check, provider request capture, protected host check,
-service activation or production-history read was performed for this change.
-Source-history availability remains a separate dependency in issue 71. A fixed
-model name in shipped metadata establishes a supported client policy; it does not
-establish account entitlement, actual provider routing or editorial quality.
+The transport has deterministic protocol tests with synthetic streams and local private sockets. **The profile remains unqualified by default.** Activation requires an actual native run, account availability, provider request capture, protected host proof, retained-output review and authoritative source history. A fixed model name in shipped metadata does not establish account entitlement, actual routing or editorial quality.
 
 ## Integrate with the existing worker
 
@@ -179,8 +173,7 @@ usage is reported, **not a provider-enforced generation or monetary budget**.
 The native CLI does not expose a proven hard token-budget control for this path.
 Counters expose duration, bytes, calls and reported token usage; subscription
 cost/remaining allowance and editorial latency/quality have not been measured.
-The existing preview resource ceiling remains unchanged: 50% CPU, 1 GiB RAM,
-96 tasks and 2 GiB disk under `/justup.slice/justup-preview.slice`.
+The model work shares the existing preview resource ceiling; [operations](operations.md#apply-the-resource-boundary) owns its exact limits and live proof.
 
 Failure, abort, disconnect, final completion and dispatcher `finally` cancel the
 session. Cleanup closes stdin, sends SIGTERM to the actual process group, waits
@@ -212,8 +205,7 @@ Wire's separate versioned factual cases cover coverage gaps and zero baselines.
 Neither fixture suite establishes native editorial quality. Root review must
 choose and run representative plus held-out editorial cases with factual-claim
 error rate zero, then record selection usefulness, variance, duration and tokens
-before setting `qualityVerified:true`. No live-model quality or cost result is
-claimed here.
+before setting `qualityVerified:true`. Real-model quality, latency and cost remain release evidence.
 
 Run the focused suites with the pinned Node **24.22.2**:
 

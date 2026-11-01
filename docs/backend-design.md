@@ -1,11 +1,9 @@
 ---
-summary: Plan the minimal backend for Justup search, accounts, company requests and Hiring Wire.
-read_when: Implementing a user-facing backend contract or choosing its verification and deployment boundary.
+summary: User-facing backend boundaries for Justup search, accounts, companies and Hiring Wire.
+read_when: Changing a user-facing backend contract or locating its implementation guide.
 ---
 
 # Backend design: user-facing Justup features
-
-Status: accepted product architecture with implementation gaps tracked for launch
 
 This design supports the [current product experience](product-design.md). It starts from that experience and the available job data, with fresh application boundaries. Crawler implementation and operation are outside its scope.
 
@@ -19,7 +17,7 @@ Current private processing uses one [account/visitor admission proof](processing
 
 ## 1. Minimal application shape
 
-Start with one application API, one shared background runner, and a database for product state. Keep job retrieval behind a small search adapter so its storage implementation can evolve independently. Select frameworks and providers during implementation.
+The application has one Node HTTP API, one shared background runner and SQLite product state. Job retrieval sits behind a search adapter so its source can evolve without changing account or result contracts. [The API guide](api.md), [model guide](models.md) and [operations guide](operations.md) own the implementation and deployment details.
 
 The API owns five modules. They are code boundaries and can be deployed together initially.
 
@@ -143,13 +141,7 @@ Distinct users share one setup record, with safe queued/in-progress/blocked prog
 
 ## 6. Weekly Hiring Wire
 
-Run a scheduled Codex Sol session once a week. Give it read tools for aggregate data, prior editions, and a durable versioned directory of scripts/tools it can maintain. Persist the edition rather than depending on conversation history for continuity.
-
-Code computes deterministic comparisons at a fixed snapshot: distinct first observations in the last seven days versus the preceding seven days, using comparable continuously tracked scope. Suppress signals with interrupted coverage or insufficient history. Use before/after counts when the baseline is zero. These describe listing activity.
-
-Sol selects companies, angles and short headlines from those facts, considering prior selections. Validate figures, links and headline claims before publication. Save the snapshot, supporting aggregates, selections and execution/tool version with each edition. Public items expose aggregates rather than restricted posting content.
-
-The API serves the published weekly edition. Retries reuse the same edition period to avoid duplicate publication.
+The weekly edition uses a fixed comparable-source snapshot and deterministic listing-activity facts. Sol may choose companies and supported angles, while application code validates and renders all public claims. The edition, source evidence and execution identity persist together; retries use the same period. [Hiring Wire](hiring-wire.md) owns the factual/public contract, [integration](hiring-wire-integration.md) owns queue scheduling, and [subscription runtime](hiring-wire-runtime.md) owns native Sol qualification.
 
 ## 7. Collections for tuning and measurement
 
@@ -172,19 +164,8 @@ Minimize retained personal context and raw query content. Define debugging reten
 
 The module boundaries, Luna planning and discovery, last-resort AI filtering, SSE, weekly Sol Wire task, tuning collections and Cloudflare/Hetzner deployment split are accepted. The current runtime uses Node built-in HTTP/SQLite, local accounts, pinned Codex and bounded JEV matching, as described in the [API](api.md), [model](models.md) and [matching](matching.md) guides. Payment integration, authoritative source evidence, actual provider availability and numerical quality/latency/cost thresholds still need their reviewed implementation or qualification. Accepted company reports and posting-language preferences must also pass their complete data, account and browser contracts before first invited activation.
 
-## 9. Implementation and verification
+## 9. Verify changes
 
-Start ordinary implementation from `dev` on `work/<semantic-slug>` and open its PR into `dev`. Follow the development guide's issue, commit and PR conventions, including a brief Applied/N/A explanation for each quality and test guideline. Keep these design contracts current as implementation decisions are made.
+Use the [development and release guide](development-process.md) for branches, PR checks, test creation and the exact deployed release gate. Update the owning feature guide when its contract changes: [accounts](auth.md), [API](api.md), [job ingestion](job-data.md), [models](models.md), [matching](matching.md), [companies](company-hiring-reports.md), or [Hiring Wire](hiring-wire.md).
 
-The always-running `CI / decision` selects the full runtime lane for backend/application changes: build/typechecking, web/deployment contracts, server tests, offline Python contracts and browser journeys. The server suite recursively discovers adjacent `.test.mjs` files; the Python lane discovers `test_*.py` files. Extend their ownership and selection alongside changed contracts through `scripts/ci.py`. An unfamiliar path must select the full available suite or fail visibly; it cannot silently omit backend checks. Ordinary checks verify the proposed merge result with current `dev`.
-
-Use the cheapest suite that proves each observable contract. Focus integration coverage on boundaries that pure logic tests cannot establish:
-
-- Search compilation diagnostics, preserved requirements, revisions and stale results; primary-filter ordering, classifier decisions, continuations, access changes and SSE reconnects.
-- Database migrations and concurrent updates; runner leasing, bounded execution, recovery and safe retries.
-- Billing callbacks, company acceptance and duplicate requests taking effect once.
-- Versioned AI cases and a held-out set for interpretation, matching, company identity and Wire facts. Define quality, latency and cost thresholds before release, and rerun relevant evaluations when models, prompts, tools or routing change.
-
-Give each suite an owner, purpose and runtime budget. Use deterministic fixtures and isolated data by default; bounded real-provider checks belong in explicit integration or preview runs. Extend existing paths and remove superseded ones instead of maintaining parallel implementations.
-
-The first live release depends on a real full-suite and isolated preview gate covering compatible frontend, API and runner artifacts. That gate is not implemented yet; product runtime changes cannot enter `main` before it exists and passes. The deployment plan defines the required environment boundaries, artifact identity and recovery provisions. Planning and code preparation may proceed while resource approvals are pending; a new external service or infrastructure spend requires its own approved `resource-request` issue before provisioning.
+Backend verification should cover the boundary a change can break: search compilation and revisions; access-filtered ordered results and live reconnection; database migration and concurrent writes; runner leases and cleanup; company identity and request idempotence; and versioned model/factual evaluation cases. Use deterministic local fixtures for ordinary PRs. Real provider, source-history and deployed browser evidence belong to the release gate. A new external service or infrastructure spend still requires its own approved resource issue.

@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.parse import unquote, urlsplit
 
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUIDELINES = {f"Q{n}" for n in range(1, 12)} | {f"T{n}" for n in range(1, 5)}
 CHECK = re.compile(r"^\s*-\s*\[([ xX])\]\s*((?:Q|T)\d+)\b.*?—\s*(Applied|N/A):\s*(.*?)\s*$")
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+MARKDOWN_HEADER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 WORK_BRANCH = re.compile(r"^(?:work|hotfix)/[a-z0-9]+(?:-[a-z0-9]+)+$")
 RELEASE_BRANCH = re.compile(r"^release/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 FULL_SUITES = ("typecheck", "build", "web", "deployment", "server", "python", "browser")
@@ -147,6 +149,31 @@ def check_local_links() -> int:
     return count
 
 
+def check_guidebook(directory: Path = ROOT / "docs") -> int:
+    index = directory / "README.md"
+    if not index.is_file():
+        raise ValueError("The docs directory needs a README guidebook.")
+    linked: set[Path] = set()
+    for raw in MARKDOWN_LINK.findall(index.read_text(encoding="utf-8")):
+        target = raw.strip().split(" ", 1)[0].strip("<>")
+        parsed = urlsplit(target)
+        if parsed.scheme or not parsed.path:
+            continue
+        linked.add((directory / unquote(parsed.path)).resolve())
+
+    guides = sorted(directory.glob("*.md"))
+    for guide in guides:
+        header = MARKDOWN_HEADER.match(guide.read_text(encoding="utf-8"))
+        if not header:
+            raise ValueError(f"Guide needs summary and read_when metadata: {guide.name}")
+        fields = dict(line.split(":", 1) for line in header.group(1).splitlines() if ":" in line)
+        if not all(fields.get(name, "").strip() for name in ("summary", "read_when")):
+            raise ValueError(f"Guide needs summary and read_when metadata: {guide.name}")
+        if guide != index and guide.resolve() not in linked:
+            raise ValueError(f"Link this guide from docs/README.md: {guide.name}")
+    return len(guides) - 1
+
+
 def browser_scripts_present() -> bool:
     package = ROOT / "package.json"
     if not package.is_file():
@@ -191,7 +218,8 @@ def run_pr(event_path: Path) -> None:
         raise ValueError("Remove the legacy browser directory; only the built web application may remain.")
     run("git", "diff", "--check", f"{pr['base']['sha']}...{pr['head']['sha']}")
     links = check_local_links()
-    print(f"Checked {links} local Markdown links and all contribution checklist items.")
+    guides = check_guidebook()
+    print(f"Checked {links} local Markdown links, {guides} indexed guides and all contribution checklist items.")
 
     if not selected:
         print("Runtime suites skipped: only guides and templates changed.")
@@ -250,6 +278,28 @@ def run_full() -> None:
 
 
 def selftest() -> None:
+    assert check_guidebook() > 0
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        metadata = "---\nsummary: A useful guide.\nread_when: Changing this topic.\n---\n"
+        (directory / "README.md").write_text(metadata + "[One](one.md)\n", encoding="utf-8")
+        (directory / "one.md").write_text(metadata + "# One\n", encoding="utf-8")
+        assert check_guidebook(directory) == 1
+        (directory / "README.md").write_text(metadata + "# Index\n", encoding="utf-8")
+        try:
+            check_guidebook(directory)
+        except ValueError as error:
+            assert "Link this guide" in str(error)
+        else:
+            raise AssertionError("An unlisted guide must fail validation")
+        (directory / "README.md").write_text(metadata + "[One](one.md)\n", encoding="utf-8")
+        (directory / "one.md").write_text("# One\n", encoding="utf-8")
+        try:
+            check_guidebook(directory)
+        except ValueError as error:
+            assert "summary and read_when" in str(error)
+        else:
+            raise AssertionError("A guide without navigation metadata must fail validation")
     for name in ("work/neutral-branch-names", "work/fresh-job-workspace-browser-tests", "hotfix/restore-login", "release/v1.2.3"):
         validate_branch_name(name)
     for name in ("codex/product-design", "feature/fresh-job-workspace", "work/agent", "release/v1.2", "release/v01.2.3"):
