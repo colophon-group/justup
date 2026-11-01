@@ -118,6 +118,7 @@ export function stripeCheckoutFields({plan, prices, customerId, billingReference
     'subscription_data[metadata][justup_reference]':billingReference,
     'line_items[0][price]':prices[plan], 'line_items[0][quantity]':'1',
     'payment_method_types[0]':'card', allow_promotion_codes:'false',
+    'managed_payments[enabled]':'false',
     'automatic_tax[enabled]':'false', success_url:returnUrl(returnTo), cancel_url:returnUrl(returnTo),
     expires_at:String(expiresAt),
   };

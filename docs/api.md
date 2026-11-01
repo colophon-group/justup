@@ -7,11 +7,13 @@ read_when: Connecting the browser, implementing a backend module or reviewing pr
 
 Status: implementation contract; not a claim that endpoints are deployed.
 
-The runtime composes attributable Jobseek imports, durable local accounts, validated search interpretation, optional residual matching, reading preferences, live result delivery, company identity requests, public company reports and Hiring Wire editions. Invitation restrictions and temporary account lifetimes are deployment policy. [Email ownership verification](account-verification.md) uses the existing queue; it is disabled until explicitly configured and qualified. Billing and crawler writes are not implemented; accepted product features still missing are launch requirements, not preview exemptions. Follow the [development guide](development-process.md); ordinary implementation targets `dev`, and runtime changes cannot enter `main` before the real release gate passes.
+The runtime composes attributable Jobseek imports, durable local accounts, validated search interpretation, optional residual matching, reading preferences, live result delivery, company identity requests, public company reports and Hiring Wire editions. Invitation restrictions and temporary account lifetimes are deployment policy. [Email ownership verification](account-verification.md) uses the existing queue; it is disabled until explicitly configured and qualified. [Ordinary Stripe test billing](account-billing.md) uses the same queue and defaults off; it does not qualify the conditional Managed Payments live target. Crawler writes are not implemented; accepted product features still missing are launch requirements, not preview exemptions. Follow the [development guide](development-process.md); ordinary implementation targets `dev`, and runtime changes cannot enter `main` before the real release gate passes.
 
 ## Runtime and resource boundary
 
 The authenticated `/account/verification` GET/POST and `/account/verification/confirm` POST routes use ordinary Origin/CSRF/locale rules. They return only a safe challenge state, never the recipient/code or provider output. The [account verification contract](account-verification.md#browser-contract) defines request keys, original-session binding, expiry and attempt errors. Verification prepares the existing free period; `POST /access/activate` remains a separate deliberate action. No email callback or special edge header is added.
+
+The authenticated `/account/billing` routes expose approved test offers, private hosted operations and current reconciliation. Only the exact raw signed `POST /billing/stripe/webhook` bypasses browser Origin/CSRF; the edge must preserve `Stripe-Signature` and raw body there. Account deletion with a provider binding returns a pending/unavailable error until future renewal and ambiguous effects are settled, then erases every owned row atomically. [Billing contracts](account-billing.md) define the exact DTOs, role-specific keys, foreign-key compatibility guard and retention. No live key or payment is accepted.
 
 Use Node.js 24 LTS ES modules, built-in HTTP/crypto/SQLite and one bounded runner. SQLite stores durable application identity, searches, requests and task state. The first restricted deployment uses isolated storage with the same schema and runtime. No additional database service or auth vendor is needed.
 
@@ -45,7 +47,7 @@ Keep registration, login and private processing disabled until the exact effecti
 | `POST /auth/register` | `{username,password,inviteCode?}` → account/session; invitation required only when backend admission says so. |
 | `POST /auth/login` | `{username,password}` → account/session; same policy gate. |
 | `POST /session/logout` | Revoke the current session and clear its cookie. |
-| `DELETE /account` | `{password}` → confirmed deletion of the account, sessions and its private searches, requests, tasks and cached model decisions. |
+| `DELETE /account` | `{password}` → confirmed deletion only after any required provider termination; pending/unavailable termination retains the account. Successful deletion erases sessions, private searches, requests, tasks, billing and redemption evidence. |
 | `GET /follows` | `{accountId,revision,items:[{companyId,followedAt}],invalidatedSearchIds:[]}`. |
 | `PATCH /follows/:companyId` | `{followed,expectedRevision}` → current owner-bound follow snapshot; canonical catalogue ID required. |
 | `GET /preferences?languages=de-CH,fr,en` | Saved interface override, supported locales and resolution against the ordered browser list. |

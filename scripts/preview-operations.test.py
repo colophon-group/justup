@@ -589,6 +589,53 @@ for(const extra of input.rejected)assert.throws(()=>bindRunnerConfig({...input.b
                                 env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_test_billing_roles_match_node_and_cannot_load_admin_or_live_credentials(self):
+        manifest, _ = payload()
+        manifest['files'].update({name: 'b' * 64 for name in artifact.BILLING_MODULES})
+        base = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
+                'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
+        offers = {'weekly': {'priceId': 'price_Weekly', 'currency': 'usd', 'amount': 100},
+                  'monthly': {'priceId': 'price_Monthly', 'currency': 'usd', 'amount': 400}}
+        enabled = {'enabled': True, 'apiKey': 'rk_test_Synthetic', 'accountId': 'acct_Sandbox',
+                   'offers': offers, 'portalConfigurationId': 'bpc_Justup', 'origin': 'https://preview.example'}
+        admitted = [{}, {'stripeBilling': {'enabled': False}}, {'stripeBilling': enabled}]
+        rejected = [{'stripeBilling': value} for value in (None, {'enabled': 0}, {'enabled': True},
+                    {**enabled, 'apiKey': 'sk_test_Admin'}, {**enabled, 'apiKey': 'rk_live_Unsafe'},
+                    {**enabled, 'webhookSecret': 'whsec_wrong_role'}, {**enabled, 'origin': 'https://preview.example:443'},
+                    {**enabled, 'offers': {**offers, 'weekly': {**offers['weekly'], 'amount': True}}},
+                    {**enabled, 'offers': {'weekly': offers['weekly'], 'monthly': offers['weekly']}})]
+        for extra in admitted:
+            queue.validate_configuration({**base, **extra}, manifest)
+        for extra in rejected:
+            with self.assertRaises((ValueError, TypeError)):
+                queue.validate_configuration({**base, **extra}, manifest)
+        api = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32, 'JUSTUP_CURSOR_SECRET': 'b' * 32,
+               'JUSTUP_STRIPE_TEST_BILLING_ENABLED': 'true', 'JUSTUP_STRIPE_TEST_ACCOUNT_ID': enabled['accountId'],
+               'JUSTUP_STRIPE_TEST_OFFERS': json.dumps(offers), 'JUSTUP_STRIPE_TEST_PORTAL_CONFIGURATION_ID': enabled['portalConfigurationId'],
+               'JUSTUP_STRIPE_TEST_WEBHOOK_SECRET': 'whsec_synthetic_endpoint_secret_value'}
+        child = launcher.child_environment(api, manifest)
+        for key in ('STRIPE_API_KEY', 'STRIPE_SECRET_KEY', 'JUSTUP_STRIPE_TEST_API_KEY', 'RESEND_ADMIN_API_KEY'):
+            with self.assertRaises(ValueError):
+                launcher.child_environment({**api, key: 'synthetic'}, manifest)
+        script = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const input=JSON.parse(readFileSync(0,'utf8'));
+const {bindRunnerConfig}=await import(input.adapter);
+const {configFromEnv}=await import(input.main);
+for(const extra of input.admitted)bindRunnerConfig({...input.base,...extra},input.environment);
+for(const extra of input.rejected)assert.throws(()=>bindRunnerConfig({...input.base,...extra},input.environment));
+assert.equal(configFromEnv(input.child).stripeBilling.enabled,true);
+"""
+        result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
+                                input=json.dumps({'base': base, 'admitted': admitted, 'rejected': rejected, 'child': child,
+                                                  'environment': queue.child_environment(manifest, 'f' * 64),
+                                                  'adapter': (HERE.parent / 'server/runner-adapter.mjs').resolve().as_uri(),
+                                                  'main': (HERE.parent / 'server/main.mjs').resolve().as_uri()}),
+                                capture_output=True, timeout=15,
+                                env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_exact_size_sparse_image_is_rejected_before_mount_or_reserve_checks(self):
         with tempfile.TemporaryDirectory() as temp:
             image = Path(temp) / 'preview.disk'

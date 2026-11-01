@@ -75,6 +75,7 @@ test('hosted URLs and checkout fields cannot redirect to arbitrary or live sessi
   assert.equal(fields['line_items[0][price]'],prices.weekly);assert.equal(fields.mode,'subscription');
   assert.equal(fields.success_url,args.returnTo);assert.equal(fields.cancel_url,args.returnTo);
   assert.equal(fields['subscription_data[metadata][justup_reference]'],binding.billingReference);
+  assert.equal(fields['managed_payments[enabled]'],'false');
   for(const change of [{returnTo:'https://preview.example/?token=private'},{returnTo:'https://preview.example/account'},
     {expiresAt:SECOND+1799},{expiresAt:SECOND+3600},{plan:'annual'},{customerId:'cus_../Other'}])assert.throws(()=>stripeCheckoutFields({...args,...change}));
   assert.deepEqual(stripePortalFields({customerId:binding.customerId,configurationId:'bpc_Approved',returnTo:args.returnTo}),

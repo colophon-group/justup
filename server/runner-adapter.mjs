@@ -16,6 +16,7 @@ import { validWireConfiguration } from './hiring-wire-codex-broker.mjs';
 import { createProductRecords } from './product-records.mjs';
 import { SOURCE_COVERAGE_VERSIONS } from './source-coverage.mjs';
 import { createEmailVerificationRunner,validateEmailVerificationConfig } from './email-verification.mjs';
+import { createStripeBillingRunner,validateStripeBillingConfig } from './stripe-billing.mjs';
 
 function validSourceCoverage(value) {
   return value===undefined||value!==null&&typeof value==='object'&&Object.getPrototypeOf(value)===Object.prototype
@@ -30,8 +31,9 @@ export function runnerIdentity(env=process.env){
 }
 export function bindRunnerConfig(config,env=process.env){
   const identity=runnerIdentity(env);
-  if(!config||typeof config!=='object'||Array.isArray(config)||Object.keys(config).some(k=>!['dbPath','sharedState','runnerStatusPath','model','jev','matching','verificationTtlMs','hiringWire','sourceCoverage','emailVerification'].includes(k))||typeof config.dbPath!=='string'||!isAbsolute(config.dbPath)||!isAbsolute(runnerStatusPath(config))||config.model!=null&&(typeof config.model!=='object'||Array.isArray(config.model)||Object.hasOwn(config.model,'sourceCommit')||Object.hasOwn(config.model,'buildIdentity')||Object.hasOwn(config.model,'hostPlanSha256'))||!validWireConfiguration(config.hiringWire)||!validSourceCoverage(config.sourceCoverage))throw new Error('Runner configuration is unavailable.');
+  if(!config||typeof config!=='object'||Array.isArray(config)||Object.keys(config).some(k=>!['dbPath','sharedState','runnerStatusPath','model','jev','matching','verificationTtlMs','hiringWire','sourceCoverage','emailVerification','stripeBilling'].includes(k))||typeof config.dbPath!=='string'||!isAbsolute(config.dbPath)||!isAbsolute(runnerStatusPath(config))||config.model!=null&&(typeof config.model!=='object'||Array.isArray(config.model)||Object.hasOwn(config.model,'sourceCommit')||Object.hasOwn(config.model,'buildIdentity')||Object.hasOwn(config.model,'hostPlanSha256'))||!validWireConfiguration(config.hiringWire)||!validSourceCoverage(config.sourceCoverage))throw new Error('Runner configuration is unavailable.');
   validateEmailVerificationConfig(config.emailVerification);
+  validateStripeBillingConfig(config.stripeBilling);
   // Only the trusted launcher derives these from the verified artifact and
   // installed host plan. Operator JSON cannot substitute a different proof.
   return {...config,...identity,model:{...(config.model??{}),buildIdentity:identity.buildIdentity,hostPlanSha256:identity.hostPlanSha256}};
@@ -67,13 +69,15 @@ export async function createRunnerDependencies(){
     const intent=createIntentService({db:store.db,feed,tasks,...ownership,readingPreferences,model,matching,records}),companies=createCompanyService({db:store.db,feed,tasks,model,readingPreferences,...ownership,records});
     const wire=await createHiringWireRunner({db:store.db,tasks,now:Date.now,hiringWire:config.hiringWire,sourceCoverage:config.sourceCoverage,buildIdentity:config.buildIdentity,hostPlanSha256:config.hostPlanSha256});
     const email=createEmailVerificationRunner({db:store.db,tasks,config,now:Date.now});
+    const billing=createStripeBillingRunner({db:store.db,tasks,config,now:Date.now});
     const workerId=`runner-${config.sourceCommit.slice(0,12)}-${createHash('sha256').update(config.buildIdentity).digest('hex').slice(0,12)}`;
-    const statusPath=runnerStatusPath(config),capabilities=()=>tasks.halted()?{search:false,companyRequests:false,aiMatching:false}:{search:model.available('search_intent'),companyRequests:model.available('company_resolution'),aiMatching:matching.available(),...(config.emailVerification!==undefined?{emailVerification:email.available()}: {})};
+    const statusPath=runnerStatusPath(config),capabilities=()=>tasks.halted()?{search:false,companyRequests:false,aiMatching:false}:{search:model.available('search_intent'),companyRequests:model.available('company_resolution'),aiMatching:matching.available(),...(config.emailVerification!==undefined?{emailVerification:email.available()}: {}),...(config.stripeBilling!==undefined?{stripeBilling:billing.available()}: {})};
     const heartbeat=()=>writeRunnerStatus({path:statusPath,identity:workerId,config,capabilities:capabilities(),ready:!tasks.halted()});
     matching.cleanup();heartbeat();
     heartbeatTimer=setInterval(()=>{try{heartbeat();}catch{ /* stale status fails closed in the API */ }},10_000);
     cleanupTimer=setInterval(()=>{try{matching.cleanup();}catch{ /* task/page paths retry bounded cleanup */ }},60_000);
-    return {tasks,handlers:{search_intent:(task,options)=>records.runTask(task,intent.runTask,options),company_resolution:(task,options)=>records.runTask(task,companies.runTask,options),ai_match:(task,options)=>records.runTask(task,matching.runTask,options),hiring_wire:wire.runTask,email_verification:email.runTask},onTaskFinished:records.taskFinished,beforeClaim:wire.beforeClaim,onHalt:heartbeat,workerId,
+    return {tasks,handlers:{search_intent:(task,options)=>records.runTask(task,intent.runTask,options),company_resolution:(task,options)=>records.runTask(task,companies.runTask,options),ai_match:(task,options)=>records.runTask(task,matching.runTask,options),hiring_wire:wire.runTask,email_verification:email.runTask,
+      ...Object.fromEntries(billing.kinds.map(kind=>[kind,billing.runTask]))},onTaskFinished:records.taskFinished,beforeClaim:wire.beforeClaim,onHalt:heartbeat,workerId,
       close(){clearInterval(heartbeatTimer);clearInterval(cleanupTimer);try{writeRunnerStatus({path:statusPath,identity:workerId,config,capabilities:{search:false,companyRequests:false,aiMatching:false},ready:false});}finally{store.close();}}};
   }catch(error){clearInterval(heartbeatTimer);clearInterval(cleanupTimer);store.close();throw error;}
 }
