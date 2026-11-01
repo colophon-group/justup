@@ -2,12 +2,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHandler, httpsOrigin } from './worker.mjs';
+const ingressSecret = 'A'.repeat(43);
+const clientAddress = '203.0.113.25';
 const publicOrigin = 'https://preview.justup.test';
 const release = { sourceSha: 'a'.repeat(40), treeSha: 'b'.repeat(40), assetsSha256: 'c'.repeat(64), workerSha256: 'd'.repeat(64), artifactSha256: 'e'.repeat(64), secret: 'must-not-leak' };
 function environment() {
-  return { DEPLOYMENT_MODE: 'preview', PUBLIC_ORIGIN: publicOrigin, API_ORIGIN: 'https://api.justup.test', RELEASE_JSON: JSON.stringify(release), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: { fetch: async () => new Response('public policy', { headers: { 'Content-Type': 'text/html' } }) } };
+  return { DEPLOYMENT_MODE: 'preview', PUBLIC_ORIGIN: publicOrigin, API_INGRESS_SECRET: ingressSecret, API_ORIGIN: 'https://api.justup.test', RELEASE_JSON: JSON.stringify(release), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: { fetch: async () => new Response('public policy', { headers: { 'Content-Type': 'text/html' } }) } };
 }
-const request = (path, options) => new Request(`${publicOrigin}${path}`, options);
+const request = (path, options = {}) => { const headers = new Headers(options.headers); if (!headers.has('CF-Connecting-IP')) headers.set('CF-Connecting-IP', clientAddress); return new Request(`${publicOrigin}${path}`, { ...options, headers }); };
 function privateHeaders(result) {
   assert.match(result.headers.get('Cache-Control'), /no-store/);
   assert.equal(result.headers.get('Cloudflare-CDN-Cache-Control'), 'no-store');
@@ -54,11 +56,14 @@ test('proxy preserves credentials, CSRF, cursor, method and body while discardin
     assert.equal(init.headers.get('x-csrf-token'), 'csrf-test');
     assert.equal(init.headers.get('x-forwarded-host'), 'preview.justup.test');
     assert.equal(init.headers.get('forwarded'), null);
+    assert.equal(init.headers.get('x-justup-ingress'), ingressSecret);
+    assert.equal(init.headers.get('x-justup-client-ip'), clientAddress);
+    assert.equal(init.headers.get('cf-connecting-ip'), null);
     assert.equal(init.headers.get('cf-access-jwt-assertion'), null);
     assert.equal(await new Response(init.body).text(), '{"query":"nurse"}');
     return new Response('{"id":"s1"}', { status: 201, headers: { 'Set-Cookie': '__Host-session=new; Path=/; Secure; HttpOnly; SameSite=Lax', ETag: 'private', 'Cache-Control': 'public,max-age=3600' } });
   });
-  const result = await handle(request('/api/v1/searches?cursor=a%2Fb', { method: 'POST', headers: { Origin: publicOrigin, Cookie: '__Host-session=test', 'X-CSRF-Token': 'csrf-test', Forwarded: 'host=evil', 'X-Forwarded-Host': 'evil', 'CF-Access-Jwt-Assertion': 'forged' }, body: '{"query":"nurse"}' }), environment());
+  const result = await handle(request('/api/v1/searches?cursor=a%2Fb', { method: 'POST', headers: { Origin: publicOrigin, Cookie: '__Host-session=test', 'X-CSRF-Token': 'csrf-test', Forwarded: 'host=evil', 'X-Forwarded-Host': 'evil', 'CF-Access-Jwt-Assertion': 'forged', 'X-Justup-Ingress': 'forged', 'X-Justup-Client-IP': '198.51.100.2' }, body: '{"query":"nurse"}' }), environment());
   assert.equal(result.status, 201); privateHeaders(result);
   assert.equal(result.headers.get('ETag'), null);
   assert.match(result.headers.get('Set-Cookie'), /__Host-session=new/);
@@ -74,7 +79,7 @@ test('foreign origins and mutations missing origin cannot reach the API', async 
 test('SSE first event is delivered before upstream closes and cancellation propagates', async () => {
   let controller; let cancelled = false;
   const stream = new ReadableStream({ start(value) { controller = value; }, cancel() { cancelled = true; } });
-  const result = await createHandler(async () => new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'public' } }))(request('/api/v1/searches/s1/events?revision=2'), environment());
+  const result = await createHandler(async (_, init) => { assert.equal(init.headers.get('Last-Event-ID'), 'event-17'); assert.equal(init.headers.get('X-Justup-Ingress'), ingressSecret); return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'public' } }); })(request('/api/v1/searches/s1/events?revision=2', { headers: { 'Last-Event-ID': 'event-17' } }), environment());
   privateHeaders(result);
   assert.equal(result.headers.get('Content-Type'), 'text/event-stream');
   const reader = result.body.getReader();
@@ -86,16 +91,20 @@ test('SSE first event is delivered before upstream closes and cancellation propa
 
 test('provider redirects pass through without edge follow, while API-host redirects fail closed', async () => {
   for (const location of ['/api/v1/session/callback', 'https://accounts.google.com/o/oauth2/v2/auth?state=test']) {
-    const result = await createHandler(async () => new Response(null, { status: 302, headers: { Location: location } }))(request('/api/v1/auth/google'), environment());
+    const result = await createHandler(async (_, init) => {
+      assert.equal(init.redirect, 'manual'); assert.equal(init.headers.get('X-Justup-Ingress'), ingressSecret);
+      return new Response(null, { status: 302, headers: { Location: location, 'X-Justup-Ingress': ingressSecret, 'X-Justup-Client-IP': clientAddress } });
+    })(request('/api/v1/auth/google'), environment());
     assert.equal(result.status, 302); assert.equal(result.headers.get('Location'), location); privateHeaders(result);
+    assert.equal(result.headers.get('X-Justup-Ingress'), null); assert.equal(result.headers.get('X-Justup-Client-IP'), null);
   }
   const invalid = await createHandler(async () => new Response(null, { status: 302, headers: { Location: 'https://api.justup.test/callback' } }))(request('/api/v1/auth/google'), environment());
   assert.equal(invalid.status, 503);
 });
 
 test('upstream failures stay private, preserve HTTP errors and do not leak diagnostics', async () => {
-  const result = await createHandler(async () => { throw new Error('secret upstream detail'); })(request('/api/v1/session'), environment());
-  assert.equal(result.status, 503); assert.doesNotMatch(await result.text(), /secret/); privateHeaders(result);
+  const result = await createHandler(async () => { throw new Error(ingressSecret + clientAddress); })(request('/api/v1/session'), environment());
+  assert.equal(result.status, 503); assert.doesNotMatch(await result.text(), new RegExp(ingressSecret + '|203\\.0\\.113')); privateHeaders(result);
   const denied = await createHandler(async () => new Response('{"code":"limited"}', { status: 429, headers: { 'Retry-After': '60' } }))(request('/api/v1/session'), environment());
   assert.equal(denied.status, 429); assert.equal(denied.headers.get('Retry-After'), '60'); privateHeaders(denied);
 });
@@ -106,6 +115,7 @@ test('release identity is whitelisted, noncached and unavailable until valid', a
   const body = await result.json(); privateHeaders(result);
   assert.equal(body.sourceSha, release.sourceSha); assert.equal(body.apiPrefix, '/api/v1');
   assert.equal(body.secret, undefined); assert.equal(body.API_ORIGIN, undefined);
+  assert.doesNotMatch(JSON.stringify(body), new RegExp(ingressSecret + '|' + clientAddress));
   assert.equal((await handle(request('/__release/version'), { ...environment(), RELEASE_JSON: '{}' })).status, 503);
 });
 
@@ -166,4 +176,48 @@ test('only an exact request locale reaches the same-origin API boundary', async 
   const repeated = new Headers(); repeated.append('X-Justup-Locale', 'it'); repeated.append('X-Justup-Locale', 'it');
   assert.equal((await handle(request('/api/v1/session', { headers: repeated }), environment())).status, 400);
   assert.equal(calls, 1);
+});
+
+
+test('missing or malformed private binding and platform address never reach upstream', async () => {
+  let calls = 0;
+  const handle = createHandler(() => { calls++; throw new Error('Must not fetch'); });
+  for (const secret of [undefined, '', 'x'.repeat(42), 'x'.repeat(43), 'A'.repeat(43) + '=', 'A'.repeat(42) + '/']) {
+    const result = await handle(request('/api/v1/health'), { ...environment(), API_INGRESS_SECRET: secret });
+    assert.equal(result.status, 503); privateHeaders(result);
+    assert.doesNotMatch(await result.text(), /203\.0\.113|Trusted ingress/);
+  }
+  for (const address of [null, '', '203.0.113.25, 198.51.100.2', '203.000.113.25', '999.0.0.1', '::ffff:192.168.00.1', '[2001:db8::1]', '2001:db8::1%eth0', '2001::db8::1']) {
+    const headers = new Headers(); if (address !== null) headers.set('CF-Connecting-IP', address);
+    headers.set('X-Justup-Client-IP', clientAddress); headers.set('X-Forwarded-For', clientAddress);
+    const result = await handle(new Request(publicOrigin + '/api/v1/session', { headers }), environment());
+    assert.equal(result.status, 503); privateHeaders(result);
+  }
+  assert.equal(calls, 0);
+});
+test('one valid IPv4 or IPv6 platform address replaces supplied internal addresses', async () => {
+  for (const address of ['203.0.113.25', '2001:db8::1', '2001:0db8:0000:0000:0000:0000:0000:0001', '::ffff:192.0.2.1']) {
+    const result = await createHandler(async (_, init) => {
+      assert.equal(init.headers.get('X-Justup-Client-IP'), address);
+      assert.equal(init.headers.get('X-Justup-Ingress'), ingressSecret);
+      return new Response('{}', { headers: { 'X-Justup-Ingress': ingressSecret, 'X-Justup-Client-IP': address } });
+    })(request('/api/v1/session', { headers: { 'CF-Connecting-IP': address, 'X-Justup-Client-IP': 'forged', 'X-Justup-Ingress': 'forged' } }), environment());
+    assert.equal(result.status, 200);
+    assert.equal(result.headers.get('X-Justup-Ingress'), null); assert.equal(result.headers.get('X-Justup-Client-IP'), null);
+  }
+});
+test('signed webhook POST without browser Origin keeps exact bytes and signature', async () => {
+  const body = new Uint8Array([123, 13, 10, 32, 34, 120, 34, 58, 34, 0, 255, 34, 125]);
+  const result = await createHandler(async (url, init) => {
+    assert.equal(url, 'https://api.justup.test/api/v1/billing/stripe/webhook');
+    assert.equal(init.headers.get('Origin'), null); assert.equal(init.headers.get('Stripe-Signature'), 'synthetic-signature');
+    assert.equal(init.headers.get('X-Justup-Ingress'), ingressSecret);
+    assert.deepEqual(new Uint8Array(await new Response(init.body).arrayBuffer()), body);
+    return new Response('{}');
+  })(request('/api/v1/billing/stripe/webhook', { method: 'POST', headers: { 'Stripe-Signature': 'synthetic-signature' }, body }), environment());
+  assert.equal(result.status, 200);
+  const denied = createHandler(() => { throw new Error('Must not fetch'); });
+  for (const path of ['/api/v1/billing/stripe/webhook/', '/api/v1/billing/other/webhook', '/api/v1/searches']) {
+    assert.equal((await denied(request(path, { method: 'POST', body: '{}' }), environment())).status, 403);
+  }
 });

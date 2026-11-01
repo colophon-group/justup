@@ -16,8 +16,26 @@ export function httpsOrigin(value) {
   return url.origin;
 }
 
+// Only the incoming Cloudflare address is trusted here, before a subrequest can
+// replace platform headers. The API authenticates these two private headers.
+export function trustedIngressHeaders(request, env) {
+  const secret = env.API_INGRESS_SECRET;
+  if (typeof secret !== 'string' || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(secret)) throw new Error('Trusted ingress unavailable');
+  const address = request.headers.get('CF-Connecting-IP');
+  if (typeof address !== 'string' || address.length > 45 || !validClientAddress(address)) throw new Error('Trusted ingress unavailable');
+  return new Headers({ 'X-Justup-Ingress': secret, 'X-Justup-Client-IP': address });
+}
+
+function validClientAddress(value) {
+  if (/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/.test(value)) return value.split('.').every(part => Number(part) <= 255);
+  if (!value.includes(':') || !/^[0-9a-f:.]+$/i.test(value)) return false;
+  try { return new URL(`https://[${value}]/`).hostname.startsWith('['); } catch { return false; }
+}
+
 function response(body, status, headers = {}, privateResponse = false, indexable = false, publicRobots = null) {
   const result = new Headers(headers);
+  result.delete('X-Justup-Ingress');
+  result.delete('X-Justup-Client-IP');
   for (const [key, value] of Object.entries(SECURITY_HEADERS)) result.set(key, value);
   if (indexable) result.delete('X-Robots-Tag');
   else result.set('X-Robots-Tag', publicRobots ?? 'noindex, nofollow, noarchive');
@@ -66,14 +84,16 @@ export function createHandler(fetchUpstream = globalThis.fetch, renderPublicDocu
       // Backend still validates CSRF tokens and entitlement. Reject a foreign browser origin early.
       const origin = request.headers.get('Origin');
       if (origin && origin !== publicOrigin) return unavailable('origin_not_allowed', 403);
-      if (!SAFE_METHODS.has(request.method) && origin !== publicOrigin) return unavailable('origin_required', 403);
+      // Only this signed provider endpoint is server-to-server; the API verifies its raw body.
+      const signedWebhook = request.method === 'POST' && url.pathname === '/api/v1/billing/stripe/webhook';
+      if (!SAFE_METHODS.has(request.method) && origin !== publicOrigin && !signedWebhook) return unavailable('origin_required', 403);
       // This request-only presentation hint is accepted only on the private same-origin API boundary.
       // Repeated headers are combined by Fetch into a comma-separated value and fail this exact check.
       const explicitLocale = request.headers.get('X-Justup-Locale');
       if (explicitLocale !== null && !/^(?:en|de|fr|it|es)$/.test(explicitLocale)) return response(JSON.stringify({ error: { code: 'invalid_locale', message: 'Choose a supported interface language.', requestId: crypto.randomUUID() } }), 400, { 'Content-Type': 'application/json' }, true);
       const headers = new Headers(request.headers);
       for (const key of [...headers.keys()]) {
-        if (HOP_HEADERS.includes(key.toLowerCase()) || /^(forwarded|x-forwarded-|cf-|x-real-ip|host$)/i.test(key)) headers.delete(key);
+        if (HOP_HEADERS.includes(key.toLowerCase()) || /^(forwarded|x-forwarded-|cf-|x-real-ip|host$|x-justup-(?:ingress|client-ip)$)/i.test(key)) headers.delete(key);
       }
       headers.delete('If-None-Match');
       headers.delete('If-Modified-Since');
@@ -81,6 +101,8 @@ export function createHandler(fetchUpstream = globalThis.fetch, renderPublicDocu
       headers.set('X-Forwarded-Host', url.host);
       headers.set('Cache-Control', 'no-store');
       try {
+        if (apiOrigin === publicOrigin) throw new Error('Invalid upstream origin');
+        for (const [key, value] of trustedIngressHeaders(request, env)) headers.set(key, value);
         const target = new URL(apiOrigin);
         target.pathname = url.pathname;
         target.search = url.search;
