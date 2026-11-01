@@ -3,6 +3,7 @@
   --paper: #f28a60;
   --cream: #f9e7d4;
   --ink: #11100e;
+  --muted: #784934;
   --rule: #11100e55;
   --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
   color-scheme: light;
@@ -27,15 +28,35 @@ nav [aria-current] { text-decoration-thickness: 2px; }
 main { padding: 38px 0 50px; min-height: 62vh; }
 .eyebrow { margin: 0 0 10px; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; font-weight: 700; }
 h1 { font: 900 clamp(54px, 9vw, 100px)/1 Impact, "Arial Black", sans-serif; margin: 0 0 32px; text-transform: uppercase; letter-spacing: -1px; overflow-wrap: anywhere; }
-.policy-status { max-width: 760px; background: var(--cream); border-left: 4px solid var(--ink); padding: 24px; margin-bottom: 24px; }
+.policy-reading-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); align-items: start; gap: 36px; }
+.policy-contents { position: sticky; top: 24px; padding-top: 6px; }
+.policy-contents h2 { margin-bottom: 16px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.policy-contents nav { display: block; font-size: 12px; line-height: 1.5; }
+.policy-contents ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.policy-contents a { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; padding: 8px 0; text-decoration: none; }
+.policy-contents a:hover { text-decoration: underline; }
+.section-number { color: var(--muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.policy-document { min-width: 0; background: var(--cream); border: 1.5px solid var(--ink); padding: clamp(22px, 4vw, 40px); font-size: 14px; line-height: 1.85; }
+.policy-status { border-left: 3px solid var(--ink); padding: 0 0 0 20px; margin: 0 0 32px; }
+.policy-status h2 { font-size: 14px; }
+.policy-status p { font-size: 12px; line-height: 1.8; }
 .policy-status p { margin: 0; }
 .policy-status p + p { margin-top: 12px; }
-.policy-section { max-width: 780px; margin: 0 0 32px; }
-h2 { font-size: 18px; line-height: 1.5; margin: 0 0 10px; }
+.policy-section { border-top: 1px solid var(--rule); padding: 28px 0; scroll-margin-top: 24px; }
+.policy-section:last-child { padding-bottom: 0; }
+h2 { font-size: 18px; line-height: 1.5; margin: 0 0 18px; }
+.policy-section h2 { display: flex; align-items: baseline; gap: 14px; }
+.policy-section h2 .section-number { flex: none; }
 .policy-section p { margin: 0 0 12px; white-space: pre-line; overflow-wrap: anywhere; }
+.policy-section p:last-child { margin-bottom: 0; }
 footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 20px; padding: 24px 0 36px; border-top: 1px solid var(--rule); font-size: 12px; font-weight: 700; }
 .skip-link:not(:focus) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
 .skip-link:focus { position: fixed; z-index: 2; top: 10px; left: 10px; background: var(--cream); padding: 12px; }
+@media (max-width: 900px) {
+  .policy-reading-layout { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .policy-contents { position: static; }
+  .policy-contents ol { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+}
 @media (max-width: 650px) {
   :root { font-size: 13px; }
   .policy-paper { padding: 0 20px; }
@@ -44,5 +65,7 @@ footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 20
   nav { justify-content: flex-end; gap: 10px 16px; font-size: 11px; }
   .policy-languages { justify-content: flex-start; }
   main { padding-top: 28px; }
-  .policy-status { padding: 20px; }
+  .policy-contents nav { justify-content: initial; }
+  .policy-contents ol { grid-template-columns: minmax(0, 1fr); }
+  .policy-document { font-size: 13px; }
 }

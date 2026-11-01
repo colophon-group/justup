@@ -314,9 +314,9 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
           ) : null}
         </main>
         <footer className="policy-footer">
-          <p id="coverage-disclosure">
+          {coverage ? <p id="coverage-disclosure">
             {coverageDescription(coverage, locale)}
-          </p>
+          </p> : null}
           <nav aria-label={t("Legal")}>
             <a href={policyDocument(locale, "privacy")}>{t("Privacy")}</a>
             <a href={policyDocument(locale, "usage")}>{t("Usage")}</a>

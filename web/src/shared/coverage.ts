@@ -4,12 +4,12 @@ import { translate } from "../i18n/messages.ts";
 import type { Coverage } from "../api/types.ts";
 
 export function coverageDescription(coverage: Coverage | undefined, locale: InterfaceLocale = "en"): string {
-  if (!coverage) return translate(locale, "Company coverage and verification time are not reported by the service.");
+  if (!coverage) return "";
   const kind = coverage.kind ?? coverage.state;
   const label = kind === "imported_snapshot" ? translate(locale, "Imported snapshot") : translate(locale, "Company coverage");
   const verified = coverage.verifiedAt
     ? ` · ${translate(locale, "verified {date}", { date: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(coverage.verifiedAt)) })}`
-    : ` · ${translate(locale, "verification time not reported")}`;
+    : "";
   const freshness = coverage.stale ? ` · ${translate(locale, "refresh needed")}` : "";
   const source = kind === "imported_snapshot"
     ? translate(locale, "An imported snapshot does not imply continuous monitoring.")

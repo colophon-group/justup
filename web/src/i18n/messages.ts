@@ -1748,23 +1748,11 @@ export const messages = {
     "Copertura aziende",
     "Cobertura de empresas"
   ],
-  "Company coverage and verification time are not reported by the service.": [
-    "Firmenabdeckung und Prüfzeit werden vom Dienst nicht gemeldet.",
-    "Le service n’indique pas la couverture des entreprises ni l’heure de vérification.",
-    "Il servizio non segnala la copertura delle aziende né l’ora della verifica.",
-    "El servicio no indica la cobertura de empresas ni la fecha de verificación."
-  ],
   "verified {date}": [
     "geprüft am {date}",
     "vérifié le {date}",
     "verificato il {date}",
     "verificado el {date}"
-  ],
-  "verification time not reported": [
-    "Prüfzeit nicht gemeldet",
-    "date de vérification non indiquée",
-    "data di verifica non segnalata",
-    "fecha de verificación no indicada"
   ],
   "refresh needed": [
     "Aktualisierung nötig",

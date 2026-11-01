@@ -38,6 +38,12 @@ for (const [locale, copy] of Object.entries(locales)) {
       await expect(page.locator('.policy-header nav a').last()).toHaveAttribute('href', `${locale === 'en' ? '/' : `/${locale}/`}#jobs`);
       await expect(page.locator('.policy-languages a')).toHaveCount(5);
       await expect(page.locator('.policy-section')).toHaveCount(kind === 'privacy' ? 10 : 7);
+      await expect(page.locator('.policy-document')).toHaveCSS('background-color', 'rgb(249, 231, 212)');
+      const contents = page.locator('.policy-contents a');
+      await expect(contents).toHaveCount(kind === 'privacy' ? 10 : 7);
+      const target = await contents.first().getAttribute('href');
+      await contents.first().click();
+      await expect(page.locator(target)).toBeInViewport();
       expect(requests.every(request => new URL(request.url()).origin === new URL(baseURL).origin)).toBe(true);
       expect(requests.some(request => request.url().includes('/api/'))).toBe(false);
       await expect(page.locator('script,iframe,form')).toHaveCount(0);

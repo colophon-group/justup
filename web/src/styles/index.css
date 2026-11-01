@@ -203,11 +203,11 @@ form label { display: block; font-size: 12px; font-weight: 600; line-height: 1.5
 .tracked-sources a { text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .policy-footer { min-height: 105px; padding: 32px 0 24px; display: flex; gap: 24px; align-items: start; justify-content: space-between; font-size: 10px; line-height: 1.7; }
 .policy-footer p { margin: 0; max-width: 70ch; }
-.policy-footer nav { display: flex; gap: 18px; }
+.policy-footer nav { display: flex; gap: 18px; margin-left: auto; }
 .policy-footer a, .small-print a { text-decoration: underline; text-underline-offset: 3px; }
 .back-to-top { position: fixed; right: max(24px, env(safe-area-inset-right)); bottom: max(24px, env(safe-area-inset-bottom)); width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; border: 1px solid; background: var(--ink); color: var(--cream); font-size: 27px; font-weight: 600; box-shadow: 3px 3px 0 var(--cream); z-index: 7; }
 .back-to-top:hover { background: var(--cream); color: var(--ink); text-decoration: none; }
-dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; background: var(--paper); color: var(--ink); border: 2px solid; padding: 25px; box-shadow: 7px 7px 0 var(--ink); }
+dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; background: var(--cream); color: var(--ink); border: 2px solid; padding: 25px; box-shadow: 7px 7px 0 var(--ink); }
 dialog::backdrop { background: rgb(17 16 14 / .48); }
 body:has(dialog[open]) { overflow: hidden; }
 .dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }

@@ -119,7 +119,7 @@ The server implements fail-closed entitlement, explicit free-period activation a
 
 ## Test public delivery and activation gates
 
-The pages use only local CSS, with no JavaScript, remote fonts, analytics or identity-provider assets. They remain readable without an account/API and carry noindex metadata. Serving static files can still generate hosting logs.
+The pages use only local CSS, with no JavaScript, remote fonts, analytics or identity-provider assets. A section index links into the complete notice inside a bordered cream reading panel; mobile layouts keep all sections visible. They remain readable without an account/API and carry noindex metadata. Serving static files can still generate hosting logs.
 
 Run `npm run build`, `npm run test:web`, then `npm run test:browser -- tests/browser/policies.spec.mjs` and the account policy-gate journeys. Pure contracts check aligned locale keys/facts, complete rendered sections, draft identity, public-only build emission and byte-identical development delivery. Browser checks cover all ten static pages with JavaScript disabled and the API unavailable: narrow viewports, keyboard navigation, local-only requests, language links, draft/version/operator/contact and current entitlement/deletion wording, conditional visitor ownership/handoff and bounded first-party measurement inventory. Service versus deployment disclosures and outstanding provider checks remain explicit. Unreviewed policies must continue to disable sign-in. These checks do not substitute for the [exact deployed release gate](development-process.md#6-verify-a-release-before-it-goes-live).
 
