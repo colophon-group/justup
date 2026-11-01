@@ -16,6 +16,7 @@ import type {
   Task,
   TaskResult,
   Warning,
+  WorkspaceSnapshot,
 } from "./types.ts";
 export class ContractError extends Error {
   constructor(detail: string) {
@@ -235,6 +236,42 @@ export function decodeSearch(value: unknown): Search {
     ...optionalText(o, "description"),
     requirements: list(o.requirements ?? [], decodeRequirement, "requirements"),
     warnings: list(o.warnings ?? [], decodeWarning, "warnings"),
+    ...(o.draft == null ? {} : { draft: (() => {
+      const draft = record(o.draft, "pending search text");
+      return { query: text(draft.query, "pending search text"), taskId: nullableText(draft.taskId, "pending task"), ...optionalText(draft, "status") };
+    })() }),
+    ...(o.proposal == null ? {} : { proposal: decodeProposal(o.proposal) }),
+  };
+}
+export function decodeWorkspace(value: unknown): WorkspaceSnapshot {
+  const o = record(value, "saved workspace"), state = record(o.state, "workspace state");
+  const bounded = (value: unknown, label: string, maximum: number) => {
+    const result = text(value, label);
+    return result.length <= maximum && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(result) ? result : fail(label);
+  };
+  const drafts = Object.entries(record(state.drafts, "workspace drafts"));
+  if (drafts.length > 100 || new TextEncoder().encode(JSON.stringify(state)).length > 60_000) fail("workspace drafts");
+  const recovered = list(o.recoveredDrafts, value => {
+    const item = record(value, "saved draft");
+    return { id: bounded(item.id, "saved draft identity", 128), text: bounded(item.text, "saved draft text", 4000), createdAt: date(item.createdAt) };
+  }, "saved drafts");
+  if (recovered.length > 100 || new Set(recovered.map(draft => draft.id)).size !== recovered.length) fail("saved drafts");
+  const viewed = list(o.viewed, value => {
+    const item = record(value, "viewed position");
+    return { jobId: bounded(item.jobId, "viewed position identity", 128), firstViewedAt: date(item.firstViewedAt) };
+  }, "viewed positions");
+  if (viewed.length > 1000) fail("viewed positions");
+  return {
+    revision: count(o.revision, "workspace revision"),
+    state: {
+      activeSearchId: state.activeSearchId === null ? null : bounded(state.activeSearchId, "active search", 128),
+      drafts: Object.fromEntries(drafts.map(([id, value]) => {
+        if (!id || id.length > 128 || ["__proto__", "constructor", "prototype"].includes(id)) fail("draft identity");
+        return [id, bounded(value, "draft text", 4000)];
+      })),
+    },
+    viewed,
+    recoveredDrafts: recovered,
   };
 }
 function decodeProposal(value: unknown): SearchProposal {
@@ -265,6 +302,9 @@ export function decodeSession(value: unknown): Session {
             id: text(user.id, "account identity"),
             username: text(user.username, "username"),
           },
+    visitor: o.visitor == null ? null : {
+      expiresAt: date(record(o.visitor, "visitor session").expiresAt),
+    },
     csrfToken: text(o.csrfToken, "session token"),
     access: {
       kind: text(access.kind, "access kind"),
@@ -376,17 +416,16 @@ export function decodeResults(value: unknown): ResultPage {
             ),
           }),
     },
-    ...(o.hidden == null
-      ? {}
-      : {
-          hidden: (() => {
-            const h = record(o.hidden, "hidden count");
-            return {
-              count: count(h.count, "hidden count"),
-              exact: flag(h.exact, "count precision"),
-            };
-          })(),
-        }),
+    hiddenMatches: (() => {
+      if (o.hiddenMatches === undefined)
+        return { status: "unavailable", count: null } as const;
+      const h = record(o.hiddenMatches, "hidden matches");
+      if (h.status === "exact" || h.status === "lower_bound")
+        return { status: h.status, count: count(h.count, "hidden count") };
+      if ((h.status === "pending" || h.status === "unavailable") && h.count === null)
+        return { status: h.status, count: null };
+      return fail("hidden matches");
+    })(),
   };
 }
 export function decodeCompanyRequest(value: unknown): CompanyRequest {

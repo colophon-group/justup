@@ -17,6 +17,7 @@ interface Props {
   dialogOpen: boolean;
   onCompanyRequest: (prefill: CompanyRequestPrefill) => void;
   onAccount: () => void;
+  onPersistenceReady: (bridge: { flush: (signal?: AbortSignal) => Promise<void> } | null) => void;
 }
 export function SearchWorkspace({
   client,
@@ -27,22 +28,33 @@ export function SearchWorkspace({
   dialogOpen,
   onCompanyRequest,
   onAccount,
+  onPersistenceReady,
 }: Props) {
-  const workspace = useWorkspace(client, session, () =>
-    onSignIn(
-      "Sign in to interpret and save your search. Your unsent text stays here.",
-    ),
-  );
+  const workspace = useWorkspace(client, session);
   const { state, search, query } = workspace;
+  useLayoutEffect(() => {
+    onPersistenceReady({ flush: workspace.flush });
+    return () => onPersistenceReady(null);
+  }, [onPersistenceReady, workspace.flush]);
   const [focused, setFocused] = useState(false),
     [pendingDelete, setPendingDelete] = useState<string | null>(null),
+    [pendingDiscard, setPendingDiscard] = useState<string | null>(null),
     [deleteError, setDeleteError] = useState(""),
     [deleting, setDeleting] = useState(false);
+  const [copiedDraft, setCopiedDraft] = useState<{ id: string; text: string; message: string } | null>(null);
+  const copyDraft = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedDraft({ id, text, message: "Copied. You can paste this text into a new search after loading the saved copy." });
+    } catch {
+      setCopiedDraft({ id, text, message: "Copying is unavailable. Select the text above and copy it before loading the saved copy." });
+    }
+  };
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
   const inputRef = useRef<HTMLTextAreaElement>(null),
     focusAfterDelete = useRef(false);
   useLayoutEffect(() => {
-    if (!active) setPendingDelete(null);
+    if (!active) { setPendingDelete(null); setPendingDiscard(null); }
     if (active && pendingDelete === null && focusAfterDelete.current) {
       focusAfterDelete.current = false;
       inputRef.current?.focus();
@@ -172,6 +184,8 @@ export function SearchWorkspace({
                     ref={inputRef}
                     id="query"
                     rows={2}
+                    maxLength={4000}
+                    disabled={workspace.recovering}
                     spellCheck={false}
                     aria-describedby="search-guidance"
                     value={query}
@@ -180,7 +194,7 @@ export function SearchWorkspace({
                       workspace.beginEditing();
                       setFocused(true);
                     }}
-                    onBlur={() => setFocused(false)}
+                    onBlur={() => { setFocused(false); void workspace.flush().catch(() => {}); }}
                     onKeyDown={(event) => {
                       if (
                         event.key === "Enter" &&
@@ -203,7 +217,8 @@ export function SearchWorkspace({
                   disabled={
                     !session ||
                     state.busy ||
-                    (!!session.user && !session.capabilities.search)
+                    !session.capabilities.search ||
+                    (!session.user && (!session.visitor || !session.capabilities.visitorSearch))
                   }
                 >
                   Search <span>↵</span>
@@ -217,9 +232,11 @@ export function SearchWorkspace({
           </div>
           <div id="search-status" className="helper" role="status">
             {state.status ||
-              (session?.user && !session.capabilities.search
+              (search?.draft?.status === "interrupted" ? "Your earlier check was interrupted. Submit this text when you want to try again."
+                : session && (!session.capabilities.search || (!session.user && (!session.visitor || !session.capabilities.visitorSearch)))
                 ? "Search interpretation is unavailable right now. Your accepted searches remain available."
                 : "")}
+            {workspace.accountSuggested ? <button id="visitor-sign-in" className="text-link" onClick={() => onSignIn("Sign in to keep your searches and continue.")}>Sign in to continue</button> : null}
             {state.proposal ? (
               <>
                 <strong>This search needs your decision.</strong>
@@ -252,6 +269,30 @@ export function SearchWorkspace({
               </>
             ) : null}
           </div>
+          <div className="helper" id="workspace-sync-status" role="status">
+            {workspace.syncError ? <>{workspace.syncError}{" "}<button className="text-link" id="retry-workspace" disabled={workspace.loading || !!workspace.conflict} onClick={workspace.retry}>Retry saving</button></> : null}
+          </div>
+          {workspace.conflict ? <section className="helper" id="workspace-conflict" aria-label="Review draft conflict">
+            <p>This workspace changed in another tab. Your unsaved text is still in the search field.</p>
+            {workspace.deletedSearchDrafts.length ? <div id="deleted-search-drafts">
+              <p>A search was deleted in another tab. Its edits cannot be saved to that search. Copy any text you want to keep before using the saved copy.</p>
+              {workspace.deletedSearchDrafts.map(draft => <div key={draft.id}>
+                <strong>{draft.title}</strong>
+                <p style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap", userSelect: "text" }}>{draft.text || "Empty draft"}</p>
+                <button className="text-link" onClick={() => void copyDraft(draft.id, draft.text)}>Copy text from {draft.title}</button>
+                <p role="status">{copiedDraft?.id === draft.id && copiedDraft.text === draft.text ? copiedDraft.message : ""}</p>
+              </div>)}
+            </div> : null}
+            <details><summary>Review the saved copy</summary>{Object.entries(workspace.conflict.remote.state.drafts).map(([id, text]) => <p key={id} style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{text || "Empty draft"}</p>)}</details>
+            <div className="dialog-actions"><button className="button outline" id="keep-local-drafts" disabled={workspace.deletedSearchDrafts.length > 0} onClick={() => workspace.resolveConflict("local")}>Keep my edits</button><button className="text-link" id="use-saved-drafts" onClick={() => workspace.resolveConflict("saved")}>Use saved copy and discard these edits</button></div>
+          </section> : null}
+          {workspace.recoveredDrafts.length ? <details className="helper" id="recovered-drafts"><summary>{workspace.recoveredDrafts.length} saved {workspace.recoveredDrafts.length === 1 ? "draft" : "drafts"}</summary>
+            {workspace.recoveredDrafts.map(draft => <div key={draft.id} data-recovered-draft={draft.id}>
+              <p style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{draft.text}</p>
+              <button className="text-link" disabled={workspace.recovering} onClick={() => void workspace.recover(draft.id, "use")}>Use this draft</button>{" "}
+              <button className="text-link" disabled={workspace.recovering} onClick={() => setPendingDiscard(draft.id)}>Discard this saved draft</button>
+            </div>)}
+          </details> : null}
           <div id="search-accounting">
             {search?.requirements
               .filter((item) =>
@@ -284,8 +325,17 @@ export function SearchWorkspace({
           session={session}
           onSignIn={onSignIn}
           onAccount={onAccount}
+          viewed={workspace.viewed}
+          onViewed={session?.capabilities.viewed ? workspace.markViewed : undefined}
         />
       ) : null}
+      <Dialog id="discard-draft-dialog" open={pendingDiscard !== null && active} onClose={() => { if (!workspace.recovering) setPendingDiscard(null); }} labelledBy="discard-draft-title">
+        <h2 id="discard-draft-title">Discard this saved draft?</h2>
+        <p>This removes only the saved draft you selected. Your other searches and drafts stay saved.</p>
+        <div className="dialog-actions"><button className="button outline" disabled={workspace.recovering} onClick={() => setPendingDiscard(null)}>Keep draft</button>
+          <button id="confirm-discard-draft" className="button dark" disabled={workspace.recovering} onClick={() => { if (pendingDiscard) void workspace.recover(pendingDiscard, "discard").then(saved => { if (saved) setPendingDiscard(null); }); }}>Discard draft</button>
+        </div><p role="status">{workspace.syncError}</p>
+      </Dialog>
       <Dialog
         id="delete-search-dialog"
         open={pendingDelete !== null && active}

@@ -6,10 +6,14 @@ export function JobRow({
   job,
   animated,
   reducedMotion,
+  viewed,
+  onViewed,
 }: {
   job: Job;
   animated: boolean;
   reducedMotion: boolean;
+  viewed: boolean;
+  onViewed?: ((jobId: string) => void) | undefined;
 }) {
   const row = useRef<HTMLElement>(null),
     animate = useRef(animated && !reducedMotion);
@@ -36,7 +40,7 @@ export function JobRow({
     <div className="job-slot">
       <article
         ref={row}
-        className={`job list-row clickable-row${job.viewed ? " viewed" : ""}${job.isNew ? " is-new" : ""}`}
+        className={`job list-row clickable-row${viewed ? " viewed" : ""}${job.isNew && !viewed ? " is-new" : ""}`}
         data-job={job.id}
         onClick={(event) => {
           if (
@@ -48,13 +52,18 @@ export function JobRow({
         }}
       >
         <div className="job-age">
-          {job.isNew ? <span className="new-badge">New</span> : null}
+          {job.isNew ? <span className="new-badge" aria-hidden={viewed} style={{ visibility: viewed ? "hidden" : "visible" }}>New</span> : null}
           <time
             dateTime={job.firstObserved}
             title={`First observed ${new Date(job.firstObserved).toLocaleDateString("en")}`}
           >
             {ageText(job.firstObserved)}
           </time>
+          <svg viewBox="0 0 20 14" width="14" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"
+            role={viewed ? "img" : undefined} aria-label={viewed ? "Viewed" : undefined} aria-hidden={!viewed}
+            style={{ marginLeft: 6, verticalAlign: "middle", visibility: viewed ? "visible" : "hidden" }}>
+            <path d="M1 7c3-7 15-7 18 0-3 7-15 7-18 0Z" /><circle cx="10" cy="7" r="2.5" />
+          </svg>
         </div>
         <div className="job-story">
           <h2 className="job-title">
@@ -64,6 +73,8 @@ export function JobRow({
               href={job.sourceUrl}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => onViewed?.(job.id)}
+              onAuxClick={event => { if (event.button === 1) onViewed?.(job.id); }}
             >
               {job.title}
             </a>

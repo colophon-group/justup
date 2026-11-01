@@ -11,9 +11,10 @@ import {
   decodeSearchSubmission,
   decodeSession,
   decodeTask,
+  decodeWorkspace,
   record,
 } from "./decode.ts";
-import type { Session } from "./types.ts";
+import type { SavedWorkspaceState, SearchScope, Session } from "./types.ts";
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -49,25 +50,30 @@ interface Options {
   body?: unknown;
   signal?: AbortSignal | undefined;
   key?: string | undefined;
+  keepalive?: boolean;
 }
 interface ClientOptions {
   fetch?: typeof fetch;
   onSessionExpired?: () => void;
+  onVisitorExpired?: () => void;
   timeoutMs?: number;
 }
 const ignored = (value: unknown): void => {
   if (value !== undefined) record(value, "acknowledgement");
 };
 const id = encodeURIComponent;
+const searchPath = (scope: SearchScope) => scope === "visitor" ? "/visitor/searches" : "/searches";
 export class ApiClient {
   private csrfToken: string | null = null;
   private sessionVersion = 0;
   private readonly fetcher: typeof fetch;
   private readonly onSessionExpired: (() => void) | undefined;
+  private readonly onVisitorExpired: (() => void) | undefined;
   private readonly timeoutMs: number;
   constructor(options: ClientOptions = {}) {
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.onSessionExpired = options.onSessionExpired;
+    this.onVisitorExpired = options.onVisitorExpired;
     this.timeoutMs = options.timeoutMs ?? 20_000;
   }
   setSession(session: Session | null): void {
@@ -114,6 +120,7 @@ export class ApiClient {
           headers,
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: controller.signal,
+          ...(options.keepalive === undefined ? {} : { keepalive: options.keepalive }),
         });
       } catch (error) {
         if (options.signal?.aborted)
@@ -189,7 +196,8 @@ export class ApiClient {
           ["unauthenticated", "session_expired"].includes(code)
         ) {
           this.setSession(null);
-          this.onSessionExpired?.();
+          if (path.startsWith("/visitor/")) this.onVisitorExpired?.();
+          else this.onSessionExpired?.();
         }
         throw error;
       }
@@ -202,14 +210,28 @@ export class ApiClient {
   getSession(signal?: AbortSignal) {
     return this.request("/session", decodeSession, { signal });
   }
-  listSearches(signal?: AbortSignal) {
-    return this.request("/searches", decodeSearchList, { signal });
+  getWorkspace(scope: SearchScope, signal?: AbortSignal) {
+    return this.request(`${scope === "visitor" ? "/visitor" : ""}/workspace`, decodeWorkspace, { signal });
+  }
+  saveWorkspace(scope: SearchScope, state: SavedWorkspaceState, expectedRevision: number, signal?: AbortSignal) {
+    return this.request(`${scope === "visitor" ? "/visitor" : ""}/workspace`, decodeWorkspace, {
+      method: "PATCH", body: { expectedRevision, ...state }, signal, keepalive: true,
+    });
+  }
+  recoverDraft(scope: SearchScope, draftId: string, action: "use" | "discard", expectedRevision: number, signal?: AbortSignal) {
+    return this.request(`${scope === "visitor" ? "/visitor" : ""}/workspace/recovered-drafts/${id(draftId)}`, decodeWorkspace, {
+      method: "POST", body: { expectedRevision, action }, signal,
+    });
+  }
+  listSearches(signal?: AbortSignal, scope: SearchScope = "account") {
+    return this.request(searchPath(scope), decodeSearchList, { signal });
   }
   createSearch(
     body: { query: string; requestKey: string },
     signal?: AbortSignal,
+    scope: SearchScope = "account",
   ) {
-    return this.request("/searches", decodeSearchSubmission, {
+    return this.request(searchPath(scope), decodeSearchSubmission, {
       method: "POST",
       body,
       key: body.requestKey,
@@ -220,8 +242,9 @@ export class ApiClient {
     searchId: string,
     body: { query: string; requestKey: string; expectedRevision: number },
     signal?: AbortSignal,
+    scope: SearchScope = "account",
   ) {
-    return this.request(`/searches/${id(searchId)}`, decodeSearchSubmission, {
+    return this.request(`${searchPath(scope)}/${id(searchId)}`, decodeSearchSubmission, {
       method: "PATCH",
       body,
       key: body.requestKey,
@@ -233,15 +256,16 @@ export class ApiClient {
     body: { proposalId: string; expectedRevision: number },
     key: string,
     signal?: AbortSignal,
+    scope: SearchScope = "account",
   ) {
     return this.request(
-      `/searches/${id(searchId)}/confirm`,
+      `${searchPath(scope)}/${id(searchId)}/confirm`,
       (value) => decodeSearch(record(value).search),
       { method: "POST", body, key, signal },
     );
   }
-  deleteSearch(searchId: string, signal?: AbortSignal) {
-    return this.request(`/searches/${id(searchId)}`, ignored, {
+  deleteSearch(searchId: string, signal?: AbortSignal, scope: SearchScope = "account") {
+    return this.request(`${searchPath(scope)}/${id(searchId)}`, ignored, {
       method: "DELETE",
       signal,
     });
@@ -251,6 +275,7 @@ export class ApiClient {
     revision: number,
     cursor?: string | null,
     signal?: AbortSignal,
+    scope: SearchScope = "account",
   ) {
     const query = new URLSearchParams({
       revision: String(revision),
@@ -258,7 +283,7 @@ export class ApiClient {
     });
     if (cursor) query.set("cursor", cursor);
     return this.request(
-      `/searches/${id(searchId)}/results?${query}`,
+      `${searchPath(scope)}/${id(searchId)}/results?${query}`,
       decodeResults,
       { signal },
     );
@@ -318,8 +343,13 @@ export class ApiClient {
       signal,
     });
   }
-  getTask(taskId: string, signal?: AbortSignal) {
-    return this.request(`/tasks/${id(taskId)}`, decodeTask, { signal });
+  getTask(taskId: string, signal?: AbortSignal, scope: SearchScope = "account") {
+    return this.request(`${scope === "visitor" ? "/visitor" : ""}/tasks/${id(taskId)}`, decodeTask, { signal });
+  }
+  markViewed(jobId: string, scope: SearchScope, signal?: AbortSignal) {
+    return this.request(`${scope === "visitor" ? "/visitor" : ""}/viewed`, ignored, {
+      method: "POST", body: { jobId }, signal,
+    });
   }
   login(body: { username: string; password: string }, signal?: AbortSignal) {
     return this.request("/auth/login", ignored, {

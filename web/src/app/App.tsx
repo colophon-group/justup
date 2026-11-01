@@ -12,13 +12,18 @@ import { coverageDescription } from "../shared/coverage.ts";
 
 export function App() {
   const expiryHandler = useRef<() => void>(() => {});
+  const visitorExpiryHandler = useRef<() => void>(() => {});
   const [client] = useState(
-    () => new ApiClient({ onSessionExpired: () => expiryHandler.current() }),
+    () => new ApiClient({ onSessionExpired: () => expiryHandler.current(), onVisitorExpired: () => visitorExpiryHandler.current() }),
   );
+  const workspaceBridge = useRef<{ flush: (signal?: AbortSignal) => Promise<void> } | null>(null);
+  const persistenceReady = useCallback((bridge: typeof workspaceBridge.current) => { workspaceBridge.current = bridge; }, []);
+  const beforeAuthenticate = useCallback(async (signal: AbortSignal) => { await workspaceBridge.current?.flush(signal); }, []);
   const [session, setSession] = useState<Session | null>(null),
     [notice, setNotice] = useState("Connecting to the edition…"),
     [connecting, setConnecting] = useState(true),
-    [epoch, setEpoch] = useState(0);
+    [epoch, setEpoch] = useState(0),
+    [searchGeneration, setSearchGeneration] = useState(0);
   const [companyPrefill, setCompanyPrefill] =
     useState<CompanyRequestPrefill | null>(null);
   const consumePrefill = useCallback(() => setCompanyPrefill(null), []);
@@ -59,6 +64,13 @@ export function App() {
     setSignInReason("Your session expired. Reconnect before signing in again.");
     setDialog("sign-in");
   };
+  visitorExpiryHandler.current = () => {
+    requestGeneration.current++;
+    sessionRequest.current?.abort();
+    clearPrivate();
+    setConnecting(false);
+    setNotice("Your visitor search session expired. Reconnect to start a new search.");
+  };
   const refreshSession = useCallback(async () => {
     const generation = ++requestGeneration.current;
     sessionRequest.current?.abort();
@@ -70,12 +82,19 @@ export function App() {
       const next = await client.getSession(controller.signal);
       if (generation !== requestGeneration.current || controller.signal.aborted)
         return;
-      if (
-        sessionRef.current?.user &&
-        sessionRef.current.user.id !== next.user?.id
+      if (sessionRef.current && !sessionRef.current.user && next.user) {
+        // Search handoff must reload the merged server workspace, while a
+        // company lead prepared by this visitor remains in its own editor.
+        setSearchGeneration((value) => value + 1);
+        setDialog(null);
+      } else if (
+        sessionRef.current &&
+        (sessionRef.current.user?.id !== next.user?.id
+          || (!next.user && sessionRef.current.visitor?.expiresAt !== next.visitor?.expiresAt))
       ) {
         setEpoch((value) => value + 1);
         setCompanyPrefill(null);
+        setDialog(null);
       }
       sessionRef.current = next;
       client.setSession(next);
@@ -230,7 +249,7 @@ export function App() {
             ) : null}
           </div>
           <SearchWorkspace
-            key={`search-${epoch}`}
+            key={`search-${epoch}-${searchGeneration}`}
             client={client}
             session={session}
             active={route.page === "jobs"}
@@ -239,6 +258,7 @@ export function App() {
             dialogOpen={dialog !== null}
             onCompanyRequest={requestCompany}
             onAccount={() => setDialog("settings")}
+            onPersistenceReady={persistenceReady}
           />
           <CompaniesPage
             key={`companies-${epoch}`}
@@ -293,6 +313,7 @@ export function App() {
         reducedMotion={reducedMotion}
         onReducedMotionChange={setReducedMotion}
         signInReason={signInReason}
+        onBeforeAuthenticate={beforeAuthenticate}
       />
       <button
         className="back-to-top"

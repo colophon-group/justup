@@ -12,6 +12,7 @@ export interface Coverage {
 }
 export interface Session {
   user: User | null;
+  visitor: { expiresAt: string } | null;
   csrfToken: string;
   access: {
     kind: string;
@@ -34,6 +35,17 @@ export interface Session {
     usageUrl: string | null;
   };
   coverage?: Coverage;
+}
+export type SearchScope = "account" | "visitor";
+export interface SavedWorkspaceState {
+  activeSearchId: string | null;
+  drafts: Record<string, string>;
+}
+export interface WorkspaceSnapshot {
+  revision: number;
+  state: SavedWorkspaceState;
+  viewed: { jobId: string; firstViewedAt: string }[];
+  recoveredDrafts: { id: string; text: string; createdAt: string }[];
 }
 export interface Requirement {
   id?: string;
@@ -59,6 +71,8 @@ export interface Search {
   description?: string;
   requirements: Requirement[];
   warnings: Warning[];
+  draft?: { query: string; taskId: string | null; status?: string };
+  proposal?: SearchProposal;
 }
 export interface SearchProposal {
   proposalId: string;
@@ -107,6 +121,9 @@ export interface Job {
 }
 export type ContinuationState =
   "open" | "pending" | "paused" | "exhausted" | "failed";
+export type HiddenMatches =
+  | { status: "exact" | "lower_bound"; count: number }
+  | { status: "pending" | "unavailable"; count: null };
 export interface ResultPage {
   searchId: string;
   revision: number;
@@ -122,7 +139,7 @@ export interface ResultPage {
     failed?: number;
     insufficientEvidence?: number;
   };
-  hidden?: { count: number; exact: boolean };
+  hiddenMatches: HiddenMatches;
   coverage?: Coverage;
 }
 export interface CompanyRequest {

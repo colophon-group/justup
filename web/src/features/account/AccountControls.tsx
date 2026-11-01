@@ -1,6 +1,6 @@
 // Account dialogs use only authoritative session state and explicit server mutations.
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
-import { type ApiClient, errorText, isAbortError } from '../../api/client';
+import { type ApiClient, ApiError, errorText, isAbortError } from '../../api/client';
 import type { Session } from '../../api/types';
 import { Dialog } from '../../shared/Dialog';
 
@@ -15,6 +15,7 @@ export interface AccountControlsProps {
   reducedMotion: boolean;
   onReducedMotionChange: (reduced: boolean) => void;
   signInReason?: string;
+  onBeforeAuthenticate?: (signal: AbortSignal) => Promise<void>;
 }
 function localPolicy(value: string | null | undefined): boolean {
   if (!value) return false;
@@ -24,7 +25,7 @@ function localPolicy(value: string | null | undefined): boolean {
   } catch { return false; }
 }
 
-export function AccountControls({ client, session, dialog, onDialogChange, onSessionRefresh, onSignedOut, reducedMotion, onReducedMotionChange, signInReason }: AccountControlsProps) {
+export function AccountControls({ client, session, dialog, onDialogChange, onSessionRefresh, onSignedOut, reducedMotion, onReducedMotionChange, signInReason, onBeforeAuthenticate }: AccountControlsProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [invitation, setInvitation] = useState('');
@@ -73,13 +74,22 @@ export function AccountControls({ client, session, dialog, onDialogChange, onSes
     const credentials = { username, password };
     const inviteCode = invitation;
     setPassword(''); setInvitation(''); setBusy(true); setAuthError('Checking account access…');
+    let credentialsSent = false;
     try {
+      await onBeforeAuthenticate?.(action.abort.signal);
+      if (!action.valid()) return;
+      credentialsSent = true;
       if (registration && registrationEnabled) await client.register({ ...credentials, ...(requiresInvitation ? { inviteCode } : {}) }, action.abort.signal);
       else await client.login(credentials, action.abort.signal);
       if (!action.valid()) return;
       onDialogChange(null);
       await onSessionRefresh();
     } catch (error) {
+      if (credentialsSent && action.valid() && error instanceof ApiError && (error.status === 0 || error.status >= 500 || error.code === 'invalid_response')) {
+        // A lost reply can follow a committed login and visitor handoff. Read the
+        // authoritative session rather than submitting credentials a second time.
+        await onSessionRefresh();
+      }
       if (action.valid() && !isAbortError(error)) setAuthError(errorText(error));
     } finally { if (action.valid()) setBusy(false); }
   }

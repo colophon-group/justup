@@ -13,6 +13,8 @@ interface Props {
   session: Session | null;
   onSignIn: (reason?: string) => void;
   onAccount: () => void;
+  viewed: ReadonlySet<string>;
+  onViewed?: ((jobId: string) => void) | undefined;
 }
 export function ResultFeed({
   client,
@@ -23,8 +25,10 @@ export function ResultFeed({
   session,
   onSignIn,
   onAccount,
+  viewed,
+  onViewed,
 }: Props) {
-  const { feed, next, retry, refresh } = useFeed(client, search, active && !paused),
+  const { feed, next, retry, refresh } = useFeed(client, search, active && !paused, session?.user ? "account" : "visitor"),
     tailRef = useRef<HTMLDivElement>(null);
   const canContinue =
     !feed.error &&
@@ -107,13 +111,13 @@ export function ResultFeed({
           <span className="eyebrow">Last 14 days</span>
           <span className="feed-order">Newest first</span>
         </div>
-        {feed.hidden && feed.hidden.count > 0 ? (
+        {feed.hiddenMatches.count !== null && feed.hiddenMatches.count > 0 ? (
           <section id="hidden-matches" className="hidden-matches" aria-labelledby="hidden-matches-title">
             <div className="compressed-matches" aria-hidden="true"><i /><i /><i /></div>
             <div className="hidden-matches-prompt">
               <div>
                 <span className="eyebrow">More in this edition</span>
-                <h2 id="hidden-matches-title">{feed.hidden.exact ? '' : 'At least '}{feed.hidden.count.toLocaleString('en')} recent {feed.hidden.count === 1 ? 'match' : 'matches'} hidden</h2>
+                <h2 id="hidden-matches-title">{feed.hiddenMatches.status === "exact" ? '' : 'At least '}{feed.hiddenMatches.count.toLocaleString('en')} recent {feed.hiddenMatches.count === 1 ? 'match' : 'matches'} hidden</h2>
                 <p>{session?.user ? 'Your current account access does not include these matches.' : 'Sign in to see the newest matches.'}</p>
               </div>
               <button className="button dark" onClick={() => session?.user ? onAccount() : onSignIn('Sign in to see the newest matches.')}>
@@ -133,6 +137,8 @@ export function ResultFeed({
             <JobRow
               key={job.id}
               job={job}
+              viewed={viewed.has(job.id) || job.viewed === true}
+              onViewed={onViewed}
               animated={index >= initialCount}
               reducedMotion={reducedMotion}
             />
