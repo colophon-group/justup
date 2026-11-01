@@ -18,7 +18,7 @@ test("every required locale has complete aligned plain-text copy and identical s
       assert.doesNotMatch(copy[key], /<[^>]*>|\bTODO\b/, `${locale}: ${key} must be complete plain text`);
     }
     if (locale !== "en") {
-      for (const key of ["status.body", "privacy.retention.redemption", "usage.access.entitlement", "usage.contact.review", "privacy.accounts.preferences", "privacy.accounts.visitor", "privacy.accounts.bootstrap", "privacy.accounts.handoff", "privacy.measurement.journey", "privacy.measurement.execution", "privacy.measurement.review", "privacy.measurement.bounds", "privacy.browser.routeLocale"] as const) {
+      for (const key of ["status.body", "privacy.retention.redemption", "usage.access.entitlement", "usage.contact.review", "privacy.accounts.email", "privacy.accounts.emailRetention", "privacy.accounts.emailConfirmation", "privacy.hosting.email", "usage.access.email", "privacy.accounts.preferences", "privacy.accounts.visitor", "privacy.accounts.bootstrap", "privacy.accounts.handoff", "privacy.measurement.journey", "privacy.measurement.execution", "privacy.measurement.review", "privacy.measurement.bounds", "privacy.browser.routeLocale"] as const) {
         assert.notEqual(copy[key], en[key], `${locale}: ${key} is actually translated`);
       }
     }
@@ -93,6 +93,32 @@ test("conditional visitor and first-party evidence limits stay aligned without a
   assert.ok(usage.includes("not an application, interview or hire"));
   assert.ok(usage.includes("automatically follows the confirmed company unless you explicitly unfollowed it before"));
   assert.doesNotMatch(privacy, /confirmed identity request does not[^.]*follow a company/i);
+});
+
+test("optional email handling distinguishes username registration, conditional delivery and US storage", () => {
+  assert.equal(FACTS.verificationSender, "accounts@notify.justup.work");
+  assert.equal(FACTS.verificationMinutes, 10);
+  assert.equal(FACTS.verificationTaskDays, 30);
+  for (const locale of POLICY_LOCALES) {
+    const html = renderPolicy("privacy", locale);
+    assert.ok(html.includes("accounts@notify.justup.work"), locale);
+    assert.ok(html.includes('data-copy="privacy.accounts.email"'), locale);
+    assert.ok(html.includes('data-copy="privacy.hosting.email"'), locale);
+    assert.ok(html.includes('data-copy="privacy.accounts.emailRetention"'), locale);
+    assert.ok(html.includes('data-copy="privacy.accounts.emailConfirmation"'), locale);
+    const usage = renderPolicy("usage", locale);
+    assert.ok(usage.includes('data-copy="usage.access.email"'), locale);
+    for (const document of [html, usage]) assert.doesNotMatch(document, /email[- ]login|E-Mail-Anmeldung|connexion par e-mail|accesso via email|acceso por correo/i);
+    if (locale !== "en") {
+      for (const key of ["privacy.accounts.email", "privacy.hosting.email", "usage.access.email"] as const) assert.notEqual(POLICY_COPY[locale][key], en[key]);
+    }
+  }
+  const privacy = renderPolicy("privacy", "en"), usage = renderPolicy("usage", "en");
+  for (const fact of ["Ordinary registration and sign-in use a local username and password", "optional email-ownership verification step can ask a signed-in user for an address", "if it is integrated, reviewed and enabled", "a signed-in user can provide an address to prove control of that mailbox", "Verification alone does not activate a free period", "Resend receives that recipient address", "verification message with its short-lived code", "delivery reference", "address is held only in the temporary verification record", "removed through local cleanup after delivery, failure or expiry", "Codes are not saved as readable text in local records", "Delivery-task metadata, without the address or code, has a 30-day limit", "running service and safe deletion controls", "valid for 10 minutes", "bound to the original signed-in session and language", "Changing interface language does not change that binding", "confirmed during a delivery-queue or AI outage", "Availability of a new send is separate from confirmation", "with sending routed through Ireland", "stores message content, delivery logs, webhook payloads and its account records in the United States", "does not move that storage to Ireland", "verified for the selected provider account", "does not itself promise deletion of Resend’s copies"]) assert.ok(privacy.includes(fact), fact);
+  assert.ok(usage.includes("If reviewed and enabled, signed-in users can provide an address"));
+  assert.ok(usage.includes("Verification alone does not activate a free period or grant full access"));
+  assert.doesNotMatch(privacy, /Identity and billing providers have not been selected|email-login|email login/);
+  assert.doesNotMatch(en["privacy.hosting.email"], /30[- ]day|30 days/);
 });
 
 test("Vite emits all notices only into the public build, using identical development bytes", () => {
