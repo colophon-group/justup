@@ -16,6 +16,7 @@ All routes below are relative to `/api/v1`. Authentication, Origin, CSRF, body a
 | Route | Request and response |
 | --- | --- |
 | `GET /follows` | Current account's follow snapshot. |
+| `GET /account/companies?view=followed\|requested&q=…&limit=20&cursor=…` | Bounded canonical company rows for current follows or accepted requests; see the [catalogue contract](api.md#companies-and-identity-requests). |
 | `PATCH /follows/:companyId` | `{followed:boolean,expectedRevision:number}` → updated follow snapshot. |
 
 A snapshot is `{accountId,revision,items:[{companyId,followedAt}],invalidatedSearchIds:[]}`. IDs must resolve through the public company catalogue. A repeated request for the same state has one effect and retains the first timestamp for that follow interval. A stale revision cannot replace a different, newer choice. Unfollowing stores a private negative choice, so automatic request following cannot recreate it. Followed-only searches affected by an actual change increment their revisions; `invalidatedSearchIds` tells the client which saved searches to reload.

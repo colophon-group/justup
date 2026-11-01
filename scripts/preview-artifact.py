@@ -84,6 +84,7 @@ def allowed(path):
         return False
     return (path in {'runtime/bin/node', 'runtime/LICENSE', MODEL_CATALOGUE, WIRE_CATALOGUE, 'app/scripts/import-jobs.py',
                      'app/scripts/hiring-wire/enqueue.mjs', 'app/scripts/hiring-wire/check-snapshot.mjs',
+                     'app/scripts/company-requests/setup.mjs',
                      'app/server/model-schemas/intent.schema.json', 'app/server/model-schemas/company.schema.json',
                      'app/server/model-schemas/company-discovery.schema.json'} or path in CODEX_FILES or
             (path.startswith('app/server/') and not path.startswith(('app/server/evals/', 'app/server/demo-'))
@@ -280,7 +281,8 @@ def build(root, commit, node_archive, codex_archive, output):
     if sha(files['runtime/codex/LICENSE']) != CODEX_FILES['runtime/codex/LICENSE']:
         raise ValueError('Codex license differs from the pinned official source.')
     entries = git('ls-tree', '-r', commit, '--', 'server', 'scripts/import-jobs.py',
-                  'scripts/hiring-wire/enqueue.mjs', 'scripts/hiring-wire/check-snapshot.mjs').decode().splitlines()
+                  'scripts/hiring-wire/enqueue.mjs', 'scripts/hiring-wire/check-snapshot.mjs',
+                  'scripts/company-requests/setup.mjs').decode().splitlines()
     for entry in entries:
         meta, path = entry.split('\t', 1)
         target = 'app/' + path

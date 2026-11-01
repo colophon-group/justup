@@ -123,11 +123,19 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     owner_id TEXT NOT NULL,request_id TEXT NOT NULL,task_id TEXT NOT NULL,PRIMARY KEY(owner_id,request_id,task_id)
   ) STRICT;
   INSERT OR IGNORE INTO justup_company_request_tasks SELECT owner_id,id,task_id FROM justup_company_requests WHERE task_id IS NOT NULL;`);
+  if(feed.ensureCompanySetup)transaction(db,()=>{
+    for(const found of db.prepare("SELECT candidate_json FROM justup_company_requests WHERE status='accepted' AND candidate_json IS NOT NULL").all()) {
+      const id=JSON.parse(found.candidate_json).companyId;if(typeof id==='string')feed.ensureCompanySetup(id);
+    }
+  });
   const row = (ownerId, id) => db.prepare('SELECT * FROM justup_company_requests WHERE owner_id=? AND id=?').get(ownerId, id);
+  const premium=ownerId=>ownerAuthority?.(ownerId,{allowUnavailable:true})?.access?.premium===true;
   function view(found) {
+    const candidate=found.candidate_json?JSON.parse(found.candidate_json):null,storedId=candidate?.companyId??null;
+    const companyId=storedId?(feed.canonicalCompanyId?.(storedId)??storedId):null;
     return { id: found.id, input: found.input_text, scope: found.scope, status: found.status,
-      companyId:found.candidate_json?JSON.parse(found.candidate_json).companyId??null:null,
-      candidate: found.candidate_json == null ? null : JSON.parse(found.candidate_json), previewRevision: found.preview_revision,
+      companyId,setup:found.status==='accepted'&&companyId&&feed.companySetup?{...feed.companySetup(companyId),priority:premium(found.owner_id)?'premium':'standard'}:null,
+      candidate:candidate?{...candidate,companyId}:null, previewRevision: found.preview_revision,
       clarification: found.clarification, taskId: found.task_id, createdAt: new Date(found.created_at).toISOString() };
   }
   const requireOwner = (ctx) => {
@@ -219,8 +227,10 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
           candidate.companyId=feed.publishCompany(candidate);
           db.prepare('UPDATE justup_company_requests SET candidate_json=? WHERE owner_id=? AND id=?').run(JSON.stringify(candidate),ownerId,id);
           readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId,locale);
+          feed.ensureCompanySetup?.(candidate.companyId);
           return result(row(ownerId,id));
         }
+        if(candidate.companyId)feed.ensureCompanySetup?.(candidate.companyId);
         return result(found);
       }
       const used = db.prepare('SELECT id FROM justup_company_requests WHERE owner_id=? AND accept_key=?').get(ownerId, idempotencyKey);
@@ -230,8 +240,38 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
       db.prepare("UPDATE justup_company_requests SET status='accepted',accept_key=?,candidate_json=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
         .run(idempotencyKey,JSON.stringify(candidate),ownerId,id,body.previewRevision);
       if(candidate.companyId)readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId,locale);
+      if(candidate.companyId)feed.ensureCompanySetup?.(candidate.companyId);
       try{records?.observe({ownerId,event:'company_accepted',key:id,referenceId:id,locale,outcome:'accepted'});}catch{}
       return result(row(ownerId, id));
+    });
+  }
+  function prioritize(ownerId,companyId,body,locale) {
+    exactKeys(body,['requestKey']);
+    if(typeof body.requestKey!=='string'||!KEY.test(body.requestKey))throw problem('invalid_input');
+    return transaction(db,()=>{
+      if(!admitted(ownerId,locale))throw problem('policy_unavailable',503);
+      if(!premium(ownerId))throw problem('access_denied',403);
+      const company=feed.company(companyId),json=JSON.stringify({action:'priority',companyId:company.id});
+      const key=db.prepare('SELECT * FROM justup_company_request_keys WHERE owner_id=? AND request_key=?').get(ownerId,body.requestKey);
+      if(key) {
+        if(key.input_json!==json)throw problem('idempotency_conflict',409);
+        const found=row(ownerId,key.request_id);if(!found)throw problem('not_found',404);
+        return result(found);
+      }
+      if(db.prepare('SELECT count(*) AS n FROM justup_company_request_keys WHERE owner_id=?').get(ownerId).n>=maxPerOwner*4)throw problem('task_limit',429);
+      const prior=db.prepare("SELECT * FROM justup_company_requests WHERE owner_id=? AND status='accepted' AND candidate_json IS NOT NULL ORDER BY created_at,id").all(ownerId)
+        .find(found=>(feed.canonicalCompanyId?.(JSON.parse(found.candidate_json).companyId)??JSON.parse(found.candidate_json).companyId)===company.id);
+      if(prior) {
+        insertKey(ownerId,body.requestKey,json,prior.id);
+        readingPreferences?.followAcceptedCompany(ownerId,company.id,locale);
+        feed.ensureCompanySetup?.(company.id);return result(prior);
+      }
+      if(db.prepare('SELECT count(*) AS n FROM justup_company_requests WHERE owner_id=?').get(ownerId).n>=maxPerOwner)throw problem('task_limit',429);
+      const id=randomUUID(),candidate=importedCandidate(company),fingerprint=createHash('sha256').update(`priority:${company.id}`).digest('hex');
+      db.prepare(`INSERT INTO justup_company_requests(id,owner_id,input_text,domain,career_url,scope,fingerprint,status,candidate_json,preview_revision,clarification,task_id,created_at)
+        VALUES(?,?,?,?,?,NULL,?,'candidate',?,1,NULL,NULL,?)`).run(id,ownerId,company.name,candidate.domain,null,fingerprint,JSON.stringify(candidate),now());
+      insertKey(ownerId,body.requestKey,json,id);
+      return accept(ownerId,id,{candidateId:candidate.id,previewRevision:1},`priority:${createHash('sha256').update(body.requestKey).digest('hex')}`,locale);
     });
   }
   function deleteRecord(ownerId, id) {
@@ -251,11 +291,33 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     db.prepare('DELETE FROM justup_company_request_keys WHERE owner_id=?').run(ownerId);
   }
   async function route(ctx) {
+    const priorityMatch=/^\/account\/companies\/([^/]+)\/priority$/u.exec(ctx.path);
+    if(priorityMatch&&ctx.method==='POST') {
+      const ownerId=requireOwner(ctx);
+      if(ctx.viewer?.account?.id!==ownerId)throw problem('unauthenticated',401);
+      let id;try{id=decodeURIComponent(priorityMatch[1]);}catch{throw problem('invalid_input');}
+      if(!id||id.length>128||id.includes('/'))throw problem('invalid_input');
+      return prioritize(ownerId,id,ctx.body,ctx.interfaceLocale);
+    }
+    if(ctx.path==='/account/companies'&&ctx.method==='GET') {
+      const ownerId=requireOwner(ctx);
+      if(ctx.viewer?.account?.id!==ownerId)throw problem('unauthenticated',401);
+      if([...ctx.url.searchParams.keys()].some(key=>!['view','q','limit','cursor'].includes(key))
+          || ['view','q','limit','cursor'].some(key=>ctx.url.searchParams.getAll(key).length>1))throw problem('invalid_query');
+      const view=ctx.url.searchParams.get('view');
+      if(!['followed','requested'].includes(view))throw problem('invalid_query');
+      const rawLimit=ctx.url.searchParams.get('limit'),limit=rawLimit===null?20:/^[1-9]\d?$/.test(rawLimit)?Number(rawLimit):NaN;
+      if(!Number.isInteger(limit)||limit<1||limit>50)throw problem('invalid_limit');
+      if(typeof feed.accountCompanies!=='function'||view==='followed'&&!readingPreferences)throw problem('dependency_unavailable',503);
+      const companyIds=view==='followed'?readingPreferences.followedIds(ownerId):db.prepare("SELECT candidate_json FROM justup_company_requests WHERE owner_id=? AND status='accepted' AND candidate_json IS NOT NULL").all(ownerId)
+        .map(found=>JSON.parse(found.candidate_json).companyId).filter(id=>typeof id==='string');
+      return {status:200,body:{accountId:ownerId,view,...feed.accountCompanies({ownerId,view,companyIds,q:ctx.url.searchParams.get('q')??'',limit,cursor:ctx.url.searchParams.get('cursor')})}};
+    }
     if (ctx.path !== '/company-requests' && !/^\/company-requests\/[^/]+(?:\/accept)?$/u.test(ctx.path)) return null;
     const ownerId = requireOwner(ctx);
     if(ctx.method!=='GET'&&ctx.method!=='DELETE'&&!admitted(ownerId,ctx.interfaceLocale))throw problem('policy_unavailable',503);
     if (ctx.path === '/company-requests') {
-      if (ctx.method === 'GET') {const items=db.prepare('SELECT * FROM justup_company_requests WHERE owner_id=? ORDER BY created_at DESC,id').all(ownerId).map(view);try{for(const item of items)records?.observe({ownerId,event:'company_progress',key:`${item.id}:${item.status}:${item.previewRevision}`,referenceId:item.id,viewer:ctx.viewer,locale:ctx.interfaceLocale,outcome:item.status});}catch{}return {status:200,body:{items}};}
+      if (ctx.method === 'GET') {const items=db.prepare('SELECT * FROM justup_company_requests WHERE owner_id=? ORDER BY created_at DESC,id').all(ownerId).map(view);try{for(const item of items)records?.observe({ownerId,event:'company_progress',key:`${item.id}:${item.status}:${item.previewRevision}:${item.setup?.revision??0}`,referenceId:item.id,viewer:ctx.viewer,locale:ctx.interfaceLocale,outcome:item.status});}catch{}return {status:200,body:{items}};}
       if (ctx.method === 'POST') return create(ownerId, ctx.body,ctx.interfaceLocale);
       return null;
     }
