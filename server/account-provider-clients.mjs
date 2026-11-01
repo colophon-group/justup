@@ -27,7 +27,9 @@ async function requestJson(fetchImpl,url,options,{signal}={}) {
   const timer=setTimeout(abort,TIMEOUT_MS);timer.unref?.();
   signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
   try {
+    if(controller.signal.aborted)throw failure();
     const response=await fetchImpl(url,{...options,redirect:'error',signal:controller.signal});
+    if(controller.signal.aborted)throw failure();
     if(!response?.ok||!response.body)throw failure(response?.status===429?'provider_rate_limit':'provider_unavailable');
     const length=response.headers.get('content-length');
     if(length!==null&&(!/^\d+$/.test(length)||Number(length)>MAX_RESPONSE))throw failure();
@@ -81,15 +83,43 @@ export function createStripeTestClient({apiKey,accountId,fetchImpl=fetch}={}) {
   if(typeof apiKey!=='string'||!/^rk_test_[A-Za-z0-9_]{1,256}$/.test(apiKey))throw failure('provider_mode_mismatch',503);
   if(!identifier(accountId,'acct')||typeof fetchImpl!=='function')throw failure();
   const headers={Authorization:`Bearer ${apiKey}`,'Stripe-Version':STRIPE_API_VERSION};
-  async function get(path,{signal}={}){
+  async function request(path,{method='GET',fields,idempotencyKey,signal}={}){
     const account=await requestJson(fetchImpl,'https://api.stripe.com/v1/account',{method:'GET',headers},{signal});
     if(account.object!=='account'||account.id!==accountId)throw failure('provider_account_mismatch');
-    const result=await requestJson(fetchImpl,`https://api.stripe.com/v1/${path}`,{method:'GET',headers},{signal});
-    if(result.livemode!==false)throw failure('provider_mode_mismatch');
+    const supplied={...headers};let body;
+    if(method!=='GET'){
+      if(typeof idempotencyKey!=='string'||!/^[A-Za-z0-9_.:/-]{16,200}$/.test(idempotencyKey))throw failure('invalid_input',400);
+      supplied['Idempotency-Key']=idempotencyKey;supplied['Content-Type']='application/x-www-form-urlencoded';
+      body=new URLSearchParams(fields??{}).toString();
+    }
+    const result=await requestJson(fetchImpl,`https://api.stripe.com/v1/${path}`,{method,headers:supplied,...(body===undefined?{}:{body})},{signal});
+    if(result.object==='list'){
+      if(!Array.isArray(result.data)||result.data.length>32||typeof result.has_more!=='boolean'||result.data.some(value=>value?.livemode!==false))throw failure('provider_mode_mismatch');
+    }else if(result.livemode!==false)throw failure('provider_mode_mismatch');
     return result;
   }
+  const optionsFor=(options,fields)=>({...options,fields});
+  const owned=(result,object,id)=>{if(result.object!==object||result.id!==id)throw failure();return result;};
+  const requireId=(id,prefix)=>{if(!identifier(id,prefix))throw failure('invalid_input',400);return id;};
   return {
-    async retrieveSubscription(id,options){if(!identifier(id,'sub'))throw failure('invalid_input',400);const result=await get(`subscriptions/${id}`,options);if(result.object!=='subscription'||result.id!==id)throw failure();return result;},
-    async retrieveInvoice(id,options){if(!identifier(id,'in'))throw failure('invalid_input',400);const result=await get(`invoices/${id}`,options);if(result.object!=='invoice'||result.id!==id)throw failure();return result;},
+    async retrieveSubscription(id,options){requireId(id,'sub');return owned(await request(`subscriptions/${id}`,options),'subscription',id);},
+    async retrieveInvoice(id,options){requireId(id,'in');return owned(await request(`invoices/${id}?expand%5B%5D=payments`,options),'invoice',id);},
+    async retrievePrice(id,options){requireId(id,'price');return owned(await request(`prices/${id}`,options),'price',id);},
+    async retrieveCustomer(id,options){requireId(id,'cus');return owned(await request(`customers/${id}`,options),'customer',id);},
+    async retrievePaymentIntent(id,options){requireId(id,'pi');return owned(await request(`payment_intents/${id}`,options),'payment_intent',id);},
+    async retrieveCharge(id,options){requireId(id,'ch');return owned(await request(`charges/${id}`,options),'charge',id);},
+    async retrieveCheckout(id,options){requireId(id,'cs_test');return owned(await request(`checkout/sessions/${id}`,options),'checkout.session',id);},
+    async retrievePortalConfiguration(id,options){requireId(id,'bpc');return owned(await request(`billing_portal/configurations/${id}`,options),'billing_portal.configuration',id);},
+    async createCustomer(billingReference,options){
+      if(typeof billingReference!=='string'||!/^[A-Za-z0-9_-]{32,128}$/.test(billingReference))throw failure('invalid_input',400);
+      const result=await request('customers',{...optionsFor(options,{'metadata[justup_reference]':billingReference}),method:'POST'});
+      if(result.object!=='customer'||!identifier(result.id,'cus')||result.metadata?.justup_reference!==billingReference)throw failure();return result;
+    },
+    async createCheckout(fields,options){const result=await request('checkout/sessions',{...optionsFor(options,fields),method:'POST'});if(result.object!=='checkout.session'||!identifier(result.id,'cs_test'))throw failure();return result;},
+    async createPortal(fields,options){const result=await request('billing_portal/sessions',{...optionsFor(options,fields),method:'POST'});if(result.object!=='billing_portal.session'||!identifier(result.id,'bps'))throw failure();return result;},
+    async expireCheckout(id,options){requireId(id,'cs_test');return owned(await request(`checkout/sessions/${id}/expire`,{...options,method:'POST'}),'checkout.session',id);},
+    async cancelSubscription(id,options){requireId(id,'sub');return owned(await request(`subscriptions/${id}`,{...options,method:'DELETE',fields:{invoice_now:'false',prorate:'false'}}),'subscription',id);},
+    async listSubscriptions(customerId,options){requireId(customerId,'cus');return request(`subscriptions?customer=${customerId}&status=all&limit=32`,options);},
+    async listCheckouts(customerId,options){requireId(customerId,'cus');return request(`checkout/sessions?customer=${customerId}&limit=32`,options);},
   };
 }

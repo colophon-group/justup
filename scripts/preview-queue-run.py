@@ -17,7 +17,7 @@ BASE = Path('/srv/justup_preview')
 CONFIG_PATH = BASE / 'queue/config/runner.json'
 LEDGER_PATH = BASE / 'queue/budget/jev.jsonl'
 CONFIG_KEYS = {'dbPath', 'sharedState', 'runnerStatusPath',
-               'model', 'jev', 'matching', 'verificationTtlMs', 'hiringWire', 'sourceCoverage', 'emailVerification'}
+               'model', 'jev', 'matching', 'verificationTtlMs', 'hiringWire', 'sourceCoverage', 'emailVerification', 'stripeBilling'}
 MODEL_KEYS = {'enabled', 'isolationVerified', 'cliVersion', 'socketPath', 'attestationPath',
               'taskProfiles', 'companyResearchVerified'}
 BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49'
@@ -49,6 +49,11 @@ def validate_configuration(config, manifest):
             or config.get('sharedState') is not True
             or config.get('runnerStatusPath') != str(BASE / 'state/runner-status.json')):
         raise ValueError('Queue configuration differs from the fixed candidate and state boundary.')
+    if 'stripeBilling' in config:
+        artifact = artifact_module()
+        artifact.validate_stripe_billing(config['stripeBilling'], role='queue')
+        if config['stripeBilling'].get('enabled') is True and not artifact.BILLING_MODULES <= manifest.get('files', {}).keys():
+            raise ValueError('Test billing requires its complete fixed runtime graph.')
     if 'emailVerification' in config:
         email = config['emailVerification']
         if not isinstance(email, dict) or (email != {'enabled': False} and (
