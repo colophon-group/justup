@@ -25,7 +25,7 @@ Name ordinary branches `work/<semantic-slug>`, normally using the primary issue'
 | Branch or ref | Purpose | Entry rule |
 | --- | --- | --- |
 | `work/<semantic-slug>` | One coherent change, based on `dev`. | PR into `dev`. |
-| `dev` | Integrated next version; never a production deployment source. | Selected PR checks and reviewed quality checklist pass. |
+| `dev` | Integrated next version; never a production deployment source. | An authorized agent completes review and merges the PR after current required checks pass. |
 | `release/vX.Y.Z` | Frozen candidate cut from an exact `dev` commit. | PR into `main`; full release gate passes on the candidate and current base. |
 | `hotfix/<semantic-slug>` | Urgent correction based on `main`. | PR into `main` with the affected release gate; merge back into `dev`. |
 | `main` | Stable baseline and source of released versions. | Release or urgent hotfix PR; before launch, reviewed repository-setup or policy PR. No direct pushes. |
@@ -45,7 +45,7 @@ If you notice a separate bug, possible simplification, maintenance task, documen
 
 1. Note the observable behavior, affected file or area and why it matters. Do not include credentials or personal data.
 2. Search open and closed issues by behavior, file path and slug. If one already covers the same outcome, add the new evidence there.
-3. Otherwise open an issue with the [work-item template](../.github/ISSUE_TEMPLATE/work.md). Explain the motivation, current context, desired outcome and how to tell when it is addressed. Choose one type label from the table below; use `blocked` only while a decision or dependency is pending.
+3. Otherwise open an issue with the [work-item template](../.github/ISSUE_TEMPLATE/work.md). Explain the motivation, current context, desired outcome and how to tell when it is addressed. Choose one type label from the table below; add `blocked` or `human-decision` only when its condition applies.
 4. Keep the current change focused. Address a finding in the current pull request only when it is needed for that request; otherwise leave the new issue for separate work.
 
 Write each issue so a reader understands it without opening another document: use ordinary words, define necessary project terms the first time they appear, and link files or evidence for detail. Record material decisions and rejected alternatives in the issue discussion. Code comments and product docs describe current behavior, without a timeline of earlier approaches.
@@ -56,7 +56,7 @@ Agents must not add themselves as `Co-authored-by` trailers or add agent self-cr
 
 A pull request description links its primary issue and states the changes, verification and release impact in plain language. It should make sense on its own, without repeating the issue's motivation. Close the issue when its desired outcome is accepted.
 
-Use one type label and, only when needed, `blocked`:
+Use one type label. The last two labels describe a current condition and may be added when needed:
 
 | Label | Use |
 | --- | --- |
@@ -66,6 +66,7 @@ Use one type label and, only when needed, `blocked`:
 | `documentation` | Documentation-only work. |
 | `resource-request` | A separate request for a new external service or infrastructure spend. |
 | `blocked` | An issue is waiting on a decision or dependency; remove it when that condition clears. |
+| `human-decision` | A product, policy, resource or release choice needs an explicit operator decision. Remove it when the decision is recorded; do not use it for routine PR review. |
 
 When proposed work needs a new external service or infrastructure spend, create a separate `resource-request` issue and mark it `blocked`. State the purpose, existing alternatives, owner, environment, data/access scope, one-time and recurring cost estimate, spending ceiling and cleanup plan. Planning and code preparation may proceed. An authorized human must explicitly approve the resource and ceiling in that issue before provisioning, even if usable credentials already exist. A label, available account, or agent-authored comment is not approval. Reapproval is needed if scope or cost increases. Link the resource issue and its approval status from the implementation issue and PR.
 
@@ -151,7 +152,11 @@ The production deploy is an explicit release action, not an automatic build on e
 
 ## 7. Ownership and enforcement
 
-Before the first live release, decide who may merge into `dev` and `main`, who owns each suite, and who can approve production promotion. Require PRs, current green checks and resolved review comments. Code owners or a second reviewer should inspect security, billing, migration and deploy changes. Restrict CI credentials to the minimum scope and keep preview and production secrets separate.
+Authorized agents own the `dev` pull request path. GitHub requires a PR and a current green `CI / decision` check, but requires zero approving reviews. No ordinary `dev` PR waits for human approval. An agent other than the contributor reviews the exact change; security, billing, migration and deployment work needs a reviewer with relevant context. Resolve findings and review comments, and complete the quality checklist before marking a draft ready. A passing check alone does not make incomplete work ready.
+
+After review, an authorized agent rereads the PR's draft state, exact head and base commit IDs, required checks, merge state and any hold or conflicting operator decision. Arm auto-merge only when source edits are finished: if checks are pending, GitHub merges that ready PR when they pass; if checks are already green, merge against the reviewed head. Never use administrator bypass or push directly to `dev`. Before another push or base change, disable auto-merge; a reviewer then checks the affected evidence and re-arms it only for the new exact state. An agent watches an armed PR through its merge. A new draft, hold, failed check or conflicting operator decision stops the merge; do not change draft state to evade a hold.
+
+Operator decisions required for new resource spending, policy approval and production promotion remain separate from PR review. Before the first live release, name the owners of each suite and the production promotion authority. Restrict CI credentials to the minimum scope and keep preview and production secrets separate.
 
 Keep `dev` and `main` protected against direct pushes and require current `CI / decision` results before merging. If a branch rule or required check is missing, stop the application merge and restore the gate. The full preview deployment and `Preview / verified` release check are not implemented yet; they must pass before a live release. Do not create an always-green placeholder check.
 

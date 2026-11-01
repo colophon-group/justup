@@ -2,7 +2,7 @@
 name: Resource request
 about: Request approval before adding an external service or infrastructure spend
 title: ""
-labels: "resource-request, blocked"
+labels: "resource-request, blocked, human-decision"
 assignees: ""
 ---
 
