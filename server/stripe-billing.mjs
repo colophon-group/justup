@@ -16,6 +16,8 @@ const ref=value=>typeof value==='string'?value:value?.id;
 const fail=(code='billing_unavailable',status=503)=>{throw problem(code,status);};
 const iso=value=>value==null?null:new Date(value).toISOString();
 const KINDS=['billing_checkout','billing_portal','billing_reconcile','billing_terminate'];
+const BILLING_FAILURES=new Set(['billing_unavailable','billing_termination_pending','billing_operator_reconciliation_required','billing_evidence_invalid','billing_configuration_mismatch','processing_unavailable']);
+const RECEIPT_FAILURES=new Set([...BILLING_FAILURES,'task_failed','task_timeout','task_interrupted','revision_conflict','provider_unavailable','provider_down','timeout','rate_limit','provider_rate_limit']);
 
 export function validateStripeBillingConfig(value,{role='queue'}={}) {
   if(value===undefined||exact(value,['enabled'])&&value.enabled===false)return value;
@@ -82,8 +84,34 @@ function unresolvedCheckout(db,binding){
   return !anchor||anchor.error_code==='billing_operator_reconciliation_required'||anchor.resource_kind==='checkout'&&Boolean(anchor.resource_id);
 }
 function taskActive(tasks,task,now){const current=tasks.get(task.ownerId,task.id);return current?.status==='running'&&current.leaseToken===task.leaseToken&&current.leaseUntil>now();}
+function terminationReceipt(db,receipt){
+  if(!receipt||receipt.kind!=='billing_terminate'||!['succeeded','failed'].includes(receipt.status)||receipt.output!==null
+      ||!exact(receipt.payload,['operationId','locale','policyKey'])||typeof receipt.payload.operationId!=='string'
+      ||receipt.errorCode!==null&&!RECEIPT_FAILURES.has(receipt.errorCode))return null;
+  const operation=operationRow(db,receipt.ownerId,receipt.payload.operationId),binding=accountRow(db,receipt.ownerId);
+  if(!operation||!binding||operation.kind!=='terminate'||operation.task_id!==receipt.id||binding.closing_revision<1
+      ||receipt.payload.locale!==operation.locale||receipt.payload.policyKey!==operation.policy_key
+      ||operation.request_key!==`termination:${binding.closing_revision}`||operation.input_hash!==hash(operation.request_key))return null;
+  return {operation,binding};
+}
+function receiptFailure(receipt,operation){return BILLING_FAILURES.has(operation.error_code)?operation.error_code:BILLING_FAILURES.has(receipt.errorCode)?receipt.errorCode:'billing_unavailable';}
+function terminationOutcome(receipt,{operation,binding}){
+  if(receipt.status==='failed')return {status:'failed',error:receiptFailure(receipt,operation)};
+  if(receipt.errorCode===null&&operation.status==='ready'&&binding.termination_revision===binding.closing_revision
+      &&Number.isSafeInteger(binding.termination_verified_at))return {status:'ready',error:null};
+  return null;
+}
+function absorbedTermination(db,receipt){
+  const state=terminationReceipt(db,receipt);if(!state)return false;
+  const outcome=terminationOutcome(receipt,state),{operation}=state;
+  return outcome!==null&&operation.resource_kind==='termination_receipt'&&operation.resource_id===receipt.id
+    &&operation.status===outcome.status&&operation.error_code===outcome.error;
+}
 function enqueue(db,tasks,operation,now) {
   if(operation.task_id&&['pending','running'].includes(tasks.get(operation.account_id,operation.task_id)?.status))return;
+  // A terminal cleanup receipt must be observed and released through the API's
+  // protected transaction before a retry can replace its canonical pointer.
+  if(operation.kind==='terminate'&&operation.task_id&&db.prepare('SELECT 1 FROM justup_tasks WHERE id=?').get(operation.task_id))return;
   if(operation.task_id)tasks.delete(operation.account_id,operation.task_id);
   const attempt=operation.attempt+1,task=tasks.enqueue({ownerId:operation.account_id,kind:`billing_${operation.kind}`,
     requestKey:`${operation.id}:${attempt}`,payload:{operationId:operation.id,locale:operation.locale,policyKey:operation.policy_key}});
@@ -127,8 +155,18 @@ export function createStripeBillingApi({db,tasks,config={},now=Date.now,getAuth,
   function cleanup() {
     const expired=db.prepare('SELECT id FROM justup_billing_operations WHERE url IS NOT NULL AND expires_at<=?').all(now());
     const old=db.prepare("SELECT id FROM justup_billing_operations WHERE kind<>'terminate' AND status IN ('ready','failed') AND updated_at<? AND id NOT IN (SELECT current_checkout_operation_id FROM justup_billing_accounts WHERE current_checkout_operation_id IS NOT NULL)").all(now()-86_400_000);
-    if(!expired.length&&!old.length)return;
-    withPrivateTransaction(()=>{beforePrivateDelete();for(const row of expired)db.prepare('UPDATE justup_billing_operations SET url=NULL WHERE id=?').run(row.id);
+    const receipts=db.prepare("SELECT id,account_id FROM justup_billing_operations WHERE kind='terminate' AND resource_kind='termination_receipt' AND task_id IS NOT NULL LIMIT 96").all();
+    if(!expired.length&&!old.length&&!receipts.length)return;
+    withPrivateTransaction(()=>{
+      for(const row of receipts){
+        const operation=operationRow(db,row.account_id,row.id);let receipt;
+        try{receipt=tasks.get(row.account_id,operation?.task_id);}catch{continue;}
+        if(!absorbedTermination(db,receipt))continue;
+        beforePrivateDelete();
+        if(tasks.releaseCleanupReceipt(row.account_id,receipt.id,current=>absorbedTermination(db,current)))
+          db.prepare('UPDATE justup_billing_operations SET task_id=NULL WHERE id=? AND task_id=?').run(operation.id,receipt.id);
+      }
+      if(expired.length||old.length)beforePrivateDelete();for(const row of expired)db.prepare('UPDATE justup_billing_operations SET url=NULL WHERE id=?').run(row.id);
       for(const row of old){const operation=db.prepare('SELECT * FROM justup_billing_operations WHERE id=?').get(row.id);if(operation.task_id)tasks.delete(operation.account_id,operation.task_id);db.prepare('DELETE FROM justup_billing_operations WHERE id=?').run(row.id);}});
   }
   function start(ctx,kind) {
@@ -162,6 +200,7 @@ export function createStripeBillingApi({db,tasks,config={},now=Date.now,getAuth,
   }
   function prepareDeletion({accountId,token}) {
     const ctx={accountId,sessionHash:hash(token),interfaceLocale:'en'};current(ctx,{cleanup:true});
+    cleanup();
     let binding=accountRow(db,accountId);if(!binding)return true;
     if(binding.closing_revision>0&&binding.termination_revision===binding.closing_revision&&binding.termination_verified_at<=now()&&binding.termination_verified_at>=now()-30_000)return true;
     if(!enabled())fail('billing_termination_unavailable',503);
@@ -244,6 +283,27 @@ export function createStripeBillingRunner({db,tasks,config={},now=Date.now,clien
   const admission=createProcessingAdmission({db,config,now});
   const ledger=enabled?createEntitlements({db,now,billingEventVerifier:event=>event}):null;
   const signals=new WeakMap();
+  function observeReceipt(receipt){
+    const state=terminationReceipt(db,receipt);if(!state)return false;
+    const outcome=terminationOutcome(receipt,state);if(!outcome)return false;
+    if(absorbedTermination(db,receipt))return true;
+    // Only bounded status and the receipt identity are absorbed here. Original
+    // provider keys, mutation times and uncertain checkout evidence stay owned.
+    db.prepare("UPDATE justup_billing_operations SET status=?,error_code=?,resource_kind='termination_receipt',resource_id=?,updated_at=max(updated_at,?) WHERE id=? AND task_id=?")
+      .run(outcome.status,outcome.error,receipt.id,Date.parse(receipt.updatedAt),state.operation.id,receipt.id);
+    return true;
+  }
+  function taskFinished(task){
+    if(task.kind!=='billing_terminate')return false;
+    return transaction(db,()=>{try{return observeReceipt(tasks.get(task.ownerId,task.id));}catch{return false;}});
+  }
+  function reconcileCompletedTasks(){
+    return transaction(db,()=>{
+      const rows=db.prepare("SELECT id,owner_id FROM justup_tasks WHERE kind='billing_terminate' AND status IN ('succeeded','failed') ORDER BY updated_at,id LIMIT 96").all();let absorbed=0;
+      for(const row of rows)try{if(observeReceipt(tasks.get(row.owner_id,row.id)))absorbed++;}catch{ /* Unknown evidence remains in its receipt. */ }
+      return absorbed;
+    });
+  }
   function current(task,{cleanup=false}={}) {
     if(signals.get(task)?.aborted)fail('task_interrupted');
     const operation=operationRow(db,task.ownerId,task.payload?.operationId),binding=accountRow(db,task.ownerId);
@@ -433,5 +493,6 @@ export function createStripeBillingRunner({db,tasks,config={},now=Date.now,clien
       return {status:'failed',errorCode:['billing_termination_pending','billing_operator_reconciliation_required','billing_evidence_invalid','billing_configuration_mismatch','processing_unavailable','task_interrupted'].includes(error.code)?error.code:'billing_unavailable'};
     }finally{signals.delete(task);}
   }
-  return {available:()=>enabled,runTask,kinds:KINDS};
+  reconcileCompletedTasks();
+  return {available:()=>enabled,runTask,kinds:KINDS,taskFinished,reconcileCompletedTasks};
 }

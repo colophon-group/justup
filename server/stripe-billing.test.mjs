@@ -3,11 +3,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,createHmac} from 'node:crypto';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,unlinkSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createApplication} from './main.mjs';
 import {createAuth} from './auth.mjs';
+import {createRunner} from './runner.mjs';
+import {createBillingRunnerHooks} from './runner-adapter.mjs';
 import {createStripeBillingRunner,validateStripeBillingConfig} from './stripe-billing.mjs';
 import {STRIPE_API_VERSION} from './account-provider-clients.mjs';
 
@@ -23,7 +25,7 @@ async function fixture(t,{storage={},hooks={}}={}) {
     allowedOrigin:ORIGIN,privacyUrl:`${ORIGIN}/privacy.html`,usageUrl:`${ORIGIN}/usage.html`,policiesReviewed:true,policyVersion:'test-v1',requiresInvitation:false,
     stripeBilling:{...base,webhookSecret:'whsec_synthetic_endpoint_secret_value'},readiness:()=>({capabilities:{stripeBilling:true}}),...storage};
   let app=await createApplication({config,now});t.after(()=>app.close());let api=app.services.find(service=>service.stripeBilling);
-  const state={customer:null,checkouts:[],subscription:null,invoice:null,intent:null,charge:null,calls:[],customerKeys:[],unavailable:false};
+  const state={customer:null,checkouts:[],subscription:null,invoice:null,intent:null,charge:null,calls:[],customerKeys:[],terminationKeys:[],unavailable:false};
   function called(name){state.calls.push(name);if(state.unavailable)throw Object.assign(new Error('synthetic private failure'),{code:'provider_unavailable'});}
   const client={
     async retrievePrice(identifier){called('price');const [plan,offer]=Object.entries(offers).find(([,value])=>value.priceId===identifier);return {id:identifier,object:'price',livemode:false,active:true,type:'recurring',billing_scheme:'per_unit',unit_amount:offer.amount,currency:offer.currency,
@@ -41,7 +43,7 @@ async function fixture(t,{storage={},hooks={}}={}) {
     async retrieveCharge(){called('charge-read');const charge=structuredClone(state.charge);await hooks.charge?.();return charge;},
     async listCheckouts(){called('checkout-list');return list(structuredClone(state.checkouts));},
     async listSubscriptions(){called('subscription-list');return list(state.subscription?[structuredClone(state.subscription)]:[]);},
-    async expireCheckout(identifier){called('checkout-expire');const value=state.checkouts.find(value=>value.id===identifier);value.status='expired';return structuredClone(value);},
+    async expireCheckout(identifier,options){called('checkout-expire');state.terminationKeys.push(options.idempotencyKey);await hooks.expire?.();const value=state.checkouts.find(value=>value.id===identifier);value.status='expired';return structuredClone(value);},
     async cancelSubscription(){called('subscription-cancel');state.subscription.status='canceled';return structuredClone(state.subscription);},
   };
   const queueConfig={...config,stripeBilling:{...base,apiKey:'rk_test_Synthetic'}};
@@ -50,7 +52,7 @@ async function fixture(t,{storage={},hooks={}}={}) {
   app.store.db.prepare('INSERT INTO access_identities VALUES(?,?,NULL,?)').run(owner.account.id,hash('synthetic verified subject'),at);
   const ctx=(body,path='/account/billing/checkout',method='POST',person=owner)=>({method,path,url:new URL(`${ORIGIN}/api/v1${path}`),body,accountId:person.account.id,sessionHash:hash(person.token),interfaceLocale:'en'});
   const start=(requestKey='first')=>api.handleBilling(ctx({plan:'weekly',requestKey}));
-  async function work(options){const task=app.tasks.claim({workerId:'test-worker',kinds:queue.kinds,leaseMs:90_000});assert.ok(task);const result=await queue.runTask(task,options);app.tasks.complete(task.id,task.leaseToken,{status:result.status,errorCode:result.errorCode??null,output:result.output??null});return {task,result};}
+  async function work({observe=true,...options}={}){const task=app.tasks.claim({workerId:'test-worker',kinds:queue.kinds,leaseMs:90_000});assert.ok(task);const result=await queue.runTask(task,options);const completed=app.tasks.complete(task.id,task.leaseToken,{status:result.status,errorCode:result.errorCode??null,output:result.output??null});if(completed&&observe)queue.taskFinished?.(task);return {task,result};}
   function paid(){
     const reference=state.customer.metadata.justup_reference,seconds=at/1000;
     const price={id:offers.weekly.priceId,object:'price',livemode:false,active:true,type:'recurring',billing_scheme:'per_unit',unit_amount:100,currency:'usd',recurring:{interval:'week',interval_count:1,usage_type:'licensed',trial_period_days:null}};
@@ -68,8 +70,21 @@ async function fixture(t,{storage={},hooks={}}={}) {
   function notification(identifier='evt_First',object=state.subscription,type='customer.subscription.updated',created=at/1000){const event={id:identifier,object:'event',livemode:false,api_version:STRIPE_API_VERSION,type,created,data:{object:structuredClone(object)}};
     const body=Buffer.from(JSON.stringify(event)),timestamp=Math.floor(at/1000),signature=`t=${timestamp},v1=${createHmac('sha256',config.stripeBilling.webhookSecret).update(`${timestamp}.`).update(body).digest('hex')}`;
     return {body,signature};}
+  function realRunner({observe=true,maintenance=true,onFinished=()=>{},handler}={}){return createRunner({tasks:app.tasks,handlers:{billing_terminate:handler??queue.runTask},
+    ...createBillingRunnerHooks({billing:{taskFinished:task=>observe&&queue.taskFinished?.(task),reconcileCompletedTasks:()=>maintenance&&queue.reconcileCompletedTasks?.()},onTaskFinished:onFinished,beforeClaim:()=>{}})}); }
   async function reopen(){await app.close();app=await createApplication({config,now});api=app.services.find(service=>service.stripeBilling);queue=createStripeBillingRunner({db:app.store.db,tasks:app.tasks,config:queueConfig,now,client});}
-  return {get app(){return app;},get api(){return api;},get queue(){return queue;},config,queueConfig,state,owner,ctx,start,work,paid,notification,now,reopen,advance:ms=>{at+=ms;}};
+  return {get app(){return app;},get api(){return api;},get queue(){return queue;},config,queueConfig,state,owner,ctx,start,work,paid,notification,now,reopen,realRunner,advance:ms=>{at+=ms;}};
+}
+
+function retainSyntheticHistory(f,count){
+  const receipts=[];
+  for(let index=0;index<count;index++){
+    const input={ownerId:'retained-history-owner',kind:'synthetic_history',requestKey:`history-${index}`,payload:{entry:index}};
+    const task=f.app.tasks.enqueue(input),lease=f.app.tasks.claim({workerId:'history-worker',kinds:['synthetic_history'],leaseMs:90_000});
+    assert.equal(lease.id,task.id);assert.equal(f.app.tasks.complete(task.id,lease.leaseToken,{status:'succeeded',output:{recorded:index}}),true);
+    receipts.push({input,id:task.id});
+  }
+  return receipts;
 }
 
 test('checkout, signed current-state reconciliation and hosted management compose without exposing queue secrets',async t=>{
@@ -290,7 +305,7 @@ test('password-confirmed deletion retries the same termination record after thre
   for(let attempt=0;attempt<3;attempt++){
     const task=f.app.tasks.claim({workerId:`crash-${attempt}`,kinds:['billing_terminate'],leaseMs:1000});assert.ok(task);f.advance(1001);f.app.tasks.recover();
   }
-  assert.equal(f.app.tasks.get(f.owner.account.id,original.task_id).status,'failed');f.advance(5001);
+  assert.equal(f.app.tasks.get(f.owner.account.id,original.task_id).status,'failed');f.advance(5001);f.queue.reconcileCompletedTasks?.();
   await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
   const retried=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();
   assert.equal(retried.id,original.id);assert.notEqual(retried.task_id,original.task_id);
@@ -334,17 +349,47 @@ test('expired customer mutation recovery never repeats an unsafe creation or per
 });
 
 
-test('saturated queue keeps billing closed and its single termination reservation retryable',async t=>{
+test('96 completed task receipts leave billing termination and exact history retries available',async t=>{
+  const f=await fixture(t);f.start();await f.work();const receipts=retainSyntheticHistory(f,95),db=f.app.store.db;
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_tasks').get().n,96);
+  assert.equal(db.prepare("SELECT count(*) n FROM justup_tasks WHERE status IN ('pending','running')").get().n,0);
+  const before=db.prepare('SELECT * FROM justup_tasks ORDER BY id').all();
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const termination=db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();assert.ok(termination.task_id);
+  assert.deepEqual(db.prepare('SELECT * FROM justup_tasks WHERE id<>? ORDER BY id').all(termination.task_id),before);
+  for(const receipt of receipts)assert.equal(f.app.tasks.enqueue(receipt.input).id,receipt.id);
+  assert.equal((await f.work()).result.status,'succeeded');assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
+  for(const receipt of receipts)assert.equal(f.app.tasks.get(receipt.input.ownerId,receipt.id).status,'succeeded');
+});
+
+test('2048 fresh terminal receipts retain evidence while first deletion gets bounded termination progress',async t=>{
+  const f=await fixture(t);f.start();await f.work();retainSyntheticHistory(f,2047);const db=f.app.store.db;
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_tasks').get().n,2048);
+  assert.equal(db.prepare("SELECT count(*) n FROM justup_tasks WHERE status IN ('pending','running')").get().n,0);
+  const before=db.prepare('SELECT * FROM justup_tasks ORDER BY id').all(),calls=f.state.calls.length;
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const reserved=db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();
+  assert.equal(db.prepare('SELECT closing_revision FROM justup_billing_accounts').get().closing_revision,1);
+  assert.equal(db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,null);
+  assert.ok(f.app.auth.session(f.owner.token));assert.equal(f.app.auth.session(f.owner.token).access.fullAccess,false);
+  assert.equal(f.state.calls.length,calls);assert.throws(()=>f.start('closed-at-retained-cap'),{code:'billing_termination_pending'});
+  assert.deepEqual(db.prepare('SELECT * FROM justup_tasks WHERE id<>? ORDER BY id').all(reserved.task_id??''),before);
+  assert.ok(reserved.task_id,'fresh ordinary receipts must leave bounded billing-termination progress');
+  assert.equal((await f.work()).result.status,'succeeded');assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
+});
+
+test('96 active tasks keep billing closed and its single termination reservation retryable',async t=>{
   const f=await fixture(t);f.start();await f.work();
   const active=f.app.tasks.enqueue({ownerId:f.owner.account.id,kind:'synthetic_foreground',requestKey:'active',payload:{}});
   const claim=f.app.tasks.claim({workerId:'active-worker',kinds:['synthetic_foreground'],leaseMs:90_000});assert.equal(claim.id,active.id);
-  for(let index=0;index<94;index++)f.app.tasks.enqueue({ownerId:`synthetic-owner-${index}`,kind:'synthetic_foreground',requestKey:`capacity-${index}`,payload:{}});
+  for(let index=0;index<95;index++)f.app.tasks.enqueue({ownerId:`synthetic-owner-${index}`,kind:'synthetic_foreground',requestKey:`capacity-${index}`,payload:{}});
+  assert.equal(f.app.store.db.prepare("SELECT count(*) n FROM justup_tasks WHERE status IN ('pending','running')").get().n,96);
   await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
   const reserved=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();assert.equal(reserved.task_id,null);
   assert.equal(f.app.store.db.prepare('SELECT closing_revision FROM justup_billing_accounts').get().closing_revision,1);
   assert.throws(()=>f.start('closed'),{code:'billing_termination_pending'});
   assert.equal(f.app.tasks.get(f.owner.account.id,claim.id).leaseToken,claim.leaseToken);
-  f.app.tasks.delete(f.owner.account.id,active.id);f.advance(5001);
+  assert.equal(f.app.tasks.complete(claim.id,claim.leaseToken,{status:'succeeded',output:{released:true}}),true);f.advance(5001);
   await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
   const retry=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();assert.equal(retry.id,reserved.id);assert.ok(retry.task_id);
   assert.equal((await f.work()).result.status,'succeeded');assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
@@ -437,4 +482,88 @@ for(const legacy of ['single','unknown_customer','unknown_customer_failed','miss
     await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_unavailable'});
     assert.ok(f.app.auth.session(f.owner.token));assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,null);
   }
+});
+
+
+async function durableFixture(t,options={}){
+  const directory=mkdtempSync(join(tmpdir(),'justup-billing-receipt-')),backupDir=join(directory,'backups'),privateGenerationPath=join(directory,'private-generation');
+  mkdirSync(backupDir,{mode:0o700});writeFileSync(privateGenerationPath,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n',{mode:0o600});
+  const f=await fixture(t,{...options,storage:{...options.storage,dbPath:join(directory,'billing.sqlite'),backupDir,privateGenerationPath}});t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  return {f,backupDir,privateGenerationPath};
+}
+
+for(const recovery of ['startup','beforeClaim','observed','committed'])test(`terminal completion ${recovery} is released only by protected API cleanup`,async t=>{
+  const observed=['observed','committed'].includes(recovery);
+  const {f,backupDir,privateGenerationPath}=await durableFixture(t);f.start();await f.work();
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const op=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();let finished=0;
+  const handler=recovery==='committed'?async(task,options)=>{const result=await f.queue.runTask(task,options);assert.equal(f.app.tasks.complete(task.id,task.leaseToken,{status:result.status,output:result.output??null,errorCode:result.errorCode??null}),true);return {...result,committed:true};}:undefined;
+  const runner=f.realRunner({observe:observed,handler,onFinished:task=>{finished++;assert.equal(f.app.tasks.get(task.ownerId,task.id).status,'succeeded');}});
+  assert.equal(await runner.runOnce(),true);assert.equal(finished,1);assert.ok(f.app.tasks.get(f.owner.account.id,op.task_id));
+  assert.equal(f.app.store.db.prepare('SELECT resource_kind FROM justup_billing_operations WHERE id=?').get(op.id).resource_kind,observed?'termination_receipt':null);
+  const generation=readFileSync(privateGenerationPath,'utf8');writeFileSync(join(backupDir,'before-release.sqlite'),'synthetic retained backup',{mode:0o600});
+  if(!observed){f.api.cleanup();assert.ok(f.app.tasks.get(f.owner.account.id,op.task_id));assert.equal(readFileSync(privateGenerationPath,'utf8'),generation);}
+  if(recovery==='beforeClaim')assert.equal(await f.realRunner().runOnce(),false);else if(recovery!=='committed')await f.reopen();
+  if(!observed){assert.ok(f.app.tasks.get(f.owner.account.id,op.task_id));assert.equal(readFileSync(privateGenerationPath,'utf8'),generation);}
+  f.api.cleanup();assert.equal(f.app.tasks.get(f.owner.account.id,op.task_id),null);
+  assert.equal(f.app.store.db.prepare('SELECT task_id FROM justup_billing_operations WHERE id=?').get(op.id).task_id,null);
+  assert.notEqual(readFileSync(privateGenerationPath,'utf8'),generation);assert.equal(existsSync(join(backupDir,'before-release.sqlite')),false);assert.equal(existsSync(`${privateGenerationPath}.pending`),false);
+  assert.ok(f.app.auth.session(f.owner.token));assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});f.app.afterPrivateTransaction();
+});
+
+test('more than sixteen completed termination cycles reuse the reserve while final DELETE is delayed',async t=>{
+  const f=await fixture(t);f.start();await f.work();const runner=f.realRunner();let canonical;
+  for(let cycle=0;cycle<18;cycle++){
+    await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+    const op=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();
+    canonical??=op;assert.equal(op.id,canonical.id);assert.equal(op.created_at,canonical.created_at);
+    assert.equal(await runner.runOnce(),true);assert.ok(f.app.tasks.get(f.owner.account.id,op.task_id));
+    f.api.cleanup();assert.equal(f.app.tasks.get(f.owner.account.id,op.task_id),null);
+    assert.equal(f.app.store.db.prepare("SELECT count(*) n FROM justup_tasks WHERE kind='billing_terminate'").get().n,0);
+    assert.ok(f.app.auth.session(f.owner.token));if(cycle<17)f.advance(31_001);
+  }
+  assert.equal(f.state.terminationKeys[0],`justup/${canonical.id}/expire:cs_test_Owner`);
+  assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
+});
+
+test('failed terminal outcomes are absorbed without deletion authority and retries keep the original mutation keys',async t=>{
+  let failures=2;const f=await fixture(t,{hooks:{expire:()=>{if(failures-->0)throw Error('synthetic response unavailable');}}});f.start();await f.work();const runner=f.realRunner();let canonical;
+  for(let attempt=0;attempt<3;attempt++){
+    await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+    const op=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();canonical??=op;
+    assert.equal(op.id,canonical.id);assert.equal(op.created_at,canonical.created_at);assert.equal(await runner.runOnce(),true);f.api.cleanup();
+    assert.equal(f.app.store.db.prepare("SELECT count(*) n FROM justup_tasks WHERE kind='billing_terminate'").get().n,0);
+    if(attempt<2){assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,null);assert.ok(f.app.auth.session(f.owner.token));f.advance(5001);}
+  }
+  assert.equal(f.state.terminationKeys.length,3);assert.ok(f.state.terminationKeys.every(value=>value===f.state.terminationKeys[0]));
+  assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});
+});
+
+for(const mismatch of ['output','operation','owner','error'])test(`unabsorbed ${mismatch} evidence retains its cleanup receipt and original operation pointer`,async t=>{
+  const f=await fixture(t);f.start();await f.work();await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const op=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get(),task=f.app.tasks.claim({workerId:'unknown-result',kinds:['billing_terminate'],leaseMs:90_000});
+  if(mismatch==='operation')f.app.store.db.prepare('UPDATE justup_tasks SET payload_json=? WHERE id=?').run(JSON.stringify({...task.payload,operationId:'unowned-operation'}),task.id);
+  if(mismatch==='owner')f.app.store.db.prepare('UPDATE justup_tasks SET owner_id=? WHERE id=?').run('unowned-account',task.id);
+  assert.equal(f.app.tasks.complete(task.id,task.leaseToken,{status:'failed',output:mismatch==='output'?{unknownMutation:'only-in-task'}:null,errorCode:mismatch==='error'?'unknown_provider_mutation':'provider_unavailable'}),true);
+  f.queue.taskFinished?.(task);f.queue.reconcileCompletedTasks?.();f.api.cleanup();
+  assert.ok(f.app.store.db.prepare('SELECT 1 FROM justup_tasks WHERE id=?').get(task.id));assert.equal(f.app.tasks.delete(mismatch==='owner'?'unowned-account':task.ownerId,task.id),false);
+  f.advance(5001);await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const after=f.app.store.db.prepare('SELECT * FROM justup_billing_operations WHERE id=?').get(op.id);assert.equal(after.task_id,task.id);assert.equal(after.attempt,op.attempt);assert.equal(after.created_at,op.created_at);
+  assert.equal(f.app.store.db.prepare("SELECT count(*) n FROM justup_tasks WHERE kind='billing_terminate'").get().n,1);
+  assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,null);
+});
+
+test('protected release and final deleteOwner roll back with the private deletion barrier',async t=>{
+  const {f,privateGenerationPath}=await durableFixture(t);f.start();await f.work();await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const op=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();await f.realRunner().runOnce();
+  const generation=readFileSync(privateGenerationPath,'utf8');writeFileSync(`${privateGenerationPath}.pending`,'synthetic foreign deletion marker',{mode:0o600});
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD));
+  assert.ok(f.app.tasks.get(f.owner.account.id,op.task_id));assert.equal(f.app.store.db.prepare('SELECT task_id FROM justup_billing_operations WHERE id=?').get(op.id).task_id,op.task_id);assert.equal(readFileSync(privateGenerationPath,'utf8'),generation);
+  unlinkSync(`${privateGenerationPath}.pending`);f.api.cleanup();assert.equal(f.app.tasks.get(f.owner.account.id,op.task_id),null);
+  const owned=f.app.tasks.enqueue({ownerId:f.owner.account.id,kind:'synthetic_private',requestKey:'rollback-delete-owner',payload:{}}),original=f.app.tasks.deleteOwner;
+  f.app.tasks.deleteOwner=owner=>{original(owner);throw Error('synthetic private deletion rollback');};
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD));
+  assert.ok(f.app.auth.session(f.owner.token));assert.ok(f.app.tasks.get(f.owner.account.id,owned.id));assert.ok(f.app.store.db.prepare('SELECT 1 FROM justup_billing_accounts WHERE account_id=?').get(f.owner.account.id));
+  f.app.afterPrivateTransaction();f.app.tasks.deleteOwner=original;assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});f.app.afterPrivateTransaction();
+  assert.equal(f.app.store.db.prepare('SELECT count(*) n FROM justup_tasks WHERE owner_id=?').get(f.owner.account.id).n,0);assert.equal(existsSync(`${privateGenerationPath}.pending`),false);
 });

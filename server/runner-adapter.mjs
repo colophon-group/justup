@@ -61,6 +61,12 @@ export function createRunnerStatusPublisher({path,identity,config,tasks,capabili
   }
   return {heartbeat,onHalt(){forcedUnavailable=true;heartbeat();}};
 }
+// Completion observation is non-destructive in the queue role. The API owns
+// receipt release, including its private-deletion and backup barrier.
+export function createBillingRunnerHooks({billing,onTaskFinished,beforeClaim}){
+  return {onTaskFinished(task){try{onTaskFinished(task);}finally{billing.taskFinished(task);}},
+    async beforeClaim(){await beforeClaim();billing.reconcileCompletedTasks();}};
+}
 export async function createRunnerDependencies(){
   const config=readRunnerConfig();
   // Shared-state startup checks the service's operator-owned umask; never change
@@ -89,7 +95,7 @@ export async function createRunnerDependencies(){
     heartbeatTimer=setInterval(()=>{try{heartbeat();}catch{ /* stale status fails closed in the API */ }},10_000);
     cleanupTimer=setInterval(()=>{try{matching.cleanup();}catch{ /* task/page paths retry bounded cleanup */ }},60_000);
     return {tasks,handlers:{search_intent:(task,options)=>records.runTask(task,intent.runTask,options),company_resolution:(task,options)=>records.runTask(task,companies.runTask,options),ai_match:(task,options)=>records.runTask(task,matching.runTask,options),hiring_wire:wire.runTask,email_verification:email.runTask,
-      ...Object.fromEntries(billing.kinds.map(kind=>[kind,billing.runTask]))},onTaskFinished:records.taskFinished,beforeClaim:wire.beforeClaim,onHalt,workerId,
+      ...Object.fromEntries(billing.kinds.map(kind=>[kind,billing.runTask]))},...createBillingRunnerHooks({billing,onTaskFinished:records.taskFinished,beforeClaim:wire.beforeClaim}),onHalt,workerId,
       close(){clearInterval(heartbeatTimer);clearInterval(cleanupTimer);try{writeRunnerStatus({path:statusPath,identity:workerId,config,capabilities:{search:false,companyRequests:false,aiMatching:false},ready:false});}finally{store.close();}}};
   }catch(error){clearInterval(heartbeatTimer);clearInterval(cleanupTimer);store.close();throw error;}
 }
