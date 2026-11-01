@@ -51,7 +51,7 @@ Hiring Wire uses the existing queue, an idempotent completed-week period and one
 
 Operations needs reviewed backup cadence/recovery objectives, successful restore and rollback rehearsal, freshness/queue/task/provider/resource/backup-age observations, numeric alert thresholds and a response owner. Existing metadata logs and the resource guard provide part of this evidence; missing alert delivery or instrumentation remains a launch gap. Restrict preview work to its existing ceilings; approve new resources before allocation.
 
-The first invited candidate must pass all accepted journeys: visitor/search/sign-in, editable saved searches and honest model warnings, residual matching, durable account/follow/viewed state, entitlement transitions, resumable live results, company discovery/request/coverage progression, fresh source-attributed jobs, factual weekly Hiring Wire, reviewed policies and deletion-safe recovery. A missing accepted feature blocks activation and cannot become a preview exception by wording alone.
+The first invited candidate must pass all accepted journeys: visitor/search/sign-in, editable saved searches and honest model warnings, residual matching, durable account/follow/viewed state, entitlement transitions, resumable live SSE results, company discovery/request/coverage progression, attributable company hiring reports, persisted posting-language preferences, fresh source-attributed jobs, factual weekly Hiring Wire, reviewed policies and deletion-safe recovery. A missing accepted feature blocks activation and cannot become a preview exception by wording alone.
 
 ## Exact-artifact release
 

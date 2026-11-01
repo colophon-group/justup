@@ -125,7 +125,7 @@ Missing or stale imported evidence returns an empty `paused` page with `retryAft
 
 Residual matching runs only after freshness and primary filters. JEV returns accept/reject/insufficient-evidence; provider failure is separate. Cached decisions bind condition, evidence hash and classifier version, scoped for account deletion. Batch enough candidates for low acceptance rates within bounded concurrency/work budgets. Deliver a resolved newest-first prefix; never substitute unevaluated candidates. Pauses and outages retain scan position and active AI requirements.
 
-SSE, follows, viewed state, preferences and hidden-match counts currently report unavailable. These accepted product paths remain launch requirements. Capability flags describe implemented availability; they cannot defer an accepted release requirement. The Hiring Wire API and worker are being integrated under their own bounded contract.
+SSE, follows, viewed state, preferences and hidden-match counts currently report unavailable. These accepted product paths remain launch requirements, alongside attributable company hiring reports and persisted posting-language preferences. Existing locale filters alone do not establish the preference journey. Capability flags describe implemented availability; they cannot defer an accepted release requirement. The Hiring Wire API and worker are being integrated under their own bounded contract.
 
 ## Companies and identity requests
 
