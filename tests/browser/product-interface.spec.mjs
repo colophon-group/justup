@@ -95,7 +95,7 @@ for (const requiresInvitation of [false, true, undefined]) {
     await page.locator('#auth-submit').click();
     await expect(page.locator('#sign-in-dialog')).not.toBeVisible();
     const register = calls.find(call => call.key === 'POST /auth/register');
-    expect(register.body).toEqual({ username: 'tester', password: 'test-only-password', ...(requiresInvitation !== false ? { inviteCode: 'test-only-invitation' } : {}) });
+    expect(register.body).toEqual({ username: 'tester', password: 'test-only-password', acceptance: { usageVersion: 'test-v1', locale: 'en', adultAndCapable: true }, ...(requiresInvitation !== false ? { inviteCode: 'test-only-invitation' } : {}) });
   });
 }
 

@@ -17,7 +17,7 @@ import {
   decodeWorkspace,
   record,
 } from "./decode.ts";
-import type { SavedWorkspaceState, SearchScope, Session } from "./types.ts";
+import type { RegistrationAcceptance, SavedWorkspaceState, SearchScope, Session } from "./types.ts";
 import { sessionOwner } from './sessionOwner.ts';
 export class ApiError extends Error {
   readonly status: number;
@@ -419,13 +419,13 @@ export class ApiClient {
   async login(body: { username: string; password: string }, signal?: AbortSignal) {
     await this.request("/auth/login", ignored, {
       method: "POST",
-      body,
+      body: { username: body.username, password: body.password },
       signal,
     });
     this.onAuthenticationChanged?.();
   }
   async register(
-    body: { username: string; password: string; inviteCode?: string },
+    body: { username: string; password: string; inviteCode?: string; acceptance: RegistrationAcceptance },
     signal?: AbortSignal,
   ) {
     await this.request("/auth/register", ignored, {

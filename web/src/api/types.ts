@@ -20,6 +20,11 @@ export interface SessionPolicies {
   reviewedLocale: InterfaceLocale | null;
   fallback: boolean;
 }
+export interface RegistrationAcceptance {
+  usageVersion: string;
+  locale: InterfaceLocale;
+  adultAndCapable: true;
+}
 export interface Session {
   user: User | null;
   serverTime?: string;
