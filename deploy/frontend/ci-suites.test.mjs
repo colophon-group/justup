@@ -30,12 +30,23 @@ test('Python importer cannot exist without behavioral tests and real test failur
   try {
     mkdirSync(join(root, 'scripts'));
     assert.match(run().stdout, /unavailable/);
-    writeFileSync(join(root, 'scripts/import-demo-jobs.py'), '# fixture');
-    assert.notEqual(run().status, 0);
-    writeFileSync(join(root, 'scripts/test_import_demo_jobs.py'), 'import unittest\nclass Importer(unittest.TestCase):\n def test_fixture(self): self.assertTrue(False)\n');
-    assert.notEqual(run().status, 0);
-    writeFileSync(join(root, 'scripts/test_import_demo_jobs.py'), 'import unittest\nclass Importer(unittest.TestCase):\n def test_fixture(self): self.assertTrue(True)\n');
-    assert.equal(run().status, 0);
+    writeFileSync(join(root, 'scripts/import-jobs.py'), '# fixture');
+    const missing = run();
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /Importer implementation exists without test_\*\.py behavioral contracts/);
+    writeFileSync(join(root, 'scripts/test_other.py'), 'import unittest\nclass Other(unittest.TestCase):\n def test_fixture(self): self.assertTrue(True)\n');
+    const missingImporter = run();
+    assert.notEqual(missingImporter.status, 0);
+    assert.match(missingImporter.stderr, /Job importer requires scripts\/test_import_jobs\.py/);
+    writeFileSync(join(root, 'scripts/test_import_jobs.py'), 'import unittest\nclass Importer(unittest.TestCase):\n def test_fixture(self): self.assertTrue(False)\n');
+    const failing = run();
+    assert.notEqual(failing.status, 0);
+    assert.match(failing.stderr, /FAILED \(failures=1\)/);
+    writeFileSync(join(root, 'scripts/test_import_jobs.py'), 'import unittest\nclass Importer(unittest.TestCase):\n def test_fixture(self): self.assertTrue(True)\n');
+    const passing = run();
+    assert.equal(passing.status, 0);
+    assert.match(passing.stdout, /scripts\/test_import_jobs\.py/);
+    assert.match(passing.stderr, /Ran 2 tests/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

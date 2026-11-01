@@ -1,4 +1,4 @@
-// Anonymous cumulative JEV reservations, separate from preview SQLite/backups.
+// Anonymous cumulative JEV reservations, separate from application SQLite/backups.
 // Runtime only appends to an operator-prepared approved ledger; it never resets it.
 import { constants, openSync, closeSync, fstatSync, lstatSync, realpathSync, readFileSync,
   writeSync, fsyncSync, unlinkSync } from 'node:fs';
@@ -6,7 +6,10 @@ import { dirname, basename, isAbsolute, resolve, relative, sep } from 'node:path
 import { createHash, randomUUID } from 'node:crypto';
 
 export const JEV_BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49';
-export const JEV_BUDGET_SLUG = 'demo-jev-evaluation-budget';
+export const JEV_BUDGET_SLUG = 'jev-evaluation-budget';
+export const JEV_BUDGET_IDENTITY_PROFILE = 'canonical-v1';
+export const JEV_BUDGET_LEGACY_IDENTITY_PROFILE = 'legacy-v1';
+export const JEV_BUDGET_LEGACY_SLUG = 'demo-jev-evaluation-budget';
 export const JEV_CUMULATIVE_CAP_NANO = 500_000_000;
 export const JEV_ATTEMPT_INPUT_TOKENS = 64_000;
 const MAX_BYTES = 4 * 1024 * 1024, MAX_LINES = 10_000;
@@ -29,7 +32,12 @@ export function createJevBudget({ config, model, pricing, databasePath = null } 
   let expected = null, path = null, exclusions = [];
   try {
     const a = config?.approval;
-    if (a?.approved !== true || a.resourceId !== JEV_BUDGET_RESOURCE || a.resourceSlug !== JEV_BUDGET_SLUG
+    const profile = Object.hasOwn(config ?? {}, 'identityProfile') ? config.identityProfile : JEV_BUDGET_IDENTITY_PROFILE;
+    // Profiles bind one known approval identity; they never alias or rewrite an
+    // existing header. Historical ledgers require a protected explicit opt-in.
+    const slug = profile === JEV_BUDGET_IDENTITY_PROFILE ? JEV_BUDGET_SLUG
+      : profile === JEV_BUDGET_LEGACY_IDENTITY_PROFILE ? JEV_BUDGET_LEGACY_SLUG : null;
+    if (!slug || a?.approved !== true || a.resourceId !== JEV_BUDGET_RESOURCE || a.resourceSlug !== slug
         || !/^(?:https:\/\/github\.com\/colophon-group\/justup\/issues\/49#issuecomment-\d{1,20}|operator-(?:user-turn|approval):[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/u.test(a.approvalId ?? '')
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(a.ledgerId ?? '')
         || !integer(a.capNanodollars) || a.capNanodollars < 1 || a.capNanodollars > JEV_CUMULATIVE_CAP_NANO
@@ -39,7 +47,7 @@ export function createJevBudget({ config, model, pricing, databasePath = null } 
         || config.excludedDirectories.some((p) => typeof p !== 'string' || !isAbsolute(p) || resolve(p) !== p)
         || pricing?.confirmed !== true || pricing.model !== model || typeof pricing.version !== 'string' || !pricing.version || pricing.version.length > 128
         || !integer(pricing.inputNanodollarsPerToken) || pricing.inputNanodollarsPerToken < 1 || pricing.outputNanodollarsPerToken !== 0) throw fail();
-    expected = { schemaVersion: 1, kind: 'approval', ledgerId: a.ledgerId, resourceId: a.resourceId, resourceSlug: JEV_BUDGET_SLUG,
+    expected = { schemaVersion: 1, kind: 'approval', ledgerId: a.ledgerId, resourceId: a.resourceId, resourceSlug: slug,
       approvalId: a.approvalId, capNanodollars: a.capNanodollars, model, pricingVersion: pricing.version,
       inputNanodollarsPerToken: pricing.inputNanodollarsPerToken, outputNanodollarsPerToken: 0,
       maxInputTokensPerAttempt: JEV_ATTEMPT_INPUT_TOKENS };
