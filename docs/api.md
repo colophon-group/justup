@@ -7,9 +7,11 @@ read_when: Connecting the browser, implementing a backend module or reviewing pr
 
 Status: implementation contract; not a claim that endpoints are deployed.
 
-The runtime composes attributable Jobseek imports, durable local accounts, validated search interpretation, optional residual matching, reading preferences, live result delivery, company identity requests, public company reports and Hiring Wire editions. Invitation restrictions and temporary account lifetimes are deployment policy. Billing, mail and crawler writes are not implemented; accepted product features still missing are launch requirements, not preview exemptions. Follow the [development guide](development-process.md); ordinary implementation targets `dev`, and runtime changes cannot enter `main` before the real release gate passes.
+The runtime composes attributable Jobseek imports, durable local accounts, validated search interpretation, optional residual matching, reading preferences, live result delivery, company identity requests, public company reports and Hiring Wire editions. Invitation restrictions and temporary account lifetimes are deployment policy. [Email ownership verification](account-verification.md) uses the existing queue; it is disabled until explicitly configured and qualified. Billing and crawler writes are not implemented; accepted product features still missing are launch requirements, not preview exemptions. Follow the [development guide](development-process.md); ordinary implementation targets `dev`, and runtime changes cannot enter `main` before the real release gate passes.
 
 ## Runtime and resource boundary
+
+The authenticated `/account/verification` GET/POST and `/account/verification/confirm` POST routes use ordinary Origin/CSRF/locale rules. They return only a safe challenge state, never the recipient/code or provider output. The [account verification contract](account-verification.md#browser-contract) defines request keys, original-session binding, expiry and attempt errors. Verification prepares the existing free period; `POST /access/activate` remains a separate deliberate action. No email callback or special edge header is added.
 
 Use Node.js 24 LTS ES modules, built-in HTTP/crypto/SQLite and one bounded runner. SQLite stores durable application identity, searches, requests and task state. The first restricted deployment uses isolated storage with the same schema and runtime. No additional database service or auth vendor is needed.
 

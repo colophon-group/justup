@@ -269,6 +269,8 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
   }
 
   function invalidateAllSessions() {
+    // Restored one-time challenges must never remain actionable after logout.
+    if(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='justup_email_challenges'").get())db.prepare('DELETE FROM justup_email_challenges').run();
     return { sessionsDeleted: removeAllSessions.run().changes };
   }
 

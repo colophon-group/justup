@@ -180,6 +180,9 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
         }
         if (!prior.legacy_hash && legacyHash) addLegacy.run(legacyHash, proof.accountId);
       } else insertIdentity.run(proof.accountId, subjectHash, legacyHash, proof.verifiedAt);
+      // Only the trusted verifier can supply this synchronous consumption hook.
+      // Session/policy rechecks and one-time proof deletion share this commit.
+      if(proof.commit!==undefined&&(typeof proof.commit!=='function'||proof.commit()!==true))throw failure('invalid_input',400,'Invalid verified identity.');
       return { accountId: proof.accountId, legacyEligible: Boolean(identity.get(proof.accountId)?.legacy_hash) };
     });
   }

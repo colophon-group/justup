@@ -4,6 +4,7 @@ import { SCHEMA_VERSION } from './schema.mjs';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { POLICY_LOCALES,policyState,policyScopes,requestLocale,validatePolicyConfig } from './policies.mjs';
 import { problem, boundedJson } from './store.mjs';
+import { emailSessionHash } from './email-verification.mjs';
 
 const DISABLED = { sse: false };
 const GUEST_ACCESS = { kind: 'guest', fullAccess: false, legacy: false, billingEnabled: false, until: null };
@@ -16,6 +17,12 @@ const SAFE_ERRORS = new Map([
   ['forbidden', 'This request is not allowed.'], ['invalid_json', 'Send a bounded JSON object.'],
   ['access_denied','Current premium access is required for company priority.'],
   ['identity_unverified','Verify your account to activate the free period.'], ['free_period_unavailable','The free period is unavailable.'],
+  ['verification_unavailable','Account verification is temporarily unavailable.'],
+  ['verification_invalid','That verification code is invalid or no longer available.'],
+  ['verification_expired','That verification code has expired. Request a new one.'],
+  ['verification_locked','Too many attempts. Request a new code later.'],
+  ['verification_pending','The verification email has not been sent yet.'],
+  ['verification_conflict','This account or email is already verified elsewhere.'],
   ['not_found', 'Not found.'], ['rate_limit', 'Too many requests. Try again later.'],
   ['task_limit', 'The task limit has been reached.'], ['idempotency_conflict', 'This request key was already used.'],
   ['stale_cursor', 'This feed changed. Reload it and try again.'], ['invalid_cursor', 'Invalid cursor.'],
@@ -59,6 +66,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   const visitorCookie = insecure ? 'justup_visitor' : '__Host-justup_visitor';
   const visitorService=services.find(service=>typeof service.visitorRoute==='function');
   const liveResults=services.find(service=>typeof service.openStream==='function');
+  const verification=services.find(service=>service.emailVerification===true);
   const csrfCookie = insecure ? 'justup_csrf' : '__Host-justup_csrf';
   const secret = config.csrfSecret ?? randomBytes(32);
   if (Buffer.byteLength(secret) < 32) throw new TypeError('CSRF secret must contain at least 32 bytes.');
@@ -98,6 +106,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
     for (const service of services) Object.assign(result, typeof service.capabilities === 'function' ? service.capabilities() : service.capabilities);
     return { follows:false,preferences:false,viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
       search:authentication(locale).loginEnabled&&result.search===true,aiMatching:authentication(locale).loginEnabled&&result.aiMatching===true,companyRequests:authentication(locale).loginEnabled&&result.companyRequests===true,
+      emailVerification:authentication(locale).loginEnabled&&result.emailVerification===true,
       sse:authentication(locale).loginEnabled&&result.sse===true,
       visitorSearch:policies(locale).reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
   }
@@ -190,6 +199,11 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         return finish(path === '/auth/register' ? 201 : 200, {...sessionBody(verifiedViewer, result.token, guestToken,null,requestLocale({explicitLocale,cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:readingPreferences?.preferences(verifiedViewer.account.id).interfaceLocale??null})),visitorHandoff});
       }
       if(viewer&&mutation&&method!=='DELETE'&&path!=='/session/logout'){const state=authentication(interfaceLocale);if(!state.loginEnabled)throw problem(state.reason,503);}
+      if(verification&&['/account/verification','/account/verification/confirm'].includes(path)){
+        if(!viewer)throw problem('unauthenticated',401);
+        const result=await verification.handleVerification({method,path,url,body,accountId:viewer.account.id,sessionHash:emailSessionHash(sessionToken),interfaceLocale});
+        return finish(result.status,result.body);
+      }
       if(method==='POST'&&path==='/access/activate') {
         if(Object.keys(body).length)throw problem('invalid_input');
         if(typeof auth.activateFreePeriod!=='function')throw problem('dependency_unavailable',503);

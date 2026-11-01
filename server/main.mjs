@@ -12,6 +12,7 @@ import { createTasks } from './tasks.mjs';
 import { createHandler,policyState } from './http.mjs';
 import { validatePolicyConfig,policyJson,policyScopes } from './policies.mjs';
 import { runtimeEnv, booleanEnv, integerEnv } from './config.mjs';
+import { createEmailVerificationApi } from './email-verification.mjs';
 
 // Hold a durable pending marker across the SQL transaction. Backup/restore must
 // reject any pending marker, including one retained after a process crash.
@@ -95,6 +96,11 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
     const accessForAccount=id=>auth?.accessForAccount?.(id)??null;
     const visitorAvailability=()=>maintenanceReady&&deletion.ready()&&Object.values(policyScopes(config)).some(p=>p.reviewed);
     const services = serviceFactories.flatMap((factory) => factory({ db: store.db, feed, tasks, config, now, accessForAccount,visitorAvailability,beforePrivateDelete: deletion.beforePrivateDelete, afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction }));
+    const verification=createEmailVerificationApi({db:store.db,tasks,config,now,getAuth:()=>auth,
+      availability:()=>config.readiness?.().capabilities?.emailVerification===true,
+      processingAvailability:visitorAvailability,beforePrivateDelete:deletion.beforePrivateDelete,
+      afterPrivateTransaction:deletion.afterPrivateTransaction,withPrivateTransaction});
+    services.push(verification);
     if (services.some((s) => !s || typeof s.then === 'function')) throw new TypeError('Service factories must synchronously return services.');
     const deleteAccountData = (ownerId) => {
       deletion.beforePrivateDelete();
@@ -105,7 +111,8 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
       tasks.deleteOwner(ownerId);
     };
     const createAuth = authFactory ?? (await import('./auth.mjs')).createAuth;
-    auth = createAuth({ db: store.db, config, now, deleteAccountData,onAccessTransition:data=>{try{services.find(s=>typeof s.observe==='function'&&typeof s.onModelMetric==='function')?.observe(data);}catch{}} });
+    auth = createAuth({ db: store.db, config, now, deleteAccountData,identityProofVerifier:verification.verifyIdentityProof,
+      onAccessTransition:data=>{try{services.find(s=>typeof s.observe==='function'&&typeof s.onModelMetric==='function')?.observe(data);}catch{}} });
     function maintainAuth() {
       try {
         if (typeof auth.cleanup !== 'function') return;
@@ -179,6 +186,7 @@ export function configFromEnv(env = process.env) {
     policyAssetProof: policyJson(runtimeEnv(env,'POLICY_ASSET_PROOF')),
     sourceCommit: runtimeEnv(env, 'SOURCE_COMMIT'), buildIdentity: runtimeEnv(env, 'BUILD_ID'),
     csrfSecret: runtimeEnv(env, 'CSRF_SECRET'), cursorSecret: runtimeEnv(env, 'CURSOR_SECRET'),
+    emailVerificationEnabled:booleanEnv(env,'EMAIL_VERIFICATION_ENABLED'),
     privateGenerationPath: runtimeEnv(env, 'PRIVATE_GENERATION_PATH'), backupDir: runtimeEnv(env, 'BACKUP_DIR'),
   });
 }
