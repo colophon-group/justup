@@ -45,7 +45,7 @@ If you notice a separate bug, possible simplification, maintenance task, documen
 
 1. Note the observable behavior, affected file or area and why it matters. Do not include credentials or personal data.
 2. Search open and closed issues by behavior, file path and slug. If one already covers the same outcome, add the new evidence there.
-3. Otherwise open an issue with the [work-item template](../.github/ISSUE_TEMPLATE/work.md). Explain the motivation, current context, desired outcome and how to tell when it is addressed. Choose one type label from the table below; use `blocked` only while a decision or dependency is pending.
+3. Otherwise open an issue with the [work-item template](../.github/ISSUE_TEMPLATE/work.md). Explain the motivation, current context, desired outcome and how to tell when it is addressed. Choose one type label from the table below; add `blocked` or `human-decision` only when its condition applies.
 4. Keep the current change focused. Address a finding in the current pull request only when it is needed for that request; otherwise leave the new issue for separate work.
 
 Write each issue so a reader understands it without opening another document: use ordinary words, define necessary project terms the first time they appear, and link files or evidence for detail. Record material decisions and rejected alternatives in the issue discussion. Code comments and product docs describe current behavior, without a timeline of earlier approaches.
@@ -56,7 +56,7 @@ Agents must not add themselves as `Co-authored-by` trailers or add agent self-cr
 
 A pull request description links its primary issue and states the changes, verification and release impact in plain language. It should make sense on its own, without repeating the issue's motivation. Close the issue when its desired outcome is accepted.
 
-Use one type label and, only when needed, `blocked`:
+Use one type label. The last two labels describe a current condition and may be added when needed:
 
 | Label | Use |
 | --- | --- |
@@ -66,6 +66,7 @@ Use one type label and, only when needed, `blocked`:
 | `documentation` | Documentation-only work. |
 | `resource-request` | A separate request for a new external service or infrastructure spend. |
 | `blocked` | An issue is waiting on a decision or dependency; remove it when that condition clears. |
+| `human-decision` | A product, policy, resource or release choice needs an explicit operator decision. Remove it when the decision is recorded; do not use it for routine PR review. |
 
 When proposed work needs a new external service or infrastructure spend, create a separate `resource-request` issue and mark it `blocked`. State the purpose, existing alternatives, owner, environment, data/access scope, one-time and recurring cost estimate, spending ceiling and cleanup plan. Planning and code preparation may proceed. An authorized human must explicitly approve the resource and ceiling in that issue before provisioning, even if usable credentials already exist. A label, available account, or agent-authored comment is not approval. Reapproval is needed if scope or cost increases. Link the resource issue and its approval status from the implementation issue and PR.
 
