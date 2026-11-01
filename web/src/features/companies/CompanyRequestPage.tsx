@@ -1,3 +1,4 @@
+import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 // A request records a supported identity, never an invented company or crawler start.
 import { useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import type { ApiClient } from '../../api/client';
@@ -16,6 +17,7 @@ export interface CompanyRequestPageProps {
   onPrefillConsumed: () => void;
 }
 export function CompanyRequestPage({ client, session, active, onSignIn, accountEpoch, prefill, onPrefillConsumed }: CompanyRequestPageProps) {
+  const { t, locale, notice } = useInterfaceLocale();
   const [input, setInput] = useState('');
   const [scope, setScope] = useState('');
   const [clarification, setClarification] = useState('');
@@ -60,50 +62,50 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
   const website = safeSourceUrl(candidate?.websiteUrl);
   const evidence = [...new Set(candidate?.evidenceUrls?.flatMap(value => { const url = safeSourceUrl(value); return url ? [url] : []; }) || [])];
   return <section id="request-page" className="page" hidden={!active}>
-    <a className="back" href="#companies">← Company catalogue</a>
-    <div className="section-heading"><h1>WANTED</h1><span className="eyebrow">Request a company</span></div>
+    <a className="back" href="#companies">{t("← Company catalogue")}</a>
+    <div className="section-heading"><h1>{t("WANTED")}</h1><span className="eyebrow">{t("Request a company")}</span></div>
     <div className="request-layout">
-      <aside><p className="request-lead">Your next role could be<br />at a company we don’t<br />know about. Yet.</p>
-        <ol className="request-steps"><li id="step-find" className={stage === 'find' ? 'active' : ''}><span>01</span> Send us a lead</li><li id="step-confirm" className={stage === 'confirm' ? 'active' : ''}><span>02</span> Confirm it’s the one</li><li id="step-add" className={stage === 'recorded' ? 'active' : ''}><span>03</span> Request recorded</li></ol>
-        <p className="request-note">Help grow the edition.<br />One good lead at a time.</p>
+      <aside><p className="request-lead">{t("Your next role could be")}<br />{t("at a company we don’t")}<br />{t("know about. Yet.")}</p>
+        <ol className="request-steps"><li id="step-find" className={stage === 'find' ? 'active' : ''}><span>01</span>{" "}{t("Send us a lead")}</li><li id="step-confirm" className={stage === 'confirm' ? 'active' : ''}><span>02</span>{" "}{t("Confirm it’s the one")}</li><li id="step-add" className={stage === 'recorded' ? 'active' : ''}><span>03</span>{" "}{t("Request recorded")}</li></ol>
+        <p className="request-note">{t("Help grow the edition.")}<br />{t("One good lead at a time.")}</p>
       </aside>
       <div id="request-content" aria-busy={flow.busy}>
         {!request ? <>
           <form id="request-form" className="request-form" onSubmit={submit}>
-            <label htmlFor="request-query">Company name or website</label><div className="query-field"><input ref={inputRef} id="request-query" type="text" required disabled={flow.busy} maxLength={500} autoComplete="organization" placeholder="A name. We’ll check the facts." value={input} onChange={event => setInput(event.target.value)} /></div>
-            <label htmlFor="request-scope">What to include <span className="small-print">(optional)</span></label>
+            <label htmlFor="request-query">{t("Company name or website")}</label><div className="query-field"><input ref={inputRef} id="request-query" type="text" required disabled={flow.busy} maxLength={500} autoComplete="organization" placeholder={t("A name. We’ll check the facts.")} value={input} onChange={event => setInput(event.target.value)} /></div>
+            <label htmlFor="request-scope">{t("What to include")}{" "}<span className="small-print">{t("(optional)")}</span></label>
             <div className="query-field">
               <input id="request-scope" type="text" disabled={flow.busy} maxLength={500}
                 value={scope} onChange={event => setScope(event.target.value)}
-                placeholder="A particular division or career page" />
+                placeholder={t("A particular division or career page")} />
             </div>
-            <p className="helper">Give us a lead. You’ll confirm the company before we record your request.</p>
-            <button className="button dark" type="submit" disabled={flow.busy || !canSubmit}>Find company ↗</button>
+            <p className="helper">{t("Give us a lead. You’ll confirm the company before we record your request.")}</p>
+            <button className="button dark" type="submit" disabled={flow.busy || !canSubmit}>{t("Find company ↗")}</button>
           </form>
-          {!canSubmit ? <p className="helper">Company requests are unavailable right now. Please try again later.</p> : null}
+          {!canSubmit ? <p className="helper">{t("Company requests are unavailable right now. Please try again later.")}</p> : null}
         </> : request.status === 'pending' ? <>
-          <h2>Checking the lead.</h2><p>We’re looking for the right company. You’ll confirm the match before we record it.</p>
-          <button id="refresh-request" className="button outline" disabled={flow.busy} onClick={() => void flow.refresh()}>Check again</button>
-          {flow.busy ? <span className="request-progress" role="status">Following your lead…</span> : null}
+          <h2>{t("Checking the lead.")}</h2><p>{t("We’re looking for the right company. You’ll confirm the match before we record it.")}</p>
+          <button id="refresh-request" className="button outline" disabled={flow.busy} onClick={() => void flow.refresh()}>{t("Check again")}</button>
+          {flow.busy ? <span className="request-progress" role="status">{t("Following your lead…")}</span> : null}
         </> : request.status === 'candidate' && candidate ? <>
-          <div className="candidate"><span className="eyebrow">Company found · please confirm</span><div className="candidate-heading"><CompanyMark company={candidate} /><h2>{candidate.name}</h2></div>
+          <div className="candidate"><span className="eyebrow">{t("Company found · please confirm")}</span><div className="candidate-heading"><CompanyMark company={candidate} /><h2>{candidate.name}</h2></div>
             {candidate.description ? <p>{candidate.description}</p> : null}
-            {website ? <a className="text-link" href={website} target="_blank" rel="noopener noreferrer">Check company website ↗</a> : null}
-            <p>{coverageLabel(candidate.coverage?.state)}</p>
-            {evidence.length ? <p className="small-print">Sources: {evidence.map((url, index) => <span key={url}>{index > 0 ? ' · ' : ''}<a href={url} target="_blank" rel="noopener noreferrer">{new URL(url).hostname} ↗</a></span>)}</p> : null}
+            {website ? <a className="text-link" href={website} target="_blank" rel="noopener noreferrer">{t("Check company website ↗")}</a> : null}
+            <p>{coverageLabel(candidate.coverage?.state, locale)}</p>
+            {evidence.length ? <p className="small-print">{t("Sources:")} {evidence.map((url, index) => <span key={url}>{index > 0 ? ' · ' : ''}<a href={url} target="_blank" rel="noopener noreferrer">{new URL(url).hostname} ↗</a></span>)}</p> : null}
           </div>
-          <div className="candidate-actions"><button className="button dark" id="accept-company" disabled={flow.busy || request.previewRevision === null} onClick={() => void flow.accept()}>Yes, that’s the one ↗</button><button className="text-link" id="reject-company" disabled={flow.busy} onClick={() => void flow.reject()}>Not this company</button></div>
+          <div className="candidate-actions"><button className="button dark" id="accept-company" disabled={flow.busy || request.previewRevision === null} onClick={() => void flow.accept()}>{t("Yes, that’s the one ↗")}</button><button className="text-link" id="reject-company" disabled={flow.busy} onClick={() => void flow.reject()}>{t("Not this company")}</button></div>
         </> : request.status === 'clarification' ? <>
-          <h2>A little more to go on.</h2><p>{request.clarification || 'Which company did you mean?'}</p>
-          <form id="clarification-form" onSubmit={submitClarification}><label htmlFor="company-clarification">More details</label><div className="query-field"><input id="company-clarification" required disabled={flow.busy} maxLength={500} placeholder="Website, industry, or the full name" value={clarification} onChange={event => setClarification(event.target.value)} /></div><button className="button dark" disabled={flow.busy}>Continue ↗</button></form>
+          <h2>{t("A little more to go on.")}</h2><p>{request.clarification || t('Which company did you mean?')}</p>
+          <form id="clarification-form" onSubmit={submitClarification}><label htmlFor="company-clarification">{t("More details")}</label><div className="query-field"><input id="company-clarification" required disabled={flow.busy} maxLength={500} placeholder={t("Website, industry, or the full name")} value={clarification} onChange={event => setClarification(event.target.value)} /></div><button className="button dark" disabled={flow.busy}>{t("Continue ↗")}</button></form>
         </> : request.status === 'unresolved' ? <>
-          <h2>No confirmed match.</h2><p>{request.reason || 'We couldn’t confidently identify this company. Try its website or full name.'}</p><button className="button outline" id="new-request" onClick={flow.reset}>Try another lead</button>
+          <h2>{t("No confirmed match.")}</h2><p>{request.reason || t('We couldn’t confidently identify this company. Try its website or full name.')}</p><button className="button outline" id="new-request" onClick={flow.reset}>{t("Try another lead")}</button>
         </> : request.status === 'accepted' ? <>
-          <h2>On the record.</h2><p>{request.message || 'Your company request is recorded. Career-page collection is not confirmed.'}</p>
-          {request.company?.id ? <a className="button dark" href={`#company/${encodeURIComponent(request.company.id)}`}>View company ↗</a> : <a className="button outline" href="#companies">Company catalogue ↗</a>}
-        </> : <><h2>Request unavailable.</h2><p>The service returned an unknown request state.</p><button className="button outline" onClick={flow.reset}>Start again</button></>}
-        <p id="request-status" role="status">{flow.error || (!request && flow.busy ? 'Following your lead…' : '')}</p>
-        {flow.error && request?.status === 'pending' ? <button className="text-link" disabled={flow.busy} onClick={flow.reset}>Try another lead</button> : null}
+          <h2>{t("On the record.")}</h2><p>{request.message || t('Your company request is recorded. Career-page collection is not confirmed.')}</p>
+          {request.company?.id ? <a className="button dark" href={`#company/${encodeURIComponent(request.company.id)}`}>{t("View company ↗")}</a> : <a className="button outline" href="#companies">{t("Company catalogue ↗")}</a>}
+        </> : <><h2>{t("Request unavailable.")}</h2><p>{t("The service returned an unknown request state.")}</p><button className="button outline" onClick={flow.reset}>{t("Start again")}</button></>}
+        <p id="request-status" role="status">{notice(flow.error) || (!request && flow.busy ? t('Following your lead…') : '')}</p>
+        {flow.error && request?.status === 'pending' ? <button className="text-link" disabled={flow.busy} onClick={flow.reset}>{t("Try another lead")}</button> : null}
       </div>
     </div>
   </section>;

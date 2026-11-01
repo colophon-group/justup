@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { searchExamples } from "./examples.ts";
+import { interfaceExamples } from "../../i18n/examples.ts";
+import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 export function TypingExample({
   enabled,
   reducedMotion,
@@ -7,9 +8,12 @@ export function TypingExample({
   enabled: boolean;
   reducedMotion: boolean;
 }) {
+  const { locale } = useInterfaceLocale();
+  const searchExamples = interfaceExamples[locale];
   const [state, setState] = useState({ index: 0, position: 0, erasing: false });
-  const [visible, setVisible] = useState(!document.hidden);
-  const prompt = searchExamples[state.index] ?? searchExamples[0];
+  const [visible, setVisible] = useState(() => typeof document === "undefined" || !document.hidden);
+  useEffect(() => { setState({ index: 0, position: 0, erasing: false }); }, [locale]);
+  const prompt = searchExamples[state.index] ?? searchExamples[0] ?? "";
   useEffect(() => {
     if (!enabled || reducedMotion || !visible) return;
     const full = state.position === prompt.length,

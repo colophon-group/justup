@@ -1,3 +1,4 @@
+import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 const features = [
   [
     "No sponsored listings.",
@@ -15,8 +16,9 @@ const features = [
     "The original source.",
     "Each result links to its reported employer source. Read the full description and apply there.",
   ],
-];
+] as const;
 export function LandingOverview() {
+  const { t } = useInterfaceLocale();
   return (
     <section
       className="landing-overview"
@@ -24,11 +26,8 @@ export function LandingOverview() {
       aria-labelledby="landing-overview-title"
     >
       <div className="landing-overview-lead">
-        <span className="eyebrow">THE JUSTUP WAY</span>
-        <h2 id="landing-overview-title">
-          Beat the
-          <br /> endless scroll.
-        </h2>
+        <span className="eyebrow">{t("THE JUSTUP WAY")}</span>
+        <h2 id="landing-overview-title">{t("Beat the")}<br />{" "}{t("endless scroll.")}</h2>
       </div>
       <div className="landing-features">
         {features.map(([title, description], index) => (
@@ -37,13 +36,11 @@ export function LandingOverview() {
               0{index + 1}
             </span>
             <div>
-              <h3>{title}</h3>
-              <p>{description}</p>
+              <h3>{t(title)}</h3>
+              <p>{t(description)}</p>
               {index === 2 ? (
                 <a className="coverage-proof" href="#companies">
-                  <span className="coverage-label">
-                    Browse included companies
-                  </span>
+                  <span className="coverage-label">{t("Browse included companies")}</span>
                   <span aria-hidden="true">↗</span>
                 </a>
               ) : null}

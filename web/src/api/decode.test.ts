@@ -22,7 +22,7 @@ test("registration requires an invitation unless the server explicitly permits o
     access: { kind: "guest", fullAccess: false, billingEnabled: false },
     capabilities: {},
     authentication: { method: "username_password", loginEnabled: true, registrationEnabled: true, reason: null, ...requirement },
-    policies: { reviewed: false, version: null, privacyUrl: null, usageUrl: null },
+    policies: { locale:"en", reviewedLocale:null, fallback:false, reviewed: false, version: null, privacyUrl: null, usageUrl: null },
   });
   assert.equal(decodeSession(session({})).authentication.requiresInvitation, true);
   assert.equal(decodeSession(session({ requiresInvitation: true })).authentication.requiresInvitation, true);
@@ -115,4 +115,15 @@ test("result pages retain nullable source verification without changing continua
     }).coverage,
     undefined,
   );
+});
+
+test('policy metadata preserves exact locale approval and rejects inconsistent declarations', async () => {
+  const { decodePolicies } = await import('./decode.ts');
+  const policy = {locale:'de',reviewedLocale:'en',fallback:true,reviewed:true,version:'synthetic-v1',privacyUrl:'https://example.test/privacy.html',usageUrl:'https://example.test/usage.html'};
+  assert.deepEqual(decodePolicies(policy), policy);
+  const unreviewed = {...policy,reviewed:false,reviewedLocale:null,fallback:false};
+  assert.deepEqual(decodePolicies(unreviewed), unreviewed);
+  for (const patch of [{locale:'esp'},{locale:undefined},{reviewedLocale:null},{reviewedLocale:'xx'},{fallback:false},{fallback:'true'},{version:''},{privacyUrl:null},{reviewed:false}]) {
+    assert.throws(() => decodePolicies({...policy,...patch}), /policy|privacy/);
+  }
 });

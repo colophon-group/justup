@@ -16,6 +16,7 @@ const session = () =>
       reason: "policy_unavailable",
     },
     policies: {
+      locale: "en", reviewedLocale: null, fallback: false,
       reviewed: false,
       version: null,
       privacyUrl: null,

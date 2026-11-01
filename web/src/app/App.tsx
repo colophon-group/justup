@@ -1,3 +1,7 @@
+import { policyDocument } from "../i18n/policies.ts";
+import { useAccountLocale } from "../i18n/useAccountLocale.ts";
+import { localeName } from "../i18n/locales.ts";
+import { useInterfaceLocale } from "../i18n/LocaleProvider.tsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClient, errorText, isAbortError } from "../api/client.ts";
 import type { CompanyRequestPrefill, Session } from "../api/types.ts";
@@ -11,6 +15,7 @@ import { useRoute } from "./useRoute.ts";
 import { coverageDescription } from "../shared/coverage.ts";
 
 export function App() {
+  const { t, locale, notice: localizeNotice } = useInterfaceLocale();
   const expiryHandler = useRef<() => void>(() => {});
   const [client] = useState(
     () => new ApiClient({ onSessionExpired: () => expiryHandler.current() }),
@@ -117,8 +122,15 @@ export function App() {
     return () => window.removeEventListener("scroll", update);
   }, []);
   useEffect(() => {
-    document.title = `Justup — ${route.page === "companies" ? "Company catalogue" : route.page === "company" ? "Hiring report" : route.page === "request" ? "Request a company" : "Fresh work. Clear sources."}`;
-  }, [route.page]);
+    document.title = `Justup — ${route.page === "companies" ? t("Company catalogue") : route.page === "company" ? t("Hiring report") : route.page === "request" ? t("Request a company") : t("Fresh work. Clear sources.")}`;
+  }, [route.page, t]);
+  const interfaceLanguage = useAccountLocale(client, session);
+  const previousLocale = useRef(locale);
+  useEffect(() => {
+    if (previousLocale.current === locale) return;
+    previousLocale.current = locale;
+    void refreshSession();
+  }, [locale, refreshSession]);
   const coverage = session?.coverage;
   return (
     <>
@@ -129,32 +141,26 @@ export function App() {
           event.preventDefault();
           mainRef.current?.focus();
         }}
-      >
-        Skip to content
-      </a>
+      >{t("Skip to content")}</a>
       <div className="edition-note">
-        <span>English interface</span>
-        <span>Fresh work. Clear sources.</span>
+        <span>{t("Interface: {language}", { language: localeName[locale] })}</span>
+        <span>{t("Fresh work. Clear sources.")}</span>
       </div>
       <div className="paper">
         <header className="topbar">
-          <nav aria-label="Main navigation">
+          <nav aria-label={t("Main navigation")}>
             <a
               ref={topLink}
               href="#jobs"
               aria-current={route.page === "jobs" ? "page" : undefined}
-            >
-              Positions
-            </a>
+            >{t("Positions")}</a>
             <a
               href="#companies"
               aria-current={route.page === "companies" ? "page" : undefined}
-            >
-              Companies
-            </a>
+            >{t("Companies")}</a>
           </nav>
           <span id="edition-date">
-            {new Date().toLocaleDateString("en", {
+            {new Date().toLocaleDateString(locale, {
               weekday: "short",
               day: "numeric",
               month: "long",
@@ -165,14 +171,12 @@ export function App() {
               className="header-sign-in"
               id="header-sign-in"
               onClick={() => openSignIn()}
-            >
-              Sign in
-            </button>
+            >{t("Sign in")}</button>
           )}
           <button
             className="account"
             id="account-open"
-            aria-label="Settings"
+            aria-label={t("Settings")}
             aria-haspopup="dialog"
             onClick={() => setDialog("settings")}
           >
@@ -188,26 +192,22 @@ export function App() {
               <circle cx="12" cy="12" r="3" />
               <path d="m9 3-.8 2.5-2.4 1L3.5 6 2 8.6l1.7 1.9v3L2 15.4 3.5 18l2.3-.5 2.4 1L9 21h6l.8-2.5 2.4-1 2.3.5 1.5-2.6-1.7-1.9v-3L22 8.6 20.5 6l-2.3.5-2.4-1L15 3Z" />
             </svg>
-            <span>Settings</span>
+            <span>{t("Settings")}</span>
           </button>
         </header>
         <div className="masthead">
-          <a className="brand" href="#jobs" aria-label="Justup home">
+          <a className="brand" href="#jobs" aria-label={t("Justup home")}>
             JUST<span>UP.</span>
           </a>
-          <p className="motto">
-            Fresh work.
-            <br />
-            Clear sources.
-          </p>
+          <p className="motto">{t("Fresh work.")}<br />{t("Clear sources.")}</p>
           <span className="live">
             <i />
             <span id="live-label">
               {connecting
-                ? "CONNECTING"
+                ? t("CONNECTING")
                 : session
-                  ? "LIVE EDITION"
-                  : "SERVICE UNAVAILABLE"}
+                  ? t("LIVE EDITION")
+                  : t("SERVICE UNAVAILABLE")}
             </span>
           </span>
         </div>
@@ -218,15 +218,13 @@ export function App() {
             role="status"
             hidden={!notice}
           >
-            <p>{notice}</p>
+            <p>{localizeNotice(notice)}</p>
             {!connecting ? (
               <button
                 id="retry-session"
                 className="button outline"
                 onClick={() => void refreshSession()}
-              >
-                Reconnect
-              </button>
+              >{t("Reconnect")}</button>
             ) : null}
           </div>
           <SearchWorkspace
@@ -265,20 +263,18 @@ export function App() {
           />
           {route.page === "invalid" ? (
             <section>
-              <h1>Page not found.</h1>
-              <a className="button dark" href="#jobs">
-                Back to search ↗
-              </a>
+              <h1>{t("Page not found.")}</h1>
+              <a className="button dark" href="#jobs">{t("Back to search ↗")}</a>
             </section>
           ) : null}
         </main>
         <footer className="policy-footer">
           <p id="coverage-disclosure">
-            {coverageDescription(coverage)}
+            {coverageDescription(coverage, locale)}
           </p>
-          <nav aria-label="Legal">
-            <a href="/privacy.html">Privacy</a>
-            <a href="/usage.html">Usage</a>
+          <nav aria-label={t("Legal")}>
+            <a href={policyDocument(locale, "privacy")}>{t("Privacy")}</a>
+            <a href={policyDocument(locale, "usage")}>{t("Usage")}</a>
           </nav>
         </footer>
       </div>
@@ -286,6 +282,7 @@ export function App() {
         key={`account-${epoch}`}
         client={client}
         session={session}
+        interfaceLanguage={interfaceLanguage}
         dialog={dialog}
         onDialogChange={setDialog}
         onSessionRefresh={refreshSession}
@@ -297,8 +294,8 @@ export function App() {
       <button
         className="back-to-top"
         id="back-to-top"
-        aria-label="Back to top"
-        title="Back to top"
+        aria-label={t("Back to top")}
+        title={t("Back to top")}
         hidden={!backToTop}
         onClick={() => {
           window.scrollTo({

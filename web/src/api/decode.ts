@@ -1,3 +1,4 @@
+import { parseInterfaceLocale } from "../i18n/locales.ts";
 // Validate public response shapes at the network boundary; ignore unrequested private fields.
 import type {
   Company,
@@ -13,6 +14,7 @@ import type {
   SearchProposal,
   SearchSubmission,
   Session,
+  SessionPolicies,
   Task,
   TaskResult,
   Warning,
@@ -250,6 +252,21 @@ function decodeProposal(value: unknown): SearchProposal {
     ...optionalText(o, "message"),
   };
 }
+export function decodePolicies(value: unknown): SessionPolicies {
+  const data = record(value, 'policies');
+  const reviewed = flag(data.reviewed, 'policy review');
+  const locale = parseInterfaceLocale(data.locale);
+  const reviewedLocale = data.reviewedLocale == null ? null : parseInterfaceLocale(data.reviewedLocale);
+  const fallback = flag(data.fallback, 'policy fallback');
+  if ((locale === null) || (data.reviewedLocale != null && reviewedLocale === null)
+    || (reviewed && (!locale || !reviewedLocale || fallback !== (locale !== reviewedLocale)))
+    || (!reviewed && (reviewedLocale !== null || fallback))) fail('policy locale approval');
+  const version = nullableText(data.version, 'policy version');
+  const privacyUrl = nullableText(data.privacyUrl, 'privacy URL');
+  const usageUrl = nullableText(data.usageUrl, 'usage URL');
+  if (reviewed && (!version || !/^[A-Za-z0-9_.:-]{1,100}$/u.test(version) || !privacyUrl || !usageUrl)) fail('policy approval');
+  return {reviewed, version, privacyUrl, usageUrl, locale: locale!, reviewedLocale, fallback};
+}
 export function decodeSession(value: unknown): Session {
   const o = record(value, "session"),
     access = record(o.access, "access"),
@@ -290,12 +307,7 @@ export function decodeSession(value: unknown): Session {
         : flag(auth.requiresInvitation, "invitation requirement"),
       reason: nullableText(auth.reason, "authentication reason"),
     },
-    policies: {
-      reviewed: flag(policies.reviewed, "policy review"),
-      version: nullableText(policies.version, "policy version"),
-      privacyUrl: nullableText(policies.privacyUrl, "privacy URL"),
-      usageUrl: nullableText(policies.usageUrl, "usage URL"),
-    },
+    policies: decodePolicies(policies),
     ...(o.coverage == null ? {} : { coverage: decodeCoverage(o.coverage) }),
   };
 }

@@ -1,7 +1,8 @@
+import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 import { useEffect, useRef } from "react";
 import type { Job } from "../../api/types.ts";
 import { CompanyMark } from "../../shared/CompanyMark.tsx";
-import { ageText, salaryText } from "./format.ts";
+import { ageText, salaryText, metadataText } from "./format.ts";
 export function JobRow({
   job,
   animated,
@@ -11,6 +12,7 @@ export function JobRow({
   animated: boolean;
   reducedMotion: boolean;
 }) {
+  const { t, locale } = useInterfaceLocale();
   const row = useRef<HTMLElement>(null),
     animate = useRef(animated && !reducedMotion);
   useEffect(() => {
@@ -25,11 +27,11 @@ export function JobRow({
     return () => motion?.cancel();
   }, []);
   const posting = useRef<HTMLAnchorElement>(null),
-    pay = salaryText(job.salary);
+    pay = salaryText(job.salary, locale);
   const locations = job.locations.map((location) => location.name).join(", "),
     workplace = [
       ...new Set(
-        job.locations.map((location) => location.workplace).filter(Boolean),
+        job.locations.map((location) => location.workplace ? metadataText(location.workplace, locale) : null).filter(Boolean),
       ),
     ].join(", ");
   return (
@@ -48,12 +50,12 @@ export function JobRow({
         }}
       >
         <div className="job-age">
-          {job.isNew ? <span className="new-badge">New</span> : null}
+          {job.isNew ? <span className="new-badge">{t("New")}</span> : null}
           <time
             dateTime={job.firstObserved}
-            title={`First observed ${new Date(job.firstObserved).toLocaleDateString("en")}`}
+            title={t("First observed {date}", { date: new Date(job.firstObserved).toLocaleDateString(locale) })}
           >
-            {ageText(job.firstObserved)}
+            {ageText(job.firstObserved, locale)}
           </time>
         </div>
         <div className="job-story">
@@ -79,7 +81,7 @@ export function JobRow({
             {job.employmentTypes.length ? (
               <span>
                 {job.employmentTypes
-                  .map((value) => value.replaceAll("_", " "))
+                  .map((value) => metadataText(value, locale))
                   .join(", ")}
               </span>
             ) : null}
@@ -99,7 +101,7 @@ export function JobRow({
             <CompanyMark company={job.company} />
             <span>{job.company.name}</span>
           </a>
-          <p className="job-source">Direct from employer</p>
+          <p className="job-source">{t("Direct from employer")}</p>
         </div>
         <span className="open-posting" aria-hidden="true">
           ↗

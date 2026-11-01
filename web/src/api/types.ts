@@ -1,3 +1,4 @@
+import type { InterfaceLocale } from "../i18n/locales.ts";
 // Public API models. Decode network data before placing it into application state.
 export interface User {
   id: string;
@@ -9,6 +10,15 @@ export interface Coverage {
   description?: string;
   verifiedAt?: string | null;
   stale?: boolean;
+}
+export interface SessionPolicies {
+  reviewed: boolean;
+  version: string | null;
+  privacyUrl: string | null;
+  usageUrl: string | null;
+  locale: InterfaceLocale;
+  reviewedLocale: InterfaceLocale | null;
+  fallback: boolean;
 }
 export interface Session {
   user: User | null;
@@ -27,12 +37,7 @@ export interface Session {
     requiresInvitation: boolean;
     reason: string | null;
   };
-  policies: {
-    reviewed: boolean;
-    version: string | null;
-    privacyUrl: string | null;
-    usageUrl: string | null;
-  };
+  policies: SessionPolicies;
   coverage?: Coverage;
 }
 export interface Requirement {

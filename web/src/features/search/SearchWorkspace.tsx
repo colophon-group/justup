@@ -1,3 +1,4 @@
+import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 import { useLayoutEffect, useRef, useState } from "react";
 import { errorText } from "../../api/client.ts";
 import type { ApiClient } from "../../api/client.ts";
@@ -28,6 +29,7 @@ export function SearchWorkspace({
   onCompanyRequest,
   onAccount,
 }: Props) {
+  const { t, notice } = useInterfaceLocale();
   const workspace = useWorkspace(client, session, () =>
     onSignIn(
       "Sign in to interpret and save your search. Your unsent text stays here.",
@@ -70,8 +72,8 @@ export function SearchWorkspace({
     >
       <div className="search-workspace">
         <div className="search-sidebar">
-          <span className="eyebrow">YOUR SEARCHES</span>
-          <div id="search-tabs" role="tablist" aria-label="Saved searches">
+          <span className="eyebrow">{t("YOUR SEARCHES")}</span>
+          <div id="search-tabs" role="tablist" aria-label={t("Saved searches")}>
             {state.searches.map((item, index) => (
               <div className="search-tab" key={item.id}>
                 <button
@@ -114,11 +116,11 @@ export function SearchWorkspace({
                   }}
                   onClick={() => workspace.select(item.id)}
                 >
-                  {item.title || "Saved search"}
+                  {item.title || t("Saved search")}
                 </button>
                 <button
                   className="tab-remove"
-                  aria-label={`Delete ${item.title || "search"}`}
+                  aria-label={t("Delete {title}", { title: item.title || t("search") })}
                   onClick={() => {
                     setDeleteError("");
                     setPendingDelete(item.id);
@@ -136,23 +138,16 @@ export function SearchWorkspace({
               workspace.newSearch();
               inputRef.current?.focus();
             }}
-          >
-            + New search
-          </button>
+          >{t("+ New search")}</button>
         </div>
         <div className="search-main">
           {search ? null : (
             <div className="search-intro" id="search-intro">
-              <span className="eyebrow">YOUR FIRST SEARCH</span>
-              <h1 id="search-intro-title">
-                Fresh jobs.
-                <br />
-                <span>No paid placement.</span>
+              <span className="eyebrow">{t("YOUR FIRST SEARCH")}</span>
+              <h1 id="search-intro-title">{t("Fresh jobs.")}<br />
+                <span>{t("No paid placement.")}</span>
               </h1>
-              <p>
-                Fresh listings from company career pages. See exactly which
-                companies are included.
-              </p>
+              <p>{t("Fresh listings from company career pages. See exactly which companies are included.")}</p>
             </div>
           )}
           <div className="search-compose">
@@ -164,7 +159,7 @@ export function SearchWorkspace({
               }}
             >
               <label htmlFor="query" id="query-label">
-                {search ? "Your search" : "What work are you looking for?"}
+                {search ? t("Your search") : t("What work are you looking for?")}
               </label>
               <div className="query-field">
                 <div className="query-editor">
@@ -205,33 +200,29 @@ export function SearchWorkspace({
                     state.busy ||
                     (!!session.user && !session.capabilities.search)
                   }
-                >
-                  Search <span>↵</span>
+                >{t("Search")}{" "}<span>↵</span>
                 </button>
               </div>
             </form>
-            <p className="search-guidance" id="search-guidance">
-              Be as specific as you need. We’ll show how your requirements are
-              handled.
-            </p>
+            <p className="search-guidance" id="search-guidance">{t("Be as specific as you need. We’ll show how your requirements are handled.")}</p>
           </div>
           <div id="search-status" className="helper" role="status">
-            {state.status ||
+            {notice(state.status) ||
               (session?.user && !session.capabilities.search
-                ? "Search interpretation is unavailable right now. Your accepted searches remain available."
+                ? t("Search interpretation is unavailable right now. Your accepted searches remain available.")
                 : "")}
             {state.proposal ? (
               <>
-                <strong>This search needs your decision.</strong>
+                <strong>{t("This search needs your decision.")}</strong>
                 <p>
                   {state.proposal.message ||
-                    "Some requirements cannot be applied."}
+                    t("Some requirements cannot be applied.")}
                 </p>
                 {state.proposal.requirements
                   .filter((item) => item.handling === "unsatisfied")
                   .map((item, index) => (
                     <p key={item.id ?? index}>
-                      {item.text}: {item.reason || "not supported"}
+                      {item.text}: {item.reason || t("not supported")}
                     </p>
                   ))}
                 {state.proposal.warnings.map((warning, index) => (
@@ -246,9 +237,7 @@ export function SearchWorkspace({
                   id="confirm-search-proposal"
                   disabled={state.busy}
                   onClick={() => void workspace.confirm()}
-                >
-                  Accept these limitations
-                </button>
+                >{t("Accept these limitations")}</button>
               </>
             ) : null}
           </div>
@@ -259,7 +248,7 @@ export function SearchWorkspace({
               )
               .map((item, index) => (
                 <p key={item.id ?? index}>
-                  <strong>Not met:</strong> {item.text}
+                  <strong>{t("Not met:")}</strong> {item.text}
                   {item.reason ? ` · ${item.reason}` : ""}
                 </p>
               ))}
@@ -296,36 +285,31 @@ export function SearchWorkspace({
         describedBy="delete-search-description"
       >
         <div className="dialog-heading">
-          <span className="eyebrow">YOUR SEARCHES</span>
+          <span className="eyebrow">{t("YOUR SEARCHES")}</span>
           <button
             className="icon-close"
-            aria-label="Cancel deleting search"
+            aria-label={t("Cancel deleting search")}
             onClick={() => setPendingDelete(null)}
           >
             ×
           </button>
         </div>
-        <h2 id="delete-search-title">Delete this search?</h2>
+        <h2 id="delete-search-title">{t("Delete this search?")}</h2>
         <p id="delete-search-description">
-          {deleteError ||
-            "This saved search will be deleted from your account."}
+          {notice(deleteError) || t("This saved search will be deleted from your account.")}
         </p>
         <div className="dialog-actions">
           <button
             className="button outline"
             autoFocus
             onClick={() => setPendingDelete(null)}
-          >
-            Keep search
-          </button>
+          >{t("Keep search")}</button>
           <button
             className="button dark"
             id="confirm-delete-search"
             disabled={deleting}
             onClick={() => void deleteSearch()}
-          >
-            Delete search
-          </button>
+          >{t("Delete search")}</button>
         </div>
       </Dialog>
     </section>
