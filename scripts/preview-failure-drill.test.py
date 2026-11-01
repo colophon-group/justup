@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import redirect_stderr
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -164,6 +168,29 @@ class DrillEvidence(unittest.TestCase):
             alias.symlink_to(evidence)
             with self.assertRaises(ValueError):
                 drill.read_evidence(alias)
+
+    def test_small_private_evidence_loads_and_bad_utf8_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as folder:
+            evidence = Path(folder).resolve() / 'before.json'
+            evidence.write_text('{"case":"crash"}')
+            evidence.chmod(0o600)
+            actual_lstat, actual_fstat = Path.lstat, os.fstat
+            def root_meta(result):
+                return SimpleNamespace(st_mode=result.st_mode, st_uid=0, st_nlink=result.st_nlink,
+                                       st_size=result.st_size, st_dev=result.st_dev, st_ino=result.st_ino)
+            with (patch.object(Path, 'lstat', autospec=True,
+                               side_effect=lambda path, *args, **kwargs: root_meta(actual_lstat(path, *args, **kwargs))
+                               if path == evidence else actual_lstat(path, *args, **kwargs)),
+                  patch.object(drill.os, 'fstat', side_effect=lambda fd: root_meta(actual_fstat(fd)))):
+                self.assertEqual(drill.read_evidence(evidence), {'case': 'crash'})
+                evidence.write_bytes(b'\xff')
+                error = io.StringIO()
+                with (patch.object(sys, 'argv', ['preview-failure-drill.py', 'assess', '--case', 'crash',
+                                                '--before', str(evidence), '--after', str(evidence)]),
+                      redirect_stderr(error)):
+                    self.assertEqual(drill.main(), 1)
+                self.assertIn('evidence is unavailable', error.getvalue())
+                self.assertNotIn('\\xff', error.getvalue())
 
 
 if __name__ == '__main__':

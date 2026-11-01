@@ -196,7 +196,7 @@ def main():
             result = assess(args.case, read_evidence(args.before), read_evidence(args.after))
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get('passed', True) else 1
-    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError, json.JSONDecodeError):
+    except (ValueError, OSError, KeyError, TypeError, UnicodeError, subprocess.SubprocessError, json.JSONDecodeError):
         print(json.dumps({'error': 'Drill evidence is unavailable or does not match the reviewed preview.'}), file=sys.stderr)
         return 1
 
