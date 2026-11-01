@@ -109,6 +109,11 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
     if (scope) reading.current = read();
     return () => { controller.abort(); ready.current = false; };
   }, [scope, owner, read]);
+  useEffect(() => client.onSessionResumed(() => {
+    if (!scope || guard.current.controller.signal.aborted) return;
+    // Reconcile a possibly committed interrupted save, retaining newer local edits.
+    reading.current = read(undefined, true, base.current);
+  }), [client, scope, read]);
   const refreshOwnedDeletion = useCallback(async (): Promise<void> => {
     const transition = pendingDeletion.current;
     if (!transition) return;

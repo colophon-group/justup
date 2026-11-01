@@ -17,6 +17,7 @@ import {
   record,
 } from "./decode.ts";
 import type { SavedWorkspaceState, SearchScope, Session } from "./types.ts";
+import { sessionOwner } from './sessionOwner.ts';
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -60,6 +61,7 @@ interface ClientOptions {
   onSessionExpired?: () => void;
   onVisitorExpired?: () => void;
   timeoutMs?: number;
+  onAuthenticationChanged?: () => void;
 }
 const ignored = (value: unknown): void => {
   if (value !== undefined) record(value, "acknowledgement");
@@ -70,24 +72,53 @@ export class ApiClient {
   private explicitRequestLocale: InterfaceLocale | null = null;
   private csrfToken: string | null = null;
   private sessionVersion = 0;
+  private suspended = false;
+  private owner: string | null = null;
+  private readonly privateRequests = new Set<AbortController>();
+  private readonly resumed = new Set<() => void>();
   private readonly fetcher: typeof fetch;
   private readonly onSessionExpired: (() => void) | undefined;
   private readonly onVisitorExpired: (() => void) | undefined;
   private readonly timeoutMs: number;
+  private readonly onAuthenticationChanged: (() => void) | undefined;
   constructor(options: ClientOptions = {}) {
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.onSessionExpired = options.onSessionExpired;
     this.onVisitorExpired = options.onVisitorExpired;
     this.timeoutMs = options.timeoutMs ?? 20_000;
+    this.onAuthenticationChanged = options.onAuthenticationChanged;
   }
   // Request-only route presentation; never persists a preference or changes a query.
   setExplicitRequestLocale(locale: InterfaceLocale | null): void {
     if (locale !== null && parseInterfaceLocale(locale) === null) throw new TypeError('Invalid explicit interface locale.');
     this.explicitRequestLocale = locale;
   }
-  setSession(session: Session | null): void {
+  setSession(session: Session | null, preserveVisitor = false): void {
+    const wasSuspended = this.suspended, previousOwner = this.owner, previousCsrf = this.csrfToken;
     this.sessionVersion++;
     this.csrfToken = session?.csrfToken || null;
+    this.owner = sessionOwner(session);
+    this.suspended = false;
+    if (!session || previousOwner !== this.owner) {
+      for (const controller of this.privateRequests) controller.abort(new DOMException('Session owner changed', 'AbortError'));
+      this.privateRequests.clear();
+    }
+    const version = this.sessionVersion;
+    const owner = this.owner;
+    const sameGuest = preserveVisitor && previousOwner !== null && !previousOwner.startsWith('account:') && !owner?.startsWith('account:') && previousCsrf === this.csrfToken;
+    if (wasSuspended && session && (previousOwner === owner || sameGuest)) {
+      queueMicrotask(() => { if (!this.suspended && this.owner === owner && this.sessionVersion === version) for (const listener of this.resumed) listener(); });
+    }
+  }
+  suspendSession(): void {
+    this.sessionVersion++;
+    this.suspended = true;
+    for (const controller of this.privateRequests) controller.abort(new DOMException('Session is being checked', 'AbortError'));
+    this.privateRequests.clear();
+  }
+  onSessionResumed(listener: () => void): () => void {
+    this.resumed.add(listener);
+    return () => { this.resumed.delete(listener); };
   }
   async request<T>(
     path: string,
@@ -99,6 +130,8 @@ export class ApiClient {
     const method = options.method ?? "GET",
       mutation = method !== "GET",
       sessionVersion = this.sessionVersion;
+    const publicRead = !mutation && (path === '/session' || path === '/hiring-wire' || path === '/companies' || path.startsWith('/companies?') || path.startsWith('/companies/'));
+    if (this.suspended && !publicRead) throw new DOMException('Session is being checked', 'AbortError');
     if (mutation && !this.csrfToken)
       throw new ApiError(
         403,
@@ -112,6 +145,13 @@ export class ApiClient {
     if (mutation && this.csrfToken) headers["X-CSRF-Token"] = this.csrfToken;
     if (options.key) headers["Idempotency-Key"] = options.key;
     const controller = new AbortController();
+    if (!publicRead) this.privateRequests.add(controller);
+    const stale = () => !publicRead && (sessionVersion !== this.sessionVersion || this.suspended);
+    let cancel!: () => void;
+    const cancellation = new Promise<never>((_, reject) => {
+      cancel = () => reject(new DOMException('Request cancelled', 'AbortError'));
+      controller.signal.addEventListener('abort', cancel, { once: true });
+    });
     const abort = () => controller.abort(options.signal?.reason);
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) abort();
@@ -123,7 +163,7 @@ export class ApiClient {
     try {
       let response: Response;
       try {
-        response = await this.fetcher("/api/v1" + path, {
+        response = await Promise.race([this.fetcher("/api/v1" + path, {
           method,
           credentials: "same-origin",
           cache: "no-store",
@@ -131,9 +171,9 @@ export class ApiClient {
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: controller.signal,
           ...(options.keepalive === undefined ? {} : { keepalive: options.keepalive }),
-        });
+        }), cancellation]);
       } catch (error) {
-        if (options.signal?.aborted)
+        if (options.signal?.aborted || stale())
           throw new DOMException("Request cancelled", "AbortError");
         throw new ApiError(
           0,
@@ -143,7 +183,7 @@ export class ApiClient {
             : "The service is unavailable. Your accepted search has been kept.",
         );
       }
-      if (options.signal?.aborted)
+      if (options.signal?.aborted || stale())
         throw new DOMException("Request cancelled", "AbortError");
       if (controller.signal.aborted)
         throw new ApiError(
@@ -153,9 +193,9 @@ export class ApiClient {
         );
       let value: unknown;
       try {
-        value = response.status === 204 ? undefined : await response.json();
+        value = response.status === 204 ? undefined : await Promise.race([response.json(), cancellation]);
       } catch {
-        if (options.signal?.aborted)
+        if (options.signal?.aborted || stale())
           throw new DOMException("Request cancelled", "AbortError");
         throw new ApiError(
           response.status,
@@ -163,7 +203,7 @@ export class ApiClient {
           "The service returned an unreadable response. Please retry.",
         );
       }
-      if (options.signal?.aborted)
+      if (options.signal?.aborted || stale())
         throw new DOMException("Request cancelled", "AbortError");
       if (controller.signal.aborted)
         throw new ApiError(
@@ -214,6 +254,8 @@ export class ApiClient {
       }
       return decode(value);
     } finally {
+      this.privateRequests.delete(controller);
+      controller.signal.removeEventListener('abort', cancel);
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
     }
@@ -363,32 +405,36 @@ export class ApiClient {
       method: "POST", body: { jobId }, signal,
     });
   }
-  login(body: { username: string; password: string }, signal?: AbortSignal) {
-    return this.request("/auth/login", ignored, {
+  async login(body: { username: string; password: string }, signal?: AbortSignal) {
+    await this.request("/auth/login", ignored, {
       method: "POST",
       body,
       signal,
     });
+    this.onAuthenticationChanged?.();
   }
-  register(
+  async register(
     body: { username: string; password: string; inviteCode?: string },
     signal?: AbortSignal,
   ) {
-    return this.request("/auth/register", ignored, {
+    await this.request("/auth/register", ignored, {
       method: "POST",
       body,
       signal,
     });
+    this.onAuthenticationChanged?.();
   }
-  logout(signal?: AbortSignal) {
-    return this.request("/session/logout", ignored, { method: "POST", signal });
+  async logout(signal?: AbortSignal) {
+    await this.request("/session/logout", ignored, { method: "POST", signal });
+    this.onAuthenticationChanged?.();
   }
-  deleteAccount(password: string, key?: string, signal?: AbortSignal) {
-    return this.request("/account", ignored, {
+  async deleteAccount(password: string, key?: string, signal?: AbortSignal) {
+    await this.request("/account", ignored, {
       method: "DELETE",
       body: { password },
       key,
       signal,
     });
+    this.onAuthenticationChanged?.();
   }
 }

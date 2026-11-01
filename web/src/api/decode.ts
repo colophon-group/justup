@@ -362,6 +362,8 @@ export function decodeSession(value: unknown): Session {
     capabilities = record(o.capabilities, "capabilities");
   const user = o.user === null ? null : record(o.user, "account");
   return {
+    ...(o.serverTime === undefined ? {} : { serverTime: date(o.serverTime) }),
+    ...(o.expiresAt === undefined ? {} : { expiresAt: o.expiresAt === null ? null : date(o.expiresAt) }),
     user:
       user === null
         ? null
@@ -377,6 +379,7 @@ export function decodeSession(value: unknown): Session {
       kind: text(access.kind, "access kind"),
       fullAccess: flag(access.fullAccess, "access status"),
       billingEnabled: flag(access.billingEnabled, "billing status"),
+      ...(access.until === undefined ? {} : { until: access.until === null ? null : date(access.until) }),
       ...optionalText(access, "description"),
     },
     capabilities: Object.fromEntries(

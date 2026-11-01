@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiError, errorText, isAbortError, type ApiClient } from '../api/client.ts';
 import type { Session } from '../api/types.ts';
 import { INTERFACE_LOCALES, type InterfaceLocale } from './locales.ts';
@@ -27,6 +27,9 @@ export function useAccountLocale(client: ApiClient, session: Session | null): Ac
   const previousScope = useRef<{ owner: string | null; available: boolean } | null>(null);
   const currentOwner = useRef(owner);
   currentOwner.current = owner;
+  useEffect(() => client.onSessionResumed(() => {
+    if (owner && available) setReload(value => value + 1);
+  }), [client, owner, available]);
   useLayoutEffect(() => {
     const sequence = ++generation.current;
     active.current?.abort();

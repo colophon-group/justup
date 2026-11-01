@@ -28,6 +28,46 @@ const json = (body: unknown, status = 200) =>
     status,
     headers: { "Content-Type": "application/json" },
   });
+
+test('ownership suspension blocks new private work and discards delayed successful and denied replies', async () => {
+  for (const status of [200, 401]) {
+    let finish!: (value: Response) => void, calls = 0, expired = 0;
+    const client = new ApiClient({ onSessionExpired: () => expired++, fetch: async () => { calls++; return new Promise<Response>(resolve => { finish = resolve; }); } });
+    client.setSession(session());
+    const old = client.request('/preferences', value => value);
+    client.suspendSession();
+    await assert.rejects(client.request('/preferences', value => value), { name: 'AbortError' });
+    await assert.rejects(client.logout(), { name: 'AbortError' });
+    assert.equal(calls, 1);
+    client.setSession({ ...session(), user: { id: 'new', username: 'new-reader' } });
+    finish(json(status === 200 ? { old: true } : { error: { code: 'unauthenticated' } }, status));
+    await assert.rejects(old, { name: 'AbortError' });
+    assert.equal(expired, 0);
+  }
+});
+
+test('only a confirmed same owner resumes retained workspace listeners', async () => {
+  const client = new ApiClient(); let resumed = 0;
+  client.onSessionResumed(() => resumed++);
+  client.setSession(session()); client.suspendSession(); client.setSession(session());
+  await Promise.resolve(); assert.equal(resumed, 1);
+  client.suspendSession(); client.setSession({ ...session(), user: { id: 'new', username: 'new' } });
+  await Promise.resolve(); assert.equal(resumed, 1);
+  client.suspendSession(); await Promise.resolve(); assert.equal(resumed, 1);
+});
+
+test('authentication invalidation signals are emitted only after acknowledged successful changes', async () => {
+  let signals = 0, status = 401;
+  const client = new ApiClient({ onAuthenticationChanged: () => signals++, fetch: async () => json(status === 200 ? {} : { error: { code: 'invalid_credentials' } }, status) });
+  client.setSession(session());
+  await assert.rejects(client.login({ username: 'reader', password: 'wrong' }));
+  await assert.rejects(client.deleteAccount('wrong')); assert.equal(signals, 0);
+  status = 200;
+  await client.login({ username: 'reader', password: 'test-only' });
+  await client.register({ username: 'reader', password: 'test-only' });
+  await client.logout(); await client.deleteAccount('test-only');
+  assert.equal(signals, 4);
+});
 test("bodyless mutations retain same-origin credentials, JSON and CSRF without storing a session", async () => {
   let calls = 0;
   const client = new ApiClient({
