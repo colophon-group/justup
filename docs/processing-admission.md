@@ -5,7 +5,7 @@ read_when: Reviewing policy activation, wiring session language metadata or diag
 
 # Configure policy and processing admission
 
-All five public policy pairs are approved at source version `2026-11-01`. Keep `JUSTUP_POLICIES_REVIEWED=false` until each deployed pair matches the recorded byte hashes and the separate processing prerequisites pass. The server still defaults to unreviewed `product-draft-5` metadata; source approval alone does not authorize activation.
+All five public policy pairs are approved at source version `2026-11-01.1`; the previously byte-verified preview used `2026-11-01`. Keep `JUSTUP_POLICIES_REVIEWED=false` until each pair of the version selected for admission matches its recorded deployed byte hashes and the separate processing prerequisites pass. The server still defaults to unreviewed `product-draft-5` metadata; source approval alone does not authorize activation.
 
 ## Bind approval to the served language
 
