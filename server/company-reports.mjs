@@ -10,7 +10,7 @@ const METHODOLOGY = Object.freeze({
   activity: 'Distinct newly observed listings on the recorded career-page scopes. Missing or interrupted coverage is unknown; listing activity does not measure hires or headcount.',
   monitoring: 'Earliest tracked-since evidence among the scopes in this historical snapshot; this does not establish uninterrupted company-wide monitoring.',
   roles: 'Source occupation labels among currently eligible public sample listings; unlabelled listings remain unknown.',
-  salaries: 'Reported numeric salary bounds among currently eligible public sample listings, grouped by currency and period without conversion or annualization. These are listing values, not employee pay.',
+  salaries: 'Reported numeric salary bounds among currently eligible public sample listings, grouped by currency and period without conversion or annualization. Crossed aggregate bounds remain unknown. These are listing values, not employee pay.',
 });
 
 function roles(jobs) {
@@ -42,6 +42,11 @@ function salaries(jobs) {
       if (salary.min != null) previous.min = previous.min == null ? salary.min : Math.min(previous.min, salary.min);
       if (salary.max != null) previous.max = previous.max == null ? salary.max : Math.max(previous.max, salary.max);
     }
+  }
+  // Bounds from separate one-sided observations cannot always form a band.
+  // Keep their group/count evidence without inventing numeric endpoints.
+  for (const group of found.values()) {
+    if (group.min != null && group.max != null && group.min > group.max) group.min = group.max = null;
   }
   return { sampleSize: jobs.length, reportedSampleSize, groupedSampleSize,
     incompleteSampleSize: reportedSampleSize - groupedSampleSize, unknownSampleSize: jobs.length - reportedSampleSize,
