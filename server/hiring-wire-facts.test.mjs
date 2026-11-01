@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
-import { compileWireSnapshot,periodFor,renderWireItems,validateWireSelection } from './hiring-wire-facts.mjs';
+import { compileWireSnapshot,digest,periodFor,renderWireItems,validateWireSelection } from './hiring-wire-facts.mjs';
 import { AT,END,wireFixture } from './hiring-wire-fixtures.mjs';
 const compile=snapshot=>compileWireSnapshot(snapshot,{periodEnd:END,now:AT});
 
@@ -34,6 +34,40 @@ test('only the same comparable scopes contribute, even when a company adds a boa
 });
 test('untrusted fields, unsafe company links and stale captures fail closed',()=>{
   for(const alter of [s=>s.accountId='private',s=>s.postings[0].body='restricted body',s=>s.companies[0].url='http://example.com/',s=>s.companies[0].url='https://127.0.0.1/',s=>s.generatedAt='2026-11-01T00:00:00.000Z',s=>s.scopes[0].coverage[0].revision='changed']) {const snapshot=wireFixture();alter(snapshot);assert.throws(()=>compile(snapshot));}
+});
+test('real-source bare origins and homepage paths canonicalize only factual company projections',()=>{
+  for(const [input,expected] of [['https://example.com','https://example.com/'],['https://EXAMPLE.com/company','https://example.com/company'],['https://example.com:443/about/','https://example.com/about/']]) {
+    const snapshot=wireFixture();snapshot.sourceVersion='jobseek-coverage-v1';snapshot.companies[0].url=input;
+    const original=structuredClone(snapshot),result=compile(snapshot);
+    assert.equal(result.facts[0].company.url,expected);
+    assert.deepEqual(result.snapshot,original);assert.deepEqual(snapshot,original);
+    assert.equal(result.snapshotSha256,digest(original));
+  }
+});
+test('never-verified scopes suppress unknown activity even with claimed complete history or no postings',()=>{
+  for(const postings of [true,false]) {
+    const snapshot=wireFixture();snapshot.sourceVersion='jobseek-coverage-v1';snapshot.scopes[0].lastVerifiedAt=null;
+    if(!postings)snapshot.postings=[];
+    const result=compile(snapshot);
+    assert.deepEqual(result.facts,[]);
+    assert.deepEqual(result.suppressed,[{scopeId:'internal-board',reason:'never_verified_scope'}]);
+    // Suppression never bypasses validation of an asserted history interval.
+    snapshot.scopes[0].coverage[0].end=snapshot.scopes[0].coverage[0].start;
+    assert.throws(()=>compile(snapshot),{code:'invalid_output'});
+  }
+  const snapshot=wireFixture();snapshot.scopes.push({...snapshot.scopes[0],id:'never-verified',lastVerifiedAt:null});
+  snapshot.postings.push({id:'unknown-posting',scopeId:'never-verified',firstObserved:'2026-11-01T00:00:00.000Z'});
+  const result=compile(snapshot);assert.equal(result.facts[0].current,3);assert.equal(result.facts[0].scopeCount,1);
+});
+test('homepage normalization rejects credentials, local destinations, unsafe ports and query/control syntax',()=>{
+  for(const url of ['http://example.com/path','https://user:password@example.com/','https://@example.com/','https://127.0.0.1/',
+    'https://[::1]/','https://2130706433/','https://localhost/','https://app.local/','https://app.internal/','https://app.lan/',
+    'https://app.localdomain/','https://example.com:8443/','https://example.com/?','https://example.com/#','https://example.com/?a=1',
+    'https://example.com/#about','https://example.com/\npath','https://example.com/%0apath',' https://example.com/',
+    'https://example.com\\private','https://example.com./','https://-bad.example.com/']) {
+    const snapshot=wireFixture();snapshot.companies[0].url=url;
+    assert.throws(()=>compile(snapshot),{code:'invalid_output'},url);
+  }
 });
 test('versioned reviewed and held-out cases meet exact factual and unsafe-claim thresholds',()=>{
   const cases=JSON.parse(readFileSync(new URL('./hiring-wire-evals-v1.json',import.meta.url))),started=performance.now();
