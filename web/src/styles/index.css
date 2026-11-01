@@ -286,3 +286,16 @@ input[type=checkbox]:checked::after { content: ''; width: 4px; height: 8px; bord
 @media (max-width: 370px) { .search-intro h1 { font-size: 56px; } .company-row { grid-template-columns: minmax(0, 1fr) 110px 28px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 .reduce-motion *, .reduce-motion *::before, .reduce-motion *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+
+/* Restricted results use abstract compressed paper, never undisclosed posting data. */
+.hidden-matches { position: relative; isolation: isolate; overflow: hidden; margin: 0 12px 18px; padding: 48px 24px 24px; min-height: 190px; }
+.compressed-matches { position: absolute; inset: 0; z-index: -1; display: grid; gap: 12px; opacity: .3; pointer-events: none; }
+.compressed-matches i { display: block; height: 56px; border: 1px solid var(--ink); background: linear-gradient(90deg, var(--ink) 0 4%, transparent 4% 10%, var(--ink) 10% 48%, transparent 48% 75%, var(--ink) 75% 85%, transparent 85%); }
+.compressed-matches i:nth-child(1) { filter: blur(10px); transform: scaleY(.2); transform-origin: bottom; }
+.compressed-matches i:nth-child(2) { filter: blur(7px); transform: scaleY(.5); }
+.compressed-matches i:nth-child(3) { filter: blur(4px); }
+.hidden-matches-prompt { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.hidden-matches-prompt h2 { font: 900 clamp(24px, 3vw, 40px)/1.05 var(--display); margin: 8px 0; }
+.hidden-matches-prompt p { margin: 0; max-width: 44ch; font-size: 12px; }
+.hidden-matches-prompt .button { flex-shrink: 0; }
+@media (max-width: 650px) { .hidden-matches { padding: 32px 12px 18px; } .hidden-matches-prompt { align-items: flex-start; flex-direction: column; } }

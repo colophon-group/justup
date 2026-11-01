@@ -42,6 +42,7 @@ export function AccountControls({ client, session, dialog, onDialogChange, onSes
     && localPolicy(session.policies.privacyUrl) && localPolicy(session.policies.usageUrl);
   const loginEnabled = reviewed && session?.authentication.method === 'username_password' && session.authentication.loginEnabled;
   const registrationEnabled = loginEnabled && session?.authentication.registrationEnabled === true;
+  const requiresInvitation = session?.authentication.requiresInvitation !== false;
 
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current++; controller.current?.abort(); }; }, []);
   useLayoutEffect(() => {
@@ -51,8 +52,9 @@ export function AccountControls({ client, session, dialog, onDialogChange, onSes
     if (dialog !== 'sign-in') setRegistration(false);
   }, [dialog]);
   useEffect(() => {
-    if (!registrationEnabled) { setRegistration(false); setInvitation(''); }
-  }, [registrationEnabled]);
+    if (!registrationEnabled) setRegistration(false);
+    if (!registrationEnabled || !requiresInvitation) setInvitation('');
+  }, [registrationEnabled, requiresInvitation]);
   useLayoutEffect(() => {
     operation.current++; controller.current?.abort(); setBusy(false);
     setUsername(''); setPassword(''); setInvitation(''); setDeletePassword('');
@@ -72,7 +74,7 @@ export function AccountControls({ client, session, dialog, onDialogChange, onSes
     const inviteCode = invitation;
     setPassword(''); setInvitation(''); setBusy(true); setAuthError('Checking account access…');
     try {
-      if (registration && registrationEnabled) await client.register({ ...credentials, inviteCode }, action.abort.signal);
+      if (registration && registrationEnabled) await client.register({ ...credentials, ...(requiresInvitation ? { inviteCode } : {}) }, action.abort.signal);
       else await client.login(credentials, action.abort.signal);
       if (!action.valid()) return;
       onDialogChange(null);
@@ -114,10 +116,10 @@ export function AccountControls({ client, session, dialog, onDialogChange, onSes
       <div id="settings-content">
         <h2 id="settings-title">Your edition.</h2>
         <p>{session?.user ? `Signed in as ${session.user.username}.` : 'You are browsing as a visitor.'}</p>
-        <p>{session?.access.fullAccess ? 'Preview account access.' : 'The newest matches are reserved for signed-in preview accounts.'}</p>
-        <p className="small-print">This demo is in English. Posting-language preferences are unavailable in this demo.</p>
+        <p id="account-access">{session?.access.description || (session?.access.fullAccess ? 'Access to the newest matches is enabled.' : session?.user ? 'Access to the newest matches is limited for this account.' : 'Sign in to access the newest matches and save searches.')}</p>
+        <p className="small-print">Interface language: English.</p>
         <label className="check-label settings-motion"><input id="settings-reduced" type="checkbox" checked={reducedMotion} onChange={event => onReducedMotionChange(event.target.checked)} /> Reduce motion</label>
-        <p className="small-print">Payment collection is not enabled.</p>
+        {session && !session.access.billingEnabled ? <p className="small-print">Payments are not enabled.</p> : null}
         {session?.user ? <div className="account-actions"><button id="logout" className="button outline" disabled={busy} onClick={() => void logout()}>Sign out</button><button id="delete-account" className="text-link" disabled={busy} onClick={() => onDialogChange('delete-account')}>Delete account</button></div> : <button className="button dark" data-sign-in onClick={() => onDialogChange('sign-in')}>Sign in</button>}
         <p id="account-status" role="status">{accountError}</p>
       </div>
@@ -129,8 +131,8 @@ export function AccountControls({ client, session, dialog, onDialogChange, onSes
       <form id="sign-in-form" hidden={!loginEnabled} onSubmit={event => void authenticate(event)}>
         <label htmlFor="auth-username">Username</label><input id="auth-username" name="username" autoComplete="username" required disabled={busy} maxLength={32} value={username} onChange={event => setUsername(event.target.value)} />
         <label htmlFor="auth-password">Password</label><input id="auth-password" name="password" type="password" autoComplete={registration ? 'new-password' : 'current-password'} required disabled={busy} value={password} onChange={event => setPassword(event.target.value)} />
-        <label className="check-label" id="auth-register-choice" hidden={!registrationEnabled}><input id="auth-register" type="checkbox" disabled={!registrationEnabled || busy} checked={registration} onChange={event => setRegistration(event.target.checked)} /> Create a preview account</label>
-        <div id="auth-invite-field" hidden={!registration}><label htmlFor="auth-invite">Invitation code</label><input id="auth-invite" type="password" autoComplete="off" required={registration} disabled={busy} value={invitation} onChange={event => setInvitation(event.target.value)} /></div>
+        <label className="check-label" id="auth-register-choice" hidden={!registrationEnabled}><input id="auth-register" type="checkbox" disabled={!registrationEnabled || busy} checked={registration} onChange={event => setRegistration(event.target.checked)} /> Create an account</label>
+        <div id="auth-invite-field" hidden={!registration || !requiresInvitation}><label htmlFor="auth-invite">Invitation code</label><input id="auth-invite" type="password" autoComplete="off" required={registration && requiresInvitation} disabled={busy || !requiresInvitation} value={invitation} onChange={event => setInvitation(event.target.value)} /></div>
         <button id="auth-submit" className="button dark" disabled={busy}>Continue ↗</button>
         <p id="auth-status" role="status">{authError}</p>
       </form>

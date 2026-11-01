@@ -1,7 +1,7 @@
 // Compiler hints are optional; source verification remains authoritative on every page.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decodeTask, decodeResults, decodeSearch } from "./decode.ts";
+import { decodeTask, decodeResults, decodeSearch, decodeSession } from "./decode.ts";
 const warning = (prefill: unknown, code = "company_not_found") => ({
   code,
   message: "Company is outside our catalogue.",
@@ -14,6 +14,22 @@ const search = (warnings: unknown[]) => ({
   title: "Company jobs",
   status: "ready",
   warnings,
+});
+test("registration requires an invitation unless the server explicitly permits otherwise", () => {
+  const session = (requirement: Record<string, unknown>) => ({
+    user: null,
+    csrfToken: "test-only",
+    access: { kind: "guest", fullAccess: false, billingEnabled: false },
+    capabilities: {},
+    authentication: { method: "username_password", loginEnabled: true, registrationEnabled: true, reason: null, ...requirement },
+    policies: { reviewed: false, version: null, privacyUrl: null, usageUrl: null },
+  });
+  assert.equal(decodeSession(session({})).authentication.requiresInvitation, true);
+  assert.equal(decodeSession(session({ requiresInvitation: true })).authentication.requiresInvitation, true);
+  assert.equal(decodeSession(session({ requiresInvitation: false })).authentication.requiresInvitation, false);
+  for (const value of [null, "false", 0]) {
+    assert.throws(() => decodeSession(session({ requiresInvitation: value })), /invitation requirement/);
+  }
 });
 test("company-not-found hints survive search and proposal decoding with bounded plain strings", () => {
   const warnings = [

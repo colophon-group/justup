@@ -5,7 +5,7 @@ import { createHandler, httpsOrigin } from './worker.mjs';
 const publicOrigin = 'https://preview.justup.test';
 const release = { sourceSha: 'a'.repeat(40), treeSha: 'b'.repeat(40), assetsSha256: 'c'.repeat(64), workerSha256: 'd'.repeat(64), artifactSha256: 'e'.repeat(64), secret: 'must-not-leak' };
 function environment() {
-  return { PUBLIC_ORIGIN: publicOrigin, API_ORIGIN: 'https://api.justup.test', RELEASE_JSON: JSON.stringify(release), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: { fetch: async () => new Response('public policy', { headers: { 'Content-Type': 'text/html' } }) } };
+  return { DEPLOYMENT_MODE: 'preview', PUBLIC_ORIGIN: publicOrigin, API_ORIGIN: 'https://api.justup.test', RELEASE_JSON: JSON.stringify(release), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: { fetch: async () => new Response('public policy', { headers: { 'Content-Type': 'text/html' } }) } };
 }
 const request = (path, options) => new Request(`${publicOrigin}${path}`, options);
 function privateHeaders(result) {
@@ -102,11 +102,11 @@ test('upstream failures stay private, preserve HTTP errors and do not leak diagn
 
 test('release identity is whitelisted, noncached and unavailable until valid', async () => {
   const handle = createHandler();
-  const result = await handle(request('/__preview/version'), environment());
+  const result = await handle(request('/__release/version'), environment());
   const body = await result.json(); privateHeaders(result);
   assert.equal(body.sourceSha, release.sourceSha); assert.equal(body.apiPrefix, '/api/v1');
   assert.equal(body.secret, undefined); assert.equal(body.API_ORIGIN, undefined);
-  assert.equal((await handle(request('/__preview/version'), { ...environment(), RELEASE_JSON: '{}' })).status, 503);
+  assert.equal((await handle(request('/__release/version'), { ...environment(), RELEASE_JSON: '{}' })).status, 503);
 });
 
 
@@ -117,4 +117,34 @@ test('root maps to the committed index without making unknown routes an HTML fal
   const index = await handle(request('/'), env);
   assert.equal(index.status, 200); assert.equal(await index.text(), 'index');
   assert.equal((await handle(request('/missing'), env)).status, 404);
+});
+
+
+test('production indexing is an explicit runtime setting and never changes private boundaries', async () => {
+  const handle = createHandler(async () => new Response('{}', { headers: { 'Content-Type': 'application/json' } }));
+  for (const mode of [undefined, '', 'prod', 'Preview']) {
+    const result = await handle(request('/'), { ...environment(), DEPLOYMENT_MODE: mode });
+    assert.equal(result.status, 503); privateHeaders(result);
+    assert.equal((await result.json()).error.code, 'deployment_mode_unavailable');
+  }
+  const env = { ...environment(), DEPLOYMENT_MODE: 'production' };
+  for (const path of ['/', '/privacy.html', '/usage.html']) {
+    const result = await handle(request(path), env);
+    assert.equal(result.status, 200);
+    assert.equal(result.headers.get('X-Robots-Tag'), null);
+    assert.equal(await result.text(), 'public policy');
+    assert.match(result.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);
+  }
+  const robots = await handle(request('/robots.txt'), env);
+  assert.equal(await robots.text(), 'User-agent: *\nDisallow: /api/\nDisallow: /__release/\n');
+  for (const path of ['/api/v1/session', '/__release/version']) {
+    const result = await handle(request(path), env); privateHeaders(result);
+    if (path.startsWith('/__release/')) assert.equal((await result.json()).deploymentMode, 'production');
+  }
+  const redirected = await handle(request('/redirect'), { ...env, ASSETS: { fetch: async () => new Response(null, { status: 302, headers: { Location: '/' } }) } });
+  assert.equal(redirected.status, 302); privateHeaders(redirected);
+  const failed = await handle(request('/missing'), { ...env, ASSETS: { fetch: async () => new Response('missing', { status: 404 }) } });
+  assert.equal(failed.status, 404); privateHeaders(failed);
+  const failure = await createHandler(async () => { throw new Error('private'); })(request('/api/v1/session'), env);
+  assert.equal(failure.status, 503); privateHeaders(failure);
 });

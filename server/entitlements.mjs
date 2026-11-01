@@ -1,5 +1,5 @@
-// Persist verified identity, free periods and confirmed subscription events.
-// Read when changing product access or adding a trusted identity/billing adapter.
+// Persist verified identity, free periods and reconciled subscription access.
+// Read when changing access or adding a signed-event/current-state billing adapter.
 import { createHash } from 'node:crypto';
 
 const DAY_MS = 86_400_000;
@@ -58,7 +58,7 @@ export function createAccessReader({ db, now = Date.now } = {}) {
   const identity = tableExists(db, 'access_identities') ? db.prepare('SELECT legacy_hash FROM access_identities WHERE account_id=?') : null;
   const freePeriod = tableExists(db, 'access_free_periods') ? db.prepare('SELECT kind, ends_at FROM access_free_periods WHERE account_id=?') : null;
   const subscriptions = tableExists(db, 'access_subscriptions')
-    ? db.prepare('SELECT status, paid_through_at FROM access_subscriptions WHERE account_id=? ORDER BY paid_through_at DESC') : null;
+    ? db.prepare('SELECT status, paid_through_at, reconcile_pending FROM access_subscriptions WHERE account_id=? ORDER BY paid_through_at DESC') : null;
 
   return function accessForAccount(accountId) {
     if (typeof accountId !== 'string' || !accountId || !account) return null;
@@ -68,7 +68,8 @@ export function createAccessReader({ db, now = Date.now } = {}) {
     const identityRow = identity?.get(accountId) ?? null;
     const trial = freePeriod?.get(accountId) ?? null;
     const paymentRows = subscriptions?.all(accountId) ?? [];
-    const paid = paymentRows.find((row) => row.paid_through_at != null && row.paid_through_at > at);
+    const paid = paymentRows.find((row) => !row.reconcile_pending && row.status !== 'ended'
+      && row.paid_through_at != null && row.paid_through_at > at);
     if (paid) {
       const until = new Date(Math.min(paid.paid_through_at, ceiling)).toISOString();
       const cancelled = paid.status === 'cancelled', pastDue = paid.status === 'past_due';
@@ -80,6 +81,7 @@ export function createAccessReader({ db, now = Date.now } = {}) {
     if (trial?.ends_at > at) return { kind: 'free', fullAccess: true, legacy: trial.kind === 'legacy',
       premium: false, billingEnabled: false, until: new Date(Math.min(trial.ends_at, ceiling)).toISOString(),
       canActivateFreePeriod: false, description: 'Free access is active.' };
+    if (paymentRows.some((row) => row.reconcile_pending)) return limited('pending', 'Payment status is being checked.');
     if (trial) return limited('expired', 'Your free period has ended.');
     if (paymentRows.length) return limited('expired', 'Paid access has ended.');
     if (identityRow) return limited('ready', 'Your free period is ready to start.', true);
@@ -108,11 +110,11 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
     CREATE TABLE IF NOT EXISTS access_subscriptions (
       subscription_hash TEXT PRIMARY KEY,
       account_id TEXT NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,
-      last_occurred_at INTEGER NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('active','cancelled','past_due')),
+      state_version INTEGER NOT NULL CHECK(state_version > 0),
+      status TEXT NOT NULL CHECK(status IN ('unknown','active','cancelled','past_due','ended')),
       plan TEXT CHECK(plan IN ('weekly','monthly')),
       paid_through_at INTEGER,
-      cancelled_at INTEGER
+      reconcile_pending INTEGER NOT NULL CHECK(reconcile_pending IN (0,1))
     ) STRICT;
     CREATE INDEX IF NOT EXISTS access_subscriptions_account ON access_subscriptions(account_id);
     CREATE TABLE IF NOT EXISTS access_billing_events (
@@ -120,8 +122,7 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
       canonical_hash TEXT NOT NULL,
       account_id TEXT NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,
       subscription_hash TEXT NOT NULL,
-      occurred_at INTEGER NOT NULL,
-      event_kind TEXT NOT NULL,
+      applied_version INTEGER NOT NULL,
       received_at INTEGER NOT NULL
     ) STRICT;
     CREATE INDEX IF NOT EXISTS access_billing_events_account ON access_billing_events(account_id);
@@ -136,9 +137,10 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
   const insertPeriod = db.prepare('INSERT INTO access_free_periods (account_id,kind,started_at,ends_at) VALUES (?,?,?,?)');
   const subscription = db.prepare('SELECT * FROM access_subscriptions WHERE subscription_hash=?');
   const insertSubscription = db.prepare('INSERT INTO access_subscriptions VALUES (?,?,?,?,?,?,?)');
-  const updateSubscription = db.prepare('UPDATE access_subscriptions SET last_occurred_at=?,status=?,plan=?,paid_through_at=?,cancelled_at=? WHERE subscription_hash=?');
+  const reserveSubscription = db.prepare('UPDATE access_subscriptions SET state_version=?,reconcile_pending=1 WHERE subscription_hash=?');
+  const updateSubscription = db.prepare('UPDATE access_subscriptions SET status=?,plan=?,paid_through_at=?,reconcile_pending=0 WHERE subscription_hash=?');
   const billingEvent = db.prepare('SELECT canonical_hash FROM access_billing_events WHERE event_hash=?');
-  const insertBillingEvent = db.prepare('INSERT INTO access_billing_events VALUES (?,?,?,?,?,?,?)');
+  const insertBillingEvent = db.prepare('INSERT INTO access_billing_events VALUES (?,?,?,?,?,?)');
   const deleteIdentity = db.prepare('DELETE FROM access_identities WHERE account_id=?');
   const deletePeriod = db.prepare('DELETE FROM access_free_periods WHERE account_id=?');
   const deleteSubscriptions = db.prepare('DELETE FROM access_subscriptions WHERE account_id=?');
@@ -201,47 +203,62 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
   async function applyBillingEvent(rawEvent) {
     if (!billingEventVerifier) throw failure('billing_unavailable', 503, 'Billing is unavailable.');
     const event = await billingEventVerifier(rawEvent);
-    if (!event || typeof event.accountId !== 'string' || !validTime(event.occurredAt) || event.occurredAt > now() + 5 * 60_000
-        || !['payment_succeeded','subscription_cancelled','payment_failed'].includes(event.kind)
-        || (event.kind === 'payment_succeeded' && (!['weekly','monthly'].includes(event.plan)
-          || !validTime(event.paidThroughAt) || event.paidThroughAt <= event.occurredAt
-          || event.paidThroughAt - event.occurredAt > BILLING_WINDOW_MS))) {
+    if (!event || typeof event.accountId !== 'string' || typeof event.reconcile !== 'function') {
       throw failure('invalid_input', 400, 'Invalid verified billing event.');
     }
     const eventHash = opaqueHash('billing-event', event.eventId);
     const subscriptionHash = opaqueHash('subscription', event.subscriptionId);
-    const canonical = { accountId: event.accountId, subscriptionHash,
-      kind: event.kind, occurredAt: event.occurredAt,
-      plan: event.kind === 'payment_succeeded' ? event.plan : null,
-      paidThroughAt: event.kind === 'payment_succeeded' ? event.paidThroughAt : null };
+    const canonical = { accountId: event.accountId, subscriptionHash };
     const canonicalHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
-    return transaction(() => {
+    // Reserve a version and pause this subscription before any network read.
+    // If reconciliation fails, retrying the event can clear the pause.
+    const reservation = transaction(() => {
       liveAccount(event.accountId);
       const oldEvent = billingEvent.get(eventHash);
       if (oldEvent) {
         if (oldEvent.canonical_hash !== canonicalHash) throw failure('billing_conflict', 409, 'Billing event conflict.');
+        return { duplicate: true };
+      }
+      const current = subscription.get(subscriptionHash);
+      if (current && current.account_id !== event.accountId) throw failure('billing_conflict', 409, 'Billing event conflict.');
+      const version = (current?.state_version ?? 0) + 1;
+      if (current) reserveSubscription.run(version, subscriptionHash);
+      else insertSubscription.run(subscriptionHash, event.accountId, version, 'unknown', null, null, 1);
+      return { version };
+    });
+    if (reservation.duplicate) return { applied: false, access: accessForAccount(event.accountId) };
+    const startedAt = now();
+    // The trusted adapter must retrieve the provider's current subscription,
+    // prove its account binding and settled paid-through period. A webhook's
+    // event time is not a version, even when the event was signed.
+    const snapshot = await event.reconcile();
+    if (!snapshot || snapshot.accountId !== event.accountId || snapshot.subscriptionId !== event.subscriptionId
+        || !validTime(snapshot.observedAt) || snapshot.observedAt < startedAt
+        || snapshot.observedAt > now() + 5 * 60_000
+        || !['active','cancelled','past_due','ended'].includes(snapshot.status)
+        || (snapshot.plan != null && !['weekly','monthly'].includes(snapshot.plan))
+        || (snapshot.paidThroughAt != null && (!validTime(snapshot.paidThroughAt)
+          || snapshot.plan == null || snapshot.paidThroughAt > snapshot.observedAt + BILLING_WINDOW_MS))
+        || (snapshot.status === 'ended' && snapshot.paidThroughAt != null)) {
+      throw failure('invalid_input', 400, 'Invalid verified billing state.');
+    }
+    return transaction(() => {
+      liveAccount(event.accountId);
+      const recordedEvent = billingEvent.get(eventHash);
+      if (recordedEvent) {
+        if (recordedEvent.canonical_hash !== canonicalHash) throw failure('billing_conflict', 409, 'Billing event conflict.');
         return { applied: false, access: accessForAccount(event.accountId) };
       }
       const current = subscription.get(subscriptionHash);
       if (current && current.account_id !== event.accountId) throw failure('billing_conflict', 409, 'Billing event conflict.');
-      // Signed provider events can arrive out of order. Equal timestamps with
-      // different IDs are ambiguous and need reconciliation, not a guessed rank.
-      if (current && event.occurredAt === current.last_occurred_at) throw failure('billing_conflict', 409, 'Billing event conflict.');
-      const applied = !current || event.occurredAt > current.last_occurred_at;
-      if (applied) {
-        const paidThrough = event.kind === 'payment_succeeded' ? event.paidThroughAt : current?.paid_through_at ?? null;
-        if (current?.paid_through_at != null && paidThrough != null && paidThrough < current.paid_through_at) {
-          throw failure('billing_conflict', 409, 'Billing event conflict.');
-        }
-        const status = event.kind === 'payment_succeeded' ? 'active'
-          : event.kind === 'subscription_cancelled' ? 'cancelled' : 'past_due';
-        const plan = event.kind === 'payment_succeeded' ? event.plan : current?.plan ?? null;
-        const cancelledAt = event.kind === 'subscription_cancelled' ? event.occurredAt : current?.cancelled_at ?? null;
-        if (current) updateSubscription.run(event.occurredAt, status, plan, paidThrough, cancelledAt, subscriptionHash);
-        else insertSubscription.run(subscriptionHash, event.accountId, event.occurredAt, status, plan, paidThrough, cancelledAt);
+      // Another attempt started while this provider snapshot was read. Its
+      // reservation has paused access; retry this event with a fresh snapshot.
+      if (!current?.reconcile_pending || current.state_version !== reservation.version) {
+        throw failure('billing_reconcile_required', 409, 'Billing state changed; retry reconciliation.');
       }
-      insertBillingEvent.run(eventHash, canonicalHash, event.accountId, subscriptionHash, event.occurredAt, event.kind, now());
-      return { applied, access: accessForAccount(event.accountId) };
+      updateSubscription.run(snapshot.status, snapshot.plan ?? null, snapshot.paidThroughAt ?? null, subscriptionHash);
+      insertBillingEvent.run(eventHash, canonicalHash, event.accountId, subscriptionHash, reservation.version, now());
+      return { applied: true, access: accessForAccount(event.accountId) };
     });
   }
   function deleteAccount(accountId) {

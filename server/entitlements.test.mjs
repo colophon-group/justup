@@ -25,11 +25,13 @@ function fixture(t, options = {}) {
   const verify = (accountId, subjectId = 'person-subject-0001', legacyProofId = null) =>
     auth.recordIdentityProof({ accountId, subjectKey: key(subjectId),
       legacyKey: legacyProofId == null ? null : key(legacyProofId), verifiedAt: at });
-  const event = (accountId, overrides = {}) => auth.applyBillingEvent({
-    eventId: 'event-confirmed-0001', subscriptionId: 'subscription-0001', accountId,
-    kind: 'payment_succeeded', plan: 'weekly', occurredAt: at,
-    paidThroughAt: at + 7 * DAY, ...overrides,
-  });
+  const event = (accountId, overrides = {}) => {
+    const { snapshot = {}, reconcile, ...envelope } = overrides;
+    const verified = { eventId: 'event-confirmed-0001', subscriptionId: 'subscription-0001', accountId, ...envelope };
+    return auth.applyBillingEvent({ ...verified, reconcile: reconcile ?? (async () => ({
+      accountId: verified.accountId, subscriptionId: verified.subscriptionId, observedAt: at, status: 'active',
+      plan: 'weekly', paidThroughAt: at + 7 * DAY, ...snapshot })) });
+  };
   return { db, auth, register, verify, event, advance: (ms) => { at += ms; }, setTime: (value) => { at = value; }, now: () => at };
 }
 
@@ -97,33 +99,114 @@ test('payment confirmation, cancellation and failure preserve only paid-through 
   assert.equal(paid.access.premium, true);
   assert.equal(paid.access.until, new Date(START + 7 * DAY).toISOString());
   assert.equal((await f.event(account.id)).applied, false, 'exact callback retry is idempotent');
-  await assert.rejects(f.event(account.id, { paidThroughAt: START + 8 * DAY }), { code: 'billing_conflict' });
+  await assert.rejects(f.event(account.id, { subscriptionId: 'different-subscription' }), { code: 'billing_conflict' });
   f.advance(2 * DAY);
   const cancelled = await f.event(account.id, { eventId: 'event-cancelled-0002',
-    kind: 'subscription_cancelled', plan: undefined, paidThroughAt: undefined });
+    snapshot: { status: 'cancelled', paidThroughAt: START + 7 * DAY } });
   assert.equal(cancelled.access.kind, 'cancelled');
   assert.equal(cancelled.access.fullAccess, true);
-  f.advance(1);
   await f.event(account.id, { eventId: 'event-failed-0003',
-    kind: 'payment_failed', plan: undefined, paidThroughAt: undefined });
+    snapshot: { status: 'past_due', paidThroughAt: START + 7 * DAY } });
   assert.equal(f.auth.session(token).access.kind, 'past_due');
   const old = await f.event(account.id, { eventId: 'event-old-0004',
-    occurredAt: START, paidThroughAt: START + 7 * DAY });
-  assert.equal(old.applied, false);
-  await assert.rejects(f.event(account.id, { eventId: 'event-ambiguous-0006',
-    kind: 'subscription_cancelled', occurredAt: f.now(), plan: undefined, paidThroughAt: undefined }),
-  { code: 'billing_conflict', status: 409 });
+    snapshot: { status: 'past_due', paidThroughAt: START + 7 * DAY } });
+  assert.equal(old.applied, true, 'older webhook still reconciles current state');
+  assert.equal(old.access.kind, 'past_due');
+  const sameSecond = await f.event(account.id, { eventId: 'event-same-second-0006',
+    snapshot: { status: 'past_due', paidThroughAt: START + 7 * DAY } });
+  assert.equal(sameSecond.applied, true, 'distinct events in the same second need no guessed ordering');
   f.advance(5 * DAY);
   const nextSession = await f.auth.login({ username: 'tester', password: PASSWORD });
   assert.equal(f.auth.session(nextSession.token).access.fullAccess, false);
   assert.equal(f.auth.session(nextSession.token).access.kind, 'expired');
   const renewed = await f.event(account.id, { eventId: 'event-renewed-0005',
-    paidThroughAt: f.now() + 7 * DAY });
+    snapshot: { paidThroughAt: f.now() + 7 * DAY } });
   assert.equal(renewed.access.kind, 'paid');
   assert.equal(renewed.access.fullAccess, true);
 });
 
-test('unverified adapters cannot award access, and a paid event never shortens prior entitlement', async (t) => {
+test('a stale concurrent snapshot cannot overwrite a newer cancellation', async (t) => {
+  const f = fixture(t);
+  const { account, token } = await f.register();
+  await f.event(account.id);
+  f.advance(2 * DAY);
+  let enterReconcile, finishReconcile;
+  const entered = new Promise((resolve) => { enterReconcile = resolve; });
+  const held = new Promise((resolve) => { finishReconcile = resolve; });
+  const stale = f.event(account.id, { eventId: 'event-stale', reconcile: async () => {
+    enterReconcile();
+    return held;
+  } });
+  await entered;
+  assert.equal(f.auth.session(token).access.kind, 'pending');
+  assert.equal(f.auth.session(token).access.fullAccess, false);
+  const cancelled = await f.event(account.id, { eventId: 'event-cancelled',
+    snapshot: { status: 'cancelled', paidThroughAt: START + 7 * DAY } });
+  assert.equal(cancelled.access.kind, 'cancelled');
+  finishReconcile({ accountId: account.id, subscriptionId: 'subscription-0001', observedAt: f.now(),
+    status: 'active', plan: 'weekly', paidThroughAt: START + 7 * DAY });
+  await assert.rejects(stale, { code: 'billing_reconcile_required', status: 409 });
+  assert.equal(f.db.prepare('SELECT status FROM access_subscriptions').get().status, 'cancelled');
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_billing_events').get().n, 2);
+  assert.equal(f.auth.session(token).access.kind, 'cancelled');
+  const retried = await f.event(account.id, { eventId: 'event-stale',
+    snapshot: { status: 'cancelled', paidThroughAt: START + 7 * DAY } });
+  assert.equal(retried.access.kind, 'cancelled');
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_billing_events').get().n, 3);
+});
+
+test('failed provider reconciliation pauses paid access until the event is retried', async (t) => {
+  const f = fixture(t);
+  const { account, token } = await f.register();
+  await f.event(account.id);
+  f.advance(DAY);
+  await assert.rejects(f.event(account.id, { eventId: 'event-provider-error',
+    reconcile: async () => { throw new Error('provider unavailable'); } }), /provider unavailable/);
+  assert.equal(f.auth.session(token).access.kind, 'pending');
+  assert.equal(f.auth.session(token).access.fullAccess, false);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_billing_events').get().n, 1);
+  const recovered = await f.event(account.id, { eventId: 'event-provider-error',
+    snapshot: { paidThroughAt: START + 7 * DAY } });
+  assert.equal(recovered.access.kind, 'paid');
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_billing_events').get().n, 2);
+});
+
+test('deletion during provider reconciliation cannot recreate account access', async (t) => {
+  const f = fixture(t);
+  const { account, token } = await f.register();
+  let enterReconcile, finishReconcile;
+  const entered = new Promise((resolve) => { enterReconcile = resolve; });
+  const held = new Promise((resolve) => { finishReconcile = resolve; });
+  const pending = f.event(account.id, { reconcile: async () => {
+    enterReconcile();
+    return held;
+  } });
+  await entered;
+  assert.equal(f.auth.session(token).access.kind, 'pending');
+  await f.auth.deleteAccount(token, PASSWORD);
+  finishReconcile({ accountId: account.id, subscriptionId: 'subscription-0001',
+    observedAt: f.now(), status: 'active', plan: 'weekly', paidThroughAt: f.now() + 7 * DAY });
+  await assert.rejects(pending, { code: 'unauthenticated' });
+  assert.equal(f.auth.accessForAccount(account.id), null);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_subscriptions').get().n, 0);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_billing_events').get().n, 0);
+});
+
+test('competing verified claims cannot assign one former-user proof to two accounts', async (t) => {
+  const f = fixture(t);
+  const first = await f.register('first');
+  const second = await f.register('second');
+  const claims = await Promise.allSettled([
+    f.verify(first.account.id, 'first-subject', 'shared-jobseek-owner'),
+    f.verify(second.account.id, 'second-subject', 'shared-jobseek-owner'),
+  ]);
+  assert.equal(claims.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(claims.filter((result) => result.status === 'rejected'
+    && result.reason.code === 'verification_conflict').length, 1);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_identities').get().n, 1);
+});
+
+test('unverified adapters cannot award access, while an authoritative end revokes paid access', async (t) => {
   const f = fixture(t, { identityProofVerifier: async () => ({ legacyKey: 'not-a-proof' }),
     billingEventVerifier: async () => ({ kind: 'payment_succeeded' }) });
   const { account, token } = await f.register();
@@ -141,9 +224,15 @@ test('unverified adapters cannot award access, and a paid event never shortens p
   const g = fixture(t);
   const buyer = await g.register();
   await g.event(buyer.account.id);
-  await assert.rejects(g.event(buyer.account.id, { eventId: 'event-shorten-0002', occurredAt: START + 1,
-    paidThroughAt: START + 2 * DAY }), { code: 'billing_conflict' });
-  assert.equal(g.auth.session(buyer.token).access.until, new Date(START + 7 * DAY).toISOString());
+  await assert.rejects(g.event(buyer.account.id, { eventId: 'event-wrong-binding',
+    snapshot: { subscriptionId: 'other-subscription' } }), { code: 'invalid_input' });
+  assert.equal(g.auth.session(buyer.token).access.kind, 'pending');
+  await assert.rejects(g.event(buyer.account.id, { eventId: 'event-invalid-window',
+    snapshot: { paidThroughAt: START + 63 * DAY } }), { code: 'invalid_input' });
+  const revoked = await g.event(buyer.account.id, { eventId: 'event-ended',
+    snapshot: { status: 'ended', plan: null, paidThroughAt: null } });
+  assert.equal(revoked.access.fullAccess, false);
+  assert.equal(g.auth.session(buyer.token).access.kind, 'expired');
 });
 
 test('deletion removes identity, free-period and billing records; restore revokes sessions only', async (t) => {

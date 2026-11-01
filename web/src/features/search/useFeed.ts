@@ -180,7 +180,10 @@ export function useFeed(
       inFlight.current = false;
       seenIds.current.clear();
       seenCursors.current.clear();
-      setFeed(emptyFeed(key));
+      setFeed((current) => ({
+        ...emptyFeed(key),
+        bufferVersion: current.bufferVersion + 1,
+      }));
       void load(null);
     },
   };
