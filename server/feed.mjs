@@ -25,11 +25,12 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
       stale, ...(stale ? { state: 'import_unavailable', description: 'Imported listings need verification.' } : {}) };
   }
   const coverage = () => coverageAt(now());
-  function eligibleAt(viewer, at) {
+  function eligibleAt(viewer, at, restrictedLatest=false) {
     if (coverageAt(at).stale) return [];
-    const upper = at - (access(viewer) === 'guest' ? 2 * DAY_MS : 0);
-    return db.prepare(`SELECT * FROM demo_jobs WHERE active=1 AND reserved=0 AND first_seen_at>=? AND first_seen_at<=?
-      AND verified_at>? AND verified_at<=? ORDER BY first_seen_at DESC, id ASC`).all(at - 14 * DAY_MS, upper, at - verificationTtlMs, at)
+    const upper = restrictedLatest?at:at - (access(viewer) === 'guest' ? 2 * DAY_MS : 0);
+    const lower=at-(restrictedLatest?2:14)*DAY_MS;
+    return db.prepare(`SELECT * FROM demo_jobs WHERE active=1 AND reserved=0 AND first_seen_at${restrictedLatest?'>':'>='}? AND first_seen_at<=?
+      AND verified_at>? AND verified_at<=? ORDER BY first_seen_at DESC, id ASC`).all(lower, upper, at - verificationTtlMs, at)
       .map((r) => ({ ...JSON.parse(r.data_json), bodyText: r.body_text, evidenceHash: r.evidence_hash,
         verifiedAt: new Date(r.verified_at).toISOString() }));
   }
@@ -94,5 +95,5 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
     if (!row) throw problem('not_found', 404, 'Not found.');
     return companyDto(JSON.parse(row.data_json));
   }
-  return { list, companies, company, coverage, eligibleJobs, publicJob, generation: () => latest()?.generation ?? null };
+  return { list, companies, company, coverage, eligibleJobs, restrictedLatestJobs:()=>eligibleAt(null,now(),true), publicJob, generation: () => latest()?.generation ?? null };
 }

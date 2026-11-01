@@ -12,6 +12,7 @@ async function setup(t, options = {}) {
     session: (value) => value === token && signedIn ? { account, expiresAt: Date.now() + 60_000, access: { kind: 'account', fullAccess: true, legacy: false, billingEnabled: false, until: null } } : null,
     register: async () => { signedIn = true; mutations++; return { account, token, expiresAt: Date.now() + 60_000 }; },
     login: async () => { signedIn = true; mutations++; return { account, token, expiresAt: Date.now() + 60_000 }; },
+    ...(options.activation?{activateFreePeriod:()=>{if(options.activationError)throw Object.assign(new Error('safe'),options.activationError);mutations++;}}:{}),
     logout: () => { signedIn = false; mutations++; },
     deleteAccount: async () => { if (options.deleteError) throw Object.assign(new Error('safe'), { code: 'invalid_credentials', status: 401 }); signedIn = false; mutations++; return { deleted: true }; },
   };
@@ -142,4 +143,12 @@ test('explicit public edition reads can report capability while public writes re
   assert.equal((await s.request('/hiring-wire')).body.edition.period,'2026-10-26');
   const denied=await s.request('/hiring-wire',{method:'POST',headers:{Origin:ORIGIN,'X-CSRF-Token':s.guest.body.csrfToken,Cookie:s.guestCookie,'Content-Type':'application/json'},body:'{}'});
   assert.equal(denied.res.status,401);assert.equal(reads,1);
+});
+
+test('access activation requires signed-in Origin and CSRF, an empty body and returns the refreshed session',async t=>{
+  const s=await setup(t,{activation:true}),login=await s.login(),headers={Origin:ORIGIN,'X-CSRF-Token':login.body.csrfToken,Cookie:login.cookie,'Content-Type':'application/json'};
+  assert.equal((await s.request('/access/activate',{method:'POST',headers:{...headers,Origin:'https://elsewhere.example'},body:'{}'})).res.status,403);
+  assert.equal((await s.request('/access/activate',{method:'POST',headers,body:'{"fullAccess":true}'})).res.status,400);
+  const activated=await s.request('/access/activate',{method:'POST',headers,body:'{}'});assert.equal(activated.res.status,200);assert.equal(activated.body.user.id,'account-a');assert.equal(activated.res.headers.getSetCookie().length,0);assert.equal(activated.res.headers.get('x-robots-tag'),'noindex');
+  const rejected=await setup(t,{activation:true,activationError:{code:'identity_unverified',status:403}}),account=await rejected.login();const result=await rejected.request('/access/activate',{method:'POST',headers:{Origin:ORIGIN,'X-CSRF-Token':account.body.csrfToken,Cookie:account.cookie,'Content-Type':'application/json'},body:'{}'});assert.equal(result.res.status,403);assert.equal(result.body.error.code,'identity_unverified');
 });

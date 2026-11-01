@@ -5,6 +5,7 @@ import { dirname,isAbsolute,join } from 'node:path';
 import { createIntentService } from './intent.mjs';
 import { createCompanyService } from './companies.mjs';
 import { createMatchingService } from './matching.mjs';
+import { createVisitorIdentity,createVisitorService } from './visitor.mjs';
 
 const disabled=()=>({search:false,companyRequests:false,aiMatching:false});
 export function runnerStatusPath(config){return config.runnerStatusPath??(typeof config.dbPath==='string'&&isAbsolute(config.dbPath)?join(dirname(config.dbPath),'runner-status.json'):null);}
@@ -27,10 +28,13 @@ export function createApiServices(deps){
   const {config={},now=Date.now}=deps;
   // Explicit allowlist: even an accidental caller config containing secrets is
   // never passed into feature providers or retained in an API-side model object.
-  const apiConfig={maxCompanyRequestsPerOwner:config.maxCompanyRequestsPerOwner,matching:config.matching};
+  const apiConfig={maxCompanyRequestsPerOwner:config.maxCompanyRequestsPerOwner,matching:config.matching,visitor:config.visitor};
+  const identity=createVisitorIdentity({...deps,config:apiConfig});
+  const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
   const heartbeat=()=>readRunnerStatus({config:{dbPath:config.dbPath,runnerStatusPath:config.runnerStatusPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},now}).capabilities;
-  const matching=createMatchingService({...deps,config:apiConfig,readOnlyProvider:true,availability:()=>heartbeat().aiMatching});
-  const intent=createIntentService({...deps,config:apiConfig,model:undefined,matching,availability:()=>heartbeat().search});
+  const matching=createMatchingService({...deps,...ownership,config:apiConfig,readOnlyProvider:true,availability:()=>heartbeat().aiMatching});
+  const intent=createIntentService({...deps,...ownership,config:apiConfig,model:undefined,matching,availability:()=>heartbeat().search});
   const companies=createCompanyService({...deps,config:apiConfig,model:undefined,availability:()=>heartbeat().companyRequests});
-  return [intent,companies,matching];
+  const visitor=createVisitorService({...deps,config:apiConfig,identity,intent,matching});
+  return [intent,companies,matching,visitor];
 }

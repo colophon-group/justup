@@ -17,7 +17,7 @@ const order = (a, b) => Date.parse(b.firstObserved) - Date.parse(a.firstObserved
 const terminal = (t) => !t || ['succeeded', 'warning', 'failed', 'cancelled'].includes(t.status);
 
 export function createMatchingService({ db, feed, tasks, config = {}, now = Date.now, provider,
-  availability, readOnlyProvider = false } = {}) {
+  availability, readOnlyProvider = false, ownerAuthority, revisionIsCurrent, taskAdmission } = {}) {
   if (!db || !feed?.eligibleJobs || !feed?.publicJob || !tasks?.enqueue || !tasks?.get || !tasks?.complete) throw new TypeError('Matching dependencies are required.');
   if (typeof readOnlyProvider !== 'boolean' || (availability != null && typeof availability !== 'function')) throw new TypeError('Invalid matching role configuration.');
   provider ??= createJevClient({ db, config: config.jev ?? {}, now });
@@ -51,6 +51,18 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     owner_id TEXT NOT NULL, search_id TEXT NOT NULL,
     cache_key TEXT NOT NULL REFERENCES demo_match_cache(cache_key) ON DELETE CASCADE,
     PRIMARY KEY(owner_id,search_id,cache_key)) STRICT;`);
+  if(!db.prepare('PRAGMA table_info(demo_match_scans)').all().some(c=>c.name==='cohort'))db.exec("ALTER TABLE demo_match_scans ADD COLUMN cohort TEXT NOT NULL DEFAULT 'visible'");
+  if(!db.prepare('PRAGMA table_info(demo_match_scans)').all().some(c=>c.name==='membership_hash'))db.exec("ALTER TABLE demo_match_scans ADD COLUMN membership_hash TEXT NOT NULL DEFAULT ''");
+  const authority=owner=>typeof ownerAuthority==='function'?ownerAuthority(owner):null;
+  const accessHashFor=(owner,viewer)=>sha({ownerId:owner,access:viewer.access??null});
+  function searchLive(scan) {
+    if(revisionIsCurrent)return revisionIsCurrent(scan.owner_id,scan.search_id,scan.revision)===true;
+    if(!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='demo_searches'").get())return false;
+    const r=db.prepare('SELECT accepted_json FROM demo_searches WHERE owner_id=? AND id=? AND revision=?').get(scan.owner_id,scan.search_id,scan.revision);
+    if(!r?.accepted_json)return false;
+    return sha({configuration:JSON.parse(r.accepted_json).configuration,cohort:scan.cohort})===scan.config_hash;
+  }
+  function currentJobs(scan,viewer) { return scan.cohort==='hidden'?(viewer.access?.fullAccess===true?[]:feed.restrictedLatestJobs?.()??[]):feed.eligibleJobs({viewer}); }
   const scanById = (id) => db.prepare('SELECT * FROM demo_match_scans WHERE id=?').get(id);
   const rows = (id) => db.prepare('SELECT * FROM demo_match_jobs WHERE scan_id=? ORDER BY position').all(id);
   const executionAvailable = () => !readOnlyProvider && provider.available?.() === true && typeof provider.classify === 'function';
@@ -105,10 +117,13 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
   }
   function pendingCount(scan) { return db.prepare('SELECT count(*) AS n FROM demo_match_jobs WHERE scan_id=? AND decision IS NULL').get(scan.id).n; }
   function schedule(scan) {
-    if (!pendingCount(scan) || readyCount(scan) >= readyLimit || !available()) return;
+    if (!pendingCount(scan) || scan.cohort==='visible'&&readyCount(scan) >= readyLimit || !available()) return;
+    // Count work cannot overtake unresolved visible work for this search.
+    if(scan.cohort==='hidden'&&db.prepare("SELECT 1 FROM demo_match_jobs j JOIN demo_match_scans s ON s.id=j.scan_id WHERE s.owner_id=? AND s.search_id=? AND s.revision=? AND s.cohort='visible' AND j.decision IS NULL LIMIT 1").get(scan.owner_id,scan.search_id,scan.revision))return;
     const previous = scan.task_id ? tasks.get(scan.owner_id, scan.task_id) : null;
     if (!terminal(previous) || (scan.retry_at != null && scan.retry_at > now())) return;
     try {
+      taskAdmission?.(scan.owner_id);
       const round = scan.round + 1;
       const task = tasks.enqueue({ ownerId: scan.owner_id, kind: 'ai_match', requestKey: `match:${scan.id}:${round}`, payload: { scanId: scan.id } });
       db.prepare("UPDATE demo_match_scans SET task_id=?,round=?,state='pending',pause_code=NULL,retry_at=NULL,updated_at=? WHERE id=?")
@@ -124,19 +139,25 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     db.prepare('DELETE FROM demo_match_cursors WHERE scan_id=? AND token_hash NOT IN (SELECT token_hash FROM demo_match_cursors WHERE scan_id=? ORDER BY created_at DESC,rowid DESC LIMIT 64)').run(scanId, scanId);
     return token;
   }
-  function page({ ownerId, searchId, revision, configuration, jobs, viewer, cursor = null, limit = 12,
-    coverage = feed.coverage(), generation = feed.generation() } = {}) {
+  function pageInternal({ ownerId, searchId, revision, configuration, jobs, viewer, cursor = null, limit = 12,
+    coverage = feed.coverage(), generation = feed.generation() } = {}, hidden=false) {
     const sessionDeadline = typeof viewer?.expiresAt === 'number' ? viewer.expiresAt : Date.parse(viewer?.expiresAt);
-    if (!viewer?.account?.id || (viewer.expiresAt != null && (!Number.isFinite(sessionDeadline) || sessionDeadline <= now()))) throw err('unauthenticated', 401);
-    if (viewer.account.id !== ownerId) throw err('forbidden', 403);
+    const suppliedOwner=viewer?.visitor?.id??viewer?.account?.id;
+    if (!suppliedOwner || (viewer.expiresAt != null && (!Number.isFinite(sessionDeadline) || sessionDeadline <= now()))) throw err('unauthenticated', 401);
+    if (suppliedOwner !== ownerId) throw err('forbidden', 403);
+    viewer=authority(ownerId);if(!viewer)throw err('unauthenticated',401);
+    const cohort=hidden?'hidden':'visible';
     if (typeof searchId !== 'string' || !searchId || searchId.length > 128 || !Number.isSafeInteger(revision) || revision < 1
         || !Array.isArray(jobs) || jobs.length > 1000 || (generation != null && (typeof generation !== 'string' || generation.length > 128))) throw err('invalid_input');
     generation ??= 'unavailable';
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw err('invalid_limit');
     let condition;
     try { condition = canonicalCondition(configuration?.residualAi?.condition); } catch { throw err('invalid_input'); }
-    const configHash = sha(configuration), conditionHash = sha(condition), accessHash = sha({ ownerId, access: viewer.access ?? null });
+    const configHash = sha({configuration,cohort}), conditionHash = sha(condition), accessHash = accessHashFor(ownerId,viewer);
     cleanup();
+    const currentPool=new Map((hidden?(viewer.access?.fullAccess===true?[]:feed.restrictedLatestJobs?.()??[]):feed.eligibleJobs({viewer})).map(j=>[j.id,j]));
+    const eligible=jobs.filter(j=>currentPool.has(j.id)&&fingerprint(currentPool.get(j.id))===fingerprint(j)).sort(order);
+    const membershipHash=sha(eligible.map(j=>[j.id,fingerprint(j)]));
     let scan, position = 0;
     if (cursor != null) {
       if (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(cursor)) throw err('invalid_cursor');
@@ -144,26 +165,25 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
       scan = c ? scanById(c.scan_id) : null;
       if (!scan || scan.owner_id !== ownerId || scan.search_id !== searchId || scan.revision !== revision
           || scan.config_hash !== configHash || scan.condition_hash !== conditionHash || scan.classifier !== version
-          || scan.generation !== generation || scan.access_hash !== accessHash || c.created_at > now()
+          || scan.generation !== generation || scan.access_hash !== accessHash || !coverage.stale&&scan.membership_hash!==membershipHash || c.created_at > now()
           || now() - c.created_at >= CURSOR_TTL) throw err('stale_cursor', 409);
       position = c.position;
     } else {
       // Old revisions cannot continue background spending after the first read of
       // a replacement revision. Cached exact decisions remain reusable.
-      for (const s of db.prepare('SELECT * FROM demo_match_scans WHERE owner_id=? AND search_id=? AND (revision<>? OR generation<>? OR classifier<>?)').all(ownerId, searchId, revision, generation, version)) deleteScan(s);
+      for (const s of db.prepare('SELECT * FROM demo_match_scans WHERE owner_id=? AND search_id=? AND (revision<>? OR generation<>? OR classifier<>? OR access_hash<>?)').all(ownerId, searchId, revision, generation, version,accessHash)) deleteScan(s);
       scan = db.prepare('SELECT * FROM demo_match_scans WHERE owner_id=? AND search_id=? AND revision=? AND config_hash=? AND classifier=? AND generation=? AND access_hash=?')
         .get(ownerId, searchId, revision, configHash, version, generation, accessHash);
+      if(scan&&!coverage.stale&&scan.membership_hash!==membershipHash){deleteScan(scan);scan=null;}
       if (!scan) {
         if (db.prepare('SELECT count(*) AS n FROM demo_match_scans').get().n >= 96
             || db.prepare('SELECT count(*) AS n FROM demo_match_scans WHERE owner_id=?').get(ownerId).n >= 16) throw err('task_limit', 429);
         const id = randomUUID(), seen = new Set();
-        const current = new Map(feed.eligibleJobs({ viewer }).map((j) => [j.id, j]));
         // Defend the module boundary again: supplied primary candidates may only
         // narrow the current eligible feed, never reintroduce hidden records.
-        const eligible = jobs.filter((j) => current.has(j.id) && fingerprint(current.get(j.id)) === fingerprint(j)).sort(order);
         tx(db, () => {
-          db.prepare('INSERT INTO demo_match_scans VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-            .run(id, ownerId, searchId, revision, configHash, conditionHash, condition, version, generation, accessHash, 'pending', null, null, null, 0, 0, now(), now());
+          db.prepare('INSERT INTO demo_match_scans(id,owner_id,search_id,revision,config_hash,condition_hash,condition,classifier,generation,access_hash,state,pause_code,retry_at,task_id,round,delivered,created_at,updated_at,cohort,membership_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+            .run(id, ownerId, searchId, revision, configHash, conditionHash, condition, version, generation, accessHash, 'pending', null, null, null, 0, 0, now(), now(),cohort,membershipHash);
           for (const [index, j] of eligible.entries()) {
             if (seen.has(j.id)) throw err('invalid_input'); seen.add(j.id);
             const evidence = fingerprint(j), key = sha({ ownerId, conditionHash, evidence, version });
@@ -173,8 +193,16 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
         scan = scanById(id);
       }
     }
+    if(!searchLive(scan))throw err('revision_conflict',409);
     refresh(scan);
-    const current = new Map(feed.eligibleJobs({ viewer }).map((j) => [j.id, j]));
+    if(hidden) {
+      const current=new Map(currentJobs(scan,viewer).map(j=>[j.id,j]));
+      const accepted=rows(scan.id).filter(r=>r.decision==='accepted'&&current.has(r.job_id)&&fingerprint(current.get(r.job_id))===r.evidence_hash).length;
+      const unresolved=rows(scan.id).some(r=>r.decision==null||r.decision==='insufficient_evidence');
+      if(!coverage.stale)schedule(scan);
+      return coverage.stale?{status:'unavailable',count:null}:!unresolved?{status:'exact',count:accepted}:accepted?{status:'lower_bound',count:accepted}:rows(scan.id).every(r=>r.decision==null)?{status:available()?'pending':'unavailable',count:null}:{status:'lower_bound',count:0};
+    }
+    const current = new Map((hidden?(viewer.access?.fullAccess===true?[]:feed.restrictedLatestJobs?.()??[]):feed.eligibleJobs({ viewer })).map((j) => [j.id, j]));
     const supplied = new Map(jobs.map((j) => [j.id, j]));
     const items = []; let next = position;
     for (const row of rows(scan.id)) {
@@ -211,7 +239,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     if (!scan || scan.owner_id !== task.ownerId || scan.task_id !== task.id || !taskLive(task)) return { status: 'failed', errorCode: 'revision_conflict', output: null };
     let pause = null, batches = 0, evaluated = 0, cacheHits = 0, insufficient = 0;
     const started = now(), usage = { inputTokens: 0, outputTokens: 0, costNanodollars: 0, attempts: 0, ambiguousAttempts: 0 };
-    const alive = () => !signal?.aborted && taskLive(task) && scanById(scan.id)?.task_id === task.id;
+    const alive = () => { const viewer=authority(scan.owner_id);return !signal?.aborted&&(feed.generation()??'unavailable')===scan.generation&&!feed.coverage().stale&&viewer&&accessHashFor(scan.owner_id,viewer)===scan.access_hash&&searchLive(scan)&&taskLive(task)&&scanById(scan.id)?.task_id===task.id; };
     while (alive() && now() - started < workMs && batches < maxBatches) {
       if ((feed.generation() ?? 'unavailable') !== scan.generation || feed.coverage().stale) { pause = 'import_unavailable'; break; }
       if (!executionAvailable()) {
@@ -219,15 +247,16 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
         pause = ['budget_exhausted', 'budget_unavailable', 'budget_locked'].includes(reason) ? reason : 'dependency_unavailable'; break;
       }
       const pending = rows(scan.id).filter((r) => r.decision == null);
-      if (!pending.length || readyCount(scanById(scan.id)) >= readyLimit) break;
-      const current = new Map(feed.eligibleJobs({ viewer: { account: { id: scan.owner_id } } }).map((j) => [j.id, j]));
+      if (!pending.length || scan.cohort==='visible'&&readyCount(scanById(scan.id)) >= readyLimit) break;
+      if(scan.cohort==='hidden'&&db.prepare("SELECT 1 FROM demo_match_jobs j JOIN demo_match_scans s ON s.id=j.scan_id WHERE s.owner_id=? AND s.search_id=? AND s.revision=? AND s.cohort='visible' AND j.decision IS NULL LIMIT 1").get(scan.owner_id,scan.search_id,scan.revision))break;
+      const current = new Map(currentJobs(scan,authority(scan.owner_id)).map((j) => [j.id, j]));
       const candidates = [], candidateKeys = new Set();
       // Resolve missing/weak evidence and cache hits without a provider call.
       tx(db, () => {
         if (!alive()) return;
         for (const row of pending) {
           const j = current.get(row.job_id), hit = cached(scan, row);
-          if (hit) {
+          if (j&&fingerprint(j)===row.evidence_hash&&hit) {
             db.prepare('UPDATE demo_match_jobs SET decision=? WHERE scan_id=? AND position=?').run(hit, scan.id, row.position); cacheHits++;
           } else if (!j || fingerprint(j) !== row.evidence_hash || !evidenceEligible(j)) {
             db.prepare("UPDATE demo_match_jobs SET decision='insufficient_evidence' WHERE scan_id=? AND position=?").run(scan.id, row.position);
@@ -292,7 +321,9 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
       return { status, output, committed: true };
     });
   }
-  return { available, page, runTask, deleteSearchData, deleteAccountData, cleanup,
+  const page=args=>pageInternal(args);
+  const hiddenCount=args=>pageInternal({...args,cursor:null},true);
+  return { available, page, hiddenCount, runTask, deleteSearchData, deleteAccountData, cleanup,
     capabilities: () => ({ aiMatching: available() }), readiness: () => {
       const ready = available();
       return { ...provider.readiness?.(), available: ready, reason: ready ? null : 'dependency_unavailable',
