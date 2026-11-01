@@ -11,6 +11,17 @@ A preview is an isolated, time-limited deployment of these product components. I
 
 ## Resolve these inputs before a deployment
 
+### Frontend-only test publication
+
+An explicitly authorized incomplete test preview can be published before backend activation. Configure the API argument as literal `disabled`, in `preview` mode only. This omits `API_ORIGIN`, records `API_DISABLED=true`, and binds `apiOrigin:null` into the runtime digest. The retained Worker already returns private JSON 503 for API routes without an upstream; landing, policy assets and release identity remain available, while company data is honestly unavailable. Do not substitute a fictional upstream, fake listings or a successful health response. This changes runtime configuration without rebuilding the retained Worker or assets.
+
+An exact matching `<worker-name>.<approved-account-subdomain>.workers.dev` preview origin enables only that Worker's workers.dev route and omits custom-domain/DNS writes. Other origins retain the custom-domain configuration. Production mode rejects both API-off and workers.dev previews. The smoke tool recognizes only the explicit disabled marker, verifies the retained assets and public rendering, requires API health/session/version to return private JSON 503, and reports `completeReleaseGate:false`. Run deployed public-browser checks afterward. This phase does not activate accounts, models, email, payments or satisfy the complete first-invitation/release gate. Existing account/resource approval, scoped deployment access and exact artifact identity still apply.
+
+```sh
+node scripts/frontend-configure.mjs /private/retained-artifact justup-preview-candidate https://justup-preview-candidate.account.workers.dev disabled preview
+node scripts/frontend-smoke.mjs https://justup-preview-candidate.account.workers.dev /private/retained-artifact
+```
+
 The release owner records the following in the hosting issue for each environment. Credentials are not an approval record; consult the [secrets guide](secrets.md) before configuring deployment access.
 
 | Input | Required evidence |
