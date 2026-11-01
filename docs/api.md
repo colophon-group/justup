@@ -7,7 +7,7 @@ read_when: Connecting the browser, implementing a backend module or reviewing pr
 
 Status: implementation contract; not a claim that endpoints are deployed.
 
-The runtime serves attributable Jobseek imports, durable local accounts, validated search interpretation, optional residual matching and company identity requests. Invitation restrictions and temporary account lifetimes are deployment policy. Billing, mail and crawler writes are not implemented; accepted product features still missing are launch requirements, not preview exemptions. Follow the [development guide](development-process.md); ordinary implementation targets `dev`, and runtime changes cannot enter `main` before the real release gate passes.
+The runtime composes attributable Jobseek imports, durable local accounts, validated search interpretation, optional residual matching, reading preferences, live result delivery, company identity requests, public company reports and Hiring Wire editions. Invitation restrictions and temporary account lifetimes are deployment policy. Billing, mail and crawler writes are not implemented; accepted product features still missing are launch requirements, not preview exemptions. Follow the [development guide](development-process.md); ordinary implementation targets `dev`, and runtime changes cannot enter `main` before the real release gate passes.
 
 ## Runtime and resource boundary
 

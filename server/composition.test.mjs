@@ -60,3 +60,41 @@ test('assembled core/auth/matching API consumes heartbeat, exposes real services
   assert.equal((await call('/searches',{method:'POST',headers:mutationHeaders,body:JSON.stringify({query:'backend',requestKey:'unavailable'})})).status,503);
   const deleted=await call('/account',{method:'DELETE',headers:mutationHeaders,body:JSON.stringify({password})});assert.equal(deleted.status,200);assert.equal(demo.auth.session(account.token),null);
 });
+
+test('composed public reads allocate no visitors and localized first-search retries retain one policy-bound owner',async t=>{
+  const {createConfiguredApplication}=await import('./main.mjs');
+  const f=fixture(t);f.write();const origin='http://127.0.0.1:18787';
+  const de={privacyUrl:origin+'/privacy.de.html',usageUrl:origin+'/usage.de.html',version:'reviewed-de',reviewed:true};
+  const app=await createConfiguredApplication({config:{...f.config,dbPath:':memory:',servicesEnabled:true,
+    allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,policyLocales:{de}},now:()=>AT});
+  t.after(async()=>{app.server.closeAllConnections();await app.close();});
+  await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));
+  const endpoint=`http://127.0.0.1:${app.server.address().port}/api/v1`;
+  const companyId=app.feed.publishCompany({name:'Example',domain:'example.org',websiteUrl:'https://example.org/',evidenceUrls:[]});
+  const counts=()=>['justup_visitors','demo_searches','demo_tasks'].map(table=>app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n);
+  for(const path of ['/hiring-wire','/companies?limit=1',`/companies/${companyId}/report`]){
+    const response=await fetch(endpoint+path);assert.equal(response.status,200);await response.json();
+    assert.equal(response.headers.get('set-cookie'),null);assert.deepEqual(counts(),[0,0,0]);
+  }
+  const sessionResponse=await fetch(endpoint+'/session',{headers:{cookie:'justup_interface_locale=de'}}),session=await sessionResponse.json();
+  assert.equal(session.policies.locale,'de');assert.equal(session.policies.version,de.version);assert.equal(session.policies.reviewed,true);
+  assert.equal(session.capabilities.visitorSearch,true);assert.equal(session.capabilities.sse,true);assert.deepEqual(counts(),[0,0,0]);
+  const ownership=sessionResponse.headers.getSetCookie().find(cookie=>cookie.startsWith('justup_visitor='));assert(ownership.includes('HttpOnly'));
+  const cookie=['justup_interface_locale=de',...sessionResponse.headers.getSetCookie().map(value=>value.split(';')[0])].join('; ');
+  const submit=()=>fetch(endpoint+'/visitor/searches',{method:'POST',headers:{cookie,origin,'content-type':'application/json','x-csrf-token':session.csrfToken},
+    body:JSON.stringify({query:'Original English query',presentationLocale:'de',requestKey:'recover-localized-first-response'})});
+  const firstResponse=await submit(),first=await firstResponse.json();assert.equal(firstResponse.status,202);
+  // Retry with only the cookies from GET /session, as if every POST response byte
+  // disappeared. The generic policy proof and persisted visitor locale coexist.
+  const retryResponse=await submit(),retry=await retryResponse.json();assert.equal(retryResponse.status,202);
+  assert.equal(retry.search.id,first.search.id);assert.equal(retry.task.id,first.task.id);assert.deepEqual(counts(),[1,1,1]);
+  const visitor=app.store.db.prepare('SELECT id,interface_locale FROM justup_visitors').get();assert.equal(visitor.interface_locale,'de');
+  const task=app.tasks.get(visitor.id,first.task.id);assert.equal(task.payload.presentationLocale,'de');assert.match(task.payload.policyKey,/^[a-f0-9]{64}$/);
+  assert.equal(app.store.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name='justup_visitor_admission'").get(),undefined);
+  assert.equal(JSON.parse(app.store.db.prepare('SELECT policy_scope FROM justup_processing_admission').get().policy_scope).de.reviewed,true);
+  de.version='reviewed-de-replacement';app.services.find(service=>typeof service.refreshAvailability==='function').refreshAvailability();
+  const intent=app.services.find(service=>typeof service.runTask==='function'&&typeof service.snapshot==='function');
+  const claimed=app.tasks.claim({workerId:'fixture',kinds:['search_intent']});
+  assert.equal((await intent.runTask(claimed)).errorCode,'processing_unavailable');
+  assert.equal(app.store.db.prepare('SELECT accepted_json FROM demo_searches').get().accepted_json,null);
+});
