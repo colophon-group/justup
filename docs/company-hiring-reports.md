@@ -110,11 +110,22 @@ explicitly in `apps/crawler/src/typesense_schema.py`; the public company-detail
 reader uses the same field. Successful lookups emit only
 `companyIdentities:[{companyId,officialDomain}]`, using the validated HTTPS website
 hostname. No name, applicant-tracking-system URL, parent-domain guess or `www`
-rewrite supplies identity proof. Missing, invalid, duplicate, conflicting or
-failed results leave the identity unbound. No new credential, network host,
-source write or crawler setup is involved. The existing reviewed alias adapter
-preserves an accepted public company ID and follows while immutable raw source
-posting IDs/company IDs remain unchanged.
+rewrite supplies identity proof. A shared host never merges distinct source IDs
+or binds an imported company to an accepted request. Until a separately reviewed
+identity link exists, requested and imported companies can remain separate on
+the same domain; their reports, follows and priority stay separate too. Missing,
+invalid, duplicate or failed lookups omit host metadata. A changed host for an
+already recorded source ID rejects the import. No new credential, network host,
+source write or crawler setup is involved. Raw source posting IDs/company IDs
+remain unchanged. Existing stored aliases are preserved, so older cross-ID rows
+must be reviewed before activation; these imports neither approve nor repair
+them.
+
+Before activation against any existing application database, inspect
+`justup_company_aliases` rows where `source_company_id <> company_id`. Those
+stored links need an explicit identity review; a matching `official_domain`
+does not establish that review. This fix preserves their state and does not
+silently remap existing public URLs or private follows.
 
 `server/company-reports.test.mjs` owns real SQLite/publication/import/HTTP
 contracts with synthetic source facts and fake editorial transport. It also

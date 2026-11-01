@@ -77,7 +77,7 @@ test('private continuations bind scope, normalized filter, catalogue and members
   for(const limit of ['0','51','01','1.5',''])await assert.rejects(f.page(`view=followed&limit=${limit}`),{code:'invalid_limit'});
 });
 
-test('verified source aliases retain one canonical row in private requested and followed pages',async t=>{
+test('shared website metadata does not move private request or follow membership to an imported company',async t=>{
   const f=fixture(t),accepted=await f.accept(40),iso=new Date(AT).toISOString();
   f.store.importSnapshot({schemaVersion:1,snapshotAt:iso,verifiedAt:iso,observations:[],unknownIds:[],companyIdentities:[{companyId:'source-company',officialDomain:'company40.example.org'}],jobs:[{
     id:'source-job',companyId:'source-company',companyName:'Company 40',companySlug:'company-40',title:'Engineer',sourceUrl:'https://company40.example.org/jobs/1',active:true,reserved:false,hasContent:true,
@@ -86,9 +86,9 @@ test('verified source aliases retain one canonical row in private requested and 
   }]});
   f.db.prepare('INSERT INTO justup_company_follows VALUES(?,?,1,?)').run('bob','source-company',AT);
   assert.equal(accepted.companyId,f.ids[40]);
-  for(const [view,owner] of [['requested','alice'],['followed','alice'],['followed','bob']]) {
+  for(const [view,owner,id,state] of [['requested','alice',f.ids[40],'requested'],['followed','alice',f.ids[40],'requested'],['followed','bob','source-company','imported_snapshot']]) {
     const items=(await f.page(`view=${view}`,owner)).body.items;
-    assert.equal(items.length,1);assert.equal(items[0].id,f.ids[40]);assert.equal(items[0].coverage.state,'imported_snapshot');
+    assert.equal(items.length,1);assert.equal(items[0].id,id);assert.equal(items[0].coverage.state,state);
   }
 });
 

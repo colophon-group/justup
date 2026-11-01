@@ -204,7 +204,7 @@ test('source hash, publication order, pending state and future observations fail
   });
 });
 
-test('public company publication and actual offline importer preserve canonical follows, raw identity and reports', async t => {
+test('actual offline importer preserves source reports separately from a request sharing its official host', async t => {
   const f = fixture(t, []), id = f.feed.publishCompany({ name: 'Example', domain: 'employer.example', websiteUrl: 'https://employer.example/', evidenceUrls: ['https://employer.example/about'] });
   const reading = createReadingPreferencesService({ db: f.db, feed: f.feed, now: f.now, ownerAuthority: owner => ({ account: { id: owner }, access: { fullAccess: true } }) });
   reading.followAcceptedCompany('synthetic-owner', id);
@@ -214,11 +214,12 @@ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 source=module.FakeSource([module.posting()],companies=[{'id':'company-1','website':'https://employer.example/'}])
 print(json.dumps(module.IMPORT.import_snapshot(source,'2026-11-01T12:00:00.000Z',max_jobs=1,now=module.NOW+module.timedelta(hours=20))))`], { encoding: 'utf8', maxBuffer: 65_536 });
   assert.equal(process.status, 0); f.store.importSnapshot(JSON.parse(process.stdout));
-  assert.equal(f.feed.company('company-1').id, id); assert.equal(f.feed.companies().items.length, 1);
+  assert.equal(f.feed.company('company-1').id, 'company-1'); assert.equal(f.feed.companies().items.length, 2);
   assert.equal(reading.follows('synthetic-owner').items[0].companyId, id);
   assert.equal(f.db.prepare('SELECT company_id FROM job_source_identities').get().company_id, 'company-1');
   await publish(f);
-  assert.equal(f.reports.report('company-1').companyId, id); assert.equal(f.reports.report(id).hiringHistory.state, 'available');
+  assert.equal(f.reports.report('company-1').companyId, 'company-1'); assert.equal(f.reports.report('company-1').hiringHistory.state, 'available');
+  assert.equal(f.reports.report(id).hiringHistory.state, 'unavailable');assert.equal(f.reports.report(id).hiringRoles.sampleSize,0);
 });
 
 test('report HTTP reads are public and cookie-independent while private scopes and writes are denied', async t => {

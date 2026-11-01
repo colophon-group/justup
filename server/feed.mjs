@@ -150,15 +150,16 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   }
   function publishCompany(candidate) {
     if(candidate.companyId)return company(candidate.companyId).id;
-    // Older previews predate companyId. Recover an unambiguous imported identity
-    // without inventing an official domain or replacing its source catalogue ID.
-    const known=new Set(candidate.coverage?.state==='imported_snapshot'?companyRows().filter(r=>JSON.parse(r.data_json).companyName===candidate.name).map(r=>r.company_id):[]);
-    if(known.size===1)return [...known][0];
+    // A confirmed catalogue ID establishes reuse. Names and official hosts do
+    // not bind a newly researched request to any imported source identity.
     if(!candidate.domain)throw problem('preview_conflict',409);
-    const prior=db.prepare('SELECT id FROM justup_requested_companies WHERE domain=?').get(candidate.domain);
-    if(prior)return prior.id;
-    const existingSource=db.prepare('SELECT company_id FROM justup_company_aliases WHERE official_domain=? ORDER BY verified_at,source_company_id LIMIT 1').get(candidate.domain);
-    const id=existingSource?.company_id??randomUUID(),value={id,name:candidate.name,slug:null,logoUrl:null,websiteUrl:candidate.websiteUrl,
+    const prior=db.prepare('SELECT id,data_json FROM justup_requested_companies WHERE domain=?').get(candidate.domain);
+    if(prior){
+      const known=JSON.parse(prior.data_json),fold=value=>value.normalize('NFKC').trim().toLocaleLowerCase('en');
+      if(fold(known.name)!==fold(candidate.name)||known.websiteUrl!==candidate.websiteUrl)throw problem('preview_conflict',409);
+      return prior.id;
+    }
+    const id=randomUUID(),value={id,name:candidate.name,slug:null,logoUrl:null,websiteUrl:candidate.websiteUrl,
       coverage:{state:'requested'},history:null,evidence:candidate.evidenceUrls.map(url=>({source:'company_request',url}))};
     db.prepare('INSERT INTO justup_requested_companies VALUES(?,?,?)').run(id,candidate.domain,JSON.stringify(value));return id;
   }
