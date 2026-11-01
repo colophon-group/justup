@@ -33,6 +33,7 @@ PROPERTIES = ('LoadState', 'ActiveState', 'SubState', 'MainPID', 'NRestarts',
               'InvocationID', 'Result', 'FragmentPath', 'ControlGroup')
 SHA256 = re.compile(r'[a-f0-9]{64}\Z')
 BUILD_LINK = re.compile(r'releases/[a-f0-9]{64}\Z')
+MAX_EVIDENCE_BYTES = 16 * 1024
 
 
 def sha(path):
@@ -154,6 +155,28 @@ def assess(case, before, after):
             'restartDelta': restarts, 'unit': before['unit']}
 
 
+def read_evidence(path):
+    if not path.is_absolute() or path.resolve(strict=True) != path:
+        raise ValueError('Evidence must be a canonical absolute path.')
+    initial = path.lstat()
+    if (not stat.S_ISREG(initial.st_mode) or initial.st_uid != 0 or initial.st_nlink != 1
+            or initial.st_mode & 0o077 or not 0 < initial.st_size <= MAX_EVIDENCE_BYTES):
+        raise ValueError('Evidence must be a bounded root-private regular file.')
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_dev != initial.st_dev
+                or opened.st_ino != initial.st_ino or opened.st_size != initial.st_size
+                or opened.st_uid != 0 or opened.st_nlink != 1 or opened.st_mode & 0o077):
+            raise ValueError('Evidence changed during review.')
+        content = os.read(descriptor, MAX_EVIDENCE_BYTES + 1)
+        if len(content) != initial.st_size:
+            raise ValueError('Evidence changed during review.')
+        return json.loads(content.decode('utf-8'))
+    finally:
+        os.close(descriptor)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -170,7 +193,7 @@ def main():
         if args.command == 'capture':
             result = capture(args.unit, args.reviewed_plan_sha, args.host_machine_sha)
         else:
-            result = assess(args.case, json.loads(args.before.read_text()), json.loads(args.after.read_text()))
+            result = assess(args.case, read_evidence(args.before), read_evidence(args.after))
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get('passed', True) else 1
     except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError, json.JSONDecodeError):

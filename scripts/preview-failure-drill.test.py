@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -69,7 +70,7 @@ class DrillEvidence(unittest.TestCase):
         with self.assertRaises(ValueError):
             drill.capture('jobseek-lightpanda-renderer', 'a' * 64, 'b' * 64)
         with tempfile.TemporaryDirectory() as folder:
-            base = Path(folder)
+            base = Path(folder).resolve()
             marker = base / '.preview-install.json'
             marker.write_text(json.dumps({'formatVersion': 1, 'planSha256': '0' * 64}))
             with (patch.object(drill, 'BASE', base), patch.object(drill, 'MARKER', marker),
@@ -92,7 +93,7 @@ class DrillEvidence(unittest.TestCase):
 
     def test_capture_records_only_reviewed_unit_and_release_identity(self):
         with tempfile.TemporaryDirectory() as folder:
-            base = Path(folder)
+            base = Path(folder).resolve()
             build = 'c' * 64
             release = base / 'releases' / build
             release.mkdir(parents=True)
@@ -142,6 +143,27 @@ class DrillEvidence(unittest.TestCase):
             path.symlink_to(target)
             with self.assertRaises(ValueError):
                 drill.owned_regular(path, 4096)
+
+    def test_evidence_input_refuses_symlinks_and_oversized_private_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve()
+            evidence = base / 'before.json'
+            evidence.write_bytes(b'x' * (drill.MAX_EVIDENCE_BYTES + 1))
+            evidence.chmod(0o600)
+            original_lstat = Path.lstat
+            def root_lstat(path, *args, **kwargs):
+                result = original_lstat(path, *args, **kwargs)
+                if path != evidence:
+                    return result
+                return SimpleNamespace(st_mode=result.st_mode, st_uid=0, st_nlink=result.st_nlink,
+                                       st_size=result.st_size, st_dev=result.st_dev, st_ino=result.st_ino)
+            with patch.object(Path, 'lstat', autospec=True, side_effect=root_lstat):
+                with self.assertRaisesRegex(ValueError, 'bounded'):
+                    drill.read_evidence(evidence)
+            alias = base / 'alias.json'
+            alias.symlink_to(evidence)
+            with self.assertRaises(ValueError):
+                drill.read_evidence(alias)
 
 
 if __name__ == '__main__':
