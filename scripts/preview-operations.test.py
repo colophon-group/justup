@@ -76,7 +76,7 @@ def payload():
              'app/scripts/import-jobs.py': b'# canonical importer fixture\n',
              'app/server/main.mjs': b'export const ready = true;'}
     files.update({'app/server/' + name + '.mjs': b'export {};' for name in
-                 ('auth', 'http', 'store', 'schema', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter', 'policies', 'processing-admission')})
+                 ('auth', 'http', 'store', 'schema', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter', 'policies', 'processing-admission', 'ingress')})
     files.update(CODEX_FIXTURES)
     manifest = {'formatVersion': 2, 'sourceCommit': 'a' * 40, 'sourceTree': 'b' * 40,
                 'schemaVersion': 2, 'nodeVersion': '24.22.2', 'platform': 'linux-arm64',
@@ -846,7 +846,7 @@ class BoundaryContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 queue.validate_configuration({**base, **extra}, manifest)
         api = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
-               'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_EMAIL_VERIFICATION_ENABLED': 'true'}
+               'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_TRUSTED_INGRESS_SECRET': 'c' * 43, 'JUSTUP_EMAIL_VERIFICATION_ENABLED': 'true'}
         self.assertEqual(launcher.child_environment(api, manifest)['JUSTUP_EMAIL_VERIFICATION_ENABLED'], 'true')
         for key in ('RESEND_API_KEY', 'JUSTUP_RESEND_API_KEY', 'JUSTUP_EMAIL_VERIFICATION_KEY', 'STRIPE_SANDBOX_SECRET_KEY'):
             with self.assertRaises(ValueError):
@@ -887,7 +887,7 @@ for(const extra of input.rejected)assert.throws(()=>bindRunnerConfig({...input.b
         for extra in rejected:
             with self.assertRaises((ValueError, TypeError)):
                 queue.validate_configuration({**base, **extra}, manifest)
-        api = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32, 'JUSTUP_CURSOR_SECRET': 'b' * 32,
+        api = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32, 'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_TRUSTED_INGRESS_SECRET': 'c' * 43,
                'JUSTUP_STRIPE_TEST_BILLING_ENABLED': 'true', 'JUSTUP_STRIPE_TEST_ACCOUNT_ID': enabled['accountId'],
                'JUSTUP_STRIPE_TEST_OFFERS': json.dumps(offers), 'JUSTUP_STRIPE_TEST_PORTAL_CONFIGURATION_ID': enabled['portalConfigurationId'],
                'JUSTUP_STRIPE_TEST_WEBHOOK_SECRET': 'whsec_synthetic_endpoint_secret_value'}
@@ -1293,7 +1293,7 @@ process.stdout.write('independent_wire_policy_matches\n');
     def test_api_environment_excludes_operator_credentials_and_fixes_storage(self):
         manifest, _ = payload()
         config = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
-                  'JUSTUP_CURSOR_SECRET': 'b' * 32}
+                  'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_TRUSTED_INGRESS_SECRET': 'c' * 43}
         with patch.dict(os.environ, {'DOPPLER_TOKEN': 'private', 'OPENAI_API_KEY': 'private', 'DOCKER_HOST': 'private'}):
             env = launcher.child_environment(config, manifest)
         self.assertFalse({'DOPPLER_TOKEN', 'OPENAI_API_KEY', 'DOCKER_HOST'} & env.keys())
@@ -1302,15 +1302,40 @@ process.stdout.write('independent_wire_policy_matches\n');
         self.assertEqual(env['JUSTUP_POLICIES_REVIEWED'], 'false')
         self.assertEqual(env['JUSTUP_SERVICES_ENABLED'], 'false')
         self.assertEqual(env['JUSTUP_SHARED_STATE'], 'true')
+        self.assertEqual(env['JUSTUP_TRUSTED_INGRESS_REQUIRED'], 'true')
         self.assertEqual(env['JUSTUP_RUNNER_STATUS_PATH'], '/srv/justup_preview/state/runner-status.json')
         self.assertTrue(env['JUSTUP_DB_PATH'].startswith('/srv/justup_preview/'))
         with self.assertRaises(ValueError):
             launcher.child_environment({**config, 'DOPPLER_TOKEN': 'private'}, manifest)
 
+    def test_api_ingress_is_required_without_a_configuration_opt_out(self):
+        manifest, _ = payload()
+        config = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
+                  'JUSTUP_CURSOR_SECRET': 'b' * 32}
+        for secret in (None, '', 'x' * 32, 'a' * 43, 'c' * 43 + '=', 'c' * 42 + '+'):
+            candidate = dict(config)
+            if secret is not None:
+                candidate['JUSTUP_TRUSTED_INGRESS_SECRET'] = secret
+            with self.subTest(secret_shape=type(secret).__name__), self.assertRaisesRegex(ValueError, 'ingress secret'):
+                launcher.child_environment(candidate, manifest)
+        config['JUSTUP_TRUSTED_INGRESS_SECRET'] = 'c' * 43
+        with patch.dict(os.environ, {'JUSTUP_TRUSTED_INGRESS_REQUIRED': 'false',
+                                    'JUSTUP_TRUSTED_INGRESS_SECRET': 'untrusted'}):
+            child = launcher.child_environment(config, manifest)
+        self.assertEqual(child['JUSTUP_TRUSTED_INGRESS_REQUIRED'], 'true')
+        self.assertEqual(child['JUSTUP_TRUSTED_INGRESS_SECRET'], config['JUSTUP_TRUSTED_INGRESS_SECRET'])
+        for required in ('true', 'false'):
+            with self.subTest(required=required), self.assertRaisesRegex(ValueError, 'configuration keys'):
+                launcher.child_environment({**config, 'JUSTUP_TRUSTED_INGRESS_REQUIRED': required}, manifest)
+        old = deepcopy(manifest)
+        del old['files']['app/server/ingress.mjs']
+        with self.assertRaisesRegex(ValueError, 'artifact must enforce trusted ingress'):
+            launcher.child_environment(config, old)
+
     def test_admission_and_account_lifetime_are_deployment_configuration(self):
         manifest, _ = payload()
         config = {'JUSTUP_ORIGIN': 'https://justup.work', 'JUSTUP_CSRF_SECRET': 'a' * 32,
-                  'JUSTUP_CURSOR_SECRET': 'b' * 32}
+                  'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_TRUSTED_INGRESS_SECRET': 'c' * 43}
         default = launcher.child_environment(config, manifest)
         self.assertEqual(default['JUSTUP_REQUIRES_INVITATION'], 'true')
         self.assertNotIn('JUSTUP_ACCOUNT_TTL_MS', default)
@@ -1328,7 +1353,7 @@ process.stdout.write('independent_wire_policy_matches\n');
     def test_policy_locale_launcher_matches_actual_node_configuration(self):
         manifest, _ = payload()
         base = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
-                'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_POLICIES_REVIEWED': 'false'}
+                'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_TRUSTED_INGRESS_SECRET': 'c' * 43, 'JUSTUP_POLICIES_REVIEWED': 'false'}
         entry = {'privacyUrl': base['JUSTUP_ORIGIN'] + '/privacy.de.html',
                  'usageUrl': base['JUSTUP_ORIGIN'] + '/usage.de.html',
                  'version': 'synthetic-reviewed', 'reviewed': True}
@@ -1531,7 +1556,7 @@ process.stdout.write('actual_node_policy_configuration_matches\n');
     def test_policy_gate_requires_reviewed_urls_and_version(self):
         manifest, _ = payload()
         config = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
-                  'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_POLICIES_REVIEWED': 'true'}
+                  'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_TRUSTED_INGRESS_SECRET': 'c' * 43, 'JUSTUP_POLICIES_REVIEWED': 'true'}
         with self.assertRaises(ValueError):
             launcher.child_environment(config, manifest)
 
