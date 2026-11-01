@@ -47,7 +47,7 @@ export function createReadingPreferencesService({db,feed,ownerAuthority,now=Date
   function updateFollow(owner,companyId,followed,{automatic=false,expectedRevision}={}) {
     return transaction(db,()=>{
       if(ownerAuthority(owner)?.account?.id!==owner)throw problem('unauthenticated',401);
-      feed.company(companyId); // Only a canonical catalogue identity can be followed.
+      companyId=feed.company(companyId).id; // Source aliases resolve to the canonical catalogue identity.
       const previous=db.prepare('SELECT followed FROM justup_company_follows WHERE owner_id=? AND company_id=?').get(owner,companyId);
       if(automatic&&previous)return follows(owner);
       if(!automatic&&expectedRevision!==followsRevision(owner)) {
