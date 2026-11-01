@@ -207,3 +207,24 @@ test('visitor language remains browser-local and usable when session bootstrap i
   expect((await page.context().cookies()).find(cookie=>cookie.name==='justup_interface_locale')).toBeUndefined();
   expect(calls.filter(call=>call.key.includes('preferences') || /^(POST|PATCH|PUT|DELETE) /.test(call.key))).toEqual([]);
 });
+
+
+test('retrying an unavailable preference load clears the recovered failure and loads the saved language', async ({page}) => {
+  let reads=0;
+  const calls=await mockApi(page, {'GET /session':preferenceSession(), 'GET /preferences':() => ++reads===1
+    ? {status:503,body:{error:{code:'unavailable',message:'The service is unavailable. Please try again.'}}}
+    : preferences('de',1),
+  });
+  await page.goto('/');await page.locator('#query').fill('My original unsent query');
+  await page.locator('#account-open').click();
+  await expect(page.locator('#settings-dialog')).toContainText('The service is unavailable. Please try again.');
+  await expect(page.locator('#interface-language')).toBeDisabled();
+  await page.locator('#settings-dialog').getByRole('button',{name:'Retry',exact:true}).click();
+  await expect(page.locator('html')).toHaveAttribute('lang','de');
+  await expect(page.locator('#interface-language')).toHaveValue('de');
+  await expect(page.locator('#interface-language')).toBeEnabled();
+  await expect(page.locator('#settings-dialog')).not.toContainText('The service is unavailable. Please try again.');
+  await expect(page.locator('#settings-dialog')).not.toContainText('Der Dienst ist nicht verfügbar. Versuche es erneut.');
+  await expect(page.locator('#query')).toHaveValue('My original unsent query');
+  expect(calls.filter(call=>/^(POST|PATCH|PUT|DELETE) /.test(call.key))).toEqual([]);
+});

@@ -73,5 +73,5 @@ export function useAccountLocale(client: ApiClient, session: Session | null): Ac
   }, [available, busy, client, owner, setOverride, setAccountPreference, onManualLocaleChange, snapshot]);
   return { supported: owner ? snapshot?.supportedInterfaceLocales ?? [] : INTERFACE_LOCALES,
     disabled: Boolean(owner) && (!available || !snapshot || snapshot.accountId !== owner),
-    busy, error, retry: () => setReload(value => value + 1), choose };
+    busy, error, retry: () => { setError(''); setReload(value => value + 1); }, choose };
 }
