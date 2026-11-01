@@ -48,6 +48,17 @@ export function writeRunnerStatus({path,identity,config,capabilities,ready=true,
   const temp=join(parent,`.runner-status-${randomUUID()}.tmp`);
   try{writeFileSync(temp,JSON.stringify(value),{flag:'wx',mode:0o640});chmodSync(temp,0o640);renameSync(temp,path);}finally{try{unlinkSync(temp);}catch(error){if(error.code!=='ENOENT')throw error;}}
 }
+// The process-local halt survives a failed queue-guard write. Every later status
+// publication stays unavailable without consulting providers or reopening work.
+export function createRunnerStatusPublisher({path,identity,config,tasks,capabilities,now=Date.now}){
+  let forcedUnavailable=false;
+  function heartbeat(){
+    const ready=!forcedUnavailable&&!tasks.halted();
+    const available=Object.fromEntries(Object.entries(capabilities).map(([kind,read])=>[kind,ready?read():false]));
+    writeRunnerStatus({path,identity,config,capabilities:available,ready,now});
+  }
+  return {heartbeat,onHalt(){forcedUnavailable=true;heartbeat();}};
+}
 export async function createRunnerDependencies(){
   const config=readRunnerConfig();
   // Shared-state startup checks the service's operator-owned umask; never change
@@ -68,12 +79,12 @@ export async function createRunnerDependencies(){
     const wire=await createHiringWireRunner({db:store.db,tasks,now:Date.now,hiringWire:config.hiringWire,sourceCoverage:config.sourceCoverage,buildIdentity:config.buildIdentity,hostPlanSha256:config.hostPlanSha256});
     const email=createEmailVerificationRunner({db:store.db,tasks,config,now:Date.now});
     const workerId=`runner-${config.sourceCommit.slice(0,12)}-${createHash('sha256').update(config.buildIdentity).digest('hex').slice(0,12)}`;
-    const statusPath=runnerStatusPath(config),capabilities=()=>tasks.halted()?{search:false,companyRequests:false,aiMatching:false}:{search:model.available('search_intent'),companyRequests:model.available('company_resolution'),aiMatching:matching.available(),...(config.emailVerification!==undefined?{emailVerification:email.available()}: {})};
-    const heartbeat=()=>writeRunnerStatus({path:statusPath,identity:workerId,config,capabilities:capabilities(),ready:!tasks.halted()});
+    const statusPath=runnerStatusPath(config),{heartbeat,onHalt}=createRunnerStatusPublisher({path:statusPath,identity:workerId,config,tasks,
+      capabilities:{search:()=>model.available('search_intent'),companyRequests:()=>model.available('company_resolution'),aiMatching:()=>matching.available(),...(config.emailVerification!==undefined?{emailVerification:()=>email.available()}: {})}});
     matching.cleanup();heartbeat();
     heartbeatTimer=setInterval(()=>{try{heartbeat();}catch{ /* stale status fails closed in the API */ }},10_000);
     cleanupTimer=setInterval(()=>{try{matching.cleanup();}catch{ /* task/page paths retry bounded cleanup */ }},60_000);
-    return {tasks,handlers:{search_intent:(task,options)=>records.runTask(task,intent.runTask,options),company_resolution:(task,options)=>records.runTask(task,companies.runTask,options),ai_match:(task,options)=>records.runTask(task,matching.runTask,options),hiring_wire:wire.runTask,email_verification:email.runTask},onTaskFinished:records.taskFinished,beforeClaim:wire.beforeClaim,onHalt:heartbeat,workerId,
+    return {tasks,handlers:{search_intent:(task,options)=>records.runTask(task,intent.runTask,options),company_resolution:(task,options)=>records.runTask(task,companies.runTask,options),ai_match:(task,options)=>records.runTask(task,matching.runTask,options),hiring_wire:wire.runTask,email_verification:email.runTask},onTaskFinished:records.taskFinished,beforeClaim:wire.beforeClaim,onHalt,workerId,
       close(){clearInterval(heartbeatTimer);clearInterval(cleanupTimer);try{writeRunnerStatus({path:statusPath,identity:workerId,config,capabilities:{search:false,companyRequests:false,aiMatching:false},ready:false});}finally{store.close();}}};
   }catch(error){clearInterval(heartbeatTimer);clearInterval(cleanupTimer);store.close();throw error;}
 }

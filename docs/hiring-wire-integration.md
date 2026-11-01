@@ -82,7 +82,8 @@ it; current lease ownership cannot suppress a trusted cleanup-failure report.
 The halt does not rewrite that task's status or lease. The runner continues its
 lease heartbeat when possible, marks readiness unavailable and stops all claims
 and weekly schedule actions. A local halt also keeps this runner unavailable if
-persisting the guard fails.
+persisting the guard fails. Its status publisher latches unavailable readiness
+and disables every capability for both the halt callback and later heartbeats.
 
 An expired running Wire lease itself provides no native cleanup proof. Checking
 queue availability, claiming or recovering tasks atomically seals the same guard

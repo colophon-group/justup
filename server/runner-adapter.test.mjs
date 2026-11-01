@@ -2,7 +2,13 @@
 // provider requests. Filesystem ownership checks remain in readRunnerConfig.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindRunnerConfig,runnerIdentity } from './runner-adapter.mjs';
+import { mkdtempSync,readFileSync,rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { bindRunnerConfig,runnerIdentity,createRunnerStatusPublisher } from './runner-adapter.mjs';
+import { createTasks } from './tasks.mjs';
+import { createRunner } from './runner.mjs';
 
 const env={JUSTUP_SOURCE_COMMIT:'a'.repeat(40),JUSTUP_BUILD_ID:'b'.repeat(64),JUSTUP_HOST_PLAN_SHA256:'c'.repeat(64)};
 const config=()=>({dbPath:'/preview/state/application.sqlite',model:{enabled:false}});
@@ -43,4 +49,26 @@ test('queue admits only fixed Wire model and pinned source configuration without
     {sourceCoverage:{...sourceCoverage,sourceVersion:'caller-version'}},{sourceCoverage:{...sourceCoverage,command:'caller-command'}}]) {
     assert.throws(()=>bindRunnerConfig({...input,...patch},env),/configuration is unavailable/);
   }
+});
+test('actual runner status stays unavailable after cleanup halt, including guard write failure and later heartbeat',async t=>{
+  for(const persistenceFailure of [false,true])await t.test(String(persistenceFailure),async t=>{
+    const directory=mkdtempSync(join(tmpdir(),'runner-halt-status-')),path=join(directory,'runner.json'),db=new DatabaseSync(':memory:');
+    t.after(()=>{db.close();rmSync(directory,{recursive:true,force:true});});
+    let at=1000;const tasks=createTasks({db,now:()=>at});
+    const publishers={search:()=>true,companyRequests:()=>true,aiMatching:()=>true,emailVerification:()=>true,stripeBilling:()=>true};
+    const publisher=createRunnerStatusPublisher({path,identity:'runner',config:bindRunnerConfig(config(),env),tasks,capabilities:publishers,now:()=>at});
+    const status=()=>JSON.parse(readFileSync(path,'utf8'));
+    publisher.heartbeat();assert.equal(status().ready,true);assert.equal(status().capabilities.emailVerification,true);assert.equal(status().capabilities.stripeBilling,true);
+    tasks.enqueue({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'week',payload:{}});
+    if(persistenceFailure)tasks.haltWire=()=>{throw Error('Guard storage unavailable.');};
+    const runner=createRunner({tasks,onHalt:publisher.onHalt,handlers:{hiring_wire:()=>{throw Object.assign(Error('Unproven cleanup.'),{code:'cleanup_unproven'});}}});
+    t.after(()=>runner.stop());
+    if(persistenceFailure)await assert.rejects(runner.runOnce(),/Guard storage unavailable/);
+    else assert.equal(await runner.runOnce(),true);
+    assert.equal(tasks.halted(),!persistenceFailure);assert.equal(runner.ready(),false);
+    const unavailable={search:false,companyRequests:false,aiMatching:false,emailVerification:false,stripeBilling:false};
+    assert.equal(status().ready,false);assert.deepEqual(status().capabilities,unavailable);
+    at+=10_000;publisher.heartbeat();
+    assert.equal(status().updatedAt,new Date(at).toISOString());assert.equal(status().ready,false);assert.deepEqual(status().capabilities,unavailable);
+  });
 });
