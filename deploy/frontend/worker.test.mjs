@@ -110,13 +110,15 @@ test('release identity is whitelisted, noncached and unavailable until valid', a
 });
 
 
-test('root maps to the committed index without making unknown routes an HTML fallback', async () => {
+test('source boundary fails closed without the compiled renderer while retained index bytes stay fetchable', async () => {
   const env = environment();
   env.ASSETS.fetch = async value => new URL(value.url).pathname === '/index.html' ? new Response('index') : new Response('missing', { status: 404 });
   const handle = createHandler();
   const index = await handle(request('/'), env);
-  assert.equal(index.status, 200); assert.equal(await index.text(), 'index');
-  assert.equal((await handle(request('/missing'), env)).status, 404);
+  assert.equal(index.status, 503); privateHeaders(index);
+  assert.equal((await index.json()).error.code, 'public_renderer_unavailable');
+  const retained = await handle(request('/index.html'), env); assert.equal(retained.status, 200); assert.equal(await retained.text(), 'index');
+  assert.equal((await handle(request('/missing.html'), env)).status, 404);
 });
 
 
@@ -128,7 +130,7 @@ test('production indexing is an explicit runtime setting and never changes priva
     assert.equal((await result.json()).error.code, 'deployment_mode_unavailable');
   }
   const env = { ...environment(), DEPLOYMENT_MODE: 'production' };
-  for (const path of ['/', '/privacy.html', '/usage.html']) {
+  for (const path of ['/privacy.html', '/usage.html']) {
     const result = await handle(request(path), env);
     assert.equal(result.status, 200);
     assert.equal(result.headers.get('X-Robots-Tag'), null);
@@ -141,10 +143,27 @@ test('production indexing is an explicit runtime setting and never changes priva
     const result = await handle(request(path), env); privateHeaders(result);
     if (path.startsWith('/__release/')) assert.equal((await result.json()).deploymentMode, 'production');
   }
-  const redirected = await handle(request('/redirect'), { ...env, ASSETS: { fetch: async () => new Response(null, { status: 302, headers: { Location: '/' } }) } });
+  const redirected = await handle(request('/redirect.html'), { ...env, ASSETS: { fetch: async () => new Response(null, { status: 302, headers: { Location: '/' } }) } });
   assert.equal(redirected.status, 302); privateHeaders(redirected);
-  const failed = await handle(request('/missing'), { ...env, ASSETS: { fetch: async () => new Response('missing', { status: 404 }) } });
+  const failed = await handle(request('/missing.html'), { ...env, ASSETS: { fetch: async () => new Response('missing', { status: 404 }) } });
   assert.equal(failed.status, 404); privateHeaders(failed);
   const failure = await createHandler(async () => { throw new Error('private'); })(request('/api/v1/session'), env);
   assert.equal(failure.status, 503); privateHeaders(failure);
+});
+
+test('only an exact request locale reaches the same-origin API boundary', async () => {
+  let calls = 0;
+  const handle = createHandler(async (_, init) => {
+    calls++; assert.equal(init.headers.get('X-Justup-Locale'), 'it');
+    return new Response('{}', { headers: { 'Content-Type': 'application/json' } });
+  });
+  const valid = await handle(request('/api/v1/session', { headers: { 'X-Justup-Locale': 'it' } }), environment());
+  assert.equal(valid.status, 200); privateHeaders(valid); assert.equal(calls, 1);
+  for (const locale of ['', 'IT', 'esp', 'it-IT', 'it,de', 'it, it', 'unknown']) {
+    const invalid = await handle(request('/api/v1/session', { headers: { 'X-Justup-Locale': locale } }), environment());
+    assert.equal(invalid.status, 400); privateHeaders(invalid); assert.equal((await invalid.json()).error.code, 'invalid_locale');
+  }
+  const repeated = new Headers(); repeated.append('X-Justup-Locale', 'it'); repeated.append('X-Justup-Locale', 'it');
+  assert.equal((await handle(request('/api/v1/session', { headers: repeated }), environment())).status, 400);
+  assert.equal(calls, 1);
 });

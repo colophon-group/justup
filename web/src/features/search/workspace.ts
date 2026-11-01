@@ -1,5 +1,5 @@
 // Pure workspace transitions keep accepted criteria separate from unsubmitted drafts.
-import type { Search, SearchProposal } from "../../api/types.ts";
+import type { SavedWorkspaceState, Search, SearchProposal } from "../../api/types.ts";
 export interface Workspace {
   searches: Search[];
   selectedId: string | null;
@@ -25,9 +25,29 @@ export const queryText = (state: Workspace): string =>
   state.drafts[draftKey(state.selectedId)] ??
   selectedSearch(state)?.query ??
   "";
+export function savedWorkspace(state: Workspace, omitEmptyNew = false): SavedWorkspaceState {
+  const ids = new Set(state.searches.map(search => search.id));
+  return {
+    activeSearchId: state.selectedId && ids.has(state.selectedId) ? state.selectedId : null,
+    drafts: Object.fromEntries(Object.entries(state.drafts).filter(([id, text]) => id === "new" ? !omitEmptyNew || text.length > 0 : ids.has(id)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)),
+  };
+}
+// Only this browser's changes replace a newer stored copy after explicit review.
+export function mergeWorkspaceEdits(base: SavedWorkspaceState, local: SavedWorkspaceState, remote: SavedWorkspaceState): SavedWorkspaceState {
+  const drafts = { ...remote.drafts };
+  for (const id of new Set([...Object.keys(base.drafts), ...Object.keys(local.drafts)])) {
+    if (base.drafts[id] === local.drafts[id]) continue;
+    if (local.drafts[id] === undefined) delete drafts[id];
+    else drafts[id] = local.drafts[id];
+  }
+  return { activeSearchId: local.activeSearchId !== base.activeSearchId ? local.activeSearchId : remote.activeSearchId, drafts };
+}
 export type Action =
   | { type: "busy"; value: boolean }
   | { type: "loaded"; searches: Search[] }
+  | { type: "restored"; searches: Search[]; saved: SavedWorkspaceState; preserveLocal: boolean; defaultSelection?: boolean; authoritative?: boolean }
+  | { type: "submitted"; search: Search; previousId: string | null }
+  | { type: "taskFailed"; id: string }
   | { type: "editing" }
   | { type: "query"; value: string }
   | { type: "select"; id: string | null }
@@ -46,6 +66,34 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
   switch (action.type) {
     case "busy":
       return { ...state, busy: action.value };
+    case "restored": {
+      const merged = action.authoritative
+        ? { ...state, searches: action.searches.filter(search => !state.deletedIds.has(search.id)) }
+        : workspaceReducer(state, { type: "loaded", searches: action.searches });
+      const drafts = { ...action.saved.drafts };
+      for (const search of merged.searches)
+        if (search.draft && drafts[search.id] === undefined) drafts[search.id] = search.draft.query;
+      if (action.preserveLocal) Object.assign(drafts, state.drafts);
+      const selectedId = action.preserveLocal ? state.selectedId
+        : action.saved.activeSearchId ?? (action.defaultSelection && drafts.new === undefined ? merged.selectedId : null);
+      const selected = merged.searches.find(search => search.id === selectedId);
+      const query = drafts[draftKey(selectedId)] ?? selected?.query ?? "";
+      const proposal = selected?.proposal && selected.proposal.expectedRevision === selected.revision && selected.proposal.query === query
+        ? selected.proposal : null;
+      return { ...merged, drafts, selectedId: selected?.id ?? null,
+        proposal: action.preserveLocal && state.proposal?.query === query ? state.proposal : proposal };
+    }
+    case "submitted": {
+      const drafts = { ...state.drafts }, key = draftKey(action.previousId);
+      if (action.previousId === null) {
+        drafts[action.search.id] = drafts.new ?? action.search.query;
+        delete drafts.new;
+      } else if (drafts[key] === undefined) drafts[key] = action.search.query;
+      return { ...state, searches: [...state.searches.filter(search => search.id !== action.search.id), action.search], selectedId: action.search.id, drafts };
+    }
+    case "taskFailed":
+      return { ...state, searches: state.searches.map(search => search.id === action.id && search.draft
+        ? { ...search, draft: { ...search.draft, status: "failed" } } : search) };
     case "loaded": {
       const byId = new Map(
         action.searches
@@ -96,7 +144,7 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       return {
         ...state,
         selectedId: null,
-        drafts: { ...state.drafts, new: "" },
+        drafts: { ...state.drafts, new: state.drafts.new ?? "" },
         proposal: null,
         status: "",
         busy: false,
@@ -117,6 +165,7 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       if (currentDraft === undefined || currentDraft === action.submitted) {
         delete drafts[previousKey];
         delete drafts[action.search.id];
+        if (currentDraft !== undefined && currentDraft !== action.search.query) drafts[action.search.id] = currentDraft;
       } else if (action.previousId === null) {
         drafts[action.search.id] = currentDraft;
         delete drafts.new;

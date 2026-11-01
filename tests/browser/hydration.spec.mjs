@@ -22,5 +22,5 @@ test('saved-search hydration cannot insert a query between focus and typing', as
   expect(calls.filter(call => call.key.endsWith('/results'))).toHaveLength(0);
   await page.getByRole('tab', { name: 'Library desk' }).click();
   await expect(page.locator('#query')).toHaveValue('Remote library jobs');
-  expect(calls.some(call => ['POST', 'PATCH'].includes(call.key.split(' ')[0]))).toBe(false);
+  expect(calls.some(call => /^(POST|PATCH) \/(?:visitor\/)?searches/.test(call.key))).toBe(false);
 });
