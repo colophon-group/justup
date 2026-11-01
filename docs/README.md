@@ -23,6 +23,7 @@ Choose the task you are doing. The [product guide](product-design.md) defines ac
 | Run or change the browser application | [Web application](../web/README.md) |
 | Connect a browser or another client to the server | [API](api.md) |
 | Change accounts, sessions, access or deletion | [Authentication and accounts](auth.md) |
+| Verify an account email before a free period | [Account verification](account-verification.md) |
 | Let a visitor search and carry work into an account | [Visitor search](visitor-search.md) |
 | Save followed companies, posting languages or interface language | [Reading preferences](reading-preferences.md) |
 | Deliver live matches and reconnect without losing accepted results | [Live results](live-results.md) |
