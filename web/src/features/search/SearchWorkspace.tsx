@@ -308,6 +308,7 @@ export function SearchWorkspace({
       {state.searches.length ? null : <LandingOverview />}
       {search?.status === "ready" ? (
         <ResultFeed
+          key={`${session?.access.fullAccess}:${session?.access.kind}:${session?.access.until ?? ''}`}
           client={client}
           search={search}
           active={active}
