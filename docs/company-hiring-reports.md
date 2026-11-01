@@ -47,6 +47,18 @@ are counted as incomplete and omitted from numeric groups. Values are not
 converted, annualized, averaged or presented as employee pay. A salary or role
 that belongs only to a withheld recent listing never enters these samples.
 
+The browser and public HTML share one validated report read for source links and
+structured samples. Fresh, nonempty role and salary sections show the public
+listing sample size and its first-observed window, never an overall openings
+total. Role counts use the whole sample as their denominator and retain
+unlabelled counts. Salary groups keep their exact currency, pay period and group
+sample size; reported, unreported and incomplete counts stay explicit. Ordered
+and one-sided bounds are displayed without conversion. Unknown aggregate bounds
+retain their unit and sample count with no invented numeric range. Stale, empty
+or unsupported numerical sections are omitted while company identity and
+independent approved career-page links remain usable. Historical activity and
+monitoring-start presentation remain separate report work.
+
 ## Read attributable historical activity
 
 `server/company-reports.mjs` reads the latest **published** frozen

@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createPublicHandler } from '../../web/worker-dist/worker.mjs';
+import { companyReportSample } from '../../tests/browser/company-report-fixture.mjs';
 const ingressSecret = 'A'.repeat(43);
 const clientAddress = '203.0.113.25';
 const origin = 'https://public.justup.test';
@@ -127,6 +128,38 @@ test('company documents hydrate only approved report links and preserve identity
     assert.match(html, /Public &amp; Co/); assert.doesNotMatch(html, /PRIVATE_SCOPE_CANARY/);
     if (good) { assert.match(html, /href="https:\/\/careers.example.com\/jobs"/); assert.match(html, /Last checked/); }
     else assert.doesNotMatch(html, /careers.example.com/);
+  }
+});
+
+test('public reports share bounded role and salary samples and omit unsupported numerical sections', async () => {
+  for (const state of ['fresh', 'unknown-bounds', 'unavailable', 'empty', 'source-only']) {
+    const report = companyReportSample(company.id);
+    if (state === 'unavailable') report.freshness.listings = 'unavailable';
+    if (state === 'unknown-bounds') { report.reportedSalaries.groups[2].min = null; report.reportedSalaries.groups[2].max = null; }
+    if (state === 'empty') {
+      report.provenance.sampleObservedFrom = null; report.provenance.sampleObservedThrough = null;
+      report.hiringRoles = { state: 'available', sampleSize: 0, labelledSampleSize: 0, unknownSampleSize: 0, items: [] };
+      report.reportedSalaries = { state: 'available', sampleSize: 0, reportedSampleSize: 0, groupedSampleSize: 0, incompleteSampleSize: 0, unknownSampleSize: 0, groups: [] };
+    }
+    if (state === 'source-only') for (const key of ['provenance', 'scope', 'freshness', 'hiringRoles', 'reportedSalaries']) delete report[key];
+    let reportReads = 0;
+    const handle = createPublicHandler(target => {
+      if (new URL(target).pathname.endsWith('/report')) { reportReads++; return json(report); }
+      return json({ ...company, hiringRoles: [{ name: 'LEGACY_ROLE' }], reportedSalaries: [{ text: 'LEGACY_PAY' }] });
+    });
+    const response = await handle(request('/companies/public-corp'), environment());
+    assert.equal(response.status, 200); const html = await response.text();
+    assert.equal(reportReads, 1); assert.match(html, /Public &amp; Co/);
+    assert.doesNotMatch(html, /LEGACY_ROLE|LEGACY_PAY|Historical hiring data is not available/);
+    if (state === 'fresh' || state === 'unknown-bounds') {
+      assert.match(html, /Sample size: 6/); assert.match(html, /3 labelled · 3 unlabelled/);
+      assert.match(html, /Software developers/); assert.match(html, /Archivists &amp; curators/);
+      if (state === 'fresh') assert.match(html, /USD 90,000–150,000 \/ year/);
+      else { assert.match(html, /Range unavailable/); assert.match(html, /Group sample: 2/); assert.doesNotMatch(html, /USD 90,000/); }
+      assert.match(html, /From USD 7,000 \/ month/);
+      assert.match(html, /Up to EUR 45 \/ hour/); assert.match(html, /Incomplete values excluded: 1/);
+      assert.match(html, /companyReport/); assert.doesNotMatch(html, /companySourceReport/);
+    } else assert.doesNotMatch(html, /class="company-samples"|Software developers|USD 90,000/);
   }
 });
 

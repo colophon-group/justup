@@ -5,13 +5,14 @@ import { resolve, extname, sep } from 'node:path';
 import { createPublicHandler } from '../../web/worker-dist/worker.mjs';
 import { localeSeam } from './locale-seam-server.mjs';
 import { company, session } from './api-fixture.mjs';
+import { companyReportSample } from './company-report-fixture.mjs';
 const port = Number(process.env.JUSTUP_PUBLIC_TEST_PORT || 4207);
 const origin = `http://127.0.0.1:${port}`;
 const files = resolve('web/dist');
 const api = async target => {
   const url = new URL(target); const path = url.pathname;
   const items = Array.from({ length: 30 }, (_, index) => ({ ...company, id: index ? `company-${index}` : company.id, name: index ? `Public company ${index}` : company.name }));
-  const body = path === '/api/v1/companies' ? { items: items.slice(url.searchParams.has('cursor') ? 20 : 0, url.searchParams.has('cursor') ? 30 : 20), nextCursor: url.searchParams.has('cursor') ? null : 'public-next' } : path === '/api/v1/companies/library/report' ? { companyId: 'library', asOf: '2026-11-01T12:00:00Z', sourceChecks: { state: 'available', items: [{ publicLink: { url: 'https://careers.example.com/library', status: 'approved', provenance: 'employer-careers', approvedAt: '2026-10-01T00:00:00Z' }, trackedSince: '2026-10-01T00:00:00Z', lastVerifiedAt: '2026-10-31T23:30:00Z' }] } } : path === '/api/v1/companies/library' ? { ...company, lastSuccessfulCheckAt: '2026-10-31T23:30:00Z' } : path === '/api/v1/session' ? session({ user: null }) : path === '/api/v1/searches' ? { items: [] } : { error: { code: 'not_found', message: 'Not found.' } };
+  const body = path === '/api/v1/companies' ? { items: items.slice(url.searchParams.has('cursor') ? 20 : 0, url.searchParams.has('cursor') ? 30 : 20), nextCursor: url.searchParams.has('cursor') ? null : 'public-next' } : path === '/api/v1/companies/library/report' ? { ...companyReportSample('library'), sourceChecks: { state: 'available', items: [{ publicLink: { url: 'https://careers.example.com/library', status: 'approved', provenance: 'employer-careers', approvedAt: '2026-10-01T00:00:00Z' }, trackedSince: '2026-10-01T00:00:00Z', lastVerifiedAt: '2026-10-31T23:30:00Z' }] } } : path === '/api/v1/companies/library' ? { ...company, lastSuccessfulCheckAt: '2026-10-31T23:30:00Z' } : path === '/api/v1/session' ? session({ user: null }) : path === '/api/v1/searches' ? { items: [] } : { error: { code: 'not_found', message: 'Not found.' } };
   return new Response(JSON.stringify(body), { status: body.error ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
 };
 const handle = createPublicHandler(api);

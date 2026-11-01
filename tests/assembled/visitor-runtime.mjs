@@ -8,7 +8,7 @@ import { join, resolve, extname, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createPublicHandler } from '../../web/worker-dist/worker.mjs';
-export async function startVisitorRuntime() {
+export async function startVisitorRuntime({ now = Date.now } = {}) {
   const ingressSecret = 'A'.repeat(43);
   const dir = mkdtempSync(join(tmpdir(), 'justup-assembled-visitor-')), ref = process.env.JUSTUP_ASSEMBLED_API_REF;
   let app, server, heartbeatTimer, queue;
@@ -34,9 +34,9 @@ export async function startVisitorRuntime() {
     const suffix = locale === 'en' ? '' : `.${locale}`, hash = kind => createHash('sha256').update(readFileSync(`web/dist/${kind}${suffix}.html`)).digest('hex');
     return [locale, { version, privacySha256: hash('privacy'), usageSha256: hash('usage') }];
   })) };
-  const heartbeat = () => writeFileSync(status, JSON.stringify({ schemaVersion: 1, identity: 'assembled-local-queue', sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', ready: true, updatedAt: new Date().toISOString(), capabilities: { search: available, companyRequests: false, aiMatching: false } }), { mode: 0o640 });
+  const heartbeat = () => writeFileSync(status, JSON.stringify({ schemaVersion: 1, identity: 'assembled-local-queue', sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', ready: true, updatedAt: new Date(now()).toISOString(), capabilities: { search: available, companyRequests: false, aiMatching: false } }), { mode: 0o640 });
   heartbeat(); heartbeatTimer = setInterval(heartbeat, 5000);
-  app = await createConfiguredApplication({ config: { dbPath: join(dir, 'state.sqlite'), privateGenerationPath: generation, backupDir: backups,
+  app = await createConfiguredApplication({ now, config: { dbPath: join(dir, 'state.sqlite'), privateGenerationPath: generation, backupDir: backups,
     servicesEnabled: true, sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', runnerStatusPath: status,
     allowedOrigin: origin, trustedIngressSecret: ingressSecret, requiresInvitation: false, policiesReviewed: true, policyVersion: 'synthetic-reviewed', privacyUrl: origin + '/privacy.html', usageUrl: origin + '/usage.html',
     policyLocales, policyAssetProof,
@@ -52,7 +52,7 @@ export async function startVisitorRuntime() {
     } },
   });
   queue = setInterval(async () => { if (busy || !available) return; busy = true; try { const task = app.tasks.claim({ workerId: 'assembled-local', kinds: ['search_intent'] }); if (task) { const result = await records.runTask(task, worker.runTask); if (!result.committed) app.tasks.complete(task.id, task.leaseToken, result); records.taskFinished(task); } } finally { busy = false; } }, 20);
-  const at = Date.now();
+  const at = now();
   app.store.importSnapshot({ schemaVersion: 1, snapshotAt: new Date(at).toISOString(), verifiedAt: new Date(at).toISOString(), observations: [], unknownIds: [], jobs: [{
     id: 'assembled-engineer', companyId: 'assembled', companyName: 'Assembled Company', companySlug: 'assembled', title: 'Engineer', sourceUrl: 'https://example.org/careers/engineer', active: true, reserved: false, hasContent: true,
     firstObserved: new Date(at - 3 * 86400000).toISOString(), lastObserved: null, locales: ['en'], locations: [], employmentTypes: [], seniority: null, salary: null, bodyText: null,
@@ -92,6 +92,7 @@ export async function startVisitorRuntime() {
   });
   await new Promise(resolve => server.listen(Number(new URL(origin).port), '127.0.0.1', resolve));
   return { origin, calls, modelInputs, app, db, sourceCommit: API_COMMIT, modelCalls: () => modelCalls,
+    refreshHeartbeat: heartbeat,
     setAvailable(value) { available = value; heartbeat(); },
     loseNext(method, path, when = () => true) { loss = { method, path, when }; },
     holdNext(method, path, when = () => true) { let reached, release; const arrived = new Promise(resolve => { reached = resolve; }); const wait = new Promise(resolve => { release = resolve; }); hold = { method, path, when, reached, wait }; return { arrived, release }; },
