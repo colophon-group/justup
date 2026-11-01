@@ -3,7 +3,7 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { problem, boundedJson } from './store.mjs';
 
-const DISABLED = { sse: false, follows: false, preferences: false };
+const DISABLED = { sse: false };
 const GUEST_ACCESS = { kind: 'guest', fullAccess: false, legacy: false, billingEnabled: false, until: null };
 const SAFE_ERRORS = new Map([
   ['invalid_input', 'Invalid request.'], ['invalid_credentials', 'Invalid username, password or invite code.'],
@@ -55,7 +55,7 @@ async function readBody(req, maxBytes) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw problem('invalid_json');
   return body;
 }
-export function createHandler({ auth, feed, tasks, db, services = [], config = {}, now = Date.now, logger = () => {}, afterPrivateTransaction = () => {} }) {
+export function createHandler({ auth, feed, tasks, db, services = [], config = {}, policyConfig=config, now = Date.now, logger = () => {}, afterPrivateTransaction = () => {} }) {
   const origin = new URL(config.allowedOrigin ?? 'https://preview.justup.work');
   const insecure = config.allowInsecureLocalhost === true && origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);
   if (origin.origin !== (config.allowedOrigin ?? 'https://preview.justup.work') || (!insecure && origin.protocol !== 'https:')) throw new TypeError('Set one allowed HTTPS browser origin.');
@@ -68,9 +68,9 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   if (Buffer.byteLength(secret) < 32) throw new TypeError('CSRF secret must contain at least 32 bytes.');
   const maxBodyBytes = config.maxBodyBytes ?? 16_384;
   if (!Number.isInteger(maxBodyBytes) || maxBodyBytes < 1 || maxBodyBytes > 65_536) throw new TypeError('Invalid body limit.');
-  const policies = policyState(config), buckets = new Map();
+  const policies = () => policyState(policyConfig), buckets = new Map();
   function authentication() {
-    const reason = !policies.reviewed ? 'policy_unavailable'
+    const reason = !policies().reviewed ? 'policy_unavailable'
       : config.deletionReady?.() === false ? 'deletion_unavailable'
       : typeof auth.cleanup !== 'function' || config.authMaintenanceReady?.() === false ? 'dependency_unavailable' : null;
     const requiresInvitation = config.requiresInvitation !== false;
@@ -99,14 +99,14 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   function capabilities() {
     const result = { search: false, aiMatching: false, companyRequests: false, hiringWire: false };
     for (const service of services) Object.assign(result, typeof service.capabilities === 'function' ? service.capabilities() : service.capabilities);
-    return { viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
+    return { follows:false,preferences:false,viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
       sse:authentication().loginEnabled&&result.sse===true,
-      visitorSearch:policies.reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
+      visitorSearch:policies().reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
   }
   function sessionBody(viewer, token, guestToken, visitor=null) {
     return { serverTime: new Date(now()).toISOString(), user: viewer?.account ?? null, expiresAt: viewer ? new Date(viewer.expiresAt).toISOString() : null,
       access: viewer?.access ?? GUEST_ACCESS, visitor:visitorService?.publicVisitor(visitor)??null, csrfToken: csrf(token, guestToken), capabilities: capabilities(),
-      policies, authentication: authentication(), coverage: feed.coverage() };
+      policies:policies(), authentication: authentication(), coverage: feed.coverage() };
   }
   return async function handler(req, res) {
     const requestId = randomUUID(), started = now(); let category = 'unknown';
@@ -131,7 +131,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       const sessionToken = viewer ? token : null;
       const guestToken = parsedCookies[csrfCookie] ?? randomBytes(32).toString('base64url');
       const visitorToken=parsedCookies[visitorCookie]??null;
-      const visitorRoute=Boolean(visitorService)&&/^\/visitor\/(?:searches(?:\/[^/]+(?:\/(?:confirm|results))?)?|tasks\/[^/]+|workspace(?:\/recovered-drafts\/[^/]+)?|viewed|session)$/.test(path);
+      const visitorRoute=Boolean(visitorService)&&/^\/visitor\/(?:searches(?:\/[^/]+(?:\/(?:confirm|results|options))?)?|search-options|tasks\/[^/]+|workspace(?:\/recovered-drafts\/[^/]+)?|viewed|session)$/.test(path);
       const authRoute = method === 'POST' && ['/auth/register', '/auth/login'].includes(path);
       const mutation = method !== 'GET';
       category = authRoute ? 'auth' : mutation ? 'mutation' : path === '/health' || path === '/version' ? 'health' : 'read';
@@ -148,14 +148,13 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
           if (!state.loginEnabled) throw problem(state.reason, 503);
           if (path === '/auth/register' && !state.registrationEnabled) throw problem(state.registrationReason ?? 'registration_closed', 403);
         }
-        if(visitorRoute&&method!=='DELETE'&&!policies.reviewed)throw problem('policy_unavailable',503);
         body = await readBody(req,method==='PATCH'&&['/workspace','/visitor/workspace'].includes(path)?65_536:maxBodyBytes);
       }
       if (method === 'GET' && path === '/session') {
         let visitor=null;
         if (!viewer) {
           const nextCookies=[cookie(csrfCookie, guestToken, now() + 3_600_000)];
-          if(visitorService&&policies.reviewed&&config.deletionReady?.()!==false){const opened=visitorService.openSession(visitorToken);visitor=opened.principal;nextCookies.push(cookie(visitorCookie,opened.token,visitor.expiresAt));}
+          if(visitorService&&policies().reviewed&&config.deletionReady?.()!==false)visitor=visitorService.currentSession(visitorToken);
           res.setHeader('Set-Cookie',nextCookies);
         }
         return finish(200, sessionBody(viewer, sessionToken, guestToken,visitor));
@@ -231,7 +230,20 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         if (result != null) return finish(result.status ?? 200, result.body);
       }
       if(visitorRoute) {
-        const result=await visitorService.visitorRoute({method,path,url,body,viewer,visitorToken,requestId,db});
+        if(method!=='DELETE'){
+          if(!policies().reviewed)throw problem('policy_unavailable',503);
+          if(config.deletionReady?.()===false)throw problem('deletion_unavailable',503);
+          if(config.authMaintenanceReady?.()===false)throw problem('dependency_unavailable',503);
+        }
+        let ownerToken=visitorToken,opened;
+        if(method==='POST'&&path==='/visitor/searches'&&!viewer&&!visitorService.currentSession(ownerToken)){
+          visitorService.admitCreation(body);
+          opened=visitorService.openSession(ownerToken);ownerToken=opened.token;
+        }
+        let result;
+        try{result=await visitorService.visitorRoute({method,path,url,body,viewer,visitorToken:ownerToken,requestId,db});}
+        catch(error){if(opened)visitorService.discardEmptySession(ownerToken);throw error;}
+        if(opened)res.setHeader('Set-Cookie',cookie(visitorCookie,ownerToken,opened.principal.expiresAt));
         if(result!=null)return finish(result.status??200,result.body);
         throw problem('not_found',404);
       }

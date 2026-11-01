@@ -37,6 +37,8 @@ Persist submitted search text, canonical configuration, generated title and desc
 
 Viewed positions belong to an account and stable posting identity across searches. Record outbound actions idempotently without delaying navigation. Preserve visitor searches and viewed state through sign-in, merge them into the account, and isolate account state on shared browsers. Persist follows independently of company requests.
 
+The implemented [reading-state contract](reading-preferences.md) stores account follows and explicit unfollows, per-search followed-only and posting-language options, and a separate interface-locale override. Its supported interface set is English, German, French, Italian and Spanish; ordered browser preferences match regional tags to a supported base with English fallback. These SQLite/API paths are tested; the complete translated browser journeys and real multilingual interpretation quality still need release qualification. Account deletion removes these private records in the existing transaction and recovery boundary.
+
 Access is authoritative on the backend. Own free-period activation, legacy eligibility, paid-through dates and premium request priority here. Process billing updates idempotently. Expiry preserves searches and changes both ordinary reads and open streams. Account deletion and query-data retention apply to these records and their associated traces.
 
 ## 3. Search planning with Luna
@@ -46,6 +48,8 @@ Access is authoritative on the backend. Own free-period activation, legacy eligi
 For each submission, supply Luna with the user's complete edited query, previous submitted query, active configuration and revision, relevant profile context, and a concise capability description. Explicit text and removed requirements take precedence over profile defaults.
 
 Capabilities describe supported filters and operators, normalization rules, available posting evidence, and the AI filter's supported conditions and current availability. The current configuration includes any AI condition; Luna must preserve, change or remove it consistently with the edited text.
+
+Explicit posting-language sets and followed-company scope remain separate saved search options. Empty language selection means any; a nonempty set uses OR and excludes unknown evidence. The server intersects these options with the query-derived compiler filters before residual AI, including hidden-match evaluation. Conflicting text and selected languages produce zero matches without dropping either requirement. Options are model context, with bounded examples and full count/hash for large selections, never permission to omit a text requirement. Changing options or follows invalidates incompatible revisions, scans and queued results without another interpretation call while preserving query drafts. Presentation locale controls generated titles and reason wording only; source text and user queries are never rewritten.
 
 Account access, freshness policy and newest-first ordering remain application rules.
 
@@ -128,6 +132,8 @@ Optimize interactive resolution around the correct identity:
 4. Return a supported candidate promptly. Optional assets and metadata can complete afterward without delaying identity confirmation.
 
 Keep the original lookup available after rejection. Acceptance references the exact preview shown, reuses an existing company when possible, publishes the catalogue entry, attaches the requester and records the requested scope. Automatically follow a newly accepted request while preserving an explicit later unfollow.
+
+The current acceptance transaction publishes/reuses a canonical catalogue ID and performs this automatic follow once. Imported IDs remain canonical; newly discovered identities share a public record by validated official domain, with requested coverage and no invented monitoring history. Exact-preview candidate IDs remain separate from catalogue IDs. Explicit unfollow survives retries and later scope requests. Setup progression and priority integration still require their complete company-request qualification.
 
 Repeated submissions and priority requests are idempotent. Distinct users share identity and setup progress. Subscription entitlement controls priority, while free requests remain accepted and visible. Show separate catalogue-publication and coverage-active milestones, with a reason and next action for blocked work. The actual configuration work is outside this design.
 

@@ -9,6 +9,7 @@ import { createCodexModel } from './model-runner.mjs';
 import { createBrokerExecutor } from './model-broker.mjs';
 import { runtimeEnv } from './config.mjs';
 import { createVisitorIdentity } from './visitor.mjs';
+import { createReadingPreferencesService } from './reading-preferences.mjs';
 import { runnerStatusPath } from './composition.mjs';
 
 export function runnerIdentity(env=process.env){
@@ -44,12 +45,13 @@ export async function createRunnerDependencies(){
   const store=openStore(config.dbPath,{sharedState:config.sharedState===true});let heartbeatTimer,cleanupTimer;
   try{
     const feed=createFeed({db:store.db,verificationTtlMs:config.verificationTtlMs}),tasks=createTasks({db:store.db});
-    const identity=createVisitorIdentity({db:store.db,accessForAccount:createAccessReader({db:store.db})});
+    const identity=createVisitorIdentity({db:store.db,config:{dbPath:config.dbPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},accessForAccount:createAccessReader({db:store.db})});
     const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
+    const readingPreferences=createReadingPreferencesService({db:store.db,feed,ownerAuthority:identity.principal});
     const modelConfig=config.model??{},executor=isAbsolute(modelConfig.socketPath??'')?createBrokerExecutor({socketPath:modelConfig.socketPath}):undefined;
     const model=createCodexModel({config:modelConfig,...(executor?{execute:executor}:{})});
-    const matching=createMatchingService({db:store.db,feed,tasks,...ownership,config:{jev:config.jev??{},matching:config.matching}});
-    const intent=createIntentService({db:store.db,feed,tasks,...ownership,model,matching}),companies=createCompanyService({db:store.db,feed,tasks,model});
+    const matching=createMatchingService({db:store.db,feed,tasks,...ownership,readingPreferences,config:{jev:config.jev??{},matching:config.matching}});
+    const intent=createIntentService({db:store.db,feed,tasks,...ownership,readingPreferences,model,matching}),companies=createCompanyService({db:store.db,feed,tasks,model,readingPreferences});
     const workerId=`runner-${config.sourceCommit.slice(0,12)}-${createHash('sha256').update(config.buildIdentity).digest('hex').slice(0,12)}`;
     const statusPath=runnerStatusPath(config),capabilities=()=>({search:model.available('search_intent'),companyRequests:model.available('company_resolution'),aiMatching:matching.available()});
     const heartbeat=()=>writeRunnerStatus({path:statusPath,identity:workerId,config,capabilities:capabilities()});
