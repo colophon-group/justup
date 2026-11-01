@@ -13,11 +13,11 @@ The approved source build produced these exact SHA-256 notice hashes. They ident
 
 | Locale | Privacy SHA-256 | Usage SHA-256 |
 | --- | --- | --- |
-| en | `487d4d8aaab1a36bda7db794b99905ffa2b09e334a693fdff239f2d1c91452de` | `e40fe5500f7f0b902c3eb004c112a874b47aa6ea8947808642c4afe8a148e5a9` |
-| de | `f27304d93de10e59e24e4c6d2f0e4180e5a9a79534d5e94b69b43ebfae119d1d` | `a5b10fcfc90d140c447d8105b2fd24bb27000db4915d55a1c6a9ea51bc9dcf69` |
-| fr | `1f64f7787c0cfa7c935432bd998fb5afd7e20fef5d0f9c05b9e96da677c95d2d` | `29e149c92873ece127b923b00f46bd490426a290099af01460f951154c646cfa` |
-| it | `17dc3ab55bfff839f3133ab2fe19ad12fb362c28f14a8677d6f94c49167c8aa0` | `5ead257226c7ae03df8d5906cdaf3e1778204e2d029fb26eadb3cc69c18297fd` |
-| es | `0a9ec9d93f6448c80b503c99869784e1588dc77ffc46af67eaaa945d04e7db4a` | `494e97528cb79b12e5c437d8f37963f24f9e615017797fee218ce4f5122c16c4` |
+| en | `487d4d8aaab1a36bda7db794b99905ffa2b09e334a693fdff239f2d1c91452de` | `4f4feaf2540afddd21749666e06caa98418db1c3e5e0cc9db4c8368d4f60d7fa` |
+| de | `f27304d93de10e59e24e4c6d2f0e4180e5a9a79534d5e94b69b43ebfae119d1d` | `f98f8bc818c872c0a0bdea340d152030e3205b48b51b7a4f64a01cb5d13d7fa6` |
+| fr | `1f64f7787c0cfa7c935432bd998fb5afd7e20fef5d0f9c05b9e96da677c95d2d` | `5ba50ccf9c94babb6bd0104d9f38f4495b46b2cbef7a60dbce1128e3e5d61b38` |
+| it | `17dc3ab55bfff839f3133ab2fe19ad12fb362c28f14a8677d6f94c49167c8aa0` | `77ec0456522671e91446689ed03d80af54c734c9afc21bcffd70f5011b2246a5` |
+| es | `0a9ec9d93f6448c80b503c99869784e1588dc77ffc46af67eaaa945d04e7db4a` | `a6e324d4fd0e8b272600f60d5e8b90414285b697e7dbd3da9c84a6e747349421` |
 
 The common facts, section inventory and English copy live in [policy content](../web/policies/content.ts). Typed German, French, Italian and Spanish copy must contain every key with the same shared-fact placeholders. The [renderer](../web/policies/render.ts) uses one escaped, script-free layout and common version/operator/review metadata. The [Vite plugin](../web/policies/vite.ts) serves these exact documents during development and emits ten HTML assets during a public client build, alongside local [policy CSS](../web/public/policies.css). It emits no notices into private SSR bundles. Brand, navigation and footer search links retain the notice language: `/#jobs` for English and `/{de,fr,it,es}/#jobs` for the other locales. Source remains under `web/` so credential-free frontend snapshots include it; generated `web/dist` files must not be committed. These checks establish source completeness and exact delivery; they do not establish deployed feature readiness.
 
