@@ -240,6 +240,7 @@ test('deleted and reclaimed ownership cookies cannot recreate or read a future p
       runtime={dbPath:join(dir,'state.sqlite'),privateGenerationPath,backupDir};
     }
     const s=await setup(t,{runtime}),c=s.client();await c.session();const id=await s.create(c),beforeDelete=c.snapshot(),oldToken=c.jar.get('__Host-justup_visitor'),oldOwner=s.identity.fromToken(oldToken).visitor.id;
+    const old=s.client();old.restore(beforeDelete);
     const path=removing==='session'?'/visitor/session':`/visitor/searches/${id}`;
     assert.equal((await c.request(path,{method:'DELETE',body:{}})).status,200);
     // Discard all DELETE headers and body, retaining the prior seed and hint.
@@ -248,14 +249,36 @@ test('deleted and reclaimed ownership cookies cannot recreate or read a future p
     for(const table of ['justup_visitors','justup_searches','justup_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
     assert.equal((await c.request('/visitor/workspace')).status,401);
     const fresh=await c.session();assert.equal(fresh.body.visitor,null);assert.notEqual(c.jar.get('__Host-justup_visitor'),oldToken);
-    assert.equal(c.jar.get('__Host-justup_csrf'),beforeDelete.jar.find(([key])=>key==='__Host-justup_csrf')[1],'the same guest CSRF seed is safe across epochs');
+    assert.notEqual(c.jar.get('__Host-justup_csrf'),beforeDelete.jar.find(([key])=>key==='__Host-justup_csrf')[1],'a stale ownership hint also rotates its guest CSRF seed');
     assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
     const future=await c.request('/visitor/searches',{method:'POST',body});assert.equal(future.status,202);assert.notEqual(s.identity.fromToken(c.jar.get('__Host-justup_visitor')).visitor.id,oldOwner);
-    const old=s.client();old.restore(beforeDelete);
     for(const path of ['/visitor/searches','/visitor/workspace',`/visitor/searches/${future.body.search.id}/results?revision=0`])assert.equal((await old.request(path)).status,401);
     assert.equal((await old.request('/visitor/searches',{method:'POST',body})).status,401);
+    // Replaying both old cookies through bootstrap must not recover the next
+    // browser's hint or expose its newly created private search/workspace.
+    const legitimateHint=c.jar.get('__Host-justup_visitor'),legitimateSeed=c.jar.get('__Host-justup_csrf');
+    assert.equal((await old.session()).body.visitor,null);
+    assert.notEqual(old.jar.get('__Host-justup_visitor'),legitimateHint);
+    assert.notEqual(old.jar.get('__Host-justup_csrf'),legitimateSeed);
+    for(const path of ['/visitor/searches','/visitor/workspace',`/visitor/searches/${future.body.search.id}/results?revision=0`])assert.equal((await old.request(path)).status,401);
+    const missing=s.client();missing.restore(beforeDelete);missing.jar.delete('__Host-justup_visitor');
+    assert.equal((await missing.session()).body.visitor,null);
+    assert.notEqual(missing.jar.get('__Host-justup_visitor'),legitimateHint);assert.notEqual(missing.jar.get('__Host-justup_csrf'),legitimateSeed);
+    assert.equal((await missing.request('/visitor/workspace')).status,401);
     assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_searches').get().n,1);
   });
+});
+
+test('a valid unallocated hint is stable across session reads and a live owner stays bound to its cookie when its CSRF seed changes',async t=>{
+  const s=await setup(t),c=s.client();await c.session();const initial=c.snapshot();
+  for(let i=0;i<3;i++){assert.equal((await c.session()).body.visitor,null);assert.deepEqual(c.snapshot(),initial);}
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+  const id=await s.create(c),liveHint=c.jar.get('__Host-justup_visitor');
+  const other=s.client();await other.session();c.jar.set('__Host-justup_csrf',other.jar.get('__Host-justup_csrf'));
+  const live=await c.session();assert(live.body.visitor);assert.equal(c.jar.get('__Host-justup_visitor'),liveHint);assert.equal(c.jar.get('__Host-justup_csrf'),other.jar.get('__Host-justup_csrf'));
+  assert.deepEqual((await c.request('/visitor/searches')).body.items.map(search=>search.id),[id]);
+  assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{new:'Still my draft'}}})).status,200);
+  assert.equal((await other.request('/visitor/workspace')).status,401);
 });
 
 test('an unallocated hint invalidated by unrelated deletion requires session bootstrap without creating private state',async t=>{

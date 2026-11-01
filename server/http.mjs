@@ -156,14 +156,18 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         let visitor=null;
         if (!viewer) {
           if(visitorService&&policies(interfaceLocale).reviewed&&config.deletionReady?.()!==false)visitor=visitorService.currentSession(visitorToken,{locale:interfaceLocale});
+          const liveOwner=visitorService?.sessionExists(visitorToken)??false;
           const epoch=visitorService?.issuanceEpoch();
-          const retired=visitorService?.tokenRetired(visitorToken)||(epoch!=null&&visitorService?.tokenRetired(visitorHint(guestToken,epoch)));
-          if(retired)guestToken=randomBytes(32).toString('base64url');
+          const validHint=epoch!=null&&visitorToken===visitorHint(guestToken,epoch)&&!visitorService.tokenRetired(visitorToken);
+          // A stale cookie pair must not deterministically bootstrap the same
+          // future owner in two browsers. Only a live owner or valid current
+          // unallocated hint may retain its prior CSRF seed.
+          if(visitorService&&!liveOwner&&!validHint)guestToken=randomBytes(32).toString('base64url');
           const nextCookies=[cookie(csrfCookie, guestToken, now() + 3_600_000)];
           // This opaque ownership hint is stateless until an admitted search.
           // Keep live ownership across epoch changes; replace unknown hints only
           // here, never during a POST whose entire response could be lost.
-          if(visitorService){const hint=visitorService.sessionExists(visitorToken)?visitorToken:epoch==null?null:visitorHint(guestToken,epoch);nextCookies.push(cookie(visitorCookie,hint??'',hint==null?now():visitor?.expiresAt??now()+86_400_000));}
+          if(visitorService){const hint=liveOwner?visitorToken:epoch==null?null:visitorHint(guestToken,epoch);nextCookies.push(cookie(visitorCookie,hint??'',hint==null?now():visitor?.expiresAt??now()+86_400_000));}
           res.setHeader('Set-Cookie',nextCookies);
         }
         return finish(200, sessionBody(viewer, sessionToken, guestToken,visitor,interfaceLocale));
