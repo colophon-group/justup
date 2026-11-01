@@ -13,6 +13,7 @@ import { createReadingPreferencesService } from './reading-preferences.mjs';
 import { runnerStatusPath } from './composition.mjs';
 import { createHiringWireRunner } from './hiring-wire-integration.mjs';
 import { validWireConfiguration } from './hiring-wire-codex-broker.mjs';
+import { createProductRecords } from './product-records.mjs';
 import { SOURCE_COVERAGE_VERSION } from './source-coverage.mjs';
 
 function validSourceCoverage(value) {
@@ -56,11 +57,12 @@ export async function createRunnerDependencies(){
     const feed=createFeed({db:store.db,verificationTtlMs:config.verificationTtlMs}),tasks=createTasks({db:store.db});
     const identity=createVisitorIdentity({db:store.db,config:{dbPath:config.dbPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},accessForAccount:createAccessReader({db:store.db})});
     const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
+    const records=createProductRecords({db:store.db,tasks,ownerAuthority:identity.principal});
     const readingPreferences=createReadingPreferencesService({db:store.db,feed,ownerAuthority:identity.principal});
     const modelConfig=config.model??{},executor=isAbsolute(modelConfig.socketPath??'')?createBrokerExecutor({socketPath:modelConfig.socketPath}):undefined;
-    const model=createCodexModel({config:modelConfig,...(executor?{execute:executor}:{})});
+    const model=createCodexModel({config:modelConfig,onMetric:records.onModelMetric,...(executor?{execute:executor}:{})});
     const matching=createMatchingService({db:store.db,feed,tasks,...ownership,readingPreferences,config:{jev:config.jev??{},matching:config.matching}});
-    const intent=createIntentService({db:store.db,feed,tasks,...ownership,readingPreferences,model,matching}),companies=createCompanyService({db:store.db,feed,tasks,model,readingPreferences,...ownership});
+    const intent=createIntentService({db:store.db,feed,tasks,...ownership,readingPreferences,model,matching,records}),companies=createCompanyService({db:store.db,feed,tasks,model,readingPreferences,...ownership,records});
     const wire=await createHiringWireRunner({db:store.db,tasks,now:Date.now,hiringWire:config.hiringWire,sourceCoverage:config.sourceCoverage,buildIdentity:config.buildIdentity,hostPlanSha256:config.hostPlanSha256});
     const workerId=`runner-${config.sourceCommit.slice(0,12)}-${createHash('sha256').update(config.buildIdentity).digest('hex').slice(0,12)}`;
     const statusPath=runnerStatusPath(config),capabilities=()=>tasks.halted()?{search:false,companyRequests:false,aiMatching:false}:{search:model.available('search_intent'),companyRequests:model.available('company_resolution'),aiMatching:matching.available()};
@@ -68,7 +70,7 @@ export async function createRunnerDependencies(){
     matching.cleanup();heartbeat();
     heartbeatTimer=setInterval(()=>{try{heartbeat();}catch{ /* stale status fails closed in the API */ }},10_000);
     cleanupTimer=setInterval(()=>{try{matching.cleanup();}catch{ /* task/page paths retry bounded cleanup */ }},60_000);
-    return {tasks,handlers:{search_intent:intent.runTask,company_resolution:companies.runTask,ai_match:matching.runTask,hiring_wire:wire.runTask},beforeClaim:wire.beforeClaim,onHalt:heartbeat,workerId,
+    return {tasks,handlers:{search_intent:(task,options)=>records.runTask(task,intent.runTask,options),company_resolution:(task,options)=>records.runTask(task,companies.runTask,options),ai_match:(task,options)=>records.runTask(task,matching.runTask,options),hiring_wire:wire.runTask},onTaskFinished:records.taskFinished,beforeClaim:wire.beforeClaim,onHalt:heartbeat,workerId,
       close(){clearInterval(heartbeatTimer);clearInterval(cleanupTimer);try{writeRunnerStatus({path:statusPath,identity:workerId,config,capabilities:{search:false,companyRequests:false,aiMatching:false},ready:false});}finally{store.close();}}};
   }catch(error){clearInterval(heartbeatTimer);clearInterval(cleanupTimer);store.close();throw error;}
 }

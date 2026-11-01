@@ -87,7 +87,7 @@ export function createVisitorIdentity({db,now=Date.now,config={},accessForAccoun
   return {principal,fromToken,tokenRetired,open,admit,recordSubmission,admitMatching,processingAvailable,processingPolicy,refreshAvailability,issuanceEpoch,rotateIssuanceEpoch};
 }
 
-export function createVisitorService({db,feed,tasks,intent,matching,identity,config={},now=Date.now,beforePrivateDelete,withPrivateTransaction}={}) {
+export function createVisitorService({db,feed,tasks,intent,matching,identity,config={},now=Date.now,beforePrivateDelete,withPrivateTransaction,records}={}) {
   if(!identity||!intent||!feed||!tasks||!db)throw new TypeError('Visitor services are required.');
   const ownerOf=viewer=>viewer?.visitor?.id??viewer?.account?.id??null;
   const publicVisitor=viewer=>viewer?.visitor?{expiresAt:new Date(viewer.expiresAt).toISOString()}:null;
@@ -112,7 +112,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     // Count every persisted owner-scoped record, including a future feature's
     // private work. Empty workspace bookkeeping alone has no user content.
     const quote=name=>'"'+name.replaceAll('"','""')+'"';
-    for(const table of db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'justup_workspaces'").all()){
+    for(const table of db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('justup_workspaces','justup_journey_events','justup_model_executions','justup_evaluation_candidates')").all()){
       const columns=db.prepare("SELECT name FROM pragma_table_info(?) WHERE name IN ('owner_id','account_id','principal_id','visitor_id')").all(table.name);
       if(columns.length&&db.prepare(`SELECT 1 FROM ${quote(table.name)} WHERE ${columns.map(c=>quote(c.name)+'=?').join(' OR ')} LIMIT 1`).get(...columns.map(()=>owner)))return false;
     }
@@ -124,6 +124,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
       // The write transaction serializes this final check with a concurrent
       // draft, viewed action, search submission or another feature's work.
       if(!semanticallyEmpty(owner))return false;
+      records?.deleteAccountData(owner);
       db.prepare('DELETE FROM justup_workspaces WHERE owner_id=?').run(owner);
       return db.prepare('DELETE FROM justup_visitors WHERE id=? AND handed_to IS NULL').run(owner).changes===1;
     });
@@ -157,6 +158,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     if(budget.n>100||budget.bytes>128_000)throw problem('task_limit',429);
   }
   function deleteAccountData(owner) {
+    records?.deleteAccountData(owner);
     db.prepare('DELETE FROM justup_workspaces WHERE owner_id=?').run(owner);
     db.prepare('DELETE FROM justup_viewed WHERE owner_id=?').run(owner);
     db.prepare('DELETE FROM justup_recovered_drafts WHERE owner_id=?').run(owner);
@@ -197,6 +199,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
       recoveryBudget(accountId);
       if(Object.keys(state.drafts).length>100||Buffer.byteLength(JSON.stringify(state))>60_000)throw problem('task_limit',429);
       db.prepare('INSERT INTO justup_workspaces(owner_id,state_json,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,revision=excluded.revision').run(accountId,JSON.stringify(state),now(),accountWorkspace.revision+1);
+      records?.transferOwner(row.id,accountId);
       deleteAccountData(row.id);
       db.prepare('UPDATE justup_visitors SET handed_to=?,handed_at=? WHERE id=? AND handed_to IS NULL').run(accountId,now(),row.id);
       return {status:'complete',...(recoveredDraftId?{recoveredDraftId}:{})};
@@ -254,7 +257,9 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
         // The caller cannot use this write to probe withheld identifiers.
         if(!feed.eligibleJobs({viewer:current}).some(j=>j.id===ctx.body.jobId))throw problem('not_found',404);
         if(db.prepare('SELECT count(*) n FROM justup_viewed WHERE owner_id=?').get(owner).n>=1000&&!db.prepare('SELECT 1 FROM justup_viewed WHERE owner_id=? AND job_id=?').get(owner,ctx.body.jobId))throw problem('task_limit',429);
-        db.prepare('INSERT OR IGNORE INTO justup_viewed VALUES(?,?,?)').run(owner,ctx.body.jobId,now());return {status:200,body:{viewed:true}};
+        db.prepare('INSERT OR IGNORE INTO justup_viewed VALUES(?,?,?)').run(owner,ctx.body.jobId,now());
+        try{records?.observe({ownerId:owner,event:'source_open_reported',key:ctx.body.jobId,viewer:current,locale:ctx.interfaceLocale,outcome:'accepted'});}catch{}
+        return {status:200,body:{viewed:true}};
       });
     }
     return null;

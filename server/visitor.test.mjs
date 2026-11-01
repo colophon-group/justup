@@ -11,6 +11,7 @@ import { createVisitorIdentity,createVisitorService,visitorPrivateGeneration } f
 import { mkdtempSync,mkdirSync,writeFileSync,rmSync,unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createProductRecords } from './product-records.mjs';
 import { createAccessReader } from './entitlements.mjs';
 
 const START=Date.parse('2026-10-31T12:00:00Z'),DAY=86_400_000,ORIGIN='https://preview.example.org';
@@ -19,10 +20,10 @@ function interpretation({residual=false,filters={titleAny:['engineer']}}={}) {
   const bindings=Object.entries(filters).map(([field,values])=>({field,values}));
   return {title:'Engineering',configuration:{schemaVersion:1,filters:{...Object.fromEntries(FILTERS.map(k=>[k,null])),...filters},residualAi:residual?{condition:'A documented four day working week.',requirementIds:['ai']}:null},requirements:[{id:'role',text:Object.values(filters).flat().join(' ')||'Any job',handling:'primary',reason:'Stated criteria.',bindings,companyReference:null},...(residual?[{id:'ai',text:'A documented four day working week.',handling:'ai',reason:'Needs posting evidence.',bindings:[],companyReference:null}]:[])]};
 }
-async function setup(t,{model,companyModel,provider,residual=false,visitor:visitorConfig,policiesReviewed=true,realAuth=false,runtime={}}={}) {
+async function setup(t,{model,companyModel,provider,residual=false,visitor:visitorConfig,policiesReviewed=true,realAuth=false,measurement=false,runtime={}}={}) {
   let time=START,modelCalls=0,providerCalls=0,companyCalls=0,failNextHandoff=false;
   const accounts=new Map(['one','two'].map(id=>[id,{id,username:`test-${id}`,expiresAt:null,access:{kind:'paid',fullAccess:true,legacy:false,premium:false,billingEnabled:false,until:null}}]));
-  const sessions=new Map();let identity,intent,matching,visitor,companies;
+  const sessions=new Map();let identity,intent,matching,visitor,companies,records;
   const config={dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:ORIGIN,policiesReviewed,privacyUrl:`${ORIGIN}/privacy.html`,usageUrl:`${ORIGIN}/usage.html`,policyVersion:'test-reviewed',visitor:visitorConfig,...(realAuth?{requiresInvitation:false}:{}),...runtime};
   const app=await createApplication({now:()=>time,config,
     authFactory:realAuth?undefined:({db,deleteAccountData})=>({cleanup:()=>{},registrationState:()=>({enabled:true,reason:null}),accessForAccount:id=>accounts.get(id)?.access??null,
@@ -32,10 +33,11 @@ async function setup(t,{model,companyModel,provider,residual=false,visitor:visit
       deleteAccount:token=>{const id=sessions.get(token);db.exec('BEGIN IMMEDIATE');try{deleteAccountData(id);accounts.delete(id);sessions.delete(token);db.exec('COMMIT');return {deleted:true};}catch(e){db.exec('ROLLBACK');throw e;}},
     }),serviceFactories:[deps=>{
       identity=createVisitorIdentity(deps);
+      if(measurement){records=createProductRecords({...deps,ownerAuthority:identity.principal});deps={...deps,records};}
       const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
       matching=createMatchingService({...deps,...ownership,provider:{available:()=>true,classify:async args=>{providerCalls++;return provider?provider(args):{decisions:args.jobs.map(j=>({id:j.id,decision:j.id.includes('rejected')?'rejected':'accepted'}))};}}});
       intent=createIntentService({...deps,...ownership,matching,model:{interpretIntent:async args=>{modelCalls++;return model?model(args):interpretation({residual});}}});
-      visitor=createVisitorService({...deps,identity,intent,matching});companies=createCompanyService({...deps,...ownership,model:{resolveCompany:async args=>{companyCalls++;return companyModel?companyModel(args):{status:'unresolved',candidate:null,clarification:'Synthetic unresolved company'};}}});return [intent,matching,visitor,companies];
+      visitor=createVisitorService({...deps,identity,intent,matching});companies=createCompanyService({...deps,...ownership,model:{resolveCompany:async args=>{companyCalls++;return companyModel?companyModel(args):{status:'unresolved',candidate:null,clarification:'Synthetic unresolved company'};}}});return [intent,matching,visitor,companies,...(records?[records]:[])];
     }]});
   const rows=[['hidden-accepted',1,'Engineer'],['hidden-rejected',1.2,'Engineer'],['hidden-primary-excluded',1.5,'Designer'],['visible-accepted',3,'Engineer'],['visible-rejected',4,'Engineer']];
   app.store.importSnapshot({schemaVersion:1,snapshotAt:new Date(time).toISOString(),verifiedAt:new Date(time).toISOString(),jobs:rows.map(([id,age,title])=>{
@@ -47,10 +49,10 @@ async function setup(t,{model,companyModel,provider,residual=false,visitor:visit
     async function request(path,{method='GET',body,headers={}}={}){const res=await fetch(base+path,{method,headers:{Cookie:[...jar].map(([k,v])=>`${k}=${v}`).join('; '),...(method==='GET'?{}:{Origin:ORIGIN,'X-CSRF-Token':csrf,'Content-Type':'application/json'}),...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});for(const item of res.headers.getSetCookie()){const pair=item.split(';')[0],i=pair.indexOf('=');jar.set(pair.slice(0,i),pair.slice(i+1));}const value=await res.json();if(value.csrfToken)csrf=value.csrfToken;return {status:res.status,body:value,res};}
     return {request,jar,snapshot:()=>({jar:[...jar],csrf}),restore:snapshot=>{jar.clear();for(const [k,v]of snapshot.jar)jar.set(k,v);csrf=snapshot.csrf;},session:()=>request('/session'),login:username=>request('/auth/login',{method:'POST',body:{username}})};
   }
-  async function work(kind){const task=app.tasks.claim({workerId:'test-runner',kinds:[kind]});assert(task,`expected ${kind}`);const result=await (kind==='search_intent'?intent:kind==='company_resolution'?companies:matching).runTask(task);if(!result.committed)app.tasks.complete(task.id,task.leaseToken,result);return result;}
+  async function work(kind){const task=app.tasks.claim({workerId:'test-runner',kinds:[kind]});assert(task,`expected ${kind}`);const handler=(kind==='search_intent'?intent:kind==='company_resolution'?companies:matching).runTask;const result=await (records?records.runTask(task,handler):handler(task));if(!result.committed)app.tasks.complete(task.id,task.leaseToken,result);records?.taskFinished(task);return result;}
   async function create(c,key='create',query='Engineer'){const reply=await c.request('/visitor/searches',{method:'POST',body:{query,requestKey:key}});assert.equal(reply.status,202,JSON.stringify(reply.body));await work('search_intent');return reply.body.search.id;}
   const results=(c,id,suffix='')=>c.request(`/visitor/searches/${id}/results?revision=1${suffix}`);
-  return {app,config,client,work,create,results,time:()=>time,identity,intent,matching,visitor,accounts,sessions,advance:ms=>time+=ms,modelCalls:()=>modelCalls,providerCalls:()=>providerCalls,companyCalls:()=>companyCalls,failHandoff:()=>failNextHandoff=true};
+  return {app,config,client,work,create,results,time:()=>time,identity,intent,matching,visitor,records,accounts,sessions,advance:ms=>time+=ms,modelCalls:()=>modelCalls,providerCalls:()=>providerCalls,companyCalls:()=>companyCalls,failHandoff:()=>failNextHandoff=true};
 }
 
 test('visitor submits, edits and retries its own search with filtered exact hidden count',async t=>{
@@ -452,4 +454,57 @@ test('company policy revocation during provider wait discards clarification and 
   const created=await c.request('/company-requests',{method:'POST',body:{input:'Synthetic Private Company',scope:null,requestKey:'waiting-company'}});assert.equal(created.status,202);
   const work=s.work('company_resolution');await Promise.resolve();assert.equal(seen.presentationLocale,'en');assert.equal(seen.input,'Synthetic Private Company');s.config.policiesReviewed=false;s.identity.refreshAvailability();release();assert.equal((await work).committed,undefined);
   const row=s.app.store.db.prepare('SELECT status,clarification FROM demo_company_requests WHERE id=?').get(created.body.request.id);assert.equal(row.status,'pending');assert.equal(row.clarification,null);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_company_evidence').get().n,0);
+});
+
+
+test('measurement does not consume the visitor cap after repeated last-search deletion and discarded cookies',async t=>{
+  const s=await setup(t,{measurement:true,visitor:{maxVisitors:2}}),db=s.app.store.db;
+  for(let i=0;i<6;i++){
+    const c=s.client();await c.session();const id=await s.create(c,`bounded-${i}`);await s.results(c,id);
+    assert(db.prepare('SELECT count(*) n FROM justup_journey_events').get().n>=3);
+    assert.equal((await c.request(`/visitor/searches/${id}`,{method:'DELETE',body:{}})).status,200);
+    for(const table of ['justup_visitors','justup_journey_events','justup_model_executions','justup_evaluation_candidates'])assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+  }
+});
+
+test('measurement handoff preserves event scope once and account deletion blocks late evidence resurrection',async t=>{
+  const s=await setup(t,{measurement:true}),db=s.app.store.db,c=s.client();await c.session();const id=await s.create(c);await s.results(c,id);
+  const source=await c.request('/visitor/viewed',{method:'POST',body:{jobId:'visible-accepted'}});assert.equal(source.status,200);
+  assert.equal((await c.request('/visitor/viewed',{method:'POST',body:{jobId:'visible-accepted'}})).status,200);
+  const owner=db.prepare('SELECT id FROM justup_visitors').get().id,before=db.prepare('SELECT count(*) n FROM justup_journey_events').get().n;
+  s.records.evaluations.stage({ownerId:owner,referenceId:id,revision:1,task:'search_intent',reason:'edit_requires_review'});
+  const login=await c.login('one');assert.equal(login.status,200);
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_journey_events WHERE owner_id=?').get(owner).n,0);
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_journey_events WHERE owner_id=?').get('one').n,before);
+  assert.equal(db.prepare("SELECT count(*) n FROM justup_journey_events WHERE event='source_open_reported'").get().n,1);
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_evaluation_candidates WHERE owner_id=?').get('one').n,1);
+  assert.equal((await c.request('/account',{method:'DELETE',body:{password:'unused-test-password'}})).status,200);
+  for(const table of ['justup_journey_events','justup_model_executions','justup_evaluation_candidates'])assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0);
+  assert.equal(s.records.observe({ownerId:owner,event:'search_completed',key:'late',outcome:'succeeded'}),false);
+  assert.equal(s.records.observe({ownerId:'one',event:'search_completed',key:'late',outcome:'succeeded'}),false);
+});
+
+test('visitor and configured account expiry remove linked measurement and review candidates',async t=>{
+  for(const mode of ['visitor','account']){
+    const s=await setup(t,{measurement:true,realAuth:mode==='account',visitor:{ttlMs:60000},runtime:mode==='account'?{accountTtlMs:60000}:{}}),db=s.app.store.db,c=s.client();await c.session();
+    let owner,id;
+    if(mode==='account'){
+      const registered=await c.request('/auth/register',{method:'POST',body:{username:'expiring-measurement',password:'Synthetic expiry password 123!'}});assert.equal(registered.status,201);owner=registered.body.user.id;
+      const submitted=await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'expiry'}});assert.equal(submitted.status,202);id=submitted.body.search.id;await s.work('search_intent');
+    }else{id=await s.create(c);owner=db.prepare('SELECT id FROM justup_visitors').get().id;}
+    s.records.evaluations.stage({ownerId:owner,referenceId:id,revision:1,task:'search_intent',reason:'edit_requires_review'});
+    assert(db.prepare('SELECT count(*) n FROM justup_journey_events').get().n>0);s.advance(60001);
+    if(mode==='account')s.app.auth.cleanup();else s.visitor.cleanup();
+    for(const table of ['justup_journey_events','justup_model_executions','justup_evaluation_candidates'])assert.equal(db.prepare(`SELECT count(*) n FROM ${table} WHERE owner_id=?`).get(owner).n,0,mode+table);
+    assert.equal(s.records.observe({ownerId:owner,event:'search_completed',key:'late',outcome:'succeeded'}),false);
+  }
+});
+
+
+test('optional measurement callback or cleanup failure cannot prevent an admitted journey',async t=>{
+  const s=await setup(t,{measurement:true}),c=s.client();await c.session();
+  s.records.observe=()=>{throw new Error('private diagnostic detail');};
+  const id=await s.create(c,'metrics-unavailable');assert.equal((await s.results(c,id)).status,200);
+  assert.equal((await c.request('/visitor/viewed',{method:'POST',body:{jobId:'visible-accepted'}})).status,200);
+  assert.equal(s.modelCalls(),1);
 });

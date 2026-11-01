@@ -67,7 +67,7 @@ function publicAccount(row) {
 }
 
 export function createAuth({ db, config = {}, now = Date.now, deleteAccountData = () => {},
-  identityProofVerifier = null, billingEventVerifier = null }) {
+  identityProofVerifier = null, billingEventVerifier = null, onAccessTransition }) {
   const maxAccounts = config.maxAccounts === null ? null : config.maxAccounts ?? 30;
   const requiresInvitation = config.requiresInvitation ?? true;
   const sessionTtlMs = config.sessionTtlMs ?? SESSION_TTL_MS;
@@ -113,7 +113,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     db.exec('ALTER TABLE auth_accounts ADD COLUMN account_expires_at INTEGER CHECK(account_expires_at IS NULL OR account_expires_at > created_at)');
   }
   db.exec('CREATE INDEX IF NOT EXISTS auth_accounts_deadline ON auth_accounts(account_expires_at)');
-  const entitlements = createEntitlements({ db, now, identityProofVerifier, billingEventVerifier });
+  const entitlements = createEntitlements({ db, now, identityProofVerifier, billingEventVerifier, onAccessTransition });
   const byUsername = db.prepare('SELECT * FROM auth_accounts WHERE username = ?');
   const byId = db.prepare('SELECT * FROM auth_accounts WHERE id = ?');
   const sessionRow = db.prepare(`
