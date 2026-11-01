@@ -28,3 +28,17 @@ test('operator JSON cannot duplicate or override artifact and installed-plan ide
   }
   for(const value of [{...config(),dbPath:'relative.sqlite'},{...config(),model:[]},{...config(),modulePath:'/arbitrary/plugin.mjs'}])assert.throws(()=>bindRunnerConfig(value,env),/configuration is unavailable/);
 });
+
+test('queue admits only fixed Wire model and pinned source configuration without identity overrides',()=>{
+  const hiringWire={enabled:true,attestationPath:'/private/wire-proof.json',providerCatalogueSha256:'d'.repeat(64),modelUid:995,socketPath:'/private/model.sock'};
+  const sourceCoverage={directory:'/private/source-history',sourceVersion:'jobseek-coverage-v1'};
+  const input={...config(),hiringWire,sourceCoverage},bound=bindRunnerConfig(input,env);
+  assert.deepEqual(bound.hiringWire,hiringWire);assert.deepEqual(bound.sourceCoverage,sourceCoverage);
+  assert.equal(bound.buildIdentity,env.JUSTUP_BUILD_ID);assert.equal(bound.hostPlanSha256,env.JUSTUP_HOST_PLAN_SHA256);
+  assert.deepEqual(bindRunnerConfig({...config(),hiringWire:{enabled:false}},env).hiringWire,{enabled:false});
+  for(const patch of [{hiringWire:{...hiringWire,buildIdentity:'e'.repeat(64)}},{hiringWire:{enabled:false,module:'/tmp/caller.mjs'}},
+    {sourceCoverage:{...sourceCoverage,directory:'relative'}},{sourceCoverage:{...sourceCoverage,directory:'/private/../source'}},
+    {sourceCoverage:{...sourceCoverage,sourceVersion:'caller-version'}},{sourceCoverage:{...sourceCoverage,command:'caller-command'}}]) {
+    assert.throws(()=>bindRunnerConfig({...input,...patch},env),/configuration is unavailable/);
+  }
+});
