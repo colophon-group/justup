@@ -5,11 +5,11 @@ read_when: Changing policy text, recipients or processing; preparing exact-asset
 
 # Privacy and Usage release record
 
-The operator approved the final Privacy and Usage wording on 1 November 2026 and authorized removing draft messaging. The ten static pages use version **`2026-11-01`**, effective **1 November 2026**, with `approved` status and `reviewed=true` metadata. Justup is operated personally by **Viktor Shcherbakov**, Route d'Oron 5, 1010 Lausanne, Switzerland; contact **business@colophon-group.org**. This approval is for the notice text and does not turn on account, AI, email, OAuth, payment or native-app processing by itself. Each enabled feature still needs its exact implementation, provider and release checks.
+The operator approved the Privacy and Usage wording on 1 November 2026 and authorized removing draft messaging. The previously byte-verified preview used version **`2026-11-01`**. The source revision **`2026-11-01.1`** adds an explicit account-registration acceptance record to the Privacy notice. Both versions have an effective date of **1 November 2026**; the new source version has `approved` status and `reviewed=true` metadata but must be published and byte-verified before it can be admitted. Justup is operated personally by **Viktor Shcherbakov**, Route d'Oron 5, 1010 Lausanne, Switzerland; contact **business@colophon-group.org**. Approval of notice text does not turn on account, AI, email, OAuth, payment or native-app processing. Each enabled feature still needs its exact implementation, provider and release checks.
 
 English pages are `/privacy.html` and `/usage.html`; German, French, Italian and Spanish pages use the matching `.de.html`, `.fr.html`, `.it.html` and `.es.html` suffixes. All five locale pairs have aligned reviewed copy. English is the authoritative drafting source where law permits; each translated Privacy page remains a complete local notice. Every admitted locale must be bound to its own exact deployed page hashes. A fallback is not inferred from a language choice.
 
-The approved source build produced these exact SHA-256 notice hashes. They identify the candidate text and layout; the release gate must compare the public HTTPS responses with these same bytes before account admission. Any policy wording or renderer change requires a new table and proof.
+The previously byte-verified preview used these `2026-11-01` SHA-256 notice hashes. They do not prove delivery of the revised registration disclosure.
 
 | Locale | Privacy SHA-256 | Usage SHA-256 |
 | --- | --- | --- |
@@ -18,6 +18,16 @@ The approved source build produced these exact SHA-256 notice hashes. They ident
 | fr | `1f64f7787c0cfa7c935432bd998fb5afd7e20fef5d0f9c05b9e96da677c95d2d` | `5ba50ccf9c94babb6bd0104d9f38f4495b46b2cbef7a60dbce1128e3e5d61b38` |
 | it | `17dc3ab55bfff839f3133ab2fe19ad12fb362c28f14a8677d6f94c49167c8aa0` | `77ec0456522671e91446689ed03d80af54c734c9afc21bcffd70f5011b2246a5` |
 | es | `0a9ec9d93f6448c80b503c99869784e1588dc77ffc46af67eaaa945d04e7db4a` | `a6e324d4fd0e8b272600f60d5e8b90414285b697e7dbd3da9c84a6e747349421` |
+
+The `2026-11-01.1` source build produces these exact SHA-256 hashes. The Usage text is unchanged, but its version metadata changes its bytes too. Compare all ten public HTTPS responses with this table before admitting the new version; a source build alone is not deployment proof.
+
+| Locale | Privacy SHA-256 | Usage SHA-256 |
+| --- | --- | --- |
+| en | `1e5dd83bf1cd33e25ee8f313550f02e23ddc24cb8810cd59a612354e12bb1aee` | `4f7319ac35360a2a34cb71e7a7da0005e8a18a0479767ed5b01b8ad40d900c74` |
+| de | `14659eabe1e029eb7174c96d701c64717aab13c158a2702e2d32f4bf4c83ad9b` | `c22ca8f43a9b945f8230cb65fdd10a925a3f4b86858e6bba3b379a1d07363be0` |
+| fr | `6b199a05b2b59780ef44cd2756511c06fdffa87672322f3b1a1c4356bb2d535d` | `b46d10e007d25f5523b55ec49aa092d16905b3f510384c509622f71f3a4f580c` |
+| it | `96107f95d3c1959e76f227440ca8e121f488df74964138b2613bd91b3d4cffca` | `d666139c46f80bfb193b3e21f56f31c8e1bcd864b7f4eaa661b728ff9d5b9d68` |
+| es | `5f6798e336d812b1a002b1761e6c363dbd6f7ef5cb0d860a16b18e02a5ecdbd0` | `874ed3bb2e99170ab12d4c5c70a09f4844fd4b065197fb4d0030ba67320c215f` |
 
 The common facts, section inventory and English copy live in [policy content](../web/policies/content.ts). Typed German, French, Italian and Spanish copy must contain every key with the same shared-fact placeholders. The [renderer](../web/policies/render.ts) uses one escaped, script-free layout and common version/operator/review metadata. The [Vite plugin](../web/policies/vite.ts) serves these exact documents during development and emits ten HTML assets during a public client build, alongside local [policy CSS](../web/public/policies.css). It emits no notices into private SSR bundles. Brand, navigation and footer search links retain the notice language: `/#jobs` for English and `/{de,fr,it,es}/#jobs` for the other locales. Source remains under `web/` so credential-free frontend snapshots include it; generated `web/dist` files must not be committed. These checks establish source completeness and exact delivery; they do not establish deployed feature readiness.
 
@@ -99,7 +109,7 @@ The [Emails API reference](https://resend.com/docs/api-reference/emails/send-ema
 
 The measurement limits are separate: journey evidence seven days/10,000 rows; execution evidence seven days/5,000 rows; reference-only edit review seven days/200 entries; explicitly reviewed synthetic or redacted cases 180 days/200 versions/16 KiB each. Pending capabilities must remain conditional in all five notices until their integration and deployed behavior are verified. Retention boundaries limit usable records; API downtime or a blocked safe deletion barrier can delay physical cleanup. No unconditional physical-deletion deadline is established.
 
-The approved `2026-11-01` source changes all ten notice bytes. Prior draft hashes cannot approve these assets. Bind admission to fresh exact hashes of every deployed page. Neither the request-only locale header nor the device preference cookie authorizes visitor creation or model processing.
+The `2026-11-01.1` source changes all ten notice bytes. The earlier deployed hashes cannot approve these assets. Bind admission to fresh exact hashes of every deployed page. Neither the request-only locale header nor the device preference cookie authorizes visitor creation or model processing.
 
 The composed API additionally stores the fixed private metadata described in [product evidence](product-evidence.md): event/outcome/access segment/interface locale/server timestamp, optional numeric counts and opaque owner/search/task references; model/task/prompt/tool identities, safe outcomes, duration, optional token/confirmed-cost counts and bounded compiler/repair/matching counts. Journey rows are capped at 10,000 and execution rows at 5,000, both for seven days. A reference-only review queue is capped at 200 for seven days. These records have owner deletion/expiry/handoff hooks, no raw query/draft/URL/posting/provider trace or personal contact fields, and no external analytics recipient. The default operator report is aggregate-only. Separate explicitly reviewed synthetic/operator-redacted cases are capped at 200 versions, 16 KiB each and 180 days; their deliberate case export can contain that curated text. The code cannot establish anonymization or consent for arbitrary operator input. Retention requires the composed API to run and its deletion barrier to succeed; failures make measurements incomplete without blocking core journeys. Verify these exact flows against every locale notice and the deployed service before activation. The static approved notices do not prove integrated behavior.
 

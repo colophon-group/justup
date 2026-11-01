@@ -18,7 +18,7 @@ test("every required locale has complete aligned plain-text copy and identical s
       assert.doesNotMatch(copy[key], /<[^>]*>|\bTODO\b/, `${locale}: ${key} must be complete plain text`);
     }
     if (locale !== "en") {
-      for (const key of ["status.body", "privacy.retention.redemption", "usage.access.entitlement", "privacy.accounts.email", "privacy.accounts.emailRetention", "privacy.accounts.emailConfirmation", "privacy.hosting.email", "usage.access.email", "privacy.accounts.preferences", "privacy.accounts.visitor", "privacy.accounts.bootstrap", "privacy.accounts.handoff", "privacy.measurement.journey", "privacy.measurement.execution", "privacy.measurement.review", "privacy.measurement.bounds", "privacy.browser.routeLocale"] as const) {
+      for (const key of ["status.body", "privacy.retention.redemption", "usage.access.entitlement", "privacy.accounts.email", "privacy.accounts.emailRetention", "privacy.accounts.emailConfirmation", "privacy.hosting.email", "usage.access.email", "privacy.accounts.acceptance", "privacy.accounts.preferences", "privacy.accounts.visitor", "privacy.accounts.bootstrap", "privacy.accounts.handoff", "privacy.measurement.journey", "privacy.measurement.execution", "privacy.measurement.review", "privacy.measurement.bounds", "privacy.browser.routeLocale"] as const) {
         assert.notEqual(copy[key], en[key], `${locale}: ${key} is actually translated`);
       }
     }
@@ -35,7 +35,8 @@ test("ten approved notices carry one version, operator and complete local naviga
     for (const kind of ["privacy", "usage"] as const) {
       const html = documents.get(policyPath(kind, locale))!;
       assert.match(html, new RegExp(`<html lang="${locale}">`));
-      assert.match(html, /data-policy-status="approved" data-policy-version="2026-11-01" data-policy-reviewed="true"/);
+      assert.match(html, /data-policy-status="approved" data-policy-version="2026-11-01\.1" data-policy-reviewed="true"/);
+      if (kind === "privacy") assert.match(html, /data-copy="privacy\.accounts\.acceptance"/);
       assert.match(html, /name="justup-policy-reviewed" content="true"/);
       assert.match(html, /name="robots" content="index,follow"/);
       assert.match(html, /default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'/);
