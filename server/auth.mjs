@@ -2,6 +2,7 @@
 // or retention cleanup; HTTP cookie, origin and rate-limit protections live upstream.
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
+import { createEntitlements } from './entitlements.mjs';
 
 const deriveKey = promisify(scrypt);
 const MAX_TIMESTAMP = 8_640_000_000_000_000;
@@ -65,7 +66,8 @@ function publicAccount(row) {
   return { id: row.id, username: row.username, expiresAt: row.account_expires_at == null ? null : new Date(row.account_expires_at).toISOString() };
 }
 
-export function createAuth({ db, config = {}, now = Date.now, deleteAccountData = () => {} }) {
+export function createAuth({ db, config = {}, now = Date.now, deleteAccountData = () => {},
+  identityProofVerifier = null, billingEventVerifier = null }) {
   const maxAccounts = config.maxAccounts === null ? null : config.maxAccounts ?? 30;
   const requiresInvitation = config.requiresInvitation ?? true;
   const sessionTtlMs = config.sessionTtlMs ?? SESSION_TTL_MS;
@@ -111,6 +113,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     db.exec('ALTER TABLE auth_accounts ADD COLUMN account_expires_at INTEGER CHECK(account_expires_at IS NULL OR account_expires_at > created_at)');
   }
   db.exec('CREATE INDEX IF NOT EXISTS auth_accounts_deadline ON auth_accounts(account_expires_at)');
+  const entitlements = createEntitlements({ db, now, identityProofVerifier, billingEventVerifier });
   const byUsername = db.prepare('SELECT * FROM auth_accounts WHERE username = ?');
   const byId = db.prepare('SELECT * FROM auth_accounts WHERE id = ?');
   const sessionRow = db.prepare(`
@@ -153,7 +156,17 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     return { account: publicAccount(account), token, expiresAt };
   }
 
-  async function register(input) {
+  function authenticatedCallback(options, accountId, phase) {
+    const callback = options?.afterAuthenticated;
+    if (callback == null) return;
+    if (typeof callback !== 'function') throw new TypeError('Authentication handoff must be a function.');
+    // The caller supplies this callback outside request JSON. It must use this
+    // exact SQLite connection and finish before the account/session commit.
+    const result = callback({ db, accountId, phase });
+    if (result && typeof result.then === 'function') throw new TypeError('Authentication handoff must be synchronous.');
+  }
+
+  async function register(input, options = {}) {
     if ((requiresInvitation && !inviteDigest) || (accountExpiresAt !== null && accountExpiresAt <= now())) throw failure('registration_closed');
     const username = usernameValue(input?.username);
     const password = input?.password;
@@ -171,11 +184,13 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
       if (deadline !== Infinity && (!Number.isSafeInteger(deadline) || deadline > MAX_TIMESTAMP || deadline <= timestamp)) throw failure('registration_closed');
       const account = { id: randomUUID(), username, created_at: timestamp, account_expires_at: deadline === Infinity ? null : deadline };
       insertAccount.run(account.id, username, salt, hash, timestamp, account.account_expires_at);
-      return issueSession(account, timestamp);
+      const issued = issueSession(account, timestamp);
+      authenticatedCallback(options, account.id, 'register');
+      return issued;
     });
   }
 
-  async function login(input) {
+  async function login(input, options = {}) {
     const username = usernameValue(input?.username);
     const password = input?.password;
     if (!username || !validPassword(password)) throw failure('invalid_credentials');
@@ -192,7 +207,9 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
       if (!currentAccount || (currentAccount.account_expires_at !== null && currentAccount.account_expires_at <= timestamp)) {
         throw failure('invalid_credentials');
       }
-      return issueSession(currentAccount, timestamp);
+      const issued = issueSession(currentAccount, timestamp);
+      authenticatedCallback(options, currentAccount.id, 'login');
+      return issued;
     });
   }
 
@@ -205,7 +222,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     return {
       account: publicAccount(row),
       expiresAt: Math.min(row.expires_at, row.account_expires_at ?? Infinity),
-      access: { kind: 'account', fullAccess: true, legacy: false, billingEnabled: false, until: null },
+      access: entitlements.accessForAccount(row.id),
     };
   }
 
@@ -222,6 +239,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     if (result && typeof result.then === 'function') {
       throw new TypeError('Account deletion callback must be synchronous.');
     }
+    entitlements.deleteAccount(accountId);
     removeAccount.run(accountId);
     return sessionsDeleted;
   }
@@ -260,5 +278,13 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     return { enabled: true, reason: null };
   }
 
-  return { register, login, session, logout, deleteAccount, cleanup, invalidateAllSessions, registrationState };
+  function activateFreePeriod(token) {
+    const current = session(token);
+    if (!current) throw failure('unauthenticated');
+    return entitlements.activateFreePeriod(current.account.id);
+  }
+
+  return { register, login, session, logout, deleteAccount, cleanup, invalidateAllSessions, registrationState,
+    activateFreePeriod, accessForAccount: entitlements.accessForAccount,
+    recordIdentityProof: entitlements.recordIdentityProof, applyBillingEvent: entitlements.applyBillingEvent };
 }
