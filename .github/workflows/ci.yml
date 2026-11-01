@@ -13,6 +13,10 @@ on:
       - edited
       - labeled
       - unlabeled
+  # Schedules run from the default branch; the full job checks out dev explicitly.
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,15 +24,37 @@ permissions:
 jobs:
   decision:
     name: CI / decision
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24.22.2'
+          package-manager-cache: false
       - name: Check pull request and run selected suites
         run: python3 scripts/ci.py run --event "$GITHUB_EVENT_PATH"
+
+  full:
+    name: CI / full suite
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ci-full-dev
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.22.2'
+          package-manager-cache: false
+      - name: Run full dev suite
+        run: python3 scripts/ci.py full

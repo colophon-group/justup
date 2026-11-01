@@ -7,7 +7,39 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { prepare, verifyArtifact, digest } from '../../scripts/frontend-prepare.mjs';
 import { smoke } from '../../scripts/frontend-smoke.mjs';
+import { createHandler } from './worker.mjs';
 const root = new URL('../../', import.meta.url);
+
+test('explicit API-off preview retains bytes, refuses production and verifies unavailable APIs without a health claim', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'justup-api-off-'));
+  try {
+    const { repository, sha } = await fixture(temporary);
+    const artifact = join(temporary, 'artifact'), release = await prepare(sha, artifact, repository);
+    const configure = (...args) => execFileSync(process.execPath, [new URL('scripts/frontend-configure.mjs', root).pathname, ...args], { stdio: 'pipe' });
+    configure(artifact, 'justup-preview-test', 'https://justup-preview-test.account.workers.dev', 'disabled', 'preview');
+    const config = JSON.parse(await readFile(join(artifact, 'wrangler.json'), 'utf8'));
+    assert.equal(config.workers_dev, true); assert.equal(config.routes, undefined);
+    assert.equal(config.vars.API_DISABLED, 'true'); assert.equal(config.vars.API_ORIGIN, undefined);
+    assert.equal(config.vars.RUNTIME_CONFIG_SHA256, digest(JSON.stringify({ publicOrigin: config.vars.PUBLIC_ORIGIN, apiOrigin: null, apiPrefix: '/api/v1', deploymentMode: 'preview' })));
+    assert.deepEqual(await verifyArtifact(artifact), release);
+    assert.throws(() => configure(artifact, 'justup-preview-test', 'https://preview.justup.test', 'disabled', 'production'), error => /Disabled API.*only/.test(error.stderr.toString()));
+    assert.throws(() => configure(artifact, 'wrong-preview-name', config.vars.PUBLIC_ORIGIN, 'disabled'), error => /matching preview Worker name/.test(error.stderr.toString()));
+    const handle = createHandler(() => { throw new Error('Disabled API must never call an upstream'); });
+    const headers = { 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store' };
+    const remote = async url => {
+      const path = new URL(url).pathname;
+      if (path.startsWith('/api/') || path === '/__release/version' || path === '/robots.txt') return handle(new Request(url), config.vars);
+      if (path === '/') return new Response(`<meta name="justup-public-document" content="v1"><meta name="justup-source" content="${release.sourceSha}"><meta name="justup-runtime-config" content="${config.vars.RUNTIME_CONFIG_SHA256}"><link rel="canonical" href="${config.vars.PUBLIC_ORIGIN}/"><div id="root">Beat the endless scroll.</div><template id="public-bootstrap" data-public="{}"></template><script src="/assets/app.fixture.js"></script>`, { headers });
+      return new Response(await readFile(join(artifact, 'assets', path.slice(1))), { headers });
+    };
+    const report = await smoke(config.vars.PUBLIC_ORIGIN, artifact, remote);
+    assert.equal(report.result, 'passed'); assert.equal(report.apiState, 'disabled'); assert.equal(report.completeReleaseGate, false);
+    await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, url => new URL(url).pathname === '/api/v1/health' ? new Response('{}', { headers }) : remote(url)), /Expected 503/);
+    const accidental = { ...config, vars: { ...config.vars } }; delete accidental.vars.API_DISABLED;
+    await writeFile(join(artifact, 'wrangler.json'), JSON.stringify(accidental));
+    await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, () => { throw new Error('Must fail before fetch'); }), /Invalid URL/);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
 
 async function fixture(temporary) {
   const repository = join(temporary, 'repo'); await mkdir(repository);

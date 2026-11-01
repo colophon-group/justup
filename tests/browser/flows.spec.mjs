@@ -42,6 +42,7 @@ test('unavailable visitor search does not submit or pretend that signing in ran 
   await expect(page.locator('#job-search button[type=submit]')).toBeDisabled();
   await expect(page.locator('#sign-in-dialog')).not.toBeVisible(); await expect(page.locator('#query')).toHaveValue('Part-time museum work');
   await page.locator('#header-sign-in').click();
+  await expect(page.locator('#sign-in-dialog')).toHaveCSS('background-color', 'rgb(249, 231, 212)');
   expect(calls.some(call => call.key === 'POST /searches' || call.key === 'GET /searches')).toBe(false);
   await expect(page.locator('#sign-in-dialog a[href="/privacy.html"]')).toBeVisible();
 });

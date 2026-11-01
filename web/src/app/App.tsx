@@ -1,6 +1,5 @@
 import { policyDocument } from "../i18n/policies.ts";
 import { useAccountLocale } from "../i18n/useAccountLocale.ts";
-import { localeName } from "../i18n/locales.ts";
 import { useInterfaceLocale } from "../i18n/LocaleProvider.tsx";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiClient, errorText, isAbortError } from "../api/client.ts";
@@ -185,10 +184,6 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
           mainRef.current?.focus();
         }}
       >{t("Skip to content")}</a>
-      <div className="edition-note">
-        <span>{t("Interface: {language}", { language: localeName[locale] })}</span>
-        <span>{t("Fresh work. Clear sources.")}</span>
-      </div>
       <div className="paper">
         <header className="topbar">
           <nav aria-label={t("Main navigation")}>
@@ -319,9 +314,9 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
           ) : null}
         </main>
         <footer className="policy-footer">
-          <p id="coverage-disclosure">
+          {coverage ? <p id="coverage-disclosure">
             {coverageDescription(coverage, locale)}
-          </p>
+          </p> : null}
           <nav aria-label={t("Legal")}>
             <a href={policyDocument(locale, "privacy")}>{t("Privacy")}</a>
             <a href={policyDocument(locale, "usage")}>{t("Usage")}</a>

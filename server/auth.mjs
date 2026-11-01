@@ -67,7 +67,7 @@ function publicAccount(row) {
 }
 
 export function createAuth({ db, config = {}, now = Date.now, deleteAccountData = () => {},
-  identityProofVerifier = null, billingEventVerifier = null, onAccessTransition }) {
+  identityProofVerifier = null, billingEventVerifier = null, onAccessTransition, beforeAccountDelete = () => true }) {
   const maxAccounts = config.maxAccounts === null ? null : config.maxAccounts ?? 30;
   const requiresInvitation = config.requiresInvitation ?? true;
   const sessionTtlMs = config.sessionTtlMs ?? SESSION_TTL_MS;
@@ -78,7 +78,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
       || !Number.isSafeInteger(sessionTtlMs) || sessionTtlMs < 1 || sessionTtlMs > MAX_TIMESTAMP
       || (accountTtlMs !== null && (!Number.isSafeInteger(accountTtlMs) || accountTtlMs < 1 || accountTtlMs > MAX_TIMESTAMP))
       || (accountExpiresAt !== null && (!Number.isSafeInteger(accountExpiresAt) || accountExpiresAt < 1 || accountExpiresAt > MAX_TIMESTAMP))
-      || typeof now !== 'function' || typeof deleteAccountData !== 'function') {
+      || typeof now !== 'function' || typeof deleteAccountData !== 'function' || typeof beforeAccountDelete !== 'function') {
     throw new TypeError('Invalid authentication configuration.');
   }
   if (config.inviteCode != null && config.inviteCode !== '' && !boundedInvite(config.inviteCode)) {
@@ -251,6 +251,10 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     const account = byId.get(currentSession.account.id);
     const hash = await passwordHash(password, account.password_salt);
     if (!timingSafeEqual(hash, account.password_hash)) throw failure('invalid_credentials');
+    // Provider termination is outside SQL and may require an explicit queue
+    // retry. Correct-password proof must precede any durable billing closure.
+    if(!session(token))throw failure('unauthenticated');
+    if(await beforeAccountDelete({accountId:account.id,token})!==true)throw new Error('Account deletion precondition failed.');
     return transaction(() => {
       if (!session(token)) throw failure('unauthenticated');
       deleteStoredAccount(account.id);
@@ -271,6 +275,8 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
   function invalidateAllSessions() {
     // Restored one-time challenges must never remain actionable after logout.
     if(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='justup_email_challenges'").get())db.prepare('DELETE FROM justup_email_challenges').run();
+    if(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='justup_billing_accounts'").get())db.prepare('UPDATE justup_billing_accounts SET termination_verified_at=NULL,termination_revision=NULL').run();
+    if(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='justup_billing_operations'").get())db.prepare('UPDATE justup_billing_operations SET url=NULL').run();
     return { sessionsDeleted: removeAllSessions.run().changes };
   }
 

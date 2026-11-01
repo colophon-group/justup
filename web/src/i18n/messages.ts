@@ -1376,12 +1376,6 @@ export const messages = {
     "Lingua del browser",
     "Idioma del navegador"
   ],
-  "Interface: {language}": [
-    "Oberfläche: {language}",
-    "Interface : {language}",
-    "Interfaccia: {language}",
-    "Interfaz: {language}"
-  ],
   "CONNECTING": [
     "VERBINDEN",
     "CONNEXION",
@@ -1754,23 +1748,11 @@ export const messages = {
     "Copertura aziende",
     "Cobertura de empresas"
   ],
-  "Company coverage and verification time are not reported by the service.": [
-    "Firmenabdeckung und Prüfzeit werden vom Dienst nicht gemeldet.",
-    "Le service n’indique pas la couverture des entreprises ni l’heure de vérification.",
-    "Il servizio non segnala la copertura delle aziende né l’ora della verifica.",
-    "El servicio no indica la cobertura de empresas ni la fecha de verificación."
-  ],
   "verified {date}": [
     "geprüft am {date}",
     "vérifié le {date}",
     "verificato il {date}",
     "verificado el {date}"
-  ],
-  "verification time not reported": [
-    "Prüfzeit nicht gemeldet",
-    "date de vérification non indiquée",
-    "data di verifica non segnalata",
-    "fecha de verificación no indicada"
   ],
   "refresh needed": [
     "Aktualisierung nötig",
@@ -1916,11 +1898,11 @@ export const messages = {
     "Ultimi 14 giorni. Sempre.",
     "Últimos 14 días. Siempre."
   ],
-  "Each job shows when we first found it. Only jobs first observed in the last 14 days appear. Source coverage and verification are shown below.": [
-    "Jede Stelle zeigt, wann wir sie erstmals gefunden haben. Nur Stellen aus den letzten 14 Tagen erscheinen. Quellenabdeckung und Prüfung stehen unten.",
-    "Chaque offre indique sa première détection. Seules celles repérées dans les 14 derniers jours apparaissent. Couverture et vérification des sources figurent ci-dessous.",
-    "Ogni offerta mostra quando l’abbiamo trovata. Appaiono solo quelle rilevate negli ultimi 14 giorni. Copertura e verifica delle fonti sono indicate sotto.",
-    "Cada oferta muestra cuándo la encontramos. Solo aparecen las vistas por primera vez en los últimos 14 días. La cobertura y verificación de fuentes figuran abajo."
+  "Each job shows when we first found it. Only jobs first observed in the last 14 days appear.": [
+    "Jede Stelle zeigt, wann wir sie erstmals gefunden haben. Nur Stellen aus den letzten 14 Tagen erscheinen.",
+    "Chaque offre indique sa première détection. Seules celles repérées dans les 14 derniers jours apparaissent.",
+    "Ogni offerta mostra quando l’abbiamo trovata. Appaiono solo quelle rilevate negli ultimi 14 giorni.",
+    "Cada oferta muestra cuándo la encontramos. Solo aparecen las vistas por primera vez en los últimos 14 días."
   ],
   "See what’s included.": [
     "Sieh, was enthalten ist.",

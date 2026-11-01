@@ -28,6 +28,8 @@ CONFIG_KEYS = {
     'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_MAX_ACCOUNTS', 'JUSTUP_SESSION_TTL_MS',
     'JUSTUP_ACCOUNT_TTL_MS', 'JUSTUP_ACCOUNT_EXPIRES_AT',
     'JUSTUP_EMAIL_VERIFICATION_ENABLED',
+    'JUSTUP_STRIPE_TEST_BILLING_ENABLED', 'JUSTUP_STRIPE_TEST_ACCOUNT_ID', 'JUSTUP_STRIPE_TEST_OFFERS',
+    'JUSTUP_STRIPE_TEST_PORTAL_CONFIGURATION_ID', 'JUSTUP_STRIPE_TEST_WEBHOOK_SECRET',
 }
 CATEGORIES = {'unknown', 'auth', 'mutation', 'health', 'read'}
 ROUTES = {'session', 'auth', 'jobs', 'searches', 'tasks', 'companies', 'company-requests', 'account', 'health', 'version'}
@@ -158,7 +160,7 @@ def child_environment(config, manifest):
     if not isinstance(config, dict) or set(config) - CONFIG_KEYS or any(not isinstance(value, str) for value in config.values()):
         raise ValueError('Only the documented API configuration keys are accepted.')
     origin = urlsplit(config.get('JUSTUP_ORIGIN', ''))
-    for key in ('JUSTUP_SERVICES_ENABLED', 'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_POLICIES_REVIEWED', 'JUSTUP_EMAIL_VERIFICATION_ENABLED'):
+    for key in ('JUSTUP_SERVICES_ENABLED', 'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_POLICIES_REVIEWED', 'JUSTUP_EMAIL_VERIFICATION_ENABLED', 'JUSTUP_STRIPE_TEST_BILLING_ENABLED'):
         if key in config and config[key] not in {'true', 'false'}:
             raise ValueError('Runtime switches must be true or false.')
     for key in ('JUSTUP_MAX_ACCOUNTS', 'JUSTUP_SESSION_TTL_MS', 'JUSTUP_ACCOUNT_TTL_MS', 'JUSTUP_ACCOUNT_EXPIRES_AT'):
@@ -175,6 +177,17 @@ def child_environment(config, manifest):
         if len(config.get(key, '').encode()) < 32:
             raise ValueError('Stable API CSRF and cursor secrets are required.')
     policy_configuration(config, manifest['sourceCommit'])
+    if config.get('JUSTUP_STRIPE_TEST_BILLING_ENABLED') == 'true':
+        try:
+            offers = json.loads(config.get('JUSTUP_STRIPE_TEST_OFFERS', ''))
+        except (ValueError, TypeError):
+            raise ValueError('Billing offers require explicit approved test fixtures.') from None
+        artifact = module('preview-artifact')
+        artifact.validate_stripe_billing({'enabled': True, 'accountId': config.get('JUSTUP_STRIPE_TEST_ACCOUNT_ID'),
+                                         'offers': offers, 'portalConfigurationId': config.get('JUSTUP_STRIPE_TEST_PORTAL_CONFIGURATION_ID'),
+                                         'origin': config['JUSTUP_ORIGIN'], 'webhookSecret': config.get('JUSTUP_STRIPE_TEST_WEBHOOK_SECRET')}, role='api')
+        if not artifact.BILLING_MODULES <= manifest.get('files', {}).keys():
+            raise ValueError('Test billing requires its complete fixed runtime graph.')
     result = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'HOME': str(BASE / 'state'),
               'TMPDIR': str(BASE / 'state/work'), **config,
               'JUSTUP_PORT': '8787', 'JUSTUP_DB_PATH': str(BASE / 'state/preview.sqlite'),

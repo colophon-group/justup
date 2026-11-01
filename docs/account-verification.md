@@ -5,7 +5,7 @@ read_when: Wiring account verification, reviewing provider data, configuring ema
 
 # Verify account ownership
 
-The API keeps username/password sign-in and uses Resend only to deliver a one-time mailbox ownership code. Verification marks an account ready for its ordinary free period; the person must still choose the existing `POST /access/activate` action. A mailbox is not proof of a unique person or former Jobseek membership. No matching name, email or invitation grants the welcome month. The authoritative former-user source remains unconfigured.
+The API keeps username/password sign-in and uses Resend only to deliver a one-time mailbox ownership code. Verification marks an account ready for its ordinary free period; the person must still choose the existing `POST /access/activate` action. A mailbox is not proof of a unique person or former Jobseek membership. No matching name, email or invitation grants the welcome month. Former Jobseek eligibility closes when Jobseek account creation ends at retirement, before Justup opens. The authoritative former-user proof source remains unconfigured and must be established before Jobseek authentication is retired; no matching email alone grants the welcome month.
 
 ## Browser contract
 

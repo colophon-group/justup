@@ -7,28 +7,18 @@ read_when: Integrating the weekly source, editorial execution, public API, sched
 
 Hiring Wire is a first-release feature. `server/hiring-wire.mjs` provides the complete consumer and publication transaction. It never manufactures an edition when source history or the separately qualified Sol runtime is unavailable. This module ships no published fixture. Preview is a deployment state, and the invited preview still needs a real, verified source and subscription execution path.
 
-## Integrate and verify an edition
+## Choose the right guide
 
-1. Compose `createHiringWireApi({db,now})` from `server/hiring-wire-integration.mjs` in the API. Dispatch its `publicRoute(ctx)` only for public GET reads and include its actual `capabilities().hiringWire` value. No provider, source or account credentials belong in API composition.
-2. Await the integration helper's `createHiringWireRunner` in the existing queue with its protected source/model configuration and independently trusted build/host identity. Register `hiring_wire: wire.runTask` and `beforeClaim: wire.beforeClaim`. Keep one global lease and claim every non-Wire kind first. Running editorial work cooperatively aborts when foreground work arrives; only confirmed cleanup permits a lease-token compare-and-set pause of the same task. The service checks the live task lease and abort signal again in the publication transaction.
-3. The shared runner's fixed Monday 00:00 UTC tick records one durable period and queues the fixed internal owner `__hiring_wire__`; no HTTP request creates an editorial task. Dependency unavailability receives at most three scheduled attempts, with 15-minute and two-hour backoff. Factual and quality failures receive no automatic retry. [The enqueue command](../scripts/hiring-wire/README.md) remains an explicit operator entry point using the same `enqueuePeriod(periodEnd)` helper, rather than a separate scheduler. That helper is idempotent while a task is pending, running or successful; a reviewed terminal retry may use a new task identity against the existing frozen period and snapshot, up to eight identities per period.
-4. Verify a real edition using the authoritative producer, the qualified subscription CLI profile, the isolated preview API and the public browser read. Verify failure with unavailable history and an unavailable provider. A green deterministic suite alone does not establish either external contract.
+| Task | Guide |
+| --- | --- |
+| Validate source history, compute facts or publish a public edition | This guide and [source coverage](source-coverage.md) |
+| Configure the existing API, queue and weekly schedule | [Hiring Wire integration](hiring-wire-integration.md) |
+| Qualify the private Sol subscription transport and cleanup | [Hiring Wire runtime](hiring-wire-runtime.md) |
+| Prove a complete deployed edition and failure paths | [Release verification](development-process.md#6-verify-a-release-before-it-goes-live) |
 
 `periodEnd` is Monday at 00:00 UTC. The current half-open week is `[periodEnd - 7 days, periodEnd)`; the preceding week is `[periodEnd - 14 days, periodEnd - 7 days)`. A task can publish within 48 hours after its period ends. The trusted configuration can set `publicationLagMs` between one and seven days and `retainedEditions` between eight and 52; defaults are 48 hours and 52 editions. A retry cannot silently switch snapshots, facts or previous editions. A newer published edition prevents an older pending period from publishing out of order.
 
-The integration uses the fixed 48-hour window and 52-edition defaults. See [the
-integration contract](hiring-wire-integration.md) for exact queue-only configuration,
-restart behavior and priority. Wire is disabled by default, and enabling it does
-not qualify a native runtime or establish authoritative historical coverage.
-If native cancellation reports `cleanup_unproven`, a bounded singleton SQLite
-guard stops all claims/recovery/scheduler actions and marks runner readiness
-unavailable, even if that task's lease expired or was superseded. An expired
-running Wire lease also seals the guard and retains ownership because elapsed
-time cannot prove native cleanup. Restart or clock rollback cannot clear it.
-Recovery requires a stopped runner,
-reviewed native/broker idle and cleanup proof, then one reviewed transaction to
-terminate the held task and remove the guard. No public or automatic clear exists;
-ordinary stored-feed/account access remains independent of runner availability.
+The integration uses the fixed 48-hour window and 52-edition defaults. [Hiring Wire integration](hiring-wire-integration.md) owns queue-only configuration, priority, restart and the durable cleanup-halt recovery contract. An expired running lease or unproven native cleanup stops Wire claims and marks runner readiness unavailable until reviewed recovery; ordinary stored-feed and account access remain independent. Wire is disabled by default; enabling it does not qualify the native runtime or establish authoritative historical coverage.
 
 ## Authoritative source contract
 

@@ -10,15 +10,26 @@ test('account access and billing disclosures follow the session rather than a pr
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(page.locator('#account-access')).toHaveText('Your membership has expired.');
   await expect(page.locator('#settings-content')).not.toContainText('Payments are not enabled');
-  await expect(page.locator('.edition-note')).not.toContainText('Preview');
+  await expect(page.locator('.edition-note')).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: /^Interface language/ })).toBeVisible();
+  await expect(page.locator('#settings-dialog')).toHaveCSS('background-color', 'rgb(249, 231, 212)');
 });
 
 test('unknown source kinds remain transparent without being relabelled as an imported snapshot', async ({ page }) => {
   await mockApi(page, { 'GET /session': session({ coverage: { kind: 'catalogue', verifiedAt: null, stale: false, description: 'Coverage is limited to the listed career pages.' } }) });
   await page.goto('/');
-  await expect(page.locator('#coverage-disclosure')).toContainText('verification time not reported');
+  await expect(page.locator('#coverage-disclosure')).not.toContainText('verification time not reported');
   await expect(page.locator('#coverage-disclosure')).toContainText('Coverage is limited to the listed career pages.');
   await expect(page.locator('#coverage-disclosure')).not.toContainText('Imported snapshot');
+});
+
+test('missing coverage metadata is omitted while legal links stay available', async ({ page }) => {
+  await mockApi(page, { 'GET /session': session({ coverage: undefined }) });
+  await page.goto('/');
+  await expect(page.locator('#account-open')).toBeVisible();
+  await expect(page.locator('#coverage-disclosure')).toHaveCount(0);
+  await expect(page.locator('.policy-footer a[href="/privacy.html"]')).toBeVisible();
+  await expect(page.locator('.policy-footer a[href="/usage.html"]')).toBeVisible();
 });
 
 test('checking new positions refreshes the accepted revision without interpreting the unsent draft', async ({ page }) => {
