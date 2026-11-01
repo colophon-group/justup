@@ -19,6 +19,13 @@ interface Props {
   apply: (action: Action) => void;
 }
 interface Conflict { remote: WorkspaceSnapshot; searches: Search[]; base: SavedWorkspaceState }
+interface RecoveredCreate { local: SavedWorkspaceState; remote: SavedWorkspaceState }
+function storedView(local: SavedWorkspaceState, recovered: RecoveredCreate | null): SavedWorkspaceState {
+  if (!recovered) return local;
+  const projected = mergeWorkspaceEdits(recovered.local, local, recovered.remote);
+  if (local.activeSearchId === null && local.drafts.new !== recovered.local.drafts.new) projected.activeSearchId = null;
+  return projected;
+}
 function deletedSearchDrafts(conflict: Conflict, local: Workspace) {
   const known = new Set(conflict.searches.map(search => search.id));
   const drafts = new Map(Object.entries(local.drafts).filter(([id]) => id !== "new" && !known.has(id)));
@@ -44,39 +51,47 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
   const pendingViewed = useRef(new Map<string, Promise<void> | null>());
   const lastSaveAt = useRef(0);
   const reclaimed = useRef(false);
-  const recoveredCreate = useRef<{ local: SavedWorkspaceState; remote: SavedWorkspaceState } | null>(null);
+  const recoveredCreate = useRef<RecoveredCreate | null>(null);
+  const pendingDeletion = useRef<SavedWorkspaceState | null>(null), refreshingDeletion = useRef<Promise<void> | null>(null);
   const project = useCallback(() => {
     const local = savedWorkspace(current.current,
       scope === "visitor" && (!hasVisitor || reclaimed.current) && stored.current?.revision === 0 && current.current.searches.length === 0
         && stored.current.viewed.length === 0 && stored.current.recoveredDrafts.length === 0);
     // A lost create keeps its field visible for same-key retry. Its unchanged
     // preflight text is already durable; only subsequent edits are new writes.
-    if (!recoveredCreate.current) return local;
-    const projected = mergeWorkspaceEdits(recoveredCreate.current.local, local, recoveredCreate.current.remote);
-    if (local.activeSearchId === null && local.drafts.new !== recoveredCreate.current.local.drafts.new) projected.activeSearchId = null;
-    return projected;
+    return storedView(local, recoveredCreate.current);
   }, [current, scope, hasVisitor]);
   const valid = (generation: number) => guard.current.generation === generation && !guard.current.controller.signal.aborted;
   const noteSnapshot = useCallback((next: WorkspaceSnapshot) => {
     stored.current = next; setSnapshot(next);
     setViewed(previous => new Set([...previous, ...next.viewed.map(item => item.jobId)]));
   }, []);
-  const read = useCallback(async (creation?: { id: string; submitted: string }, preserveCurrent = false) => {
+  const read = useCallback(async (creation?: { id: string; submitted: string }, preserveCurrent = false, rebaseStored?: SavedWorkspaceState) => {
     if (!scope) return;
     const generation = guard.current.generation, signal = guard.current.controller.signal;
     const started = serial.current;
+    const initialStored = rebaseStored ?? base.current;
     setLoading(true); ready.current = false;
     try {
       const [searches, remote] = await Promise.all([client.listSearches(signal, scope), client.getWorkspace(scope, signal)]);
       if (!valid(generation)) return;
       const local = savedWorkspace(current.current);
+      const projected = storedView(local, recoveredCreate.current);
       const edited = preserveCurrent || started !== serial.current || fingerprint(local) !== fingerprint(base.current);
-      const clashes = edited && (Object.entries(local.drafts).some(([id, text]) => remote.state.drafts[id] !== undefined && remote.state.drafts[id] !== text
+      const clashes = rebaseStored
+        ? [...new Set([...Object.keys(projected.drafts), ...Object.keys(remote.state.drafts), ...Object.keys(initialStored.drafts)])]
+          .some(id => projected.drafts[id] !== initialStored.drafts[id] && remote.state.drafts[id] !== initialStored.drafts[id] && projected.drafts[id] !== remote.state.drafts[id])
+          || projected.activeSearchId !== initialStored.activeSearchId && remote.state.activeSearchId !== initialStored.activeSearchId && projected.activeSearchId !== remote.state.activeSearchId
+        : edited && (Object.entries(local.drafts).some(([id, text]) => remote.state.drafts[id] !== undefined && remote.state.drafts[id] !== text
         && !(creation?.id === id && remote.state.drafts[id] === creation.submitted))
         || !!creation && remote.state.activeSearchId !== null && remote.state.activeSearchId !== creation.id);
+      // Merge actual saved-state deltas first, then retain only the transient
+      // unresolved-request footprint that is still needed for same-key retry.
+      const saved = rebaseStored && !clashes
+        ? mergeWorkspaceEdits(projected, local, mergeWorkspaceEdits(initialStored, projected, remote.state)) : remote.state;
       noteSnapshot(remote); base.current = remote.state; ready.current = true;
-      apply({ type: "restored", searches, saved: remote.state, preserveLocal: edited, defaultSelection: remote.revision === 0 });
-      const held = clashes ? { remote, searches, base: remote.state } : null;
+      apply({ type: "restored", searches, saved, preserveLocal: rebaseStored ? clashes : edited, defaultSelection: remote.revision === 0 });
+      const held = clashes ? { remote, searches, base: rebaseStored ? initialStored : remote.state } : null;
       heldConflict.current = held; setConflict(held); setSyncError("");
     } catch (error) {
       if (valid(generation) && !isAbortError(error)) setSyncError(`Saved workspace unavailable. ${errorText(error)}`);
@@ -89,10 +104,36 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
     lastSaveAt.current = 0; base.current = { activeSearchId: null, drafts: {} };
     reclaimed.current = false;
     recoveredCreate.current = null;
+    pendingDeletion.current = null; refreshingDeletion.current = null;
     pendingViewed.current.clear(); heldConflict.current = null; setConflict(null); setSnapshot(null); setViewed(new Set()); setViewError("");
     if (scope) reading.current = read();
     return () => { controller.abort(); ready.current = false; };
   }, [scope, owner, read]);
+  const refreshOwnedDeletion = useCallback(async (): Promise<void> => {
+    const transition = pendingDeletion.current;
+    if (!transition) return;
+    if (refreshingDeletion.current) return refreshingDeletion.current;
+    const generation = guard.current.generation;
+    ready.current = false; setLoading(true);
+    const work = async () => {
+      // A successful owned DELETE can reclaim its visitor even when this
+      // browser's list is stale. Renew before either private hydration read.
+      if (scope === "visitor") await onVisitorRebootstrap();
+      if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
+      await read(undefined, true, transition);
+      if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
+      if (!ready.current) throw new Error("Reconnect the saved workspace before continuing.");
+      if (recoveredCreate.current) recoveredCreate.current.remote = base.current;
+      reclaimed.current = scope === "visitor" && stored.current?.revision === 0;
+      pendingDeletion.current = null;
+    };
+    const running = work().catch(error => {
+      if (valid(generation)) { ready.current = false; if (!isAbortError(error)) setSyncError(errorText(error)); }
+      throw error;
+    }).finally(() => { if (valid(generation)) { refreshingDeletion.current = null; setLoading(false); } });
+    refreshingDeletion.current = running; reading.current = running;
+    return running;
+  }, [scope, onVisitorRebootstrap, read]);
   const sendViewed = useCallback(async (jobId: string) => {
     if (!scope) return;
     const running = pendingViewed.current.get(jobId);
@@ -121,7 +162,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
     const work = async () => {
       await reading.current;
       if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
-      if (!ready.current || !stored.current) throw new Error("Reconnect the saved workspace before continuing.");
+      if (pendingDeletion.current || !ready.current || !stored.current) throw new Error("Reconnect the saved workspace before continuing.");
       if (heldConflict.current) throw new Error("Review the draft conflict before continuing. Your unsaved text is still here.");
       if (valid(generation)) {
         const next = project();
@@ -202,6 +243,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
   }, [scope, state.drafts, state.selectedId, state.searches, snapshot?.revision, save]);
   const flush = useCallback(async (signal?: AbortSignal) => {
     if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+    if (pendingDeletion.current) await refreshOwnedDeletion();
     await save();
     if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
     // An older autosave may have been in flight when the caller requested the
@@ -211,7 +253,34 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
     for (const jobId of pendingViewed.current.keys()) await sendViewed(jobId);
     if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
     if (ready.current && fingerprint(project()) !== fingerprint(base.current)) throw new Error("Your latest edits are still being saved. Please try again.");
-  }, [save, sendViewed, project]);
+  }, [save, sendViewed, project, refreshOwnedDeletion]);
+  const deleteOwnedSearch = async (id: string, onDeleted: () => void) => {
+    if (!scope) throw new Error("Reconnect before changing saved searches.");
+    const generation = guard.current.generation;
+    await flush();
+    if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
+    let release: () => void = () => {};
+    reading.current = new Promise<void>(resolve => { release = resolve; });
+    ready.current = false; setLoading(true);
+    try {
+      await client.deleteSearch(id, guard.current.controller.signal, scope);
+      if (!valid(generation)) throw new DOMException("Workspace changed", "AbortError");
+      onDeleted();
+      const prune = (saved: SavedWorkspaceState): SavedWorkspaceState => ({
+        activeSearchId: saved.activeSearchId === id ? null : saved.activeSearchId,
+        drafts: Object.fromEntries(Object.entries(saved.drafts).filter(([key]) => key !== id)),
+      });
+      base.current = prune(base.current);
+      if (recoveredCreate.current) recoveredCreate.current = { local: prune(recoveredCreate.current.local), remote: prune(recoveredCreate.current.remote) };
+      pendingDeletion.current = base.current;
+      // The deletion itself succeeded. A failed refresh stays visible and
+      // blocks writes; Retry saving must resume this renewal, not a stale read.
+      await refreshOwnedDeletion().catch(() => {});
+    } catch (error) {
+      if (valid(generation) && !isAbortError(error)) setSyncError(errorText(error));
+      throw error;
+    } finally { release(); if (valid(generation)) setLoading(false); }
+  };
   useEffect(() => {
     const leave = () => { void flush().catch(() => {}); };
     window.addEventListener("pagehide", leave);
@@ -279,6 +348,6 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
       recoveredCreate.current = { local: { ...local, drafts: { ...local.drafts, new: unresolvedSubmitted } }, remote: base.current };
     }
   };
-  return { flush, refreshAfterCreate, syncError: syncError || viewError, conflict, deletedSearchDrafts: conflict ? deletedSearchDrafts(conflict, state) : [], resolveConflict, recoveredDrafts: snapshot?.recoveredDrafts ?? [], recover, recovering, loading, viewed, markViewed,
-    retry: () => { if (!ready.current) reading.current = read(); else void flush().catch(() => {}); } };
+  return { flush, deleteOwnedSearch, refreshAfterCreate, syncError: syncError || viewError, conflict, deletedSearchDrafts: conflict ? deletedSearchDrafts(conflict, state) : [], resolveConflict, recoveredDrafts: snapshot?.recoveredDrafts ?? [], recover, recovering, loading, viewed, markViewed,
+    retry: () => { if (pendingDeletion.current) void flush().catch(() => {}); else if (!ready.current) reading.current = read(); else void flush().catch(() => {}); } };
 }

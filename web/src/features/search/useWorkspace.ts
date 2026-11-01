@@ -263,11 +263,10 @@ export function useWorkspace(
     }
   };
   const remove = async (id: string) => {
-    if (!scope) throw new Error("Reconnect before changing saved searches.");
-    await persistence.flush();
-    await client.deleteSearch(id, undefined, scope);
-    if (current.current.selectedId === id) cancel();
-    apply({ type: "deleted", id });
+    await persistence.deleteOwnedSearch(id, () => {
+      if (current.current.selectedId === id) cancel();
+      apply({ type: "deleted", id });
+    });
   };
   const flushForAuthentication = useCallback(async (signal?: AbortSignal) => {
     if (!scope && queryText(current.current).trim())

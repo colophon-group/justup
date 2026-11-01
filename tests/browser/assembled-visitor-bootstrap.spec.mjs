@@ -99,6 +99,95 @@ test('newer independent text after a lost create survives autosave, tab changes 
   expect(runtime.modelCalls()).toBe(1); expect(runtime.count('justup_searches')).toBe(1);
 });
 
+for (const recovered of [false, true]) for (const remaining of [false, true]) test(`owned ${recovered ? 'recovered' : 'normal'} search deletion preserves fresh drafting ${remaining ? 'with another search' : 'after last-search reclamation'}`, async ({ page }) => {
+  await page.clock.install(); await page.goto(runtime.origin);
+  if (remaining) {
+    await page.locator('#query').fill('Engineer first'); await page.locator('#job-search button[type=submit]').click();
+    await expect(page.getByRole('tab', { name: 'Engineering', exact: true })).toBeVisible();
+    await page.locator('#add-search').click();
+  }
+  const before = new Set(runtime.db.prepare('SELECT id FROM justup_searches').all().map(row => row.id));
+  if (recovered) runtime.loseNext('POST', '/visitor/searches');
+  await page.locator('#query').fill('  Engineer  '); await page.locator('#job-search button[type=submit]').click();
+  if (recovered) await expect(page.locator('#search-status')).toContainText(/unavailable|unreadable/);
+  else await expect(page.getByRole('tab', { name: 'Engineering', exact: true })).toHaveCount(remaining ? 2 : 1);
+  const id = runtime.db.prepare('SELECT id FROM justup_searches').all().find(row => !before.has(row.id)).id;
+  const callsBefore = runtime.calls.length;
+  await page.locator('.search-tab .tab-remove').last().click(); await page.locator('#confirm-delete-search').click();
+  await expect(page.locator('#delete-search-dialog')).not.toBeVisible();
+  await expect(page.getByRole('tab')).toHaveCount(remaining ? 1 : 0);
+  if (remaining) await page.locator('#add-search').click();
+  const newer = '  A fresh genuine new draft\nno night shifts  '; await page.locator('#query').fill(newer);
+  await page.clock.runFor(6500); await page.waitForLoadState('networkidle');
+  await expect(page.locator('#query')).toHaveValue(newer);
+  await expect.poll(() => runtime.workspaces()[0]?.drafts.new).toBe(newer);
+  expect(Object.hasOwn(runtime.workspaces()[0].drafts, id)).toBe(false);
+  expect(runtime.workspaces()[0].activeSearchId).toBeNull();
+  expect(runtime.calls.slice(callsBefore).filter(call => call.path === '/api/v1/visitor/workspace' && call.method === 'PATCH').every(call => call.status === 200)).toBe(true);
+  expect(runtime.calls.filter(call => call.path === `/api/v1/visitor/searches/${id}` && call.method === 'DELETE' && call.status === 200)).toHaveLength(1);
+  expect(runtime.modelCalls()).toBe(remaining ? 2 : 1); expect(runtime.count('justup_searches')).toBe(remaining ? 1 : 0);
+});
+
+test('acknowledged last deletion with a lost renewal keeps writes blocked until a fresh retry preserves later typing', async ({ page }) => {
+  await page.clock.install(); await page.goto(runtime.origin);
+  await page.locator('#query').fill('Engineer'); await page.locator('#job-search button[type=submit]').click();
+  await expect(page.getByRole('tab', { name: 'Engineering', exact: true })).toBeVisible();
+  runtime.loseNext('GET', '/session');
+  await page.locator('.search-tab .tab-remove').click(); await page.locator('#confirm-delete-search').click();
+  await expect(page.locator('#delete-search-dialog')).not.toBeVisible();
+  await expect(page.locator('#workspace-sync-status')).toContainText('Reconnect');
+  expect(runtime.count('justup_visitors')).toBe(0);
+  const beforeRetry = runtime.calls.length, newer = 'Exact text while renewal is unavailable  ';
+  await page.locator('#query').fill(newer); await page.clock.runFor(6500); await page.waitForLoadState('networkidle');
+  await expect(page.locator('#query')).toHaveValue(newer);
+  expect(runtime.calls.slice(beforeRetry).some(call => call.path === '/api/v1/visitor/workspace' && call.method === 'PATCH')).toBe(false);
+  const held = runtime.holdNext('GET', '/session');
+  await page.locator('#retry-workspace').click(); await held.arrived;
+  const latest = '  Latest exact draft\nwhile the retry read is held  '; await page.locator('#query').fill(latest); held.release();
+  await expect.poll(() => runtime.workspaces()[0]?.drafts.new).toBe(latest);
+  await expect(page.locator('#query')).toHaveValue(latest);
+  await expect(page.locator('#workspace-sync-status')).toBeEmpty();
+  await expect(page.locator('#workspace-conflict')).toHaveCount(0);
+  await expect(page.getByRole('tab')).toHaveCount(0);
+  expect(runtime.calls.slice(beforeRetry).filter(call => call.path === '/api/v1/visitor/workspace' && call.method === 'PATCH').every(call => call.status === 200)).toBe(true);
+  expect(runtime.modelCalls()).toBe(1); expect(runtime.count('justup_searches')).toBe(0);
+});
+
+test('owned deletion retains a genuine remote conflict when newer local text predates the hydration read', async ({ page }) => {
+  await page.clock.install(); await page.goto(runtime.origin);
+  await page.locator('#query').fill('Engineer first'); await page.locator('#job-search button[type=submit]').click();
+  await expect(page.getByRole('tab', { name: 'Engineering', exact: true })).toBeVisible();
+  await page.locator('#add-search').click(); await page.locator('#query').fill('Engineer second');
+  await page.locator('#job-search button[type=submit]').click();
+  await expect(page.getByRole('tab', { name: 'Engineering', exact: true })).toHaveCount(2);
+  runtime.loseNext('GET', '/session');
+  await page.locator('.search-tab .tab-remove').last().click(); await page.locator('#confirm-delete-search').click();
+  await expect(page.locator('#delete-search-dialog')).not.toBeVisible();
+  await expect(page.locator('#workspace-sync-status')).toContainText('Reconnect');
+  const held = runtime.holdNext('GET', '/session');
+  await page.locator('#retry-workspace').click(); await held.arrived;
+  const local = '  Local edit before hydration  ', remote = 'Independent edit from another browser';
+  const remainingId = runtime.db.prepare('SELECT id FROM justup_searches').get().id;
+  await page.locator('#query').fill(local);
+  const session = await (await page.request.get(runtime.origin + '/api/v1/session')).json();
+  const workspace = await (await page.request.get(runtime.origin + '/api/v1/visitor/workspace')).json();
+  const updated = await page.request.patch(runtime.origin + '/api/v1/visitor/workspace', {
+    headers: { Origin: runtime.origin, 'X-CSRF-Token': session.csrfToken },
+    data: { expectedRevision: workspace.revision, activeSearchId: null, drafts: { ...workspace.state.drafts, [remainingId]: remote } },
+  }); expect(updated.status()).toBe(200);
+  await expect(page.locator('#query')).toHaveValue(local);
+  held.release(); await expect(page.locator('#delete-search-dialog')).not.toBeVisible();
+  await expect(page.locator('#workspace-conflict')).toBeVisible();
+  await expect(page.locator('#query')).toHaveValue(local);
+  await page.clock.runFor(6500); await page.waitForLoadState('networkidle');
+  expect(runtime.workspaces()[0].drafts[remainingId]).toBe(remote);
+  await page.locator('#keep-local-drafts').click();
+  await expect(page.locator('#workspace-conflict')).toHaveCount(0);
+  await expect.poll(() => runtime.workspaces()[0].drafts[remainingId]).toBe(local);
+  await expect(page.locator('#query')).toHaveValue(local);
+  expect(runtime.modelCalls()).toBe(2); expect(runtime.count('justup_searches')).toBe(1);
+});
+
 for (const lost of [false, true]) test(`real clear/rebootstrap preserves typing while the clearing reply is ${lost ? 'lost' : 'held'}`, async ({ page }) => {
   await page.goto(runtime.origin); await page.locator('#query').fill('An earlier draft'); await page.locator('#query').blur();
   await expect.poll(() => runtime.workspaces()[0]?.drafts.new).toBe('An earlier draft');
