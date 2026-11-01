@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProductRecords,RECORD_RETENTION_MS } from './product-records.mjs';
 import { compareEvaluation,checkedCase,CASE_RETENTION_MS } from './evaluation-records.mjs';
+import { migrateSchemaV1 } from './schema.mjs';
 import { createTasks } from './tasks.mjs';
 import { runProductRecordsCli } from './product-records-cli.mjs';
 
@@ -37,6 +38,7 @@ test('retention and row caps are transactional; a failed deletion barrier rolls 
   for(let i=0;i<2;i++)f.records.observe({ownerId:'owner',event:'search_submitted',key:`new-${i}`,outcome:'accepted'});
   f.block();assert.equal(f.records.observe({ownerId:'owner',event:'search_submitted',key:'cannot-evict',outcome:'accepted'}),false);
   assert.equal(f.db.prepare('SELECT count(*) n FROM justup_journey_events').get().n,2);
+  f.advance(RECORD_RETENTION_MS);assert.equal(f.records.cleanup(),false);assert.equal(f.db.prepare('SELECT count(*) n FROM justup_journey_events').get().n,2);
 });
 test('execution joins real queue attempts, repair counts and numeric metrics; retries and late deletion never inflate runs',async t=>{
   const f=fixture(t),queued=f.tasks.enqueue({ownerId:'owner',kind:'search_intent',requestKey:'one',payload:{query:'private query must stay out',searchId:'search-1'}}),task=f.tasks.claim({workerId:'fixture'});
@@ -72,4 +74,23 @@ test('operator CLI defaults to aggregate and explicitly imports/exports only rev
   assert.equal(JSON.parse(runProductRecordsCli(['--db',path,'cases-export'])).cases.length,cases.length);
   const report=runProductRecordsCli(['--db',path]);assert(!report.includes('private-search'));assert(!report.includes('Backend at Acme'));
   const large=join(directory,'large.json');writeFileSync(large,'x'.repeat(4*1024*1024+1));assert.throws(()=>runProductRecordsCli(['--db',path,'cases-import',large]));
+});
+
+
+test('stable product evidence survives the offline epoch-one rename without a collection-owned version bump',t=>{
+  const db=new DatabaseSync(':memory:');t.after(()=>db.close());db.exec(readFileSync(new URL('./fixtures/schema-v1.sql',import.meta.url),'utf8'));
+  const records=createProductRecords({db,now:()=>AT,ownerAuthority:id=>id==='owner'?{account:{id},access:{kind:'free'}}:null});
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version,1);
+  records.observe({ownerId:'owner',event:'search_submitted',key:'task-1',referenceId:'search-1',outcome:'accepted'});records.evaluations.importCase(cases[0]);records.evaluations.stage({ownerId:'owner',referenceId:'search-1',revision:1,task:'search_intent',reason:'edit_requires_review'});
+  const tables=['justup_journey_events','justup_model_executions','justup_evaluation_candidates','justup_evaluation_cases'],rows=()=>tables.map(name=>db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()),before=rows();
+  migrateSchemaV1(db);assert.deepEqual(rows(),before);assert.equal(db.prepare('PRAGMA user_version').get().user_version,2);
+});
+
+test('matching execution preserves confirmed numeric cost and keeps an ambiguous attempt cost unknown',async t=>{
+  const f=fixture(t);
+  for(const ambiguous of [0,1]){
+    f.tasks.enqueue({ownerId:'owner',kind:'ai_match',requestKey:`matching-${ambiguous}`,payload:{scanId:'scan-1'}});const task=f.tasks.claim({workerId:'fixture',kinds:['ai_match']});
+    const result=await f.records.runTask(task,async()=>({status:'succeeded',output:{inputTokens:20,outputTokens:2,costNanodollars:840,attempts:1,ambiguousAttempts:ambiguous,evaluated:2,cacheHits:1,insufficient:1}}));f.tasks.complete(task.id,task.leaseToken,result);
+  }
+  const rows=f.db.prepare('SELECT cost_nanodollars,evaluated FROM justup_model_executions ORDER BY rowid').all();assert.deepEqual(rows.map(row=>row.cost_nanodollars),[840,null]);assert(rows.every(row=>row.evaluated===2));
 });

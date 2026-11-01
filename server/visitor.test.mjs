@@ -501,7 +501,7 @@ test('visitor and configured account expiry remove linked measurement and review
 });
 
 
-test('optional measurement callback or cleanup failure cannot prevent an admitted journey',async t=>{
+test('optional measurement callback failure cannot prevent an admitted journey',async t=>{
   const s=await setup(t,{measurement:true}),c=s.client();await c.session();
   s.records.observe=()=>{throw new Error('private diagnostic detail');};
   const id=await s.create(c,'metrics-unavailable');assert.equal((await s.results(c,id)).status,200);
