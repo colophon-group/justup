@@ -6,8 +6,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync,writeFileSync,chmodSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createApiServices,createApiReadiness,readRunnerStatus } from './demo-composition.mjs';
-import { writeRunnerStatus,readRunnerConfig } from './demo-runner-adapter.mjs';
+import { createApiServices,createApiReadiness,readRunnerStatus } from './composition.mjs';
+import { writeRunnerStatus,readRunnerConfig } from './runner-adapter.mjs';
 const AT=Date.parse('2026-10-31T16:00:00Z'),sourceCommit='a'.repeat(40),buildIdentity='sha256:immutable';
 function fixture(t){const dir=mkdtempSync(join(tmpdir(),'justup-composition-')),path=join(dir,'runner-status.json');t.after(()=>rmSync(dir,{recursive:true,force:true}));return {dir,path,config:{sourceCommit,buildIdentity,runnerStatusPath:path},write(extra={}){const value={schemaVersion:1,identity:'queue-build',sourceCommit,buildIdentity,ready:true,updatedAt:new Date(AT).toISOString(),capabilities:{search:true,companyRequests:true,aiMatching:false},...extra};writeFileSync(path,JSON.stringify(value),{mode:0o640});return value;}};}
 test('missing/stale/wrong-build or malformed heartbeat fails closed without model access',t=>{
@@ -36,13 +36,13 @@ test('queue status writes atomic non-secret metadata and shutdown removes availa
 });
 test('queue configuration refuses an ordinary contributor-owned config',t=>{const f=fixture(t);f.write();assert.throws(()=>readRunnerConfig(f.path),/unavailable/);});
 test('assembled core/auth/matching API consumes heartbeat, exposes real services and deletes accounts without model secrets',async t=>{
-  let createConfiguredDemo,createAuth;
-  try{({createConfiguredDemo}=await import('./main.mjs'));({createAuth}=await import('./auth.mjs'));await import('./matching.mjs');}
+  let createConfiguredApplication,createAuth;
+  try{({createConfiguredApplication}=await import('./main.mjs'));({createAuth}=await import('./auth.mjs'));await import('./matching.mjs');}
   catch(error){if(error.code==='ERR_MODULE_NOT_FOUND'){t.skip('Core/auth/matching dependency PRs must be assembled for this cross-module contract.');return;}throw error;}
   const f=fixture(t);f.write();const origin='http://127.0.0.1:18787',password='Synthetic-password-123!';
-  const demo=await createConfiguredDemo({config:{...f.config,dbPath:':memory:',servicesEnabled:true,allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,privacyUrl:'https://preview.example/privacy',usageUrl:'https://preview.example/usage',policyVersion:'fixture',inviteCode:'fixture-invite',jev:{token:'must-never-enter-api-response'}},now:()=>AT,authFactory:createAuth});
+  const demo=await createConfiguredApplication({config:{...f.config,dbPath:':memory:',servicesEnabled:true,allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,privacyUrl:'https://preview.example/privacy',usageUrl:'https://preview.example/usage',policyVersion:'fixture',inviteCode:'fixture-invite',jev:{token:'must-never-enter-api-response'}},now:()=>AT,authFactory:createAuth});
   t.after(()=>demo.close());await new Promise(resolve=>demo.server.listen(0,'127.0.0.1',resolve));const endpoint=`http://127.0.0.1:${demo.server.address().port}/api/v1`;
-  const account=await demo.auth.register({username:'fixtureuser',password,inviteCode:'fixture-invite'}),headers={cookie:`justup_demo_session=${account.token}`};
+  const account=await demo.auth.register({username:'fixtureuser',password,inviteCode:'fixture-invite'}),headers={cookie:`justup_session=${account.token}`};
   // Cookie name is part of the core boundary, not a provider/session substitute.
   const coreSession=await demo.auth.session(account.token);assert.ok(coreSession.account.id);
   const call=(path,options={})=>fetch(endpoint+path,{...options,headers:{...headers,...options.headers}});

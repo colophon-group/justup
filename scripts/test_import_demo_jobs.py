@@ -1,4 +1,4 @@
-"""Focused fake-network tests for the explicit public demo import command."""
+"""Focused fake-network tests for the explicit public job import command."""
 
 from datetime import datetime, timedelta, timezone
 import importlib.util
@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-MODULE_PATH = Path(__file__).with_name("import-demo-jobs.py")
-SPEC = importlib.util.spec_from_file_location("demo_import", MODULE_PATH)
+MODULE_PATH = Path(__file__).with_name("import-jobs.py")
+SPEC = importlib.util.spec_from_file_location("job_import", MODULE_PATH)
 IMPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(IMPORT)
 NOW = datetime(2026, 10, 31, 16, tzinfo=timezone.utc)

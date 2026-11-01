@@ -6,11 +6,11 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { openStore } from './store.mjs';
 import { tmpdir } from 'node:os';
-import { createDemo, createDeletionBarrier, readImportFile, configFromEnv } from './main.mjs';
+import { createApplication, createDeletionBarrier, prepareRestoredDatabase, readImportFile, configFromEnv } from './main.mjs';
 
 test('feature deletion and tasks compose synchronously inside the auth transaction', async (t) => {
   let cleanup;
-  const demo = await createDemo({ config: { allowedOrigin: 'https://preview.example' },
+  const demo = await createApplication({ config: { allowedOrigin: 'https://preview.example' },
     authFactory: ({ deleteAccountData }) => { cleanup = deleteAccountData; return {}; },
     serviceFactories: [({ db }) => {
       db.exec('CREATE TABLE feature_private(owner_id TEXT, data TEXT)');
@@ -28,17 +28,18 @@ test('feature deletion and tasks compose synchronously inside the auth transacti
 test('persistent demo files are private, imports are bounded and env flags are explicit', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'justup-demo-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'private', 'demo.sqlite');
-  const demo = await createDemo({ config: { dbPath: path, allowedOrigin: 'https://preview.example' }, authFactory: () => ({}) });
+  const demo = await createApplication({ config: { dbPath: path, allowedOrigin: 'https://preview.example' }, authFactory: () => ({}) });
   assert.equal(statSync(path).mode & 0o777, 0o600); await demo.close();
   const input = join(dir, 'snapshot.json'); writeFileSync(input, '{}'); assert.deepEqual(readImportFile(input), {});
-  writeFileSync(input, '{sensitive source text'); assert.throws(() => readImportFile(input), { message: 'Invalid demo import file.' });
+  writeFileSync(input, '{sensitive source text'); assert.throws(() => readImportFile(input), { message: 'Invalid job import file.' });
   truncateSync(input, 64 * 1024 * 1024 + 1); assert.throws(() => readImportFile(input), /64 MiB/);
-  const env = configFromEnv({ JUSTUP_DEMO_POLICIES_REVIEWED: 'yes', JUSTUP_DEMO_ALLOW_LOCAL_HTTP: 'true' });
+  assert.throws(() => configFromEnv({ JUSTUP_POLICIES_REVIEWED: 'yes' }), /Invalid runtime configuration/);
+  const env = configFromEnv({ JUSTUP_POLICIES_REVIEWED: 'false', JUSTUP_ALLOW_LOCAL_HTTP: 'true' });
   assert.equal(env.policiesReviewed, false); assert.equal(env.allowInsecureLocalhost, true);
-  assert.equal(env.servicesEnabled, false); assert.equal(configFromEnv({ JUSTUP_DEMO_SERVICES_ENABLED: 'true', JUSTUP_DEMO_SHARED_STATE: 'true' }).sharedState, true);
+  assert.equal(env.servicesEnabled, false); assert.equal(configFromEnv({ JUSTUP_SERVICES_ENABLED: 'true', JUSTUP_SHARED_STATE: 'true' }).sharedState, true);
 });
 test('health/version expose fixed identity and explicitly unavailable runner', async (t) => {
-  const demo = await createDemo({ config: { allowedOrigin: 'https://preview.example', sourceCommit: 'a'.repeat(40), buildIdentity: 'build-a' }, authFactory: () => ({ session: () => null }) });
+  const demo = await createApplication({ config: { allowedOrigin: 'https://preview.example', sourceCommit: 'a'.repeat(40), buildIdentity: 'build-a' }, authFactory: () => ({ session: () => null }) });
   await new Promise((r) => demo.server.listen(0, '127.0.0.1', r));
   t.after(async () => { demo.server.closeAllConnections(); await demo.close(); });
   const base = `http://127.0.0.1:${demo.server.address().port}/api/v1`;
@@ -53,7 +54,7 @@ test('deletion rotates and flushes recovery generation before private SQL commit
   mkdirSync(backupDir, { mode: 0o700 }); const old = '00000000-0000-4000-8000-000000000000\n';
   writeFileSync(generationPath, old); writeFileSync(join(backupDir, 'snapshot.sqlite'), 'private'); writeFileSync(join(backupDir, 'snapshot.json'), '{}');
   let cleanup;
-  const demo = await createDemo({ config: { allowedOrigin: 'https://preview.example', privateGenerationPath: generationPath, backupDir },
+  const demo = await createApplication({ config: { allowedOrigin: 'https://preview.example', privateGenerationPath: generationPath, backupDir },
     authFactory: ({ deleteAccountData }) => { cleanup = deleteAccountData; return {}; } }); t.after(() => demo.close());
   const task = demo.tasks.enqueue({ ownerId: 'a', kind: 'search_intent', requestKey: 'one', payload: {} });
   assert.throws(() => demo.withPrivateTransaction(() => { cleanup('a'); throw new Error('later SQL failure'); }), /later SQL failure/);
@@ -108,7 +109,7 @@ test('real concurrent SQLite backup is rejected throughout pending deletion and 
   const dir = mkdtempSync(join(tmpdir(), 'justup-backup-race-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const backupDir = join(dir, 'backups'), generationPath = join(dir, 'private-generation'), dbPath = join(dir, 'live.sqlite');
   mkdirSync(backupDir); const old = '00000000-0000-4000-8000-000000000000\n'; writeFileSync(generationPath, old);
-  const demo = await createDemo({ config: { dbPath, privateGenerationPath: generationPath, backupDir, allowedOrigin: 'https://preview.example' }, authFactory: () => ({}) });
+  const demo = await createApplication({ config: { dbPath, privateGenerationPath: generationPath, backupDir, allowedOrigin: 'https://preview.example' }, authFactory: () => ({}) });
   t.after(() => demo.close()); demo.store.db.exec("CREATE TABLE private_records(id TEXT); INSERT INTO private_records VALUES('account-a');");
   const snapshot = join(dir, 'raced.sqlite'); let raced;
   demo.withPrivateTransaction(() => {
@@ -142,7 +143,7 @@ test('crash-retained and replaced pending markers are never cleared by a differe
   assert.equal(next.ready(), false); next.afterPrivateTransaction(); assert.ok(existsSync(pendingPath));
   reopened.db.exec('BEGIN IMMEDIATE'); assert.throws(() => next.beforePrivateDelete(), /pending/); reopened.db.exec('ROLLBACK');
   next.afterPrivateTransaction(); assert.equal(readFileSync(pendingPath, 'utf8'), foreign);
-  const demo = await createDemo({ config: { dbPath, privateGenerationPath: generationPath, backupDir, allowedOrigin: 'https://preview.example',
+  const demo = await createApplication({ config: { dbPath, privateGenerationPath: generationPath, backupDir, allowedOrigin: 'https://preview.example',
     policiesReviewed: true, privacyUrl: 'https://preview.example/privacy', usageUrl: 'https://preview.example/usage', policyVersion: 'synthetic', inviteCode: 'synthetic' },
     authFactory: () => ({ cleanup: () => ({}), session: () => null }) });
   await new Promise((r) => demo.server.listen(0, '127.0.0.1', r));
@@ -157,7 +158,7 @@ test('shared API/queue storage keeps DB, WAL and SHM group-private and rejects u
   const path = join(dir, 'demo.sqlite'), oldMask = process.umask(0o007);
   try {
     chmodSync(dir, 0o2770);
-    const demo = await createDemo({ config: { dbPath: path, sharedState: true, allowedOrigin: 'https://preview.example' }, authFactory: () => ({}) });
+    const demo = await createApplication({ config: { dbPath: path, sharedState: true, allowedOrigin: 'https://preview.example' }, authFactory: () => ({}) });
     try {
       demo.store.db.exec('CREATE TABLE shared_probe(id INTEGER); INSERT INTO shared_probe VALUES(1);');
       for (const file of [path, path + '-wal', path + '-shm']) assert.equal(statSync(file).mode & 0o777, 0o660);
@@ -166,4 +167,31 @@ test('shared API/queue storage keeps DB, WAL and SHM group-private and rejects u
     process.umask(0o077); assert.throws(() => openStore(path, { sharedState: true }), /umask/);
     process.umask(0o007); chmodSync(dir, 0o0770); assert.throws(() => openStore(path, { sharedState: true }), /02770/);
   } finally { process.umask(oldMask); }
+});
+
+test('product runtime configuration distinguishes admission, account retention and sessions', () => {
+  const defaults = configFromEnv({});
+  assert.equal(defaults.requiresInvitation, true); assert.equal(defaults.accountTtlMs, undefined);
+  const config = configFromEnv({ JUSTUP_REQUIRES_INVITATION: 'false', JUSTUP_MAX_ACCOUNTS: 'none',
+    JUSTUP_ACCOUNT_TTL_MS: 'none', JUSTUP_SESSION_TTL_MS: '1000', JUSTUP_ACCOUNT_EXPIRES_AT: '1790000000000' });
+  assert.equal(config.requiresInvitation, false); assert.equal(config.maxAccounts, null);
+  assert.equal(config.accountTtlMs, null); assert.equal(config.sessionTtlMs, 1000); assert.equal(config.accountExpiresAt, 1790000000000);
+  for (const value of ['0','-1','1.5','Infinity','secret-value']) assert.throws(() => configFromEnv({JUSTUP_MAX_ACCOUNTS:value}), /MAX_ACCOUNTS/);
+});
+
+test('disk restore preparation invalidates sessions while preserving durable identities and private work', async (t) => {
+  const dir=mkdtempSync(join(tmpdir(),'justup-durable-restore-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const path=join(dir,'live.sqlite'),restored=join(dir,'restored.sqlite');let clock=Date.UTC(2026,9,31);
+  const application=await createApplication({config:{dbPath:path,allowedOrigin:'https://preview.example',requiresInvitation:false},now:()=>clock});
+  const signedUp=await application.auth.register({username:'durable',password:'only-a-fixture-password'});
+  const task=application.tasks.enqueue({ownerId:signedUp.account.id,kind:'search_intent',requestKey:'durable-task',payload:{query:'A synthetic query'}});
+  application.store.db.prepare('VACUUM INTO ?').run(restored);await application.close();
+  assert.deepEqual(await prepareRestoredDatabase({dbPath:restored}),{schemaVersion:1,sessionsInvalidated:true,remainingSessions:0,sessionsDeleted:1});
+  clock+=365*86400000;
+  const reopened=await createApplication({config:{dbPath:restored,allowedOrigin:'https://preview.example',requiresInvitation:false,accountTtlMs:1000},now:()=>clock});t.after(()=>reopened.close());
+  assert.equal(reopened.auth.session(signedUp.token),null);
+  const signedIn=await reopened.auth.login({username:'durable',password:'only-a-fixture-password'});
+  assert.deepEqual(signedIn.account,signedUp.account);assert.equal(signedIn.account.expiresAt,null);
+  assert.equal(reopened.tasks.get(signedUp.account.id,task.id).payload.query,'A synthetic query');
+  assert.equal(reopened.store.db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
 });

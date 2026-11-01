@@ -1,17 +1,17 @@
 ---
-summary: Integrate the temporary Justup preview with its minimal API and confirmed data boundaries.
-read_when: Connecting the browser, implementing a backend module or reviewing preview privacy and release evidence.
+summary: Integrate the Justup API with durable accounts and explicit service availability.
+read_when: Connecting the browser, implementing a backend module or reviewing product privacy and release evidence.
 ---
 
-# Demo API contract
+# Justup API contract
 
 Status: implementation contract; not a claim that endpoints are deployed.
 
-The demo serves a bounded copy of real Jobseek listings, real preview accounts, validated search interpretation, optional last-resort matching and company identity requests. Billing, production mail, crawler writes and production schedules are disabled. Follow the [development guide](development-process.md); ordinary implementation targets `dev`, and runtime changes cannot enter `main` before the real release gate passes.
+The runtime serves attributable Jobseek imports, durable local accounts, validated search interpretation, optional residual matching and company identity requests. Invitation restrictions and temporary account lifetimes are deployment policy. Billing, mail and crawler writes are not implemented; accepted product features still missing are launch requirements, not preview exemptions. Follow the [development guide](development-process.md); ordinary implementation targets `dev`, and runtime changes cannot enter `main` before the real release gate passes.
 
 ## Runtime and resource boundary
 
-Use Node.js 24 LTS ES modules, built-in HTTP/crypto/SQLite and one bounded runner. The isolated SQLite database and task state belong only to the preview. This is a small demo allocation, not a change to the longer-term production database decision. No additional database service or auth vendor is needed.
+Use Node.js 24 LTS ES modules, built-in HTTP/crypto/SQLite and one bounded runner. SQLite stores durable application identity, searches, requests and task state. The first restricted deployment uses isolated storage with the same schema and runtime. No additional database service or auth vendor is needed.
 
 The existing ARM64 host is in Nuremberg. Keep its production Lightpanda renderer intact. The aggregate preview ceiling is half a CPU, 1 GiB RAM, 2 GiB disk and 96 tasks, with at most one model task in flight. Verify and enforce these limits before deployment. Builds run off-host. A resource outside the authorized host/free Cloudflare allowance needs a separately approved resource request.
 
@@ -31,16 +31,16 @@ Errors use the following shape, with safe messages and no provider output or sec
 
 Use 400 for malformed input, 401 for a missing/expired session, 403 for denied access, 409 for stale revisions/previews, 422 for unsupported requirements, 429 for a usage limit and 503 for an unavailable dependency. Include `Retry-After` where a retry is appropriate.
 
-## Session and preview accounts
+## Accounts, admission and sessions
 
-The login provider is Justup itself: invite-only username/password accounts. There are no email addresses, external identity providers, Google OAuth scopes, payment identities, trial activation or legacy-credit claims in this preview. Passwords use salted scrypt; the store retains only hashes of passwords and random session tokens. Registration is capped at 30 accounts initially. Sessions expire after seven days and logout revokes them.
+The implemented login provider is Justup itself: local username/password accounts. `JUSTUP_REQUIRES_INVITATION` defaults true; setting it false permits public registration without an invitation, still subject to backend admission, policy and security checks. The safe default account cap is 30 and can be configured explicitly. Accounts are durable by default. Optional `JUSTUP_ACCOUNT_TTL_MS` or `JUSTUP_ACCOUNT_EXPIRES_AT` assign new temporary accounts a stored deadline; later policy changes do not alter existing accounts. Sessions expire independently after seven days by default. There is no external identity, payment identity, free-period activation, recovery or legacy entitlement in the current runtime. See [account contracts](auth.md) and the launch issue [account-access](https://github.com/colophon-group/justup/issues/29).
 
 Keep registration and login disabled until the static Privacy and Usage pages have been reviewed. Deploy the approved HTTPS page URLs and policy version with the API. The pages are frontend-owned; there is no policy JSON endpoint.
 
 | Route | Input or result |
 | --- | --- |
 | `GET /session` | Viewer or null, server time, access rules, CSRF token, authentication availability, capabilities, policy URLs/version and import freshness. |
-| `POST /auth/register` | `{username,password,inviteCode}` → account/session; unavailable until policy approval and invite configuration. |
+| `POST /auth/register` | `{username,password,inviteCode?}` → account/session; invitation required only when backend admission says so. |
 | `POST /auth/login` | `{username,password}` → account/session; same policy gate. |
 | `POST /session/logout` | Revoke the current session and clear its cookie. |
 | `DELETE /account` | `{password}` → confirmed deletion of the account, sessions and its private searches, requests, tasks and cached model decisions. |
@@ -50,9 +50,10 @@ Session example:
 ```json
 {
   "serverTime":"2026-10-31T16:00:00Z",
-  "user":{"id":"account-id","username":"tester"},
-  "access":{"kind":"demo","fullAccess":true,"legacy":false,"billingEnabled":false,"until":null},
-  "authentication":{"method":"username_password","loginEnabled":true,"registrationEnabled":true,"reason":null},
+  "user":{"id":"account-id","username":"tester","expiresAt":null},
+  "expiresAt":"2026-11-07T16:00:00Z",
+  "access":{"kind":"account","fullAccess":true,"legacy":false,"billingEnabled":false,"until":null},
+  "authentication":{"method":"username_password","loginEnabled":true,"registrationEnabled":true,"requiresInvitation":true,"reason":null,"registrationReason":null},
   "csrfToken":"opaque-token",
   "capabilities":{"search":true,"aiMatching":true,"companyRequests":true,"sse":false,"follows":false,"viewed":false,"preferences":false,"hiddenMatchCounts":false},
   "policies":{"privacyUrl":"https://preview.justup.work/privacy","usageUrl":"https://preview.justup.work/usage","version":"reviewed-version","reviewed":true},
@@ -62,9 +63,9 @@ Session example:
 
 The URLs and enabled flags above are illustrative. Return the deployed configuration and actual provider availability. A visitor has `user:null`, `access.kind:"guest"` and `fullAccess:false`. Anonymous visitors can read the public feed; creating or editing a model-backed search requires sign-in. The browser may preserve an unsubmitted visitor draft in memory, without inventing a saved account search.
 
-`authentication.reason` is null or `policy_unavailable`, `deletion_unavailable`, `dependency_unavailable`. Login requires reviewed configured policies and working retention/deletion protections. Registration additionally requires an invite configuration and remaining account capacity. Model availability is separate from login and account deletion. A wrong deletion password returns `invalid_credentials` while preserving the valid session; an expired session returns `unauthenticated`.
+`authentication.reason` is null or `policy_unavailable`, `deletion_unavailable`, `dependency_unavailable`. Login requires reviewed configured policies and working retention/deletion protections. Registration additionally requires backend registration availability and remaining configured account capacity. Invitation configuration is required only in invitation mode. The response always reports the authoritative boolean `requiresInvitation`; clients conservatively treat an absent value as true. Stable cookies are `__Host-justup_session` and `__Host-justup_csrf`, with explicit localhost-only variants. The `product-draft-4` policy is unapproved; this illustrative reviewed example does not authorize activation. Model availability is separate from login and account deletion. A wrong deletion password returns `invalid_credentials` while preserving the valid session; an expired session returns `unauthenticated`.
 
-Preview accounts can read eligible imported jobs first observed within 14 days. Visitors can read only jobs first observed 48 hours to 14 days ago. These are explicit demo access rules, not a paid-plan or free-trial entitlement. Access is rechecked on every result page.
+Accounts with `access.fullAccess:true` can read eligible imported jobs first observed within 14 days. Visitors can read only jobs first observed 48 hours to 14 days ago. A signed-in account without full access receives the same withheld-job protection as a visitor. The current account access is not a paid-plan or free-trial claim. Access is rechecked on every result page.
 
 ## Searches, tasks and results
 
@@ -124,7 +125,7 @@ Missing or stale imported evidence returns an empty `paused` page with `retryAft
 
 Residual matching runs only after freshness and primary filters. JEV returns accept/reject/insufficient-evidence; provider failure is separate. Cached decisions bind condition, evidence hash and classifier version, scoped for account deletion. Batch enough candidates for low acceptance rates within bounded concurrency/work budgets. Deliver a resolved newest-first prefix; never substitute unevaluated candidates. Pauses and outages retain scan position and active AI requirements.
 
-SSE, follows, viewed state, preferences, hidden-match counts and Hiring Wire are explicitly unavailable in this first demo contract. Capability flags keep the UI honest. They remain in the broader design and can be added when their end-to-end contracts are ready.
+SSE, follows, viewed state, preferences and hidden-match counts currently report unavailable. These accepted product paths remain launch requirements. Capability flags describe implemented availability; they cannot defer an accepted release requirement. The Hiring Wire API and worker are being integrated under their own bounded contract.
 
 ## Companies and identity requests
 
@@ -147,17 +148,17 @@ Imported companies have `coverage.state:"imported_snapshot"`; an accepted new id
 
 `GET /health` proves process readiness without secrets. `GET /version` returns the API source commit, schema version, immutable build identity, runner identity/readiness and import generation. The release report also records the frontend deployment identity and exact tested versions. A missing required dependency is an explicit capability/readiness state, not a fake successful result.
 
-## Data flow and retention to verify before sharing
+## Data flow and retention
 
-| Data | Purpose and recipients | Preview retention/deletion contract |
+| Data | Purpose and recipients | Product retention/deletion contract |
 | --- | --- | --- |
-| Username, password hash, session-token hash | Local account authentication on the isolated Nuremberg host. No external login provider/scopes or email. | Sessions at most seven days; accounts and private state at most 30 days; immediate logical removal on verified account deletion. |
-| Search text, accepted configurations and revisions | Local saved searches; request/prior query/configuration and selected posting-language context sent to OpenAI through bounded Luna execution. No account IDs, usernames or billing data in model prompts. | Account lifetime, at most 30 days; account/search deletion purges associated private task/decision data. |
+| Username, password hash, session-token hash | Local account authentication on the isolated Nuremberg host. No external login provider/scopes or email. | Sessions default seven days; account identity persists until verified deletion or an explicitly stored temporary-account deadline. |
+| Search text, accepted configurations and revisions | Local saved searches; request/prior query/configuration and selected posting-language context sent to OpenAI through bounded Luna execution. No account IDs, usernames or billing data in model prompts. | Account lifetime; account/search deletion purges associated private task/decision data. Terminal queue records expire after 30 days; matching cache/scans after seven. |
 | Residual AI condition and public job evidence | JEV provider for matching after ordinary filters. | Local decisions keyed by exact versions, at most seven days and removed with account data. Provider handling must be documented from actual configuration. |
-| Company name/domain/link/scope and public evidence | Local request tracking and bounded OpenAI/Codex identity research. | Account lifetime, at most 30 days; removable request and account paths. |
-| Imported public listing fields and normalized description text | Read-only Jobseek public search/asset export into the isolated preview. No user records, credentials, private crawler configuration or internal traces. | Rolling 14-day result eligibility, bounded snapshot age and repeatable refresh/removal. Keep source first-observed times, hashes and verification time. |
+| Company name/domain/link/scope and public evidence | Local request tracking and bounded OpenAI/Codex identity research. | Account lifetime; removable request and account paths. |
+| Imported public listing fields and normalized description text | Read-only Jobseek public search/asset import. No user records, credentials, private crawler configuration or internal traces. | Rolling 14-day eligibility and 24-hour verification ceiling; bodies/metadata pruned after 30 days and to 1,000 jobs. Minimal source identity keys and latest activity/reservation observations persist to prevent reassignment or stale reopening; import summaries retain 32 generations. |
 | Operational diagnostics | Route category, status, request ID, duration, token/cost counts and redacted diagnostic codes; no raw query/body, password, token or IP in application logs. | Bounded local retention, initially seven days, with implemented cleanup and restore/deletion behavior recorded before policy approval. |
 
 These are implementation requirements. The privacy inventory and static policy pages must be updated to actual observed settings and provider recipients before approval; do not promise provider zero retention. Company research may use public web evidence. Prevent model tools from accessing runtime secrets, private host paths or production services. No model request or raw trace is published in GitHub or browser errors.
 
-Use deterministic tests and isolated accounts/data by default, then bounded real-provider checks and full deployed browser journeys. Record the exact candidate and deployed builds, failure recovery, resource use, deletion and restore results before sharing the temporary preview.
+Use deterministic tests and isolated accounts/data by default, then bounded real-provider checks and full deployed browser journeys. Record exact candidate and deployed builds, failure recovery, resource use, deletion and restore results before first invited activation. Subscription, continuous-feed, monitored-company transition and live-delivery gaps must be resolved or explicitly changed by an accepted product decision.
