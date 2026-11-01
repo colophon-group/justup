@@ -18,7 +18,7 @@ test("every required locale has complete aligned plain-text copy and identical s
       assert.doesNotMatch(copy[key], /<[^>]*>|\bTODO\b/, `${locale}: ${key} must be complete plain text`);
     }
     if (locale !== "en") {
-      for (const key of ["status.body", "privacy.retention.redemption", "usage.access.entitlement", "usage.contact.review"] as const) {
+      for (const key of ["status.body", "privacy.retention.redemption", "usage.access.entitlement", "usage.contact.review", "privacy.accounts.preferences", "privacy.accounts.visitor", "privacy.accounts.bootstrap", "privacy.accounts.handoff", "privacy.measurement.journey", "privacy.measurement.execution", "privacy.measurement.review", "privacy.measurement.bounds", "privacy.browser.routeLocale"] as const) {
         assert.notEqual(copy[key], en[key], `${locale}: ${key} is actually translated`);
       }
     }
@@ -71,6 +71,28 @@ test("access is entitlement-based and deletion does not preserve a hidden redemp
     for (const fact of ["justup_interface_locale", "Path=/", "SameSite=Lax", "Secure", "Max-Age=31536000"]) assert.ok(document.includes(fact), `${locale}: ${fact}`);
   }
   assert.doesNotMatch(privacy, /retain[^.]{0,80}to prevent[^.]{0,50}(redemption|free period)/i);
+});
+
+test("conditional visitor and first-party evidence limits stay aligned without approving deployment", () => {
+  assert.deepEqual({ visitorHours: FACTS.visitorHours, recordRetentionDays: FACTS.recordRetentionDays,
+    journeyRowLimit: FACTS.journeyRowLimit, executionRowLimit: FACTS.executionRowLimit,
+    reviewQueueLimit: FACTS.reviewQueueLimit, caseRetentionDays: FACTS.caseRetentionDays,
+    caseVersionLimit: FACTS.caseVersionLimit, caseMaxKiB: FACTS.caseMaxKiB },
+  { visitorHours: 24, recordRetentionDays: 7, journeyRowLimit: 10000, executionRowLimit: 5000,
+    reviewQueueLimit: 200, caseRetentionDays: 180, caseVersionLimit: 200, caseMaxKiB: 16 });
+  for (const locale of POLICY_LOCALES) {
+    const html = renderPolicy("privacy", locale);
+    for (const value of ["__Host-justup_visitor", "justup_interface_locale", "X-Justup-Locale", "10000", "5000", "180", "200", "16 KiB"]) assert.ok(html.includes(value), `${locale}: ${value}`);
+    for (const key of ["privacy.accounts.preferences", "privacy.accounts.visitor", "privacy.accounts.bootstrap", "privacy.accounts.handoff", "privacy.browser.routeLocale", "privacy.measurement.journey", "privacy.measurement.execution", "privacy.measurement.review", "privacy.measurement.bounds"]) assert.ok(html.includes(`data-copy="${key}"`), `${locale}: ${key}`);
+    assert.match(html, /data-policy-reviewed="false"/);
+  }
+  const privacy = renderPolicy("privacy", "en"), usage = renderPolicy("usage", "en");
+  for (const fact of ["When visitor search is enabled after integration and review", "fixed server deadline; reads do not extend it", "nonempty drafts can be saved as you type", "including whitespace-only drafts", "even if AI search is unavailable", "exactly as entered, without trimming or normalization", "Browsing alone and empty or invalid saves create no workspace", "Saving a draft is separate from pressing Search", "without overwriting its existing searches", "spent ownership receipt prevents replay", "guest choice is never copied into an account", "only for the API request", "does not save a preference or create a visitor record", "account-held followed companies, explicit unfollow choices", "interface and posting-language preferences", "account lifetime and deletion rules", "your account automatically follows the confirmed company when you confirm a request", "unless you explicitly unfollowed it before", "first-party private journey records", "opaque owner, search or task references", "7-day limit and a 10000-row cap", "7-day limit and a 5000-row cap", "Unconfirmed Codex monetary cost remains unknown", "references only, not user text", "7 days and 200 entries", "180 days", "200 case versions of 16 KiB each", "not automatically copied", "exclude raw queries, drafts, posting bodies, URLs, IP addresses, emails, credentials and traces", "running API and a safe deletion barrier", "do not promise physical deletion at an unconditional deadline", "active deployment"]) assert.ok(privacy.includes(fact), fact);
+  assert.doesNotMatch(privacy, /includes no analytics|no analytics or advertising tracker|still being finalized|first-create association response/i);
+  assert.ok(usage.includes("not prove immediate deletion"));
+  assert.ok(usage.includes("not an application, interview or hire"));
+  assert.ok(usage.includes("automatically follows the confirmed company unless you explicitly unfollowed it before"));
+  assert.doesNotMatch(privacy, /confirmed identity request does not[^.]*follow a company/i);
 });
 
 test("Vite emits all notices only into the public build, using identical development bytes", () => {

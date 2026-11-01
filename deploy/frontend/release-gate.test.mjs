@@ -27,7 +27,7 @@ function fixture() {
   const config = {
     origin,
     frontend: { deploymentMode: 'preview', sourceSha: 'a'.repeat(40), treeSha: 'b'.repeat(40), assetsSha256: 'c'.repeat(64), workerSha256: 'd'.repeat(64), artifactSha256: 'e'.repeat(64), runtimeConfigSha256: 'f'.repeat(64) },
-    api: { sourceCommit: 'a'.repeat(40), schemaVersion: 1, buildIdentity: 'build-fixed', runnerIdentity: 'runner-fixed', importGeneration: '00000000-0000-4000-8000-000000000000' },
+    api: { sourceCommit: 'a'.repeat(40), schemaVersion: 2, buildIdentity: 'build-fixed', runnerIdentity: 'runner-fixed', importGeneration: '00000000-0000-4000-8000-000000000000' },
     policies: { admittedLocales: entries, fallbackApprovals: {} },
     scenario: { query: 'Reviewed query', warnedQuery: 'Reviewed query plus unsupported requirement', companyId: 'company-fixed', companyName: 'Company', sourceUrl: 'https://employer.example/careers/one' },
   };
@@ -86,6 +86,17 @@ test('invalid configuration and mismatched deployed evidence fail before the reg
   boundary.data['/api/v1/jobs?limit=12'].json.items = [2, 14].map(days => ({ firstObserved: new Date(now + 1000 - days * 86_400_000).toISOString() }));
   await preflight(boundary.config, boundary.get, now + 1000);
 });
+test('stale application schema one is rejected in configured and deployed API identities', async () => {
+  for (const change of [
+    f => { f.config.api.schemaVersion = 1; },
+    f => { f.data['/api/v1/version'].json.schemaVersion = 1; },
+  ]) {
+    const f = fixture(); change(f);
+    await assert.rejects(preflight(f.config, f.get, now));
+    assert.equal(f.reads.some(read => read.path === '/api/v1/searches'), false);
+  }
+});
+
 test('every admitted locale and all ten exact documents are verified before private reads', async () => {
   const f = fixture();
   await preflight(f.config, f.get, now);
