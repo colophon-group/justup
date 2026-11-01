@@ -160,7 +160,7 @@ for (const locale of ['de','fr','it','es']) {
     await expect(page.locator('#policy-language-fallback')).toHaveCount(0);
   });
 }
-test('an explicitly approved fallback identifies its language and uses server reviewed URLs for sign-in only', async ({page}) => {
+test('an explicitly approved fallback identifies its language and uses server reviewed URLs for account actions', async ({page}) => {
   await page.addInitScript(() => Object.defineProperty(navigator,'languages',{value:['de-CH']}));
   await mockApi(page, {'GET /session':session({user:null,policies:{locale:'de',reviewedLocale:'en',fallback:true,reviewed:true,version:'synthetic-v1',privacyUrl:'/privacy.html',usageUrl:'/usage.html'}})});
   await page.goto('/');await page.locator('#header-sign-in').click();
@@ -178,3 +178,32 @@ for (const patch of [{reviewedLocale:'de',fallback:true},{privacyUrl:'/privacy.h
     expect(calls.filter(call=>call.key.startsWith('POST /auth'))).toEqual([]);
   });
 }
+
+
+test('account deletion links the validated reviewed fallback privacy notice', async ({page}) => {
+  await page.addInitScript(() => Object.defineProperty(navigator,'languages',{value:['de-CH']}));
+  const calls = await mockApi(page, {'GET /session':session({policies:{locale:'de',reviewedLocale:'en',fallback:true,reviewed:true,version:'synthetic-v1',privacyUrl:'/privacy.html',usageUrl:'/usage.html'}})});
+  await page.goto('/');await page.locator('#account-open').click();
+  await page.locator('#delete-account').click();
+  await expect(page.locator('#delete-account-dialog')).toBeVisible();
+  await expect(page.locator('#delete-account-dialog a')).toHaveAttribute('href','/privacy.html');
+  await expect(page.locator('.policy-footer a').first()).toHaveAttribute('href','/privacy.de.html');
+  expect(calls.filter(call => call.key==='DELETE /account')).toEqual([]);
+});
+
+test('visitor language remains browser-local and usable when session bootstrap is unavailable', async ({page}) => {
+  const calls = await mockApi(page, {'GET /session':{status:503,body:{error:{code:'unavailable',message:'The service is unavailable. Please try again.'}}}});
+  await page.goto('/');await expect(page.locator('#service-notice')).toBeVisible();
+  await page.locator('#account-open').click();
+  await expect(page.locator('#interface-language')).toBeEnabled();
+  await page.locator('#interface-language').selectOption('fr');
+  await expect(page.locator('html')).toHaveAttribute('lang','fr');
+  expect((await page.context().cookies()).find(cookie=>cookie.name==='justup_interface_locale')?.value).toBe('fr');
+  await page.reload();await expect(page.locator('html')).toHaveAttribute('lang','fr');
+  await page.locator('#account-open').click();
+  await expect(page.locator('#interface-language')).toBeEnabled();
+  await page.locator('#interface-language').selectOption('');
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  expect((await page.context().cookies()).find(cookie=>cookie.name==='justup_interface_locale')).toBeUndefined();
+  expect(calls.filter(call=>call.key.includes('preferences') || /^(POST|PATCH|PUT|DELETE) /.test(call.key))).toEqual([]);
+});

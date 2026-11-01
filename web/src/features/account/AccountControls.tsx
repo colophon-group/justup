@@ -148,7 +148,7 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
     <Dialog id="delete-account-dialog" open={dialog === 'delete-account'} onClose={() => onDialogChange(null)} labelledBy="delete-account-title">
       <div className="dialog-heading"><span className="eyebrow">{t("Your account")}</span><button className="icon-close" aria-label={t("Keep account")} onClick={() => onDialogChange(null)}>×</button></div>
       <h2 id="delete-account-title">{t("Delete your account?")}</h2>
-      <p>{t("This requests deletion of your account and saved data. Read the")}{" "}<a href={policyDocument(locale, "privacy")}>{t("Privacy notice")}</a>{" "}{t("for retention details.")}</p>
+      <p>{t("This requests deletion of your account and saved data. Read the")}{" "}<a href={policyLinks?.privacy ?? policyDocument(locale, "privacy")}>{t("Privacy notice")}</a>{" "}{t("for retention details.")}</p>
       <form id="delete-account-form" onSubmit={event => void removeAccount(event)}>
         <label htmlFor="delete-password">{t("Confirm your password")}</label><input id="delete-password" type="password" autoComplete="current-password" required disabled={busy} value={deletePassword} onChange={event => setDeletePassword(event.target.value)} />
         <div className="dialog-actions"><button type="button" className="button outline" disabled={busy} onClick={() => onDialogChange(null)}>{t("Keep account")}</button><button className="button dark" id="confirm-delete-account" type="submit" disabled={busy}>{t("Delete account")}</button></div>
