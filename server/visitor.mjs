@@ -76,24 +76,29 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     deletion(()=>{for(const row of expired){intent.deleteAccountData(row.id);matching?.deleteAccountData?.(row.id);tasks.deleteOwner(row.id);deleteAccountData(row.id);db.prepare('DELETE FROM justup_visitors WHERE id=?').run(row.id);}});
   }
   function workspace(owner) {
+    const visible=new Set(feed.eligibleJobs({viewer:identity.principal(owner)}).map(job=>job.id));
     const state=db.prepare('SELECT state_json,revision FROM justup_workspaces WHERE owner_id=?').get(owner);
-    return {recoveredDrafts:db.prepare('SELECT id,text,created_at FROM justup_recovered_drafts WHERE owner_id=? ORDER BY created_at,id').all(owner).map(r=>({id:r.id,text:r.text,createdAt:new Date(r.created_at).toISOString()})),revision:state?.revision??0,state:state?JSON.parse(state.state_json):{activeSearchId:null,drafts:{}},viewed:db.prepare('SELECT job_id AS jobId,first_viewed_at AS at FROM justup_viewed WHERE owner_id=? ORDER BY first_viewed_at,job_id').all(owner).map(r=>({jobId:r.jobId,firstViewedAt:new Date(r.at).toISOString()}))};
+    return {recoveredDrafts:db.prepare('SELECT id,text,created_at FROM justup_recovered_drafts WHERE owner_id=? ORDER BY created_at,id').all(owner).map(r=>({id:r.id,text:r.text,createdAt:new Date(r.created_at).toISOString()})),revision:state?.revision??0,state:state?JSON.parse(state.state_json):{activeSearchId:null,drafts:{}},viewed:db.prepare('SELECT job_id AS jobId,first_viewed_at AS at FROM justup_viewed WHERE owner_id=? ORDER BY first_viewed_at,job_id').all(owner).filter(r=>visible.has(r.jobId)).map(r=>({jobId:r.jobId,firstViewedAt:new Date(r.at).toISOString()}))};
   }
   function writeWorkspace(owner,body) {
     keys(body,['expectedRevision','activeSearchId','drafts']);
     if(!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0)throw problem('invalid_input');
     if(body.activeSearchId!==null&&(typeof body.activeSearchId!=='string'||body.activeSearchId.length>128))throw problem('invalid_input');
-    if(!body.drafts||typeof body.drafts!=='object'||Array.isArray(body.drafts)||Object.keys(body.drafts).length>20)throw problem('invalid_input');
+    if(!body.drafts||typeof body.drafts!=='object'||Array.isArray(body.drafts)||Object.keys(body.drafts).length>100)throw problem('invalid_input');
     const own=new Set(db.prepare('SELECT id FROM demo_searches WHERE owner_id=?').all(owner).map(r=>r.id));
     if(body.activeSearchId!==null&&!own.has(body.activeSearchId))throw problem('not_found',404);
     for(const [id,draft] of Object.entries(body.drafts))if((id!=='new'&&!own.has(id))||typeof draft!=='string'||draft.length>4000||/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(draft))throw problem('invalid_input');
     const state={activeSearchId:body.activeSearchId,drafts:body.drafts};
-    const json=JSON.stringify(state);if(Buffer.byteLength(json)>20_000)throw problem('invalid_input');
+    const json=JSON.stringify(state);if(Buffer.byteLength(json)>60_000)throw problem('invalid_input');
     savepoint(db,()=>{
       const current=workspace(owner).revision;if(current!==body.expectedRevision)throw problem('revision_conflict',409);
       db.prepare('INSERT INTO justup_workspaces(owner_id,state_json,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,revision=excluded.revision').run(owner,json,now(),current+1);
     });
     return workspace(owner);
+  }
+  function recoveryBudget(owner) {
+    const budget=db.prepare('SELECT count(*) AS n,coalesce(sum(length(CAST(text AS BLOB))),0) AS bytes FROM justup_recovered_drafts WHERE owner_id=?').get(owner);
+    if(budget.n>100||budget.bytes>128_000)throw problem('task_limit',429);
   }
   function deleteAccountData(owner) {
     db.prepare('DELETE FROM justup_workspaces WHERE owner_id=?').run(owner);
@@ -119,10 +124,10 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
       const total=db.prepare('SELECT count(*) AS n FROM demo_searches WHERE owner_id IN (?,?)').get(row.id,accountId).n;
       if(total>100)throw problem('task_limit',429);
       intent.transferOwner(row.id,accountId);
-      matching?.deleteAccountData?.(row.id);tasks.cancelOwner(row.id);tasks.deleteOwner(row.id);
+      matching?.transferOwner?.(row.id,accountId);tasks.cancelOwner(row.id);tasks.deleteOwner(row.id);
       for(const viewed of db.prepare('SELECT job_id,first_viewed_at FROM justup_viewed WHERE owner_id=?').all(row.id))db.prepare('INSERT INTO justup_viewed VALUES(?,?,?) ON CONFLICT(owner_id,job_id) DO UPDATE SET first_viewed_at=min(first_viewed_at,excluded.first_viewed_at)').run(accountId,viewed.job_id,viewed.first_viewed_at);
       // The visitor's active tab stays selected; account drafts retain their own
-      // keys. A pre-search draft is returned explicitly rather than overwriting it.
+      // keys. A conflicting pre-search draft stays in durable recovery storage.
       const incoming={...visitorState.drafts};const newDraft=incoming.new;delete incoming.new;
       const state={activeSearchId:visitorState.activeSearchId??accountState.activeSearchId,drafts:{...accountState.drafts,...incoming}};
       let recoveredDraftId;
@@ -133,6 +138,8 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
         db.prepare('INSERT INTO justup_recovered_drafts VALUES(?,?,?,?)').run(recoveredDraftId,accountId,newDraft,now());
       }
       db.prepare('UPDATE justup_recovered_drafts SET owner_id=? WHERE owner_id=?').run(accountId,row.id);
+      recoveryBudget(accountId);
+      if(Object.keys(state.drafts).length>100||Buffer.byteLength(JSON.stringify(state))>60_000)throw problem('task_limit',429);
       db.prepare('INSERT INTO justup_workspaces(owner_id,state_json,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,revision=excluded.revision').run(accountId,JSON.stringify(state),now(),accountWorkspace.revision+1);
       deleteAccountData(row.id);
       db.prepare('UPDATE justup_visitors SET handed_to=?,handed_at=? WHERE id=? AND handed_to IS NULL').run(accountId,now(),row.id);
@@ -155,7 +162,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     return null;
   }
   function stateRoute(ctx) {
-    const owner=ownerOf(ctx.viewer);if(!owner)throw problem('unauthenticated',401);
+    const owner=ownerOf(ctx.viewer),current=identity.principal(owner);if(!owner||!current)throw problem('unauthenticated',401);ctx={...ctx,viewer:current};
     if(ctx.method==='POST'&&/^\/workspace\/recovered-drafts\/[^/]+$/.test(ctx.path)){
       keys(ctx.body,['expectedRevision','action']);
       if(!Number.isSafeInteger(ctx.body.expectedRevision)||ctx.body.expectedRevision<0||!['use','discard'].includes(ctx.body.action))throw problem('invalid_input');
@@ -168,6 +175,8 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
           if(previous&&previous!==draft.text)db.prepare('UPDATE justup_recovered_drafts SET text=?,created_at=? WHERE owner_id=? AND id=?').run(previous,now(),owner,id);
           else db.prepare('DELETE FROM justup_recovered_drafts WHERE owner_id=? AND id=?').run(owner,id);
         }else db.prepare('DELETE FROM justup_recovered_drafts WHERE owner_id=? AND id=?').run(owner,id);
+        recoveryBudget(owner);
+        if(Buffer.byteLength(JSON.stringify(state))>60_000)throw problem('task_limit',429);
         db.prepare('INSERT INTO justup_workspaces(owner_id,state_json,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,revision=excluded.revision').run(owner,JSON.stringify(state),now(),current.revision+1);
         return workspace(owner);
       })};

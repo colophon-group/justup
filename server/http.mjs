@@ -146,7 +146,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
           if (path === '/auth/register' && !state.registrationEnabled) throw problem(state.registrationReason ?? 'registration_closed', 403);
         }
         if(visitorRoute&&method!=='DELETE'&&!policies.reviewed)throw problem('policy_unavailable',503);
-        body = await readBody(req, maxBodyBytes);
+        body = await readBody(req,method==='PATCH'&&['/workspace','/visitor/workspace'].includes(path)?65_536:maxBodyBytes);
       }
       if (method === 'GET' && path === '/session') {
         let visitor=null;

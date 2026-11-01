@@ -93,6 +93,18 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     db.prepare('DELETE FROM demo_match_cache_links WHERE owner_id=?').run(ownerId);
     provider.deleteAccountData?.(ownerId);
   }
+  function transferOwner(from,to) {
+    // Classification is reusable evidence, never an access grant. Re-key only
+    // this verified visitor's decisions for the destination account; scans and
+    // leases are revoked and every subsequent read still checks current access.
+    const moved=new Map();
+    for(const cached of db.prepare('SELECT * FROM demo_match_cache WHERE owner_id=? AND expires_at>?').all(from,now())) {
+      const key=sha({ownerId:to,conditionHash:cached.condition_hash,evidence:cached.evidence_hash,version:cached.classifier});moved.set(cached.cache_key,key);
+      db.prepare('INSERT INTO demo_match_cache VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET decision=CASE WHEN expires_at<=? THEN excluded.decision ELSE decision END,expires_at=max(expires_at,excluded.expires_at)').run(key,to,cached.condition_hash,cached.evidence_hash,cached.classifier,cached.decision,cached.created_at,cached.expires_at,now());
+    }
+    for(const link of db.prepare('SELECT * FROM demo_match_cache_links WHERE owner_id=?').all(from))if(moved.has(link.cache_key))db.prepare('INSERT OR IGNORE INTO demo_match_cache_links VALUES(?,?,?)').run(to,link.search_id,moved.get(link.cache_key));
+    deleteAccountData(from);
+  }
   function cacheDecision(scan, row, decision) {
     db.prepare(`INSERT INTO demo_match_cache VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET
       decision=excluded.decision,created_at=excluded.created_at,expires_at=excluded.expires_at`)
@@ -323,7 +335,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
   }
   const page=args=>pageInternal(args);
   const hiddenCount=args=>pageInternal({...args,cursor:null},true);
-  return { available, page, hiddenCount, runTask, deleteSearchData, deleteAccountData, cleanup,
+  return { available, page, hiddenCount, runTask,transferOwner, deleteSearchData, deleteAccountData, cleanup,
     capabilities: () => ({ aiMatching: available() }), readiness: () => {
       const ready = available();
       return { ...provider.readiness?.(), available: ready, reason: ready ? null : 'dependency_unavailable',

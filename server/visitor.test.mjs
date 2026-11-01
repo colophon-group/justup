@@ -7,6 +7,7 @@ import { createApplication } from './main.mjs';
 import { createIntentService } from './intent.mjs';
 import { createMatchingService } from './matching.mjs';
 import { createVisitorIdentity,createVisitorService } from './visitor.mjs';
+import { createAccessReader } from './entitlements.mjs';
 
 const START=Date.parse('2026-10-31T12:00:00Z'),DAY=86_400_000,ORIGIN='https://preview.example.org';
 const FILTERS=['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'];
@@ -14,12 +15,12 @@ function interpretation({residual=false,filters={titleAny:['engineer']}}={}) {
   const bindings=Object.entries(filters).map(([field,values])=>({field,values}));
   return {title:'Engineering',configuration:{schemaVersion:1,filters:{...Object.fromEntries(FILTERS.map(k=>[k,null])),...filters},residualAi:residual?{condition:'A documented four day working week.',requirementIds:['ai']}:null},requirements:[{id:'role',text:Object.values(filters).flat().join(' ')||'Any job',handling:'primary',reason:'Stated criteria.',bindings,companyReference:null},...(residual?[{id:'ai',text:'A documented four day working week.',handling:'ai',reason:'Needs posting evidence.',bindings:[],companyReference:null}]:[])]};
 }
-async function setup(t,{model,provider,residual=false,visitor:visitorConfig,policiesReviewed=true}={}) {
+async function setup(t,{model,provider,residual=false,visitor:visitorConfig,policiesReviewed=true,realAuth=false}={}) {
   let time=START,modelCalls=0,providerCalls=0,failNextHandoff=false;
   const accounts=new Map(['one','two'].map(id=>[id,{id,username:`test-${id}`,expiresAt:null,access:{kind:'paid',fullAccess:true,legacy:false,premium:false,billingEnabled:false,until:null}}]));
   const sessions=new Map();let identity,intent,matching,visitor;
-  const app=await createApplication({now:()=>time,config:{allowedOrigin:ORIGIN,policiesReviewed,privacyUrl:`${ORIGIN}/privacy`,usageUrl:`${ORIGIN}/usage`,policyVersion:'test-reviewed',visitor:visitorConfig},
-    authFactory:({db,deleteAccountData})=>({cleanup:()=>{},registrationState:()=>({enabled:true,reason:null}),accessForAccount:id=>accounts.get(id)?.access??null,
+  const app=await createApplication({now:()=>time,config:{allowedOrigin:ORIGIN,policiesReviewed,privacyUrl:`${ORIGIN}/privacy`,usageUrl:`${ORIGIN}/usage`,policyVersion:'test-reviewed',visitor:visitorConfig,...(realAuth?{requiresInvitation:false}:{})},
+    authFactory:realAuth?undefined:({db,deleteAccountData})=>({cleanup:()=>{},registrationState:()=>({enabled:true,reason:null}),accessForAccount:id=>accounts.get(id)?.access??null,
       session:token=>{const id=sessions.get(token),a=accounts.get(id);return a?{account:{id:a.id,username:a.username,expiresAt:null},expiresAt:time+DAY,access:a.access}:null;},
       async login(body,{afterAuthenticated}={}) {const a=accounts.get(body.username);if(!a)throw Object.assign(new Error('safe'),{code:'invalid_credentials',status:401});const token=randomBytes(32).toString('base64url');db.exec('BEGIN IMMEDIATE');try{sessions.set(token,a.id);const result={token,account:a,expiresAt:time+DAY};const visitorHandoff=afterAuthenticated?.({db,accountId:a.id,phase:'login'});if(failNextHandoff){failNextHandoff=false;throw Object.assign(new Error('safe'),{code:'dependency_unavailable',status:503});}db.exec('COMMIT');return {...result,visitorHandoff};}catch(error){db.exec('ROLLBACK');sessions.delete(token);throw error;}},
       logout:token=>sessions.delete(token),
@@ -44,7 +45,7 @@ async function setup(t,{model,provider,residual=false,visitor:visitorConfig,poli
   async function work(kind){const task=app.tasks.claim({workerId:'test-runner',kinds:[kind]});assert(task,`expected ${kind}`);const result=await (kind==='search_intent'?intent:matching).runTask(task);if(!result.committed)app.tasks.complete(task.id,task.leaseToken,result);return result;}
   async function create(c,key='create',query='Engineer'){const reply=await c.request('/visitor/searches',{method:'POST',body:{query,requestKey:key}});assert.equal(reply.status,202,JSON.stringify(reply.body));await work('search_intent');return reply.body.search.id;}
   const results=(c,id,suffix='')=>c.request(`/visitor/searches/${id}/results?revision=1${suffix}`);
-  return {app,client,work,create,results,identity,intent,matching,visitor,accounts,sessions,advance:ms=>time+=ms,modelCalls:()=>modelCalls,providerCalls:()=>providerCalls,failHandoff:()=>failNextHandoff=true};
+  return {app,client,work,create,results,time:()=>time,identity,intent,matching,visitor,accounts,sessions,advance:ms=>time+=ms,modelCalls:()=>modelCalls,providerCalls:()=>providerCalls,failHandoff:()=>failNextHandoff=true};
 }
 
 test('visitor submits, edits and retries its own search with filtered exact hidden count',async t=>{
@@ -143,4 +144,44 @@ test('a handoff failure rolls back visitor movement, task cancellation, workspac
 test('insufficient or unavailable hidden classification never claims a final count',async t=>{
   const s=await setup(t,{residual:true,provider:async({jobs})=>({decisions:jobs.map(j=>({id:j.id,decision:j.id.startsWith('hidden')?'insufficient_evidence':'accepted'}))})}),c=s.client();await c.session();const id=await s.create(c);await s.results(c,id);await s.work('ai_match');await s.results(c,id);await s.work('ai_match');const partial=await s.results(c,id);assert.deepEqual(partial.body.hiddenMatches,{status:'lower_bound',count:0});assert(!JSON.stringify(partial.body).includes('hidden-'));
   const failed=await setup(t,{residual:true,provider:async()=>{throw new Error('private synthetic failure');}}),b=failed.client();await b.session();const other=await failed.create(b);await failed.results(b,other);await failed.work('ai_match');const paused=await failed.results(b,other);assert.equal(paused.body.continuation.state,'paused');assert.equal(paused.body.hiddenMatches.status,'pending');assert.equal(JSON.stringify(paused.body).includes('private synthetic failure'),false);
+});
+
+test('real password registration commits the visitor search and private draft in its auth transaction',async t=>{
+  const s=await setup(t,{realAuth:true}),c=s.client();await c.session();const id=await s.create(c);await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{[id]:'Keep this unsent draft'}}});
+  const result=await c.request('/auth/register',{method:'POST',body:{username:'visitor-handoff',password:randomBytes(24).toString('base64url')}});assert.equal(result.status,201);assert.equal(result.body.visitorHandoff.status,'complete');assert.equal(result.body.access.fullAccess,false);assert.equal(result.body.user.expiresAt,null);
+  const searches=await c.request('/searches');assert.equal(searches.body.items[0].id,id);assert.equal((await c.request('/workspace')).body.state.drafts[id],'Keep this unsent draft');
+  const page=await c.request(`/searches/${id}/results?revision=1`);assert.deepEqual(page.body.items.map(j=>j.id),['visible-accepted','visible-rejected']);assert.deepEqual(page.body.hiddenMatches,{status:'exact',count:2});
+  assert.equal((await c.request('/access/activate',{method:'POST',body:{}})).status,403);assert.equal(s.modelCalls(),1);
+});
+
+test('the independent queue reader honors persisted paid and free periods and rechecks expiry after inference',async t=>{
+  for(const kind of ['paid','free'])await t.test(kind,async t=>{
+    const s=await setup(t,{realAuth:true,residual:true}),c=s.client();await c.session();const registration=await c.request('/auth/register',{method:'POST',body:{username:`current-${kind}`,password:randomBytes(24).toString('base64url')}});assert.equal(registration.status,201);const owner=registration.body.user.id,db=s.app.store.db;
+    if(kind==='paid')db.prepare('INSERT INTO access_subscriptions VALUES(?,?,?,?,?,?,?)').run('synthetic-subscription',owner,START,'active','weekly',START+1000,null);
+    else db.prepare('INSERT INTO access_free_periods VALUES(?,?,?,?)').run(owner,'standard',START,START+1000);
+    const created=await c.request('/searches',{method:'POST',body:{query:'Engineer four day week',requestKey:'persisted'}});await s.work('search_intent');const path=`/searches/${created.body.search.id}/results?revision=1`;const initial=await c.request(path);assert.equal(initial.status,200);
+    await c.request('/viewed',{method:'POST',body:{jobId:'hidden-accepted'}});assert((await c.request('/workspace')).body.viewed.some(j=>j.jobId==='hidden-accepted'));
+    const queueIdentity=createVisitorIdentity({db,now:s.time,accessForAccount:createAccessReader({db,now:s.time})});let release,selected;
+    const queue=createMatchingService({db,feed:s.app.feed,tasks:s.app.tasks,now:s.time,ownerAuthority:queueIdentity.principal,taskAdmission:queueIdentity.admitMatching,provider:{available:()=>true,classify:args=>{selected=args.jobs.map(j=>j.id);return new Promise(resolve=>release=()=>resolve({decisions:args.jobs.map(j=>({id:j.id,decision:'accepted'}))}));}}});
+    const task=s.app.tasks.claim({workerId:'independent-queue',kinds:['ai_match']}),work=queue.runTask(task);await Promise.resolve();assert(selected.includes('hidden-accepted'));
+    s.advance(1001);release();const result=await work;assert.equal(result.committed,undefined);assert.equal(db.prepare("SELECT count(*) n FROM demo_match_jobs WHERE decision='accepted'").get().n,0);assert.equal((await c.request(`${path}&cursor=${initial.body.continuation.cursor}`)).status,409);
+    assert.equal((await c.request('/workspace')).body.viewed.some(j=>j.jobId==='hidden-accepted'),false);
+  });
+});
+
+test('verified handoff preserves confirmed visible and hidden classifier decisions without repeating inference',async t=>{
+  const s=await setup(t,{residual:true}),c=s.client();await c.session();const id=await s.create(c);await s.results(c,id);await s.work('ai_match');await s.results(c,id);await s.work('ai_match');assert.deepEqual((await s.results(c,id)).body.hiddenMatches,{status:'exact',count:1});
+  const calls=s.providerCalls();assert.equal((await c.login('one')).status,200);const page=await c.request(`/searches/${id}/results?revision=1`);assert.equal(page.status,200);assert.deepEqual(page.body.items.map(j=>j.id),['hidden-accepted','visible-accepted']);assert.deepEqual(page.body.hiddenMatches,{status:'exact',count:0});assert.equal(s.providerCalls(),calls);assert.equal(s.app.tasks.claim({workerId:'no-extra-inference',kinds:['ai_match']}),null);
+});
+
+test('merged Unicode drafts round-trip through the workspace-only bounded body allowance',async t=>{
+  const s=await setup(t),c=s.client();await c.session();const id=await s.create(c),draft='界'.repeat(4000);const saved=await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{[id]:draft,new:draft}}});assert.equal(saved.status,200);assert(Buffer.byteLength(JSON.stringify(saved.body.state))>16_384);
+  assert.equal((await c.login('one')).status,200);const moved=(await c.request('/workspace')).body;const again=await c.request('/workspace',{method:'PATCH',body:{expectedRevision:moved.revision,...moved.state}});assert.equal(again.status,200);assert.equal(again.body.state.drafts[id],draft);
+});
+
+test('a full recovery stash rejects the whole handoff and preserves both owners drafts',async t=>{
+  const s=await setup(t),member=s.client();await member.session();await member.login('one');const state=(await member.request('/workspace')).body;await member.request('/workspace',{method:'PATCH',body:{expectedRevision:state.revision,activeSearchId:null,drafts:{new:'Member draft'}}});
+  for(let i=0;i<100;i++)s.app.store.db.prepare('INSERT INTO justup_recovered_drafts VALUES(?,?,?,?)').run(`recovered-${i}`,'one',`Retained ${i}`,START);
+  const c=s.client();await c.session();await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Visitor draft'}}});const reply=await c.login('one');assert.equal(reply.status,429);assert.equal(reply.body.error.code,'task_limit');assert.equal(s.sessions.size,1);
+  assert.equal((await c.request('/visitor/workspace')).body.state.drafts.new,'Visitor draft');const still=(await member.request('/workspace')).body;assert.equal(still.state.drafts.new,'Member draft');assert.equal(still.recoveredDrafts.length,100);
 });
