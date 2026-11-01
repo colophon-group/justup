@@ -23,7 +23,7 @@ async function setup(t,{model,companyModel,provider,residual=false,visitor:visit
   let time=START,modelCalls=0,providerCalls=0,companyCalls=0,failNextHandoff=false;
   const accounts=new Map(['one','two'].map(id=>[id,{id,username:`test-${id}`,expiresAt:null,access:{kind:'paid',fullAccess:true,legacy:false,premium:false,billingEnabled:false,until:null}}]));
   const sessions=new Map();let identity,intent,matching,visitor,companies;
-  const config={dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:ORIGIN,policiesReviewed,privacyUrl:`${ORIGIN}/privacy`,usageUrl:`${ORIGIN}/usage`,policyVersion:'test-reviewed',visitor:visitorConfig,...(realAuth?{requiresInvitation:false}:{}),...runtime};
+  const config={dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:ORIGIN,policiesReviewed,privacyUrl:`${ORIGIN}/privacy.html`,usageUrl:`${ORIGIN}/usage.html`,policyVersion:'test-reviewed',visitor:visitorConfig,...(realAuth?{requiresInvitation:false}:{}),...runtime};
   const app=await createApplication({now:()=>time,config,
     authFactory:realAuth?undefined:({db,deleteAccountData})=>({cleanup:()=>{},registrationState:()=>({enabled:true,reason:null}),accessForAccount:id=>accounts.get(id)?.access??null,
       session:token=>{const id=sessions.get(token),a=accounts.get(id);return a?{account:{id:a.id,username:a.username,expiresAt:null},expiresAt:time+DAY,access:a.access}:null;},

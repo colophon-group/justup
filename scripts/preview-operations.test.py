@@ -957,6 +957,16 @@ process.stdout.write('independent_wire_policy_matches\n');
                     {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': {**entry, 'usageUrl': entry['usageUrl'] + '?x=1'}})},
                     {**base, 'JUSTUP_POLICY_FALLBACKS': '{"it":"de"}'},
                     {**base, 'JUSTUP_POLICY_LOCALES': 'x' * 8193}]
+        legacy = {**base, 'JUSTUP_POLICIES_REVIEWED': 'true', 'JUSTUP_POLICY_VERSION': 'synthetic-reviewed',
+                  'JUSTUP_PRIVACY_URL': base['JUSTUP_ORIGIN'] + '/privacy.html',
+                  'JUSTUP_USAGE_URL': base['JUSTUP_ORIGIN'] + '/usage.html'}
+        variants += [legacy, {**legacy, 'JUSTUP_PRIVACY_URL': legacy['JUSTUP_USAGE_URL'], 'JUSTUP_USAGE_URL': legacy['JUSTUP_PRIVACY_URL']},
+                     {**legacy, 'JUSTUP_PRIVACY_URL': base['JUSTUP_ORIGIN'] + '/arbitrary.html'},
+                     {**legacy, 'JUSTUP_USAGE_URL': base['JUSTUP_ORIGIN'] + '/usage.fr.html'},
+                     {**legacy, 'JUSTUP_PRIVACY_URL': legacy['JUSTUP_PRIVACY_URL'] + '?x=1'},
+                     {**legacy, 'JUSTUP_USAGE_URL': legacy['JUSTUP_USAGE_URL'] + '#reviewed'},
+                     {**legacy, 'JUSTUP_PRIVACY_URL': legacy['JUSTUP_PRIVACY_URL'] + '/'},
+                     {**legacy, 'JUSTUP_POLICY_LOCALES': '{}', 'JUSTUP_USAGE_URL': legacy['JUSTUP_PRIVACY_URL']}]
         accepted = []
         for variant in variants:
             try:

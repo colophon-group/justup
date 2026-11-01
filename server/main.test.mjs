@@ -144,7 +144,7 @@ test('crash-retained and replaced pending markers are never cleared by a differe
   reopened.db.exec('BEGIN IMMEDIATE'); assert.throws(() => next.beforePrivateDelete(), /pending/); reopened.db.exec('ROLLBACK');
   next.afterPrivateTransaction(); assert.equal(readFileSync(pendingPath, 'utf8'), foreign);
   const demo = await createApplication({ config: { dbPath, privateGenerationPath: generationPath, backupDir, allowedOrigin: 'https://preview.example',
-    policiesReviewed: true, privacyUrl: 'https://preview.example/privacy', usageUrl: 'https://preview.example/usage', policyVersion: 'synthetic', inviteCode: 'synthetic' },
+    policiesReviewed: true, privacyUrl: 'https://preview.example/privacy.html', usageUrl: 'https://preview.example/usage.html', policyVersion: 'synthetic', inviteCode: 'synthetic' },
     authFactory: () => ({ cleanup: () => ({}), session: () => null }) });
   await new Promise((r) => demo.server.listen(0, '127.0.0.1', r));
   try {

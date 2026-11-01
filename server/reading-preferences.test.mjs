@@ -245,7 +245,7 @@ test('an awaited live snapshot rejects revision, source membership and authority
 
 test('real HTTP exposes account preferences and visitor languages with CSRF, handoff and account isolation',async t=>{
   const origin='https://preview.example';let intent,reading,modelInput;
-  const app=await createApplication({now:()=>AT,config:{dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:origin,requiresInvitation:false,policiesReviewed:true,privacyUrl:origin+'/privacy',usageUrl:origin+'/usage',policyVersion:'synthetic',policyLocales:Object.fromEntries(['en','de','fr','it','es'].map(locale=>[locale,{privacyUrl:origin+'/privacy'+(locale==='en'?'':'.'+locale)+'.html',usageUrl:origin+'/usage'+(locale==='en'?'':'.'+locale)+'.html',version:'synthetic',reviewed:true}]))},serviceFactories:[deps=>{
+  const app=await createApplication({now:()=>AT,config:{dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:origin,requiresInvitation:false,policiesReviewed:true,privacyUrl:origin+'/privacy.html',usageUrl:origin+'/usage.html',policyVersion:'synthetic',policyLocales:Object.fromEntries(['en','de','fr','it','es'].map(locale=>[locale,{privacyUrl:origin+'/privacy'+(locale==='en'?'':'.'+locale)+'.html',usageUrl:origin+'/usage'+(locale==='en'?'':'.'+locale)+'.html',version:'synthetic',reviewed:true}]))},serviceFactories:[deps=>{
     const identity=createVisitorIdentity(deps),ownership={ownerAuthority:identity.principal,visitorIdentity:identity};
     reading=createReadingPreferencesService({...deps,...ownership});
     intent=createIntentService({...deps,...ownership,readingPreferences:reading,model:{interpretIntent:async data=>{modelInput=data;return modelOutput();}}});

@@ -4,8 +4,14 @@ export const POLICY_LOCALES = Object.freeze(['en','de','fr','it','es']);
 const version = v => typeof v==='string'&&/^[A-Za-z0-9_.:-]{1,100}$/.test(v);
 const object = v => v&&typeof v==='object'&&!Array.isArray(v);
 function url(value,config={}) {try{const u=new URL(value);return (u.protocol==='https:'||config.allowInsecureLocalhost===true&&u.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(u.hostname))&&!u.username&&!u.password&&!u.search&&!u.hash?u:null;}catch{return null;}}
+function legacyPolicy(config) {
+  const origin=config.allowedOrigin??'https://preview.justup.work';
+  return config.privacyUrl===origin+'/privacy.html'&&config.usageUrl===origin+'/usage.html'&&url(config.privacyUrl,config)&&url(config.usageUrl,config)&&version(config.policyVersion)
+    ?{privacyUrl:config.privacyUrl,usageUrl:config.usageUrl,version:config.policyVersion,reviewed:true}:null;
+}
 export function validatePolicyConfig(config={}) {
   const origin=config.allowedOrigin??'https://preview.justup.work';
+  if(config.policiesReviewed===true&&!config.policyLocales?.en&&(config.policyLocales===undefined||['privacyUrl','usageUrl','policyVersion'].some(key=>config[key]!==undefined))&&!legacyPolicy(config))throw new TypeError('Invalid legacy English policy configuration.');
   for(const [locale,entry] of Object.entries(config.policyLocales??{})) {
     if(!POLICY_LOCALES.includes(locale)||!object(entry)||Object.keys(entry).sort().join(',')!=='privacyUrl,reviewed,usageUrl,version'||typeof entry.reviewed!=='boolean'||!version(entry.version))throw new TypeError('Invalid policy locale configuration.');
     const suffix=locale==='en'?'':`.${locale}`;
@@ -17,7 +23,7 @@ export function validatePolicyConfig(config={}) {
 }
 export function policyState(config={},locale='en') {
   if(!POLICY_LOCALES.includes(locale))locale='en';
-  const legacy=locale==='en'&&url(config.privacyUrl,config)?.origin===(config.allowedOrigin??'https://preview.justup.work')&&url(config.usageUrl,config)?.origin===(config.allowedOrigin??'https://preview.justup.work')&&version(config.policyVersion)?{privacyUrl:config.privacyUrl,usageUrl:config.usageUrl,version:config.policyVersion,reviewed:true}:null;
+  const legacy=locale==='en'?legacyPolicy(config):null;
   const local=config.policyLocales?.[locale]??legacy;
   const fallback=config.policyFallbacks?.[locale];
   const target=local?.reviewed===true?locale:fallback??locale;

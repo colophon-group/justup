@@ -34,7 +34,7 @@ async function setup(t, options = {}) {
   let time = AT, intent, matching, identity, live, providerAvailable = true;
   const accounts = new Map();
   const app = await createApplication({ now: () => time, config: { allowedOrigin: ORIGIN, policiesReviewed: true,
-    privacyUrl: `${ORIGIN}/privacy`, usageUrl: `${ORIGIN}/usage`, policyVersion: 'fixture',
+    privacyUrl: `${ORIGIN}/privacy.html`, usageUrl: `${ORIGIN}/usage.html`, policyVersion: 'fixture',
     dbPath: ':memory:', sourceCommit: 'a'.repeat(40), buildIdentity: 'fixture-build',
     ...storage, requiresInvitation: false, verificationTtlMs, liveResults: { pollMs: 10, heartbeatMs: 30, ...transportOptions } },
     serviceFactories: [deps => {

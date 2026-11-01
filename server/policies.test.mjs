@@ -14,6 +14,13 @@ test('legacy English approval, exact locale reviews and explicit fallback never 
   assert.equal(policyState(config,'en').reviewed,true);
   for(const locale of ['de','fr','it','es']){const p=policyState(config,locale);assert.equal(p.reviewed,false);assert.equal(p.version,'product-draft-5');assert.equal(p.privacyUrl,entry(locale).privacyUrl);assert.equal(p.reviewedLocale,null);}
   assert.equal(policyState({...config,privacyUrl:'https://elsewhere.example/privacy.html'}).reviewed,false);
+  for(const patch of [{privacyUrl:origin+'/usage.html',usageUrl:origin+'/privacy.html'},
+    {privacyUrl:origin+'/arbitrary.html'},{privacyUrl:origin+'/privacy.fr.html'},
+    {privacyUrl:origin+'/privacy.html?reviewed=1'},{usageUrl:origin+'/usage.html#reviewed'},
+    {privacyUrl:origin+'/privacy.html/'}]){
+    assert.equal(policyState({...config,...patch},'en').reviewed,false);
+    assert.throws(()=>validatePolicyConfig({...config,...patch}),/legacy English policy/);
+  }
   const localized={...config,policyLocales:{en:entry('en'),de:entry('de',false)}};
   assert.equal(policyState(localized,'de').reviewed,false);
   const fallback={...localized,policyFallbacks:{de:'en'}};validatePolicyConfig(fallback);

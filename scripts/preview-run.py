@@ -122,12 +122,15 @@ def policy_configuration(config):
         if (source not in supported or not isinstance(target, str) or target not in supported
                 or source == target or locales.get(target, {}).get('reviewed') is not True):
             raise ValueError('Invalid policy fallback configuration.')
-    if config.get('JUSTUP_POLICIES_REVIEWED') == 'true' and 'JUSTUP_POLICY_LOCALES' not in config:
-        for key in ('JUSTUP_PRIVACY_URL', 'JUSTUP_USAGE_URL'):
+    legacy_keys = ('JUSTUP_PRIVACY_URL', 'JUSTUP_USAGE_URL', 'JUSTUP_POLICY_VERSION')
+    if (config.get('JUSTUP_POLICIES_REVIEWED') == 'true' and 'en' not in locales
+            and ('JUSTUP_POLICY_LOCALES' not in config or any(key in config for key in legacy_keys))):
+        for kind in ('PRIVACY', 'USAGE'):
+            key = 'JUSTUP_' + kind + '_URL'
             parsed = urlsplit(config.get(key, ''))
             if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
-                    or parsed.query or parsed.fragment or parsed.scheme + '://' + parsed.netloc != origin):
-                raise ValueError('Reviewed policy URLs must use the frontend HTTPS origin.')
+                    or parsed.query or parsed.fragment or config.get(key) != origin + '/' + kind.lower() + '.html'):
+                raise ValueError('Reviewed English policy URLs must use their exact frontend HTTPS paths.')
         if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', config.get('JUSTUP_POLICY_VERSION', '')):
             raise ValueError('Reviewed policy version is required.')
 

@@ -22,7 +22,7 @@ async function setup(t, options = {}) {
   const task = { id: 'task-a', status: 'succeeded', kind: 'search_intent', payload: { secret: 'private' }, output: { hiddenJob: 'never-serialize' } };
   const tasks = { get: (owner, id) => owner === account.id && id === task.id ? task : null, publicView: (row, result) => ({ id: row.id, status: row.status, result }) };
   const config = { allowedOrigin: ORIGIN, csrfSecret: 'x'.repeat(32), inviteCode: 'test-invite', policiesReviewed: true,
-    privacyUrl: `${ORIGIN}/privacy`, usageUrl: `${ORIGIN}/usage`, policyVersion: 'reviewed-1', ...options.config };
+    privacyUrl: `${ORIGIN}/privacy.html`, usageUrl: `${ORIGIN}/usage.html`, policyVersion: 'reviewed-1', ...options.config };
   const services = options.services ?? [{ capabilities: { search: true }, route: async (ctx) => { calls.push(ctx); return ctx.path === '/searches' ? { status: 202, body: { ok: true } } : null; } }];
   const server = createServer(createHandler({ auth, feed, tasks, services, config, logger: (v) => logs.push(v) }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
