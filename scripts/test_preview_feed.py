@@ -210,6 +210,58 @@ class ImportSequenceTests(unittest.TestCase):
                 self.assertEqual(FEED.root_receipt(BATCH_ID, SHA), {'schemaVersion': 1, 'manifestSha256': SHA})
                 self.assertEqual((inbox / 'latest.json').stat().st_mode & 0o777, 0o600)
 
+    def test_failed_receipt_publication_cannot_ack_until_file_and_directory_sync_recover(self):
+        owner = os.geteuid()
+        checked = FEED.checked_file
+        for failure in ('file', 'directory'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as root:
+                directory = Path(root).resolve()
+
+                class LocalReceiptDirectory(type(directory)):
+                    # Exercise the root-only command off-host under this test's
+                    # identity; only the receipt directory ownership is mapped.
+                    def stat(self, *args, **kwargs):
+                        meta = super().stat(*args, **kwargs)
+                        if self == directory:
+                            fields = list(meta)
+                            fields[4] = 0
+                            return os.stat_result(fields)
+                        return meta
+
+                receipts = LocalReceiptDirectory(directory)
+                host = SimpleNamespace(verify_caps=lambda: None, verify_storage=lambda: None)
+                with patch.object(FEED, 'RECEIPTS', receipts), \
+                        patch.object(FEED, 'checked_file', side_effect=lambda path, _owner: checked(path, owner)), \
+                        patch.object(FEED.os, 'geteuid', return_value=0), \
+                        patch.object(FEED.os, 'fstat', return_value=SimpleNamespace(
+                            st_mode=FEED.stat.S_IFREG | 0o600, st_uid=0, st_nlink=1)), \
+                        patch.object(FEED, 'authorized_batch', return_value=(None, None, None, SHA)), \
+                        patch.object(FEED, 'host_module', return_value=host), \
+                        patch.object(FEED, 'private_inbox', return_value=directory), \
+                        patch.object(FEED, 'active_release') as active, \
+                        patch.object(FEED, 'consume_batch') as consume:
+                    target, name = (FEED.os, 'fsync') if failure == 'file' else (FEED, 'fsync_dir')
+                    with patch.object(target, name, side_effect=OSError('Synthetic sync failure.')) as sync:
+                        with self.assertRaises(OSError):
+                            FEED.store_receipt(BATCH_ID, SHA)
+                        self.assertTrue(FEED.receipt_path(BATCH_ID).is_file())
+                        for read in (lambda: FEED.root_receipt(BATCH_ID, SHA),
+                                     lambda: FEED.show_receipt(BATCH_ID, SHA),
+                                     lambda: FEED.process_batch(BATCH_ID, SHA)):
+                            with self.assertRaises(OSError):
+                                read()
+                        self.assertGreaterEqual(sync.call_count, 4)
+                        with patch.object(FEED.sys, 'stdout', new_callable=io.StringIO) as output, \
+                                patch.object(FEED.sys, 'stderr', new_callable=io.StringIO) as error:
+                            self.assertEqual(FEED.main(['receipt', '--batch-id', BATCH_ID, '--manifest-sha256', SHA]), 1)
+                            self.assertEqual(output.getvalue(), '')
+                            self.assertEqual(error.getvalue(), 'Feed operation failed.\n')
+                    expected = {'schemaVersion': 1, 'manifestSha256': SHA}
+                    self.assertEqual(FEED.show_receipt(BATCH_ID, SHA), expected)
+                    self.assertEqual(FEED.process_batch(BATCH_ID, SHA)['status'], 'already_accepted')
+                    active.assert_not_called()
+                    consume.assert_not_called()
+
     def test_wrong_independent_digest_blocks_import_authorization(self):
         with patch.object(FEED, 'batch_files', return_value=(Path('/safe'), Path('/safe/manifest.json'), {}, SHA)), \
                 patch.object(FEED, 'active_release') as release, \
@@ -403,6 +455,19 @@ class ComposedImportTests(unittest.TestCase):
                 self.assertEqual(imports(), 2)
                 self.assertTrue(FEED.latest_import_matches(complete[3]))
                 self.assertIsNone(FEED.root_receipt('c' * 32, complete[3]))
+                with self.assertRaises(FEED.FeedStageError):
+                    consume(complete, {**release_manifest, 'buildIdentity': 'b' * 64})
+                original_sync = FEED.fsync_dir
+                def fail_receipt_sync(path):
+                    if path == receipts:
+                        raise OSError('Synthetic receipt publication interruption.')
+                    return original_sync(path)
+                with patch.object(FEED, 'fsync_dir', side_effect=fail_receipt_sync):
+                    with self.assertRaises(OSError):
+                        consume(complete)
+                    with self.assertRaises(OSError):
+                        FEED.root_receipt('c' * 32, complete[3])
+                    self.assertEqual(imports(), 2)
                 self.assertEqual(consume(complete)['status'], 'imported')
                 self.assertEqual(imports(), 2)
                 self.assertEqual(events, ['adapter', 'node', 'adapter', 'adapter', 'node'])

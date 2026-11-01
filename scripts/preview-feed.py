@@ -424,6 +424,15 @@ def root_receipt(batch_id, digest):
         raise FeedStageError('Feed receipt is invalid.') from exc
     if receipt != {'schemaVersion': 1, 'manifestSha256': digest}:
         raise FeedStageError('Feed receipt differs from staged batch.')
+    # A prior publisher may have written complete bytes and then failed to
+    # sync the file or directory. Presence alone is not accepted publication.
+    # Re-establish durability on every historical ACK path before returning it.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    fsync_dir(RECEIPTS)
     return receipt
 
 
