@@ -9,9 +9,10 @@ const TERMINAL = new Set(['succeeded', 'warning', 'failed', 'cancelled']);
 const KIND = /^[a-z][a-z0-9_.-]{0,63}$/;
 const LEASE_TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const WIRE_KIND = 'hiring_wire', WIRE_OWNER = '__hiring_wire__';
-export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOwner = 4, maxAttempts = 3, retentionMs = 30 * DAY_MS } = {}) {
-  if (!db || ![maxTasks, maxPendingPerOwner, maxAttempts, retentionMs].every((n) => Number.isSafeInteger(n) && n > 0)
-      || maxTasks > 96 || retentionMs > 30 * DAY_MS) throw new TypeError('Invalid task configuration.');
+export function createTasks({ db, now = Date.now, maxActiveTasks = 96, maxStoredTasks = 2048, maxPendingPerOwner = 4, maxAttempts = 3, retentionMs = 30 * DAY_MS } = {}) {
+  if (!db || ![maxActiveTasks, maxStoredTasks, maxPendingPerOwner, maxAttempts, retentionMs].every((n) => Number.isSafeInteger(n) && n > 0)
+      || maxActiveTasks > 96 || maxStoredTasks > 2048 || maxStoredTasks < maxActiveTasks || retentionMs > 30 * DAY_MS)
+    throw new TypeError('Invalid task configuration.');
   db.exec(`CREATE TABLE IF NOT EXISTS justup_tasks (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL, request_key TEXT NOT NULL,
     payload_json TEXT NOT NULL, output_json TEXT, status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','warning','failed','cancelled')),
@@ -48,7 +49,11 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
         return hydrate(existing);
       }
       db.prepare('DELETE FROM justup_tasks WHERE updated_at<=? AND status IN (\'succeeded\',\'warning\',\'failed\',\'cancelled\')').run(now() - retentionMs);
-      if (db.prepare('SELECT count(*) AS n FROM justup_tasks').get().n >= maxTasks
+      // Keep admitted work bounded without making retained outcomes spend the
+      // active-work allowance. Never evict a fresh receipt just to make room:
+      // its request key, task read or domain reference may still be in use.
+      if (db.prepare('SELECT count(*) AS n FROM justup_tasks').get().n >= maxStoredTasks
+          || db.prepare("SELECT count(*) AS n FROM justup_tasks WHERE status IN ('pending','running')").get().n >= maxActiveTasks
           || db.prepare('SELECT count(*) AS n FROM justup_tasks WHERE owner_id=? AND status IN (\'pending\',\'running\')').get(ownerId).n >= maxPendingPerOwner) {
         throw Object.assign(problem('task_limit', 429, 'The task limit has been reached.'), { retryAfter: 60 });
       }
