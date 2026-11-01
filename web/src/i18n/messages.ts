@@ -2,6 +2,37 @@
 import type { InterfaceLocale } from './locales.ts';
 
 export const messages = {
+  "Processing is unavailable until policies are approved for this language.": [
+    "Die Verarbeitung ist erst verfügbar, wenn die Hinweise für diese Sprache freigegeben sind.",
+    "Le traitement est indisponible tant que les notices ne sont pas approuvées pour cette langue.",
+    "L’elaborazione non è disponibile finché le informative non sono approvate per questa lingua.",
+    "El procesamiento no está disponible hasta que se aprueben los avisos para este idioma."
+  ],
+  "Processing is paused until current policy and data protections are available.": [
+    "Die Verarbeitung pausiert, bis die aktuellen Hinweise und Datenschutzmaßnahmen verfügbar sind.",
+    "Le traitement est suspendu jusqu’à la disponibilité des notices et des protections des données actuelles.",
+    "L’elaborazione è sospesa finché non sono disponibili le informative e le protezioni dei dati aggiornate.",
+    "El procesamiento está en pausa hasta que estén disponibles los avisos y las protecciones de datos actuales."
+  ],
+  "Verify your account to activate the free period.": [
+    "Bestätige dein Konto, um den kostenlosen Zeitraum zu aktivieren.",
+    "Vérifie ton compte pour activer la période gratuite.",
+    "Verifica il tuo account per attivare il periodo gratuito.",
+    "Verifica tu cuenta para activar el periodo gratuito."
+  ],
+  "The free period is unavailable.": [
+    "Der kostenlose Zeitraum ist nicht verfügbar.",
+    "La période gratuite est indisponible.",
+    "Il periodo gratuito non è disponibile.",
+    "El periodo gratuito no está disponible."
+  ],
+  "Choose a supported interface language.": [
+    "Wähle eine unterstützte Sprache für die Oberfläche.",
+    "Choisis une langue d’interface prise en charge.",
+    "Scegli una lingua dell’interfaccia supportata.",
+    "Elige un idioma de interfaz compatible."
+  ],
+
 "For account access, the reviewed notices are in {language}.": ["Für den Kontozugriff gelten die geprüften Hinweise auf {language}.", "Pour l’accès au compte, les notices validées sont en {language}.", "Per accedere all’account, le informative approvate sono in {language}.", "Para acceder a la cuenta, los avisos revisados están en {language}."],
 "Your language preference changed elsewhere. Review your saved choice and try again.": ["Deine Spracheinstellung wurde anderswo geändert. Prüfe deine gespeicherte Auswahl und versuche es erneut.", "Ta préférence de langue a changé ailleurs. Vérifie ton choix enregistré et réessaie.", "La preferenza di lingua è cambiata altrove. Controlla la scelta salvata e riprova.", "Tu preferencia de idioma cambió en otro lugar. Revisa tu elección guardada e inténtalo de nuevo."],
   "More companies ↗": [
