@@ -13,6 +13,7 @@ A pull request (PR) is a proposed change reviewed before it joins a branch. The 
 | --- | --- |
 | Record a bug, simplification or other discovery | [Issues and discoveries](#2-issues-discoveries-and-resource-approval) |
 | Prepare a change or review | [Contribution quality](#3-contribution-quality) and [test guidance](#4-test-creation-structure-and-maintenance) |
+| Update documentation | [Keep guides current](#keep-guides-current) |
 | Understand what automated checks will run | [Pull request checks](#5-automated-checks-for-pull-requests) |
 | Prepare a release | [Branch requirements](#1-branch-and-release-requirements) and [release verification](#6-verify-a-release-before-it-goes-live) |
 
@@ -91,6 +92,21 @@ Every PR completes the [PR template](../.github/PULL_REQUEST_TEMPLATE.md). For e
 Keep this checklist stable and version its IDs. A PR may mark a guideline N/A only with a specific reason; for example, “N/A: this changes only the search evaluation fixture, with no user-facing UI.” Claims such as “N/A: not needed” are incomplete. Reviewers request evidence when the explanation is doubtful. Mechanical rules belong in formatters, linters, type checks and CI rather than prose.
 
 Write guides around the task a reader is trying to complete, with steps before detailed reference. Start substantive Markdown guides with two short metadata fields: `summary` says what the guide covers, and `read_when` says when to open it. A directory README gives the same orientation for a group of files. A source file with a non-obvious purpose gets a brief top-of-file comment explaining its role and when to read it. Skip headers on tiny self-explanatory files, generated code, vendored libraries and data snapshots; their directory guide can cover them. Keep the root `AGENTS.md` short and use it to route agents to the appropriate guide rather than repeating the guides there. Update these summaries when file responsibilities change.
+
+### Keep guides current
+
+Use the [guidebook](README.md) and the nearest directory README to find the one guide that owns a fact. Rewrite that guide in the same change as the behavior: remove superseded instructions, examples and links, then update its short header and navigation. Add a guide only when a distinct reader task has no owner; link every new guide from the guidebook or its nearest directory README. Cross-link related guides instead of copying their rules. Check claims against the code, tests and served behavior, and run the local link and guidebook checks. Use ordinary words and explain a necessary project term where a reader first meets it.
+
+Keep the information in the place where it remains useful:
+
+| Place | Keep there |
+| --- | --- |
+| Repository guides | Accepted product behavior, implemented contracts and repeatable build, release or recovery steps. Say plainly which behavior works today and which release requirement remains unverified. |
+| Issues and commits | Motivation, open decisions, approved resource scope, rejected alternatives and the history behind a change. Use the issue slug to recover context from file history. |
+| Pull request description | The proposed changes, verification and release impact; link the related issue without retelling its history. |
+| Protected local notes | Temporary release-candidate receipts, host or account identifiers, private evidence, price observations and one-off checklists. Keep credentials in the approved secret store. A local note cannot replace the explicit approval required in a resource issue. |
+
+Do not leave dated checkpoints, implementation diaries or instructions for a retired path in a current guide. When a design choice changes, update the accepted behavior and its implementation guide together; record the reason in the issue. The existing Q7, Q8 and Q11 checklist items cover this review, so no extra pull request checkbox is needed.
 
 ## 4. Test creation, structure and maintenance
 
