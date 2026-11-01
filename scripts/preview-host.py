@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -481,19 +482,42 @@ def _probe_receiver_cgroup():
             try:
                 status = (path / 'status').read_text()
                 ids = next(line.split()[1:] for line in status.splitlines() if line.startswith('Uid:'))
-                command = (path / 'cmdline').read_bytes().replace(b'\x00', b' ')
+                command = (path / 'cmdline').read_bytes().rstrip(b'\x00').split(b'\x00')
                 group = (path / 'cgroup').read_text()
             except (FileNotFoundError, ProcessLookupError, StopIteration):
                 continue
             if (len(ids) == 4 and all(value.isdigit() for value in ids)
                     and all(int(value) == api_uid for value in ids)
-                    and b'preview-feed.py receive' in command):
-                if not any(SLICE in Path(line[3:]).parts for line in group.splitlines()
+                    and command == [b'/usr/bin/python3', os.fsencode(BASE / 'ops/preview-feed.py'), b'receive']):
+                if not any(SLICE in Path(line[3:]).parts
+                           and re.fullmatch(r'justup-preview-feed@[^/]+\.service', Path(line[3:]).name)
+                           for line in group.splitlines()
                            if line.startswith('0::')):
                     raise ValueError('The feed receiver is outside the preview slice.')
                 return
         time.sleep(0.1)
     raise ValueError('The bounded feed receiver did not start inside the preview slice.')
+
+
+def _verify_feed_probe_storage(inbox, receipt_dir, api_uid):
+    """Invalid input may leave only the receiver's persistent, idle lock."""
+    if any(receipt_dir.iterdir()) or {path.name for path in inbox.iterdir()} - {'.receive.lock'}:
+        raise ValueError('Synthetic refusal left feed content or receipts.')
+    lock = inbox / '.receive.lock'
+    if not os.path.lexists(lock):
+        return
+    fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        meta = os.fstat(fd)
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != api_uid or meta.st_nlink != 1
+                or stat.S_IMODE(meta.st_mode) != 0o600 or meta.st_size != 0):
+            raise ValueError('The receiver lock has unsafe identity or content.')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('The feed receiver still holds its intake lock.') from None
+    finally:
+        os.close(fd)
 
 
 def qualify_feed_units():
@@ -518,11 +542,13 @@ def qualify_feed_units():
             or not stat.S_ISDIR(receipt_dir.lstat().st_mode) or receipt_dir.stat().st_uid != 0
             or stat.S_IMODE(receipt_dir.stat().st_mode) != 0o700):
         raise ValueError('The private feed paths have unsafe ownership or modes.')
+    _verify_feed_probe_storage(inbox, receipt_dir, api_uid)
     # Connect as the deploy UID, then hold the socket open so the actual
     # socket-activated service can be observed in /proc before refusing bytes.
     probe_code = ('import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); '
                   'sys.stdout.write("ready\\n"); sys.stdout.flush(); sys.stdin.buffer.read(1); '
-                  's.sendall(b"invalid\\n"); s.shutdown(socket.SHUT_WR); s.recv(1024); s.close()')
+                  's.sendall(b"invalid\\n"); s.shutdown(socket.SHUT_WR); '
+                  'response=s.recv(1024); s.close(); sys.exit(0 if response==b"" else 1)')
     def demote():
         os.setgroups([])
         os.setgid(deploy.pw_gid)
@@ -546,8 +572,7 @@ def qualify_feed_units():
         process.stdin.flush()
         if process.wait(timeout=5) != 0:
             raise ValueError('The receiver did not refuse synthetic invalid input.')
-        if any(inbox.iterdir()) or any(receipt_dir.iterdir()):
-            raise ValueError('Synthetic refusal left feed content or receipts.')
+        _verify_feed_probe_storage(inbox, receipt_dir, api_uid)
     finally:
         if process is not None and process.poll() is None:
             process.kill()

@@ -672,12 +672,63 @@ class OperatorUpgradeContracts(unittest.TestCase):
             process.mkdir()
             uid = os.getuid()
             (process / 'status').write_text('Uid:\t' + '\t'.join([str(uid)] * 4) + '\n')
-            (process / 'cmdline').write_bytes(b'/usr/bin/python3\x00/srv/justup_preview/ops/preview-feed.py\x00receive\x00')
+            (process / 'cmdline').write_bytes(b'/usr/bin/python3\x00' + os.fsencode(fixture.base / 'ops/preview-feed.py') + b'\x00receive\x00')
             (process / 'cgroup').write_text('0::/justup.slice/justup-preview.slice/justup-preview-feed@1.service\n')
             host._probe_receiver_cgroup()
             (process / 'cgroup').write_text('0::/system.slice/not-justup-preview.slice.service\n')
             with self.assertRaisesRegex(ValueError, 'outside the preview slice'):
                 host._probe_receiver_cgroup()
+            (process / 'cgroup').write_text('0::/justup.slice/justup-preview.slice/unrelated.service\n')
+            with self.assertRaisesRegex(ValueError, 'outside the preview slice'):
+                host._probe_receiver_cgroup()
+            (process / 'cmdline').write_bytes(b'/usr/bin/python3\x00/tmp/fake-preview-feed.py\x00receive\x00')
+            with patch.object(host.time, 'monotonic', side_effect=[0, 0, 6]), patch.object(host.time, 'sleep'):
+                with self.assertRaisesRegex(ValueError, 'did not start'):
+                    host._probe_receiver_cgroup()
+
+    def test_actual_invalid_feed_receive_leaves_only_an_idle_private_lock(self):
+        feed = load('preview-feed')
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            inbox, receipts = root / 'inbox', root / 'receipts'
+            inbox.mkdir(mode=0o700)
+            receipts.mkdir(mode=0o700)
+            with self.assertRaisesRegex(feed.FeedStageError, 'transfer version'):
+                feed.receive(io.BytesIO(b'invalid\n'), inbox=inbox, owner=os.getuid())
+            self.assertEqual({path.name for path in inbox.iterdir()}, {'.receive.lock'})
+            host._verify_feed_probe_storage(inbox, receipts, os.getuid())
+            lock = inbox / '.receive.lock'
+            with lock.open('rb') as held:
+                host.fcntl.flock(held.fileno(), host.fcntl.LOCK_EX | host.fcntl.LOCK_NB)
+                with self.assertRaisesRegex(ValueError, 'still holds'):
+                    host._verify_feed_probe_storage(inbox, receipts, os.getuid())
+            for directory in (inbox, receipts):
+                extra = directory / 'unexpected'
+                extra.write_bytes(b'')
+                with self.assertRaisesRegex(ValueError, 'content or receipts'):
+                    host._verify_feed_probe_storage(inbox, receipts, os.getuid())
+                extra.unlink()
+            with self.assertRaisesRegex(ValueError, 'unsafe identity'):
+                host._verify_feed_probe_storage(inbox, receipts, os.getuid() + 1)
+            for mode, content in ((0o640, b''), (0o600, b'body')):
+                lock.chmod(mode)
+                lock.write_bytes(content)
+                with self.assertRaisesRegex(ValueError, 'unsafe identity'):
+                    host._verify_feed_probe_storage(inbox, receipts, os.getuid())
+            lock.write_bytes(b'')
+            linked = root / 'linked-lock'
+            os.link(lock, linked)
+            with self.assertRaisesRegex(ValueError, 'unsafe identity'):
+                host._verify_feed_probe_storage(inbox, receipts, os.getuid())
+            linked.unlink()
+            lock.unlink()
+            lock.symlink_to(root / 'missing')
+            with self.assertRaises(OSError):
+                host._verify_feed_probe_storage(inbox, receipts, os.getuid())
+            lock.unlink()
+            os.mkfifo(lock, mode=0o600)
+            with self.assertRaisesRegex(ValueError, 'unsafe identity'):
+                host._verify_feed_probe_storage(inbox, receipts, os.getuid())
 
     def test_feed_unit_source_must_be_regular_protected_file(self):
         with self.installation(add_feed=True) as fixture:
