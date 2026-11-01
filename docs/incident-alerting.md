@@ -72,7 +72,7 @@ Add the read-only token to macOS Keychain interactively. The final `-w` prompts 
 security add-generic-password -a justup-incident-watch -s justup-irm-alert-groups-readonly -w
 ```
 
-First verify `codex queue --help` on this laptop and test `--resume` with a disposable idle Codex chat. Confirm the turn actually appears and completes, with the chat configured for read-only triage. Use a dedicated Justup incident chat UUID in the live config. Once the phone page and watcher are both proven, generate and review the LaunchAgent from the installed script, then bootstrap it:
+Restart the Codex desktop app after the CLI upgrade, verify `codex queue --help` on this laptop, and test `--resume` with a disposable idle Codex chat. Confirm the turn actually appears and completes, with the chat configured for read-only triage. Use a dedicated Justup incident chat UUID in the live config. Once the phone page and watcher are both proven, generate and review the LaunchAgent from the installed script, then bootstrap it:
 
 ```sh
 "$HOME/Library/Application Support/Justup/incident-watch.py" \
@@ -82,7 +82,14 @@ launchctl bootstrap "gui/$(id -u)" \
   "$HOME/Library/LaunchAgents/com.colophon.justup-incident-watch.plist"
 ```
 
-The LaunchAgent runs at login and every 120 seconds while the Mac is awake. A wake after sleep polls currently active groups and does not replay claimed IDs. To stop it, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.colophon.justup-incident-watch.plist"`. Keep the config, token and delivery database out of the repository. If a queue result is uncertain, inspect the dedicated chat and private `incident-watch-state/deliveries.sqlite3` status before any manual retry. A full rehearsal records Grafana trigger time, phone delivery and acknowledgement, watcher poll, Codex turn completion and recovery notice.
+The LaunchAgent runs at login and every 120 seconds while the Mac is awake. A wake after sleep polls currently active groups and does not replay claimed IDs. To stop it, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.colophon.justup-incident-watch.plist"`. Keep the config, token and delivery database out of the repository. If a queue result is uncertain, inspect the dedicated chat and private database before any manual retry:
+
+```sh
+sqlite3 "$HOME/Library/Application Support/Justup/incident-watch-state/deliveries.sqlite3" \
+  "SELECT id, status, first_seen, queued_at FROM deliveries WHERE status = 'claimed';"
+```
+
+A full rehearsal records Grafana trigger time, phone delivery and acknowledgement, watcher poll, Codex turn completion and recovery notice.
 
 ## Remaining activation evidence
 

@@ -235,7 +235,9 @@ def deliver_one(connection, groups: list[str], config: dict, queue=queue_codex) 
 
 
 def run_once(config_path: Path, *, fetch=fetch_groups, queue=queue_codex) -> str | None:
-    config = read_config(config_path)
+    supplied_path = config_path.expanduser()
+    config = read_config(supplied_path)
+    config_path = supplied_path.resolve(strict=True)
     folder = state_dir(config_path)
     lock = folder / 'watch.lock'
     old_umask = os.umask(0o077)
@@ -276,7 +278,8 @@ def main() -> int:
         return 0
     except (WatchError, ValueError, OSError, UnicodeError, json.JSONDecodeError,
             HTTPError, URLError, sqlite3.Error, subprocess.SubprocessError, BlockingIOError) as error:
-        print(f'Justup incident watcher: {type(error).__name__}; no alert content logged.', file=sys.stderr)
+        detail = str(error) if isinstance(error, WatchError) else type(error).__name__
+        print(f'Justup incident watcher: {detail}; no alert content logged.', file=sys.stderr)
         return 1
 
 
