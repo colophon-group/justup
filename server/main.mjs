@@ -13,6 +13,7 @@ import { createHandler,policyState } from './http.mjs';
 import { validatePolicyConfig,policyJson,policyScopes } from './policies.mjs';
 import { runtimeEnv, booleanEnv, integerEnv } from './config.mjs';
 import { createEmailVerificationApi } from './email-verification.mjs';
+import { createStripeBillingApi,stripeBillingFromEnv } from './stripe-billing.mjs';
 
 // Hold a durable pending marker across the SQL transaction. Backup/restore must
 // reject any pending marker, including one retained after a process crash.
@@ -101,8 +102,13 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
       processingAvailability:visitorAvailability,beforePrivateDelete:deletion.beforePrivateDelete,
       afterPrivateTransaction:deletion.afterPrivateTransaction,withPrivateTransaction});
     services.push(verification);
+    const billing=createStripeBillingApi({db:store.db,tasks,config,now,getAuth:()=>auth,
+      availability:()=>config.readiness?.().capabilities?.stripeBilling===true,processingAvailability:visitorAvailability,
+      beforePrivateDelete:deletion.beforePrivateDelete,withPrivateTransaction});
+    services.push(billing);
     if (services.some((s) => !s || typeof s.then === 'function')) throw new TypeError('Service factories must synchronously return services.');
     const deleteAccountData = (ownerId) => {
+      billing.assertDeletionReady(ownerId);
       deletion.beforePrivateDelete();
       for (const service of services) {
         const result = service.deleteAccountData?.(ownerId);
@@ -112,6 +118,7 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
     };
     const createAuth = authFactory ?? (await import('./auth.mjs')).createAuth;
     auth = createAuth({ db: store.db, config, now, deleteAccountData,identityProofVerifier:verification.verifyIdentityProof,
+      beforeAccountDelete:billing.prepareDeletion,
       onAccessTransition:data=>{try{services.find(s=>typeof s.observe==='function'&&typeof s.onModelMetric==='function')?.observe(data);}catch{}} });
     function maintainAuth() {
       try {
@@ -187,6 +194,7 @@ export function configFromEnv(env = process.env) {
     sourceCommit: runtimeEnv(env, 'SOURCE_COMMIT'), buildIdentity: runtimeEnv(env, 'BUILD_ID'),
     csrfSecret: runtimeEnv(env, 'CSRF_SECRET'), cursorSecret: runtimeEnv(env, 'CURSOR_SECRET'),
     emailVerificationEnabled:booleanEnv(env,'EMAIL_VERIFICATION_ENABLED'),
+    stripeBilling:stripeBillingFromEnv(env),
     privateGenerationPath: runtimeEnv(env, 'PRIVATE_GENERATION_PATH'), backupDir: runtimeEnv(env, 'BACKUP_DIR'),
   });
 }

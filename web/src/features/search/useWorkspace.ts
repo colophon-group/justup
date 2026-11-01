@@ -1,22 +1,27 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ApiError, errorText, isAbortError } from "../../api/client.ts";
 import type { ApiClient } from "../../api/client.ts";
 import { pollTask, TaskFailure } from "../../api/tasks.ts";
-import type { SearchSubmission, Session } from "../../api/types.ts";
+import type { Search, SearchSubmission, Session, TaskResult } from "../../api/types.ts";
 import {
   emptyWorkspace,
   queryText,
   selectedSearch,
   workspaceReducer,
 } from "./workspace.ts";
+import type { Action } from "./workspace.ts";
+import { useWorkspacePersistence } from "./useWorkspacePersistence.ts";
 interface Mutation {
   key: string;
   submission?: SearchSubmission;
+  attempted?: boolean;
+  submittedText?: string;
 }
+interface Operation { controller: AbortController; token: symbol }
 export function useWorkspace(
   client: ApiClient,
   session: Session | null,
-  onSignIn: () => void,
+  onVisitorRebootstrap: () => Promise<void>,
 ) {
   const [state, dispatch] = useReducer(
     workspaceReducer,
@@ -25,10 +30,15 @@ export function useWorkspace(
   );
   const current = useRef(state);
   current.current = state;
-  const operation = useRef<{
-    controller: AbortController;
-    token: symbol;
-  } | null>(null);
+  const serial = useRef(0);
+  const [accountSuggested, setAccountSuggested] = useState(false);
+  const apply = useCallback((action: Action) => {
+    if (["editing", "query", "select", "new", "accepted", "submitted", "deleted"].includes(action.type)) serial.current++;
+    current.current = workspaceReducer(current.current, action);
+    dispatch(action);
+  }, []);
+  const operation = useRef<Operation | null>(null);
+  const resumedTasks = useRef(new Set<string>());
   const mutations = useRef(new Map<string, Mutation>()),
     confirmationKeys = useRef(new Map<string, string>());
   const cancel = useCallback(() => {
@@ -36,44 +46,62 @@ export function useWorkspace(
     operation.current = null;
   }, []);
   const userId = session?.user?.id;
+  const scope = session?.user ? "account" : session?.capabilities.visitorSearch ? "visitor" : null;
+  const persistence = useWorkspacePersistence({ client, scope, owner: userId, hasVisitor: !!session?.visitor, onVisitorRebootstrap, state, current, serial, apply });
   useEffect(() => {
-    const controller = new AbortController();
-    if (userId)
-      client
-        .listSearches(controller.signal)
-        .then((searches) => {
-          if (!controller.signal.aborted)
-            dispatch({ type: "loaded", searches });
-        })
-        .catch((error) => {
-          if (!isAbortError(error))
-            dispatch({
-              type: "status",
-              text: `Saved searches unavailable. ${errorText(error)}`,
-            });
-        });
-    return () => {
-      controller.abort();
-      cancel();
-    };
-  }, [client, userId, cancel]);
+    mutations.current.clear();
+    confirmationKeys.current.clear();
+    resumedTasks.current.clear();
+    setAccountSuggested(false);
+    return cancel;
+  }, [userId, scope, cancel]);
   useEffect(() => () => cancel(), [cancel]);
   const select = (id: string | null) => {
     cancel();
-    dispatch({ type: "select", id });
+    apply({ type: "select", id });
   };
   const newSearch = () => {
     cancel();
-    dispatch({ type: "new" });
+    apply({ type: "new" });
   };
-  const submit = async () => {
-    if (!session) return;
-    if (!session.user) {
-      onSignIn();
-      return;
+  const applyResult = useCallback((active: Operation, result: TaskResult, targetId: string, expectedRevision: number, submitted: string, previousId: string | null) => {
+    if (active !== operation.current) return;
+    const query = submitted.trim();
+    if ("proposal" in result) {
+      if (result.proposal.searchId !== targetId || result.proposal.expectedRevision !== expectedRevision)
+        throw new ApiError(409, "unexpected_proposal", "The service returned an outdated proposal. Please retry.");
+      if (queryText(current.current).trim() === query) apply({ type: "proposal", proposal: result.proposal });
+      else apply({ type: "status", text: "The earlier search needs clarification. Submit your updated text to continue.", busy: false });
+    } else if ("search" in result) {
+      if (result.search.id !== targetId || result.search.status !== "ready" || result.search.query !== query || result.search.revision <= expectedRevision)
+        throw new ApiError(409, "unexpected_revision", "The service returned an unexpected search revision. Please reconnect.");
+      apply({ type: "accepted", search: result.search, submitted, previousId });
+    } else throw new Error("The search task returned an unrelated result.");
+  }, [apply]);
+  const resume = useCallback(async (search: Search) => {
+    const draft = search.draft;
+    if (!scope || !draft?.taskId) return;
+    cancel();
+    const active = { controller: new AbortController(), token: Symbol("resumed search") };
+    operation.current = active; resumedTasks.current.add(draft.taskId);
+    const displayed = queryText(current.current);
+    const submitted = displayed.trim() === draft.query ? displayed : draft.query;
+    apply({ type: "status", text: "Checking the existing search…", busy: true });
+    try {
+      const result = await pollTask(client, draft.taskId, active.controller.signal, scope);
+      applyResult(active, result, search.id, search.revision, submitted, search.id);
+    } catch (error) {
+      if (active === operation.current && !isAbortError(error)) {
+        if (error instanceof TaskFailure) apply({ type: "taskFailed", id: search.id });
+        apply({ type: "status", text: errorText(error), busy: false });
+      }
+    } finally {
+      if (active === operation.current) { operation.current = null; apply({ type: "busy", value: false }); }
     }
-    if (!session.capabilities.search) {
-      dispatch({
+  }, [client, scope, cancel, apply, applyResult]);
+  const submit = async () => {
+    if (!session || !scope || !session.capabilities.search) {
+      apply({
         type: "status",
         text: "Search interpretation is unavailable right now. Your accepted searches remain available.",
       });
@@ -84,6 +112,9 @@ export function useWorkspace(
       submittedText = queryText(snapshot),
       query = submittedText.trim();
     if (!query) return;
+    if (search?.draft?.taskId && search.draft.query === query && !["interrupted", "failed"].includes(search.draft.status ?? "")) {
+      await resume(search); return;
+    }
     cancel();
     const active = {
       controller: new AbortController(),
@@ -99,12 +130,16 @@ export function useWorkspace(
       key: crypto.randomUUID(),
     };
     mutations.current.set(fingerprint, mutation);
-    dispatch({
+    apply({
       type: "status",
       text: "Checking every requirement…",
       busy: true,
     });
     try {
+      if (search || !mutation.attempted) await persistence.flush(active.controller.signal);
+      if (active !== operation.current) return;
+      mutation.submittedText ??= submittedText;
+      mutation.attempted = true;
       mutation.submission ??= search
         ? await client.editSearch(
             search.id,
@@ -114,70 +149,53 @@ export function useWorkspace(
               requestKey: mutation.key,
             },
             active.controller.signal,
+            scope,
           )
         : await client.createSearch(
             { query, requestKey: mutation.key },
             active.controller.signal,
+            scope,
           );
       if (active !== operation.current) return;
       if (search && mutation.submission.search.id !== search.id)
-        throw new ApiError(
-          409,
-          "unexpected_search",
-          "The service returned a different search. Please reconnect.",
-        );
+        throw new ApiError(409, "unexpected_search", "The service returned a different search. Please reconnect.");
+      if (mutation.submission.task) {
+        resumedTasks.current.add(mutation.submission.task.id);
+        apply({ type: "submitted", search: { ...mutation.submission.search, draft: { query, taskId: mutation.submission.task.id } }, previousId: snapshot.selectedId });
+      } else if (!search && mutation.submission.search.status !== "ready") {
+        apply({ type: "submitted", search: mutation.submission.search, previousId: snapshot.selectedId });
+        mutations.current.set(JSON.stringify([mutation.submission.search.id, mutation.submission.search.revision, query]), mutation);
+      }
+      if (!search) {
+        if (!mutation.submission.task && mutation.submission.search.status === "ready") apply({ type: "submitted", search: mutation.submission.search, previousId: snapshot.selectedId });
+        await persistence.refreshAfterCreate({ id: mutation.submission.search.id, submitted: mutation.submittedText ?? submittedText });
+        if (active !== operation.current) return;
+      }
       const result = mutation.submission.task
         ? await pollTask(
             client,
             mutation.submission.task.id,
             active.controller.signal,
+            scope,
           )
         : { search: mutation.submission.search };
       if (active !== operation.current) return;
-      if ("proposal" in result) {
-        if (
-          result.proposal.searchId !== mutation.submission.search.id ||
-          result.proposal.expectedRevision !==
-            (search?.revision ?? mutation.submission.search.revision)
-        )
-          throw new ApiError(
-            409,
-            "unexpected_proposal",
-            "The service returned an outdated proposal. Please retry.",
-          );
-        // New typing invalidates a proposal for the earlier text.
-        if (queryText(current.current).trim() === query)
-          dispatch({ type: "proposal", proposal: result.proposal });
-        else
-          dispatch({
-            type: "status",
-            text: "The earlier search needs clarification. Submit your updated text to continue.",
-            busy: false,
-          });
-      } else if ("search" in result) {
-        if (
-          result.search.id !== mutation.submission.search.id ||
-          result.search.status !== "ready" ||
-          result.search.query !== query ||
-          (search && result.search.revision <= search.revision)
-        )
-          throw new ApiError(
-            409,
-            "unexpected_revision",
-            "The service returned an unexpected search revision. Please reconnect.",
-          );
-        mutations.current.delete(fingerprint);
-        dispatch({
-          type: "accepted",
-          search: result.search,
-          submitted: submittedText,
-          previousId: snapshot.selectedId,
-        });
-      } else throw new Error("The search task returned an unrelated result.");
+      applyResult(active, result, mutation.submission.search.id, search?.revision ?? 0, submittedText,
+        search?.id ?? mutation.submission.search.id);
+      if ("search" in result)
+        for (const [key, value] of mutations.current) if (value === mutation) mutations.current.delete(key);
     } catch (error) {
       if (active !== operation.current || isAbortError(error)) return;
-      if (error instanceof TaskFailure) mutations.current.delete(fingerprint);
-      dispatch({
+      if (!search && mutation.attempted && !mutation.submission && error instanceof ApiError && (error.status === 0 || error.status >= 500 || error.code === "invalid_response")) {
+        await persistence.refreshAfterCreate(undefined, mutation.submittedText);
+        if (active !== operation.current) return;
+      }
+      if (error instanceof TaskFailure) {
+        for (const [key, value] of mutations.current) if (value === mutation) mutations.current.delete(key);
+        if (mutation.submission) apply({ type: "taskFailed", id: mutation.submission.search.id });
+      }
+      if (scope === "visitor" && error instanceof ApiError && error.code === "task_limit") setAccountSuggested(true);
+      apply({
         type: "status",
         text: `${errorText(error)}${search ? " The last accepted revision and its results are unchanged." : ""}`,
         busy: false,
@@ -185,13 +203,13 @@ export function useWorkspace(
     } finally {
       if (active === operation.current) {
         operation.current = null;
-        dispatch({ type: "busy", value: false });
+        apply({ type: "busy", value: false });
       }
     }
   };
   const confirm = async () => {
     const proposal = current.current.proposal;
-    if (!proposal) return;
+    if (!proposal || !scope) return;
     cancel();
     const active = {
       controller: new AbortController(),
@@ -202,8 +220,10 @@ export function useWorkspace(
     const confirmationKey =
       confirmationKeys.current.get(confirmationId) ?? crypto.randomUUID();
     confirmationKeys.current.set(confirmationId, confirmationKey);
-    dispatch({ type: "status", text: "", busy: true });
+    apply({ type: "status", text: "", busy: true });
     try {
+      await persistence.flush(active.controller.signal);
+      if (active !== operation.current) return;
       const accepted = await client.confirmSearch(
         proposal.searchId,
         {
@@ -212,6 +232,7 @@ export function useWorkspace(
         },
         confirmationKey,
         active.controller.signal,
+        scope,
       );
       if (active !== operation.current) return;
       if (
@@ -223,7 +244,7 @@ export function useWorkspace(
           "The service returned an unexpected confirmed revision.",
         );
       confirmationKeys.current.delete(confirmationId);
-      dispatch({
+      apply({
         type: "accepted",
         search: accepted,
         submitted: proposal.query,
@@ -232,7 +253,7 @@ export function useWorkspace(
       });
     } catch (error) {
       if (active === operation.current && !isAbortError(error))
-        dispatch({
+        apply({
           type: "status",
           text: `${errorText(error)} The last accepted search is unchanged.`,
           busy: false,
@@ -242,16 +263,40 @@ export function useWorkspace(
     }
   };
   const remove = async (id: string) => {
-    await client.deleteSearch(id);
-    if (current.current.selectedId === id) cancel();
-    dispatch({ type: "deleted", id });
+    await persistence.deleteOwnedSearch(id, () => {
+      if (current.current.selectedId === id) cancel();
+      apply({ type: "deleted", id });
+    });
   };
+  const flushForAuthentication = useCallback(async (signal?: AbortSignal) => {
+    if (!scope && queryText(current.current).trim())
+      throw new Error("Search storage is unavailable. Reconnect before signing in to keep this draft.");
+    await persistence.flush(signal);
+  }, [scope, persistence.flush]);
+  const selected = selectedSearch(state);
+  useEffect(() => {
+    const taskId = selected?.draft?.taskId;
+    if (!persistence.loading && selected && taskId && !selected.proposal && !operation.current
+      && !["interrupted", "failed"].includes(selected.draft?.status ?? "") && !resumedTasks.current.has(taskId)) void resume(selected);
+  }, [selected?.id, selected?.revision, selected?.draft?.taskId, selected?.proposal, persistence.loading, resume]);
   return {
+    ...persistence,
+    flush: flushForAuthentication,
+    recover: async (draftId: string, action: "use" | "discard") => {
+      cancel(); apply({ type: "busy", value: false });
+      return persistence.recover(draftId, action);
+    },
+    resolveConflict: (choice: "local" | "saved") => {
+      cancel(); apply({ type: "busy", value: false });
+      persistence.resolveConflict(choice);
+    },
+    scope,
+    accountSuggested,
     state,
     search: selectedSearch(state),
     query: queryText(state),
-    beginEditing: () => dispatch({ type: "editing" }),
-    setQuery: (value: string) => dispatch({ type: "query", value }),
+    beginEditing: () => apply({ type: "editing" }),
+    setQuery: (value: string) => apply({ type: "query", value }),
     submit,
     confirm,
     select,

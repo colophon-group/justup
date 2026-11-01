@@ -123,18 +123,23 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     owner_id TEXT NOT NULL,request_id TEXT NOT NULL,task_id TEXT NOT NULL,PRIMARY KEY(owner_id,request_id,task_id)
   ) STRICT;
   INSERT OR IGNORE INTO justup_company_request_tasks SELECT owner_id,id,task_id FROM justup_company_requests WHERE task_id IS NOT NULL;`);
+  transaction(db,()=>{
+    // Earlier requests have no acceptance-time proof; never infer it from today's access.
+    if(!db.prepare('PRAGMA table_info(justup_company_requests)').all().some(column=>column.name==='acceptance_priority'))
+      db.exec("ALTER TABLE justup_company_requests ADD COLUMN acceptance_priority TEXT NOT NULL DEFAULT 'standard' CHECK(acceptance_priority IN ('premium','standard'))");
+  });
   if(feed.ensureCompanySetup)transaction(db,()=>{
     for(const found of db.prepare("SELECT candidate_json FROM justup_company_requests WHERE status='accepted' AND candidate_json IS NOT NULL").all()) {
       const id=JSON.parse(found.candidate_json).companyId;if(typeof id==='string')feed.ensureCompanySetup(id);
     }
   });
   const row = (ownerId, id) => db.prepare('SELECT * FROM justup_company_requests WHERE owner_id=? AND id=?').get(ownerId, id);
-  const premium=ownerId=>ownerAuthority?.(ownerId,{allowUnavailable:true})?.access?.premium===true;
+  const priorityAccess=ownerId=>ownerAuthority?.(ownerId,{allowUnavailable:true})?.access?.fullAccess===true;
   function view(found) {
     const candidate=found.candidate_json?JSON.parse(found.candidate_json):null,storedId=candidate?.companyId??null;
     const companyId=storedId?(feed.canonicalCompanyId?.(storedId)??storedId):null;
     return { id: found.id, input: found.input_text, scope: found.scope, status: found.status,
-      companyId,setup:found.status==='accepted'&&companyId&&feed.companySetup?{...feed.companySetup(companyId),priority:premium(found.owner_id)?'premium':'standard'}:null,
+      companyId,setup:found.status==='accepted'&&companyId&&feed.companySetup?{...feed.companySetup(companyId),priority:found.acceptance_priority}:null,
       candidate:candidate?{...candidate,companyId}:null, previewRevision: found.preview_revision,
       clarification: found.clarification, taskId: found.task_id, createdAt: new Date(found.created_at).toISOString() };
   }
@@ -237,8 +242,8 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
       if (used) throw problem('idempotency_conflict', 409, 'This request key was already used.');
       if(feed.publishCompany)candidate.companyId=feed.publishCompany(candidate);
       if(readingPreferences&&!candidate.companyId)throw problem('dependency_unavailable',503);
-      db.prepare("UPDATE justup_company_requests SET status='accepted',accept_key=?,candidate_json=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
-        .run(idempotencyKey,JSON.stringify(candidate),ownerId,id,body.previewRevision);
+      db.prepare("UPDATE justup_company_requests SET status='accepted',accept_key=?,candidate_json=?,acceptance_priority=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
+        .run(idempotencyKey,JSON.stringify(candidate),priorityAccess(ownerId)?'premium':'standard',ownerId,id,body.previewRevision);
       if(candidate.companyId)readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId,locale);
       if(candidate.companyId)feed.ensureCompanySetup?.(candidate.companyId);
       try{records?.observe({ownerId,event:'company_accepted',key:id,referenceId:id,locale,outcome:'accepted'});}catch{}
@@ -250,7 +255,6 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     if(typeof body.requestKey!=='string'||!KEY.test(body.requestKey))throw problem('invalid_input');
     return transaction(db,()=>{
       if(!admitted(ownerId,locale))throw problem('policy_unavailable',503);
-      if(!premium(ownerId))throw problem('access_denied',403);
       const company=feed.company(companyId),json=JSON.stringify({action:'priority',companyId:company.id});
       const key=db.prepare('SELECT * FROM justup_company_request_keys WHERE owner_id=? AND request_key=?').get(ownerId,body.requestKey);
       if(key) {
@@ -258,13 +262,15 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
         const found=row(ownerId,key.request_id);if(!found)throw problem('not_found',404);
         return result(found);
       }
+      if(!priorityAccess(ownerId))throw problem('access_denied',403);
       if(db.prepare('SELECT count(*) AS n FROM justup_company_request_keys WHERE owner_id=?').get(ownerId).n>=maxPerOwner*4)throw problem('task_limit',429);
       const prior=db.prepare("SELECT * FROM justup_company_requests WHERE owner_id=? AND status='accepted' AND candidate_json IS NOT NULL ORDER BY created_at,id").all(ownerId)
         .find(found=>(feed.canonicalCompanyId?.(JSON.parse(found.candidate_json).companyId)??JSON.parse(found.candidate_json).companyId)===company.id);
       if(prior) {
         insertKey(ownerId,body.requestKey,json,prior.id);
+        db.prepare("UPDATE justup_company_requests SET acceptance_priority='premium' WHERE owner_id=? AND id=?").run(ownerId,prior.id);
         readingPreferences?.followAcceptedCompany(ownerId,company.id,locale);
-        feed.ensureCompanySetup?.(company.id);return result(prior);
+        feed.ensureCompanySetup?.(company.id);return result(row(ownerId,prior.id));
       }
       if(db.prepare('SELECT count(*) AS n FROM justup_company_requests WHERE owner_id=?').get(ownerId).n>=maxPerOwner)throw problem('task_limit',429);
       const id=randomUUID(),candidate=importedCandidate(company),fingerprint=createHash('sha256').update(`priority:${company.id}`).digest('hex');

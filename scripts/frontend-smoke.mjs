@@ -13,12 +13,18 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
   assert.equal(config.vars.PUBLIC_ORIGIN, origin, 'Configured origin differs from smoke target');
   const deploymentMode = config.vars.DEPLOYMENT_MODE;
   assert.ok(['preview', 'production'].includes(deploymentMode), 'Invalid deployment mode');
-  assert.equal(config.vars.RUNTIME_CONFIG_SHA256, digest(JSON.stringify({ publicOrigin: origin, apiOrigin: httpsOrigin(config.vars.API_ORIGIN), apiPrefix: '/api/v1', deploymentMode })), 'Runtime configuration identity differs from its settings');
+  assert.ok(config.vars.API_DISABLED === undefined || config.vars.API_DISABLED === 'true', 'Invalid API-disabled setting');
+  const apiDisabled = config.vars.API_DISABLED === 'true';
+  if (apiDisabled) {
+    assert.equal(deploymentMode, 'preview', 'Disabled API requires preview mode');
+    assert.equal(config.vars.API_ORIGIN, undefined, 'Disabled API cannot configure an upstream');
+  }
+  assert.equal(config.vars.RUNTIME_CONFIG_SHA256, digest(JSON.stringify({ publicOrigin: origin, apiOrigin: apiDisabled ? null : httpsOrigin(config.vars.API_ORIGIN), apiPrefix: '/api/v1', deploymentMode })), 'Runtime configuration identity differs from its settings');
   const deadline = Date.now() + 60_000;
-  const get = async path => {
+  const get = async (path, status = 200) => {
     assert.ok(Date.now() < deadline, 'Smoke deadline exceeded');
     const result = await fetchRemote(`${origin}${path}`, { redirect: 'manual', signal: AbortSignal.timeout(Math.min(10_000, deadline - Date.now())), cache: 'no-store' });
-    assert.equal(result.status, 200, `Expected 200: ${path}`);
+    assert.equal(result.status, status, `Expected ${status}: ${path}`);
     if (deploymentMode === 'preview' || path.startsWith('/api/') || path.startsWith('/__release/')) assert.match(result.headers.get('X-Robots-Tag') || '', /noindex/, `Missing noindex: ${path}`);
     return result;
   };
@@ -29,7 +35,15 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
   assert.ok(Array.isArray(release.assets) && release.assets.length <= 200, 'Asset count exceeds bounded smoke allowance');
   const index = release.assets.find(asset => asset.path === 'index.html');
   assert.ok(index, 'Missing root index identity');
-  assert.equal(digest(new Uint8Array(await (await get('/')).arrayBuffer())), index.sha256, 'Wrong root index bytes');
+  const document = await (await get('/')).text();
+  assert.match(document, /<meta name="justup-public-document" content="v1">/, 'Missing shared public rendering proof');
+  assert.ok(document.includes(`<meta name="justup-source" content="${release.sourceSha}">`), 'Rendered document has wrong source identity');
+  assert.ok(document.includes(`<meta name="justup-runtime-config" content="${config.vars.RUNTIME_CONFIG_SHA256}">`), 'Rendered document has wrong runtime identity');
+  assert.ok(document.includes(`<link rel="canonical" href="${origin}/">`), 'Wrong public canonical');
+  assert.match(document, /<div id="root">[\s\S]*Beat the/, 'Landing document has no readable public content');
+  assert.match(document, /<template id="public-bootstrap" data-public=/, 'Missing inert public hydration data');
+  assert.doesNotMatch(document, /(?:csrfToken|proposalId|passwordHash|sessionToken|modelEvidence)/, 'Private state in public document');
+  for (const asset of release.assets.filter(asset => /^assets\/.*\.(?:js|css)$/.test(asset.path))) assert.ok(document.includes('/' + asset.path), `Public document does not use retained asset: ${asset.path}`);
   for (const asset of release.assets) {
     assert.ok(!asset.path.startsWith('/') && !asset.path.split('/').some(part => part === '..'), 'Unsafe asset path');
     const result = await get(`/${asset.path.split('/').map(encodeURIComponent).join('/')}`);
@@ -37,6 +51,15 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
   }
   for (const policy of ['/privacy.html', '/usage.html']) await get(policy);
   assert.equal(await (await get('/robots.txt')).text(), deploymentMode === 'preview' ? 'User-agent: *\nDisallow: /\n' : 'User-agent: *\nDisallow: /api/\nDisallow: /__release/\n', 'Wrong robots policy');
+  if (apiDisabled) {
+    for (const path of ['/api/v1/health', '/api/v1/session', '/api/v1/version']) {
+      const result = await get(path, 503);
+      assert.match(result.headers.get('Cache-Control') || '', /no-store/, `Disabled API can be cached: ${path}`);
+      assert.match(result.headers.get('Content-Type') || '', /application\/json/, `Disabled API returned HTML: ${path}`);
+      assert.equal((await result.json()).error?.code, 'dependency_unavailable', `Unexpected disabled API response: ${path}`);
+    }
+    return { deploymentMode, apiState: 'disabled', sourceSha: release.sourceSha, artifactSha256: release.artifactSha256, runtimeConfigSha256: version.runtimeConfigSha256, checkedAssets: release.assets.length, result: 'passed', completeReleaseGate: false, scope: 'frontend-only test deployment; API intentionally unavailable; no service health, account, provider or complete release qualification' };
+  }
   const health = await get('/api/v1/health');
   assert.match(health.headers.get('Cache-Control') || '', /no-store/, 'Health can be cached');
   for (const path of ['/api/v1/session', '/api/v1/version']) {
@@ -50,7 +73,7 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
       assert.ok(body.access && typeof body.access === 'object', 'Missing server-owned access');
     }
   }
-  return { deploymentMode, sourceSha: release.sourceSha, artifactSha256: release.artifactSha256, runtimeConfigSha256: version.runtimeConfigSha256, checkedAssets: release.assets.length, result: 'passed', scope: 'read-only frontend delivery; API/runner identities and authenticated journeys require separate release checks' };
+  return { deploymentMode, sourceSha: release.sourceSha, artifactSha256: release.artifactSha256, runtimeConfigSha256: version.runtimeConfigSha256, checkedAssets: release.assets.length, publicDocumentProof: 'semantic public HTML, runtime identity and retained asset references; rendered source facts are not immutable artifact bytes', result: 'passed', scope: 'read-only frontend delivery; API/runner identities and authenticated journeys require separate release checks' };
 }
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   if (process.argv.length !== 4) throw new Error('Usage: node scripts/frontend-smoke.mjs <approved-https-origin> <retained-artifact-directory>');

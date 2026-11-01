@@ -12,6 +12,7 @@ Choose the task you are doing. The [product guide](product-design.md) defines ac
 | Task | Owning guide |
 | --- | --- |
 | Understand the accepted user experience and release scope | [Product design](product-design.md) |
+| Check the accepted interface against remaining release gaps | [Interface readiness](interface-readiness.md) |
 | Understand the server's main boundaries before changing a feature | [Backend design](backend-design.md) and [server directory](../server/README.md) |
 | Change result arrival, scrolling or reduced motion | [Motion design](motion-design.md) |
 | Review what Privacy and Usage notices must say before access is enabled | [Policy review](policies.md) |
@@ -23,6 +24,7 @@ Choose the task you are doing. The [product guide](product-design.md) defines ac
 | Run or change the browser application | [Web application](../web/README.md) |
 | Connect a browser or another client to the server | [API](api.md) |
 | Change accounts, sessions, access or deletion | [Authentication and accounts](auth.md) |
+| Integrate subscription transitions and billing | [Account billing](account-billing.md) |
 | Verify an account email before a free period | [Account verification](account-verification.md) |
 | Let a visitor search and carry work into an account | [Visitor search](visitor-search.md) |
 | Save followed companies, posting languages or interface language | [Reading preferences](reading-preferences.md) |

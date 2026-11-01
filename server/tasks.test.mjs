@@ -30,11 +30,145 @@ test('single global lease, heartbeat and recovery reject stale completion', (t) 
   assert.equal(tasks.complete(one.id, next.leaseToken, { status: 'warning', output: { reason: 'unknown' } }), true);
 });
 test('bounded attempts terminal failure and task ceilings are durable', (t) => {
-  const { tasks, advance } = setup(t, { maxAttempts: 1, maxTasks: 1 }); const one = tasks.enqueue(input());
+  const { tasks, advance } = setup(t, { maxAttempts: 1, maxActiveTasks: 1, maxStoredTasks: 1 }); const one = tasks.enqueue(input());
   tasks.claim({ workerId: 'worker', leaseMs: 1000 }); advance(1001); tasks.recover();
   assert.equal(tasks.get('a', one.id).status, 'failed'); assert.equal(tasks.claim({ workerId: 'worker' }), null);
   assert.throws(() => tasks.enqueue(input({ requestKey: 'two' })), { status: 429 });
   assert.throws(() => tasks.enqueue(input({ payload: { text: 'x'.repeat(16384) } })), { code: 'invalid_input' });
+});
+test('completed work leaves active capacity while exact retries survive a SQLite restart', (t) => {
+  const directory=mkdtempSync(join(tmpdir(),'task-history-')),path=join(directory,'queue.sqlite');
+  let store=openStore(path),at=100_000;
+  t.after(()=>{store.close();rmSync(directory,{recursive:true,force:true});});
+  let tasks=createTasks({db:store.db,now:()=>at}),first;
+  for(let i=0;i<96;i++){
+    const task=tasks.enqueue(input({requestKey:`work:${i}`}));
+    if(i===0)first=task;
+    const lease=tasks.claim({workerId:'worker'});
+    assert.equal(lease.id,task.id);
+    assert.equal(tasks.complete(task.id,lease.leaseToken,{status:'succeeded',output:{done:i}}),true);
+  }
+  assert.equal(store.db.prepare("SELECT count(*) n FROM justup_tasks WHERE status IN ('pending','running')").get().n,0);
+  const next=tasks.enqueue(input({requestKey:'work:96'}));
+  assert.equal(next.status,'pending');
+  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'edition:next'}));
+  assert.equal(wire.status,'pending');
+  assert.equal(tasks.enqueue(input({requestKey:'work:0'})).id,first.id);
+  store.close();store=openStore(path);tasks=createTasks({db:store.db,now:()=>at});
+  assert.equal(tasks.enqueue(input({requestKey:'work:0'})).id,first.id);
+  assert.equal(tasks.get('a',next.id).status,'pending');
+  assert.equal(tasks.get('__hiring_wire__',wire.id).status,'pending');
+  const foreground=tasks.claim({workerId:'worker'});
+  assert.equal(foreground.id,next.id);
+  assert.equal(tasks.complete(next.id,foreground.leaseToken,{status:'succeeded'}),true);
+  assert.equal(tasks.claim({workerId:'worker'}).id,wire.id);
+});
+test('active and stored ceilings keep recent receipts and recover after retention', (t) => {
+  const {tasks,db,advance}=setup(t,{maxActiveTasks:1,maxStoredTasks:3,retentionMs:1000});
+  const finish=key=>{
+    const task=tasks.enqueue(input({requestKey:key})),lease=tasks.claim({workerId:'worker'});
+    assert.equal(tasks.complete(task.id,lease.leaseToken,{status:'succeeded'}),true);
+    return task;
+  };
+  const pending=tasks.enqueue(input({requestKey:'first'}));
+  assert.throws(()=>tasks.enqueue(input({requestKey:'second'})),{code:'task_limit'});
+  const lease=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.complete(pending.id,lease.leaseToken,{status:'succeeded'}),true);
+  const second=finish('second'),third=finish('third');
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_tasks').get().n,3);
+  assert.throws(()=>tasks.enqueue(input({requestKey:'fourth'})),{code:'task_limit'});
+  assert.equal(tasks.enqueue(input({requestKey:'first'})).id,pending.id);
+  assert.throws(()=>tasks.enqueue(input({requestKey:'first',payload:{query:'Other'}})),{code:'idempotency_conflict'});
+  assert.equal(tasks.get('a',second.id).status,'succeeded');
+  assert.equal(tasks.get('a',third.id).status,'succeeded');
+  advance(1001);
+  const fourth=tasks.enqueue(input({requestKey:'fourth'}));
+  assert.equal(fourth.status,'pending');
+  assert.equal(tasks.get('a',pending.id),null);
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
+});
+test('a full ordinary history admits termination while only a proved billing result releases its receipt', t => {
+  const {tasks,db}=setup(t);
+  const release=(owner,id,proof)=>{
+    db.exec('BEGIN');
+    try { const result=tasks.releaseCleanupReceipt(owner,id,proof); db.exec('COMMIT'); return result; }
+    catch(error) { db.exec('ROLLBACK'); throw error; }
+  };
+  const seed=db.prepare(`INSERT INTO justup_tasks
+    (id,owner_id,kind,request_key,payload_json,status,created_at,updated_at)
+    VALUES (?,?, 'search_intent', ?,?,'succeeded',100000,100000)`);
+  for(let i=0;i<2048;i++) seed.run(`ordinary-${i}`,`owner-${i}`,`request-${i}`,JSON.stringify({query:'Engineer'}));
+  assert.throws(()=>tasks.enqueue(input({ownerId:'new-owner'})),{code:'task_limit'});
+  const ordinaryRetry=tasks.enqueue(input({ownerId:'owner-0',requestKey:'request-0'}));
+  assert.equal(ordinaryRetry.id,'ordinary-0');
+  const termination=tasks.enqueue(input({ownerId:'closing-owner',kind:'billing_terminate',requestKey:'termination:1',payload:{operationId:'operation-1'}}));
+  assert.equal(termination.status,'pending');
+  assert.equal(tasks.delete('closing-owner',termination.id),false);
+  assert.equal(release('closing-owner',termination.id,()=>true),false);
+  const lease=tasks.claim({workerId:'worker'});
+  assert.equal(lease.id,termination.id);
+  db.exec('CREATE TABLE billing_proof (task_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, operation_id TEXT NOT NULL, result TEXT NOT NULL) STRICT');
+  const absorbed=receipt=>{
+    assert.equal(db.isTransaction,true);
+    const proof=db.prepare('SELECT 1 FROM billing_proof WHERE task_id=? AND owner_id=? AND operation_id=? AND result=?')
+      .get(receipt.id,receipt.ownerId,receipt.payload.operationId,'settled');
+    return Boolean(proof);
+  };
+  // The handler may commit its canonical result before the runner records
+  // completion. Its proof must not remove a task that the runner still owns.
+  db.prepare('INSERT INTO billing_proof VALUES (?,?,?,?)').run(termination.id,'closing-owner','operation-1','settled');
+  assert.equal(release('closing-owner',termination.id,absorbed),false);
+  assert.equal(tasks.complete(termination.id,lease.leaseToken,{status:'succeeded'}),true);
+  db.prepare('DELETE FROM billing_proof WHERE task_id=?').run(termination.id);
+  assert.equal(release('closing-owner',termination.id,absorbed),false);
+  assert.throws(()=>tasks.releaseCleanupReceipt('closing-owner',termination.id,absorbed),TypeError);
+  assert.throws(()=>release('closing-owner',termination.id,true),TypeError);
+  assert.throws(()=>release('closing-owner',termination.id,async()=>true),TypeError);
+  db.prepare('INSERT INTO billing_proof VALUES (?,?,?,?)').run(termination.id,'closing-owner','operation-1','settled');
+  assert.equal(release('other-owner',termination.id,absorbed),false);
+  assert.equal(release('closing-owner',termination.id,absorbed),true);
+  assert.equal(release('closing-owner',termination.id,absorbed),false);
+  assert.equal(tasks.get('closing-owner',termination.id),null);
+  assert.equal(tasks.enqueue(input({ownerId:'owner-0',requestKey:'request-0'})).id,ordinaryRetry.id);
+  assert.equal(tasks.enqueue(input({ownerId:'second-owner',kind:'billing_terminate',requestKey:'termination:2',payload:{operationId:'operation-2'}})).status,'pending');
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_tasks').get().n,2049);
+});
+test('the cleanup reserve does not bypass active work and recycles only after proved completion', t => {
+  const {tasks,db}=setup(t,{maxActiveTasks:1,maxStoredTasks:1,maxCleanupReceipts:1});
+  const ordinary=tasks.enqueue(input());
+  assert.throws(()=>tasks.enqueue(input({ownerId:'closing',kind:'billing_terminate',requestKey:'one',payload:{operationId:'one'}})),{code:'task_limit'});
+  const firstLease=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.complete(ordinary.id,firstLease.leaseToken,{status:'succeeded'}),true);
+  const first=tasks.enqueue(input({ownerId:'closing',kind:'billing_terminate',requestKey:'one',payload:{operationId:'one'}}));
+  const cleanupLease=tasks.claim({workerId:'worker'});
+  assert.equal(cleanupLease.id,first.id);
+  assert.equal(tasks.complete(first.id,cleanupLease.leaseToken,{status:'failed'}),true);
+  assert.throws(()=>tasks.enqueue(input({ownerId:'next',kind:'billing_terminate',requestKey:'two',payload:{operationId:'two'}})),{code:'task_limit'});
+  assert.equal(tasks.enqueue(input({ownerId:'closing',kind:'billing_terminate',requestKey:'one',payload:{operationId:'one'}})).id,first.id);
+  db.exec('BEGIN');
+  try {
+    assert.equal(tasks.releaseCleanupReceipt('closing',first.id,receipt=>receipt.status==='failed'&&db.isTransaction),true);
+    db.exec('COMMIT');
+  } catch(error) { db.exec('ROLLBACK'); throw error; }
+  assert.equal(tasks.enqueue(input({ownerId:'next',kind:'billing_terminate',requestKey:'two',payload:{operationId:'two'}})).status,'pending');
+  assert.equal(tasks.enqueue(input()).id,ordinary.id);
+});
+test('ordinary receipt expiry cannot erase an unproved termination receipt', t => {
+  const {tasks,db,advance}=setup(t,{maxActiveTasks:1,maxStoredTasks:1,maxCleanupReceipts:1});
+  const ordinary=tasks.enqueue(input());
+  let lease=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.complete(ordinary.id,lease.leaseToken,{status:'succeeded'}),true);
+  const termination=tasks.enqueue(input({ownerId:'closing',kind:'billing_terminate',requestKey:'termination',payload:{operationId:'operation'}}));
+  lease=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.complete(termination.id,lease.leaseToken,{status:'failed'}),true);
+  advance(31*24*60*60*1000);
+  const next=tasks.enqueue(input({requestKey:'new-ordinary'}));
+  assert.equal(next.status,'pending');
+  assert.equal(tasks.get('a',ordinary.id),null);
+  assert.equal(tasks.get('closing',termination.id).status,'failed');
+  assert.equal(tasks.enqueue(input({ownerId:'closing',kind:'billing_terminate',requestKey:'termination',payload:{operationId:'operation'}})).id,termination.id);
+  assert.throws(()=>tasks.enqueue(input({ownerId:'other',kind:'billing_terminate',requestKey:'later',payload:{operationId:'later'}})),{code:'task_limit'});
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_tasks WHERE kind=?').get('billing_terminate').n,1);
 });
 test('deletion and cancellation invalidate running work and public view omits private material', (t) => {
   const { tasks, db } = setup(t); const one = tasks.enqueue(input()); const lease = tasks.claim({ workerId: 'worker' });

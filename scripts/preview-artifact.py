@@ -33,6 +33,7 @@ WIRE_MODULES = {'app/server/' + name + '.mjs' for name in (
     'hiring-wire', 'hiring-wire-facts', 'hiring-wire-editorial', 'hiring-wire-codex',
     'hiring-wire-codex-policy', 'hiring-wire-codex-broker', 'hiring-wire-integration', 'source-coverage')}
 EMAIL_MODULES = {'app/server/email-verification.mjs', 'app/server/account-provider-clients.mjs'}
+BILLING_MODULES = {'app/server/stripe-billing.mjs', 'app/server/stripe-billing-protocol.mjs', 'app/server/account-provider-clients.mjs'}
 CODEX_FILES = {
     CODEX_ENTRYPOINT: '113aa5d5952a6fd3950a88323219747d0c91978ebee948509a540c8a460e59a3',
     'runtime/codex/codex-resources/bwrap': 'c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4',
@@ -60,6 +61,31 @@ def file_sha(path):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+
+
+def validate_stripe_billing(value, *, role):
+    """Match the fixed Node test-only provider roles without exposing values."""
+    if isinstance(value, dict) and set(value) == {'enabled'} and value['enabled'] is False:
+        return
+    secret_key = 'webhookSecret' if role == 'api' else 'apiKey'
+    if (role not in {'api', 'queue'} or not isinstance(value, dict)
+            or set(value) != {'enabled', 'accountId', 'offers', 'portalConfigurationId', 'origin', secret_key}
+            or value.get('enabled') is not True
+            or not isinstance(value.get('accountId'), str) or not re.fullmatch(r'acct_[A-Za-z0-9]{1,128}', value['accountId'])
+            or not isinstance(value.get('portalConfigurationId'), str) or not re.fullmatch(r'bpc_[A-Za-z0-9]{1,128}', value['portalConfigurationId'])
+            or not isinstance(value.get('origin'), str) or not re.fullmatch(r'https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', value['origin'])
+            or not isinstance(value.get('offers'), dict) or set(value['offers']) != {'weekly', 'monthly'}):
+        raise ValueError('Billing requires exact isolated test configuration.')
+    for offer in value['offers'].values():
+        if (not isinstance(offer, dict) or set(offer) != {'priceId', 'currency', 'amount'}
+                or not isinstance(offer.get('priceId'), str) or not re.fullmatch(r'price_[A-Za-z0-9]{1,128}', offer['priceId'])
+                or not isinstance(offer.get('currency'), str) or not re.fullmatch(r'[a-z]{3}', offer['currency'])
+                or type(offer.get('amount')) is not int or not 1 <= offer['amount'] <= 1_000_000_000):
+            raise ValueError('Billing offers require explicit approved test fixtures.')
+    expression = r'whsec_[A-Za-z0-9_]{16,256}' if role == 'api' else r'rk_test_[A-Za-z0-9_]{1,256}'
+    if (value['offers']['weekly']['priceId'] == value['offers']['monthly']['priceId']
+            or not isinstance(value.get(secret_key), str) or not re.fullmatch(expression, value[secret_key])):
+        raise ValueError('Billing credentials and offers must match the isolated test role.')
 
 
 def read_host_plan(base):
@@ -148,6 +174,8 @@ def validate_manifest(manifest):
         raise ValueError('Artifact is missing required runtime/application bytes.')
     if EMAIL_MODULES & files.keys() and not EMAIL_MODULES <= files.keys():
         raise ValueError('Email verification requires its complete fixed runtime graph.')
+    if (BILLING_MODULES - {'app/server/account-provider-clients.mjs'}) & files.keys() and not BILLING_MODULES <= files.keys():
+        raise ValueError('Test billing requires its complete fixed runtime graph.')
     if (manifest.get('codexVersion') != CODEX_VERSION or manifest.get('codexTarget') != CODEX_TARGET
             or manifest.get('codexArchiveSha256') != CODEX_ARCHIVE_SHA256
             or manifest.get('codexEntrypoint') != CODEX_ENTRYPOINT

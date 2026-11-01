@@ -15,7 +15,7 @@ const SAFE_ERRORS = new Map([
   ['policy_unavailable', 'Processing is unavailable until policies are approved for this language.'],
   ['deletion_unavailable', 'Account access is temporarily unavailable.'],
   ['forbidden', 'This request is not allowed.'], ['invalid_json', 'Send a bounded JSON object.'],
-  ['access_denied','Current premium access is required for company priority.'],
+  ['access_denied','Active free or paid access is required for company priority.'],
   ['identity_unverified','Verify your account to activate the free period.'], ['free_period_unavailable','The free period is unavailable.'],
   ['verification_unavailable','Account verification is temporarily unavailable.'],
   ['verification_invalid','That verification code is invalid or no longer available.'],
@@ -23,6 +23,17 @@ const SAFE_ERRORS = new Map([
   ['verification_locked','Too many attempts. Request a new code later.'],
   ['verification_pending','The verification email has not been sent yet.'],
   ['verification_conflict','This account or email is already verified elsewhere.'],
+  ['billing_unavailable','Test billing is temporarily unavailable.'],
+  ['billing_pending','A billing operation is already in progress.'],
+  ['billing_conflict','Billing state changed. Refresh the account and try again.'],
+  ['billing_account_lifetime','Test billing needs a durable account.'],
+  ['billing_termination_pending','Billing termination is in progress. Retry account deletion after it finishes.'],
+  ['billing_termination_unavailable','Billing could not be stopped yet. Your account has not been deleted.'],
+  ['billing_operator_reconciliation_required','Billing needs an operator check before deletion. Your account has not been deleted.'],
+  ['billing_evidence_invalid','Payment status needs verification.'],
+  ['billing_configuration_mismatch','Test billing configuration needs attention.'],
+  ['invalid_provider_signature','Invalid provider notification.'],
+  ['provider_mode_mismatch','Invalid provider notification.'],
   ['not_found', 'Not found.'], ['rate_limit', 'Too many requests. Try again later.'],
   ['task_limit', 'The task limit has been reached.'], ['idempotency_conflict', 'This request key was already used.'],
   ['stale_cursor', 'This feed changed. Reload it and try again.'], ['invalid_cursor', 'Invalid cursor.'],
@@ -57,6 +68,13 @@ async function readBody(req, maxBytes) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw problem('invalid_json');
   return body;
 }
+async function readProviderBody(req) {
+  if(!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(req.headers['content-type']??'')
+      ||Number(req.headers['content-length']??0)>262_144)throw problem('invalid_json');
+  const chunks=[];let bytes=0;
+  for await(const chunk of req){bytes+=chunk.length;if(bytes>262_144)throw problem('invalid_json');chunks.push(chunk);}
+  return Buffer.concat(chunks);
+}
 export function createHandler({ auth, feed, tasks, db, services = [], config = {}, policyConfig=config, now = Date.now, logger = () => {}, afterPrivateTransaction = () => {} }) {
   validatePolicyConfig(policyConfig);
   const origin = new URL(config.allowedOrigin ?? 'https://preview.justup.work');
@@ -67,6 +85,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   const visitorService=services.find(service=>typeof service.visitorRoute==='function');
   const liveResults=services.find(service=>typeof service.openStream==='function');
   const verification=services.find(service=>service.emailVerification===true);
+  const billing=services.find(service=>service.stripeBilling===true);
   const csrfCookie = insecure ? 'justup_csrf' : '__Host-justup_csrf';
   const secret = config.csrfSecret ?? randomBytes(32);
   if (Buffer.byteLength(secret) < 32) throw new TypeError('CSRF secret must contain at least 32 bytes.');
@@ -107,12 +126,14 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
     return { follows:false,preferences:false,viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
       search:authentication(locale).loginEnabled&&result.search===true,aiMatching:authentication(locale).loginEnabled&&result.aiMatching===true,companyRequests:authentication(locale).loginEnabled&&result.companyRequests===true,
       emailVerification:authentication(locale).loginEnabled&&result.emailVerification===true,
+      billing:authentication(locale).loginEnabled&&result.billing===true,
       sse:authentication(locale).loginEnabled&&result.sse===true,
       visitorSearch:policies(locale).reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
   }
   function sessionBody(viewer, token, guestToken, visitor=null,locale='en') {
+    const features=capabilities(locale);
     return { serverTime: new Date(now()).toISOString(), user: viewer?.account ?? null, expiresAt: viewer ? new Date(viewer.expiresAt).toISOString() : null,
-      access: viewer?.access ?? GUEST_ACCESS, visitor:visitorService?.publicVisitor(visitor)??null, csrfToken: csrf(token, guestToken), capabilities: capabilities(locale),
+      access: viewer?{...viewer.access,billingEnabled:features.billing===true}:GUEST_ACCESS, visitor:visitorService?.publicVisitor(visitor)??null, csrfToken: csrf(token, guestToken), capabilities: features,
       policies:policies(locale), authentication: authentication(locale), coverage: feed.coverage() };
   }
   return async function handler(req, res) {
@@ -133,6 +154,14 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       if (!url.pathname.startsWith('/api/v1/')) throw problem('not_found', 404);
       const path = url.pathname.slice('/api/v1'.length), method = req.method;
       if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(method)) throw problem('not_found', 404);
+      if(path==='/billing/stripe/webhook'){
+        category='mutation';limit(req,category);
+        if(method!=='POST'||[...url.searchParams].length)throw problem('not_found',404);
+        if(req.headers.origin!==undefined||(req.headersDistinct?.['stripe-signature']?.length??1)!==1)throw problem('invalid_provider_signature',400);
+        if(!billing)throw problem('billing_unavailable',503);
+        const result=await billing.handleWebhook({body:await readProviderBody(req),signature:req.headers['stripe-signature']});
+        return finish(result.status,result.body);
+      }
       const explicitLocale=req.headers['x-justup-locale'];
       if(explicitLocale!==undefined&&(!POLICY_LOCALES.includes(explicitLocale)||(req.headersDistinct?.['x-justup-locale']?.length??1)!==1))throw problem('invalid_input');
       const parsedCookies = cookies(req.headers.cookie);
@@ -202,6 +231,11 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       if(verification&&['/account/verification','/account/verification/confirm'].includes(path)){
         if(!viewer)throw problem('unauthenticated',401);
         const result=await verification.handleVerification({method,path,url,body,accountId:viewer.account.id,sessionHash:emailSessionHash(sessionToken),interfaceLocale});
+        return finish(result.status,result.body);
+      }
+      if(billing&&path.startsWith('/account/billing')){
+        if(!viewer)throw problem('unauthenticated',401);
+        const result=await billing.handleBilling({method,path,url,body,accountId:viewer.account.id,sessionHash:emailSessionHash(sessionToken),interfaceLocale});
         return finish(result.status,result.body);
       }
       if(method==='POST'&&path==='/access/activate') {

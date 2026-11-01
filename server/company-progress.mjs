@@ -30,17 +30,19 @@ export function createCompanyProgress({db,canonicalCompanyId=id=>id,now=Date.now
   function accepted() {
     const groups=new Map();
     if(!exists('justup_company_requests'))return groups;
+    const priorityColumn=db.prepare('PRAGMA table_info(justup_company_requests)').all().some(column=>column.name==='acceptance_priority')
+      ? 'acceptance_priority' : "'standard' AS acceptance_priority";
     const access=new Map();
-    for(const request of db.prepare("SELECT owner_id,scope,created_at,candidate_json FROM justup_company_requests WHERE status='accepted' AND candidate_json IS NOT NULL ORDER BY created_at,id").all()) {
+    for(const request of db.prepare(`SELECT owner_id,scope,created_at,candidate_json,${priorityColumn} FROM justup_company_requests WHERE status='accepted' AND candidate_json IS NOT NULL ORDER BY created_at,id`).all()) {
       const candidate=JSON.parse(request.candidate_json);if(typeof candidate.companyId!=='string')continue;
       if(!access.has(request.owner_id))access.set(request.owner_id,accessForAccount(request.owner_id));
-      const current=access.get(request.owner_id);if(!current)continue; // Expired/deleted owners cannot sponsor queue priority.
+      if(!access.get(request.owner_id))continue; // Unavailable/deleted accounts cannot contribute private requests.
       const id=canonicalCompanyId(candidate.companyId),previous=groups.get(id);
       if(previous) {
-        if(current.premium===true)previous.priority='premium';
+        if(request.acceptance_priority==='premium')previous.priority='premium';
         if(request.scope!==null)previous.requestedScopes.add(request.scope);
       } else groups.set(id,{companyId:id,name:candidate.name,websiteUrl:candidate.websiteUrl,
-        priority:current.premium===true?'premium':'standard',firstRequestedAt:iso(request.created_at),requestedScopes:new Set(request.scope===null?[]:[request.scope])});
+        priority:request.acceptance_priority==='premium'?'premium':'standard',firstRequestedAt:iso(request.created_at),requestedScopes:new Set(request.scope===null?[]:[request.scope])});
     }
     return groups;
   }
