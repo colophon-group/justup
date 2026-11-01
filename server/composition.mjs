@@ -4,11 +4,8 @@ import { lstatSync,readFileSync } from 'node:fs';
 import { dirname,isAbsolute,join } from 'node:path';
 import { createIntentService } from './intent.mjs';
 import { createCompanyService } from './companies.mjs';
+import { createMatchingService } from './matching.mjs';
 
-// Matching is an independently reviewed module. Its absence leaves the dependency
-// unavailable; no replacement classifier or successful stand-in is constructed.
-let matchingFactory=null;
-try{matchingFactory=(await import('./matching.mjs')).createMatchingService;}catch(error){if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;}
 const disabled=()=>({search:false,companyRequests:false,aiMatching:false});
 export function runnerStatusPath(config){return config.runnerStatusPath??(typeof config.dbPath==='string'&&isAbsolute(config.dbPath)?join(dirname(config.dbPath),'runner-status.json'):null);}
 export function readRunnerStatus({config={},now=Date.now}={}){
@@ -32,8 +29,8 @@ export function createApiServices(deps){
   // never passed into feature providers or retained in an API-side model object.
   const apiConfig={maxCompanyRequestsPerOwner:config.maxCompanyRequestsPerOwner,matching:config.matching};
   const heartbeat=()=>readRunnerStatus({config:{dbPath:config.dbPath,runnerStatusPath:config.runnerStatusPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},now}).capabilities;
-  const matching=matchingFactory?.({...deps,config:apiConfig,readOnlyProvider:true,availability:()=>heartbeat().aiMatching});
+  const matching=createMatchingService({...deps,config:apiConfig,readOnlyProvider:true,availability:()=>heartbeat().aiMatching});
   const intent=createIntentService({...deps,config:apiConfig,model:undefined,matching,availability:()=>heartbeat().search});
   const companies=createCompanyService({...deps,config:apiConfig,model:undefined,availability:()=>heartbeat().companyRequests});
-  return [intent,companies,...(matching?[matching]:[])];
+  return [intent,companies,matching];
 }

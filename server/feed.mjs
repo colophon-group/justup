@@ -17,7 +17,7 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
       || !Number.isSafeInteger(cursorTtlMs) || cursorTtlMs < 1 || cursorTtlMs > DAY_MS
       || Buffer.byteLength(cursorSecret) < 32) throw new TypeError('Invalid feed configuration.');
   const latest = () => db.prepare('SELECT * FROM demo_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
-  const access = (viewer) => viewer?.account?.id ? 'demo' : 'guest';
+  const access = (viewer) => viewer?.account?.id && viewer.access?.fullAccess === true ? 'account' : 'guest';
   function coverageAt(at) {
     const row = latest();
     const stale = !row || at - row.verified_at >= verificationTtlMs;

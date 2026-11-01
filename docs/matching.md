@@ -1,5 +1,5 @@
 ---
-summary: Integrate and verify bounded residual matching for the isolated Justup demo.
+summary: Integrate and verify bounded residual matching for Justup.
 read_when: Wiring the search runner, reviewing matching privacy or approving a real-provider benchmark.
 ---
 
@@ -289,7 +289,7 @@ This supports a provisional 24-candidate default under the local byte/token
 limits. No real-provider latency, token cost, acceptance rate or accuracy has
 been measured. Before public sharing, reviewed queue-only delivery of the approved
 existing key, verified pricing and the initialized cumulative ledger must enable
-a bounded benchmark on the actual eligible demo slice. Repeat
+a bounded benchmark on the actual eligible job slice. Repeat
 the reviewed held-out cases at least three times, require no false acceptance on
 ambiguous cases and perfect acceptance precision in this small gate, and report
 variance plus sample size. Also measure actual-slice acceptance, throughput,

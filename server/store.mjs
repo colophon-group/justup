@@ -1,5 +1,5 @@
-// Isolated demo SQLite storage and allowlisted imports. Read when changing the
-// snapshot format or its freshness/source-identity rules; never point at production.
+// Application SQLite storage and allowlisted imports. Read when changing the
+// snapshot format, migrations or freshness/source-identity rules.
 import { lstatSync, chmodSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -96,10 +96,10 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
   if (path !== ':memory:') {
     const directory = lstatSync(dirname(resolve(path)));
     if (!directory.isDirectory() || directory.isSymbolicLink()
-        || (sharedState && ((directory.mode & 0o7777) !== 0o2770 || process.umask() !== 0o007))) throw new Error('Shared demo storage requires a setgid 02770 directory and umask 0007.');
+        || (sharedState && ((directory.mode & 0o7777) !== 0o2770 || process.umask() !== 0o007))) throw new Error('Shared application storage requires a setgid 02770 directory and umask 0007.');
     for (const file of [path, `${path}-wal`, `${path}-shm`]) {
       let info; try { info = lstatSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      if (!info.isFile() || info.isSymbolicLink()) throw new Error('Unsafe demo storage file.');
+      if (!info.isFile() || info.isSymbolicLink()) throw new Error('Unsafe application storage file.');
       chmodSync(file, mode);
     }
   }
@@ -108,7 +108,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA max_page_count = 262144;');
   if (path !== ':memory:') for (const file of [`${path}-wal`, `${path}-shm`]) if (existsSync(file)) chmodSync(file, mode);
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (version > SCHEMA_VERSION) { db.close(); throw new Error('Unsupported demo database schema.'); }
+  if (version > SCHEMA_VERSION) { db.close(); throw new Error('Unsupported application database schema.'); }
   db.exec(`
     CREATE TABLE IF NOT EXISTS demo_imports (
       generation TEXT PRIMARY KEY, snapshot_at INTEGER NOT NULL, verified_at INTEGER NOT NULL,
@@ -122,8 +122,23 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     ) STRICT;
     CREATE INDEX IF NOT EXISTS demo_jobs_order ON demo_jobs(first_seen_at DESC, id);
     CREATE INDEX IF NOT EXISTS demo_jobs_company ON demo_jobs(company_id);
+    CREATE TABLE IF NOT EXISTS job_source_identities (
+      id TEXT PRIMARY KEY, company_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,
+      verified_at INTEGER NOT NULL, active INTEGER NOT NULL CHECK(active IN (0,1)),
+      reserved INTEGER NOT NULL CHECK(reserved IN (0,1))
+    ) STRICT;
     PRAGMA user_version = 1;
   `);
+  // Retain source lifecycle independently from bounded bodies/metadata, including
+  // when reopening a database with the earlier identity-only additive schema.
+  const identityColumns = new Set(db.prepare('PRAGMA table_info(job_source_identities)').all().map((column) => column.name));
+  for (const [name, definition] of [['verified_at','INTEGER NOT NULL DEFAULT 0'],['active','INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1))'],['reserved','INTEGER NOT NULL DEFAULT 1 CHECK(reserved IN (0,1))']]) {
+    if (!identityColumns.has(name)) db.exec(`ALTER TABLE job_source_identities ADD COLUMN ${name} ${definition}`);
+  }
+  db.exec(`INSERT OR IGNORE INTO job_source_identities(id,company_id,first_seen_at,verified_at,active,reserved)
+    SELECT id,company_id,first_seen_at,verified_at,active,reserved FROM demo_jobs;
+    UPDATE job_source_identities SET (verified_at,active,reserved)=(SELECT verified_at,active,reserved FROM demo_jobs WHERE id=job_source_identities.id)
+      WHERE verified_at=0 AND EXISTS(SELECT 1 FROM demo_jobs WHERE id=job_source_identities.id);`);
   function generation() {
     return db.prepare('SELECT * FROM demo_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   }
@@ -147,18 +162,33 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     const generationId = randomUUID();
     return transaction(db, () => {
       if ((generation()?.verified_at ?? -1) > verifiedAt) throw problem('stale_import', 409, 'A newer import is already present.');
-      const existing = db.prepare('SELECT first_seen_at FROM demo_jobs WHERE id = ?');
+      const existing = db.prepare('SELECT company_id,first_seen_at FROM job_source_identities WHERE id = ?');
+      const rememberIdentity = db.prepare(`INSERT INTO job_source_identities(id,company_id,first_seen_at,verified_at,active,reserved) VALUES(?,?,?,?,1,0)
+        ON CONFLICT(id) DO UPDATE SET verified_at=excluded.verified_at,active=1,reserved=0`);
+      const priorEvidence = db.prepare('SELECT verified_at,active,reserved FROM job_source_identities WHERE id=?');
       const insert = db.prepare(`INSERT INTO demo_jobs (id, company_id, first_seen_at, active, reserved, verified_at, closed_observed_at, evidence_hash, data_json, body_text)
         VALUES (?, ?, ?, 1, 0, ?, NULL, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET
         company_id=excluded.company_id,active=1,reserved=0,verified_at=excluded.verified_at,closed_observed_at=NULL,
         evidence_hash=excluded.evidence_hash,data_json=excluded.data_json,body_text=excluded.body_text`);
       for (const { job, first, bodyText, textHash } of jobs) {
         const row = existing.get(job.id);
-        if (row && row.first_seen_at !== first) throw problem('source_identity_conflict', 409, 'Source discovery time changed.');
-        insert.run(job.id, job.companyId, first, Date.parse(job.evidence.metadataFetchedAt), textHash, boundedJson(job, 16_384), bodyText);
+        if (row && (row.first_seen_at !== first || row.company_id !== job.companyId)) throw problem('source_identity_conflict', 409, 'Source discovery time changed.');
+        const observedAt = Date.parse(job.evidence.metadataFetchedAt), prior = priorEvidence.get(job.id);
+        // A later export may carry older per-record observations. It must not
+        // reopen a closure, undo a reservation or replace newer source content.
+        if (prior && (observedAt < prior.verified_at || observedAt === prior.verified_at && (!prior.active || prior.reserved))) continue;
+        rememberIdentity.run(job.id,job.companyId,first,observedAt);
+        insert.run(job.id, job.companyId, first, observedAt, textHash, boundedJson(job, 16_384), bodyText);
       }
       const close = db.prepare(`UPDATE demo_jobs SET active=?,reserved=?,verified_at=?,closed_observed_at=? WHERE id=?`);
-      for (const o of observations) close.run(o.active ? 1 : 0, o.reserved ? 1 : 0, o.observedAt, o.active ? null : o.observedAt, o.id);
+      const rememberObservation = db.prepare('UPDATE job_source_identities SET active=?,reserved=?,verified_at=? WHERE id=?');
+      for (const o of observations) {
+        const prior = priorEvidence.get(o.id);
+        if (prior && o.observedAt >= prior.verified_at) {
+          close.run(o.active ? 1 : 0, o.reserved ? 1 : 0, o.observedAt, o.active ? null : o.observedAt, o.id);
+          rememberObservation.run(o.active ? 1 : 0,o.reserved ? 1 : 0,o.observedAt,o.id);
+        }
+      }
       db.prepare('INSERT INTO demo_imports VALUES (?, ?, ?, ?, ?, ?)').run(generationId, snapshotAt, verifiedAt, selection, jobs.length, snapshot.unknownIds?.length ?? 0);
       // Old import metadata is not needed for cursor validity or public evidence.
       db.prepare('DELETE FROM demo_imports WHERE rowid NOT IN (SELECT rowid FROM demo_imports ORDER BY rowid DESC LIMIT 32)').run();

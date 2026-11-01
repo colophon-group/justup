@@ -1,17 +1,17 @@
-// Invite-only demo accounts and SQLite sessions. Read when wiring authentication
+// Durable local accounts and SQLite sessions. Read when wiring authentication
 // or retention cleanup; HTTP cookie, origin and rate-limit protections live upstream.
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const deriveKey = promisify(scrypt);
+const MAX_TIMESTAMP = 8_640_000_000_000_000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const ACCOUNT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SCRYPT_OPTIONS = Object.freeze({ N: 32768, r: 8, p: 3, maxmem: 64 * 1024 * 1024 });
 const ERROR_DETAILS = {
   invalid_input: [400, 'Invalid account input.'],
   invalid_credentials: [401, 'Invalid username, password or invite code.'],
-  registration_closed: [403, 'Demo registration is closed.'],
-  account_limit: [403, 'The demo account limit has been reached.'],
+  registration_closed: [403, 'Registration is closed.'],
+  account_limit: [403, 'The account limit has been reached.'],
   username_taken: [409, 'That username is unavailable.'],
   unauthenticated: [401, 'Sign in to continue.'],
 };
@@ -62,16 +62,20 @@ function tokenHash(token) {
 }
 
 function publicAccount(row) {
-  return { id: row.id, username: row.username };
+  return { id: row.id, username: row.username, expiresAt: row.account_expires_at == null ? null : new Date(row.account_expires_at).toISOString() };
 }
 
 export function createAuth({ db, config = {}, now = Date.now, deleteAccountData = () => {} }) {
-  const maxAccounts = config.maxAccounts ?? 30;
+  const maxAccounts = config.maxAccounts === null ? null : config.maxAccounts ?? 30;
+  const requiresInvitation = config.requiresInvitation ?? true;
   const sessionTtlMs = config.sessionTtlMs ?? SESSION_TTL_MS;
-  const accountTtlMs = config.accountTtlMs ?? ACCOUNT_TTL_MS;
-  if (!Number.isSafeInteger(maxAccounts) || maxAccounts < 1
-      || !Number.isSafeInteger(sessionTtlMs) || sessionTtlMs < 1
-      || !Number.isSafeInteger(accountTtlMs) || accountTtlMs < 1 || accountTtlMs > ACCOUNT_TTL_MS
+  const accountTtlMs = config.accountTtlMs ?? null;
+  const accountExpiresAt = config.accountExpiresAt ?? null;
+  if ((maxAccounts !== null && (!Number.isSafeInteger(maxAccounts) || maxAccounts < 1))
+      || typeof requiresInvitation !== 'boolean'
+      || !Number.isSafeInteger(sessionTtlMs) || sessionTtlMs < 1 || sessionTtlMs > MAX_TIMESTAMP
+      || (accountTtlMs !== null && (!Number.isSafeInteger(accountTtlMs) || accountTtlMs < 1 || accountTtlMs > MAX_TIMESTAMP))
+      || (accountExpiresAt !== null && (!Number.isSafeInteger(accountExpiresAt) || accountExpiresAt < 1 || accountExpiresAt > MAX_TIMESTAMP))
       || typeof now !== 'function' || typeof deleteAccountData !== 'function') {
     throw new TypeError('Invalid authentication configuration.');
   }
@@ -101,25 +105,31 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     CREATE INDEX IF NOT EXISTS auth_sessions_expiry ON auth_sessions(expires_at);
   `);
 
+  // Additive migration: existing identities become durable. A deployment policy
+  // applies only when creating an account; reopening never invents a deadline.
+  if (!db.prepare('PRAGMA table_info(auth_accounts)').all().some((column) => column.name === 'account_expires_at')) {
+    db.exec('ALTER TABLE auth_accounts ADD COLUMN account_expires_at INTEGER CHECK(account_expires_at IS NULL OR account_expires_at > created_at)');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS auth_accounts_deadline ON auth_accounts(account_expires_at)');
   const byUsername = db.prepare('SELECT * FROM auth_accounts WHERE username = ?');
   const byId = db.prepare('SELECT * FROM auth_accounts WHERE id = ?');
   const sessionRow = db.prepare(`
-    SELECT a.id, a.username, a.created_at, s.expires_at
+    SELECT a.id, a.username, a.created_at, a.account_expires_at, s.expires_at
     FROM auth_sessions s JOIN auth_accounts a ON a.id = s.account_id
-    WHERE s.token_hash = ? AND s.expires_at > ? AND a.created_at > ?
+    WHERE s.token_hash = ? AND s.expires_at > ? AND (a.account_expires_at IS NULL OR a.account_expires_at > ?)
   `);
   const insertSession = db.prepare(`
     INSERT INTO auth_sessions (token_hash, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)
   `);
   const removeSession = db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?');
   const removeExpired = db.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?');
-  const expiredAccounts = db.prepare('SELECT id FROM auth_accounts WHERE created_at <= ? ORDER BY created_at, id');
+  const expiredAccounts = db.prepare('SELECT id FROM auth_accounts WHERE account_expires_at <= ? ORDER BY account_expires_at, id');
   const removeAllSessions = db.prepare('DELETE FROM auth_sessions');
   const removeAccountSessions = db.prepare('DELETE FROM auth_sessions WHERE account_id = ?');
   const removeAccount = db.prepare('DELETE FROM auth_accounts WHERE id = ?');
   const accountCount = db.prepare('SELECT count(*) AS count FROM auth_accounts');
   const insertAccount = db.prepare(`
-    INSERT INTO auth_accounts (id, username, password_salt, password_hash, created_at) VALUES (?, ?, ?, ?, ?)
+    INSERT INTO auth_accounts (id, username, password_salt, password_hash, created_at, account_expires_at) VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   function transaction(work) {
@@ -136,28 +146,31 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
 
   function issueSession(account, timestamp) {
     const token = randomBytes(32).toString('base64url');
-    const expiresAt = Math.min(timestamp + sessionTtlMs, account.created_at + accountTtlMs);
+    const expiresAt = Math.min(timestamp + sessionTtlMs, account.account_expires_at ?? Infinity);
+    if (!Number.isSafeInteger(expiresAt) || expiresAt > MAX_TIMESTAMP) throw new TypeError('Invalid session deadline.');
     removeExpired.run(timestamp);
     insertSession.run(digest(token), account.id, timestamp, expiresAt);
     return { account: publicAccount(account), token, expiresAt };
   }
 
   async function register(input) {
-    if (!inviteDigest) throw failure('registration_closed');
+    if ((requiresInvitation && !inviteDigest) || (accountExpiresAt !== null && accountExpiresAt <= now())) throw failure('registration_closed');
     const username = usernameValue(input?.username);
     const password = input?.password;
     const inviteCode = input?.inviteCode;
-    if (!username || !validPassword(password) || !boundedInvite(inviteCode)) throw failure('invalid_input');
-    if (!timingSafeEqual(digest(inviteCode), inviteDigest)) throw failure('invalid_credentials');
+    if (!username || !validPassword(password) || (requiresInvitation && !boundedInvite(inviteCode))) throw failure('invalid_input');
+    if (requiresInvitation && !timingSafeEqual(digest(inviteCode), inviteDigest)) throw failure('invalid_credentials');
 
     const salt = randomBytes(16);
     const hash = await passwordHash(password, salt);
     return transaction(() => {
       if (byUsername.get(username)) throw failure('username_taken');
-      if (accountCount.get().count >= maxAccounts) throw failure('account_limit');
+      if (maxAccounts !== null && accountCount.get().count >= maxAccounts) throw failure('account_limit');
       const timestamp = now();
-      const account = { id: randomUUID(), username, created_at: timestamp };
-      insertAccount.run(account.id, username, salt, hash, timestamp);
+      const deadline = Math.min(accountTtlMs === null ? Infinity : timestamp + accountTtlMs, accountExpiresAt ?? Infinity);
+      if (deadline !== Infinity && (!Number.isSafeInteger(deadline) || deadline > MAX_TIMESTAMP || deadline <= timestamp)) throw failure('registration_closed');
+      const account = { id: randomUUID(), username, created_at: timestamp, account_expires_at: deadline === Infinity ? null : deadline };
+      insertAccount.run(account.id, username, salt, hash, timestamp, account.account_expires_at);
       return issueSession(account, timestamp);
     });
   }
@@ -176,7 +189,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
       // Deletion or hard account expiry may finish during password verification.
       const currentAccount = byId.get(account.id);
       const timestamp = now();
-      if (!currentAccount || currentAccount.created_at + accountTtlMs <= timestamp) {
+      if (!currentAccount || (currentAccount.account_expires_at !== null && currentAccount.account_expires_at <= timestamp)) {
         throw failure('invalid_credentials');
       }
       return issueSession(currentAccount, timestamp);
@@ -187,12 +200,12 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     const hash = tokenHash(token);
     if (!hash) return null;
     const timestamp = now();
-    const row = sessionRow.get(hash, timestamp, timestamp - accountTtlMs);
+    const row = sessionRow.get(hash, timestamp, timestamp);
     if (!row) return null;
     return {
       account: publicAccount(row),
-      expiresAt: Math.min(row.expires_at, row.created_at + accountTtlMs),
-      access: { kind: 'demo', fullAccess: true, legacy: false, billingEnabled: false, until: null },
+      expiresAt: Math.min(row.expires_at, row.account_expires_at ?? Infinity),
+      access: { kind: 'account', fullAccess: true, legacy: false, billingEnabled: false, until: null },
     };
   }
 
@@ -231,7 +244,7 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
     const timestamp = now();
     return transaction(() => {
       let sessionsDeleted = removeExpired.run(timestamp).changes;
-      const expired = expiredAccounts.all(timestamp - accountTtlMs);
+      const expired = expiredAccounts.all(timestamp);
       for (const account of expired) sessionsDeleted += deleteStoredAccount(account.id);
       return { accountsDeleted: expired.length, sessionsDeleted };
     });
@@ -242,8 +255,8 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
   }
 
   function registrationState() {
-    if (!inviteDigest) return { enabled: false, reason: 'registration_closed' };
-    if (accountCount.get().count >= maxAccounts) return { enabled: false, reason: 'account_limit' };
+    if ((requiresInvitation && !inviteDigest) || (accountExpiresAt !== null && accountExpiresAt <= now())) return { enabled: false, reason: 'registration_closed' };
+    if (maxAccounts !== null && accountCount.get().count >= maxAccounts) return { enabled: false, reason: 'account_limit' };
     return { enabled: true, reason: null };
   }
 

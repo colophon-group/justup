@@ -5,17 +5,15 @@ read_when: Implementing a user-facing backend contract or choosing its verificat
 
 # Backend design: user-facing Justup features
 
-Status: accepted starting architecture
-
-Date: 31 October 2026
+Status: accepted product architecture with implementation gaps tracked for launch
 
 This design supports the [current product experience](product-design.md). It starts from that experience and the available job data, with fresh application boundaries. Crawler implementation and operation are outside its scope.
 
 The accepted [deployment plan](deployment-plan.md) uses Cloudflare for frontend delivery and caching, and existing Hetzner capacity for the backend and Codex execution.
 
-The public repository is [colophon-group/justup](https://github.com/colophon-group/justup), and the product domain is `justup.work`. This is an accepted design for implementation; the current browser interface does not yet have the API, runner or full release preview described here. The [development and release guide](https://github.com/colophon-group/justup/blob/main/docs/development-process.md) governs integration, verification and resource approval.
+The public repository is [colophon-group/justup](https://github.com/colophon-group/justup), and the product domain is `justup.work`. The repository implements a small HTTP API, durable SQLite account/search/request state, a leased runner and isolated model broker. Full product journeys and the deployed release gate still require verification. The [development and release guide](https://github.com/colophon-group/justup/blob/main/docs/development-process.md) governs integration, verification and resource approval.
 
-This guide defines the full product architecture. The temporary [demo-release](https://github.com/colophon-group/justup/issues/26) implements a smaller slice with isolated preview state and explicit unavailable capabilities. Its local invite-only authentication and bounded imported job snapshot do not establish the subscription, live-update or monitoring behavior below.
+This guide defines one product architecture. [Product release readiness](https://github.com/colophon-group/justup/issues/26) requires the accepted product paths before first invited activation. A restricted preview is a deployment state: invitation admission, bounded provider spend, temporary URL and isolated resources can change through reviewed configuration. They do not authorize a disposable account system or a smaller release contract. [Accounts](auth.md), [API](api.md), [job ingestion](job-data.md) and [matching](matching.md) describe implemented boundaries. Subscription transitions, continuous source refresh, live delivery and monitored-coverage progress remain concrete launch gaps until their end-to-end contracts pass.
 
 ## 1. Minimal application shape
 
@@ -35,7 +33,7 @@ A database-backed job table supports durable background work. Use a thin shared 
 
 ## 2. Account and workspace
 
-Persist submitted search text, canonical configuration, generated title and description, warnings, revision and undo state together. Keep unsubmitted drafts distinct. Tab switching, pagination and undo reuse saved state without another interpretation call. Changing the followed-company scope invalidates affected result continuations while preserving the query draft.
+Persist submitted search text, canonical configuration, generated title and description, warnings, revision and undo state together. Accounts have no automatic expiry by default. An explicitly temporary deployment may assign a stored account deadline on creation; session expiry and account deletion remain separate. Changes to invitation admission cannot change existing identity or stored account lifetime. Keep unsubmitted drafts distinct. Tab switching, pagination and undo reuse saved state without another interpretation call. Changing the followed-company scope invalidates affected result continuations while preserving the query draft.
 
 Viewed positions belong to an account and stable posting identity across searches. Record outbound actions idempotently without delaying navigation. Preserve visitor searches and viewed state through sign-in, merge them into the account, and isolate account state on shared browsers. Persist follows independently of company requests.
 
@@ -166,7 +164,7 @@ The module boundaries, Luna planning and discovery, last-resort AI filtering, SS
 
 Start ordinary implementation from `dev` on `work/<semantic-slug>` and open its PR into `dev`. Follow the development guide's issue, commit and PR conventions, including a brief Applied/N/A explanation for each quality and test guideline. Keep these design contracts current as implementation decisions are made.
 
-The existing always-running `CI / decision` check covers the browser interface. Backend suites and their impact selection are not registered yet. Add the relevant test groups, shared-contract dependencies and full-suite registration alongside the first implementation, through the reviewed selection path in `scripts/ci.py`. An unfamiliar path must select the full available suite or fail visibly; it cannot silently omit backend checks. Ordinary checks verify the proposed merge result with current `dev`.
+The always-running `CI / decision` selects the full runtime lane for backend/application changes: build/typechecking, web/deployment contracts, server tests, offline Python contracts and browser journeys. The server suite recursively discovers adjacent `.test.mjs` files; the Python lane discovers `test_*.py` files. Extend their ownership and selection alongside changed contracts through `scripts/ci.py`. An unfamiliar path must select the full available suite or fail visibly; it cannot silently omit backend checks. Ordinary checks verify the proposed merge result with current `dev`.
 
 Use the cheapest suite that proves each observable contract. Focus integration coverage on boundaries that pure logic tests cannot establish:
 

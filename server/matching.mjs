@@ -126,7 +126,8 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
   }
   function page({ ownerId, searchId, revision, configuration, jobs, viewer, cursor = null, limit = 12,
     coverage = feed.coverage(), generation = feed.generation() } = {}) {
-    if (!viewer?.account?.id || (viewer.expiresAt != null && (!Number.isFinite(Date.parse(viewer.expiresAt)) || Date.parse(viewer.expiresAt) <= now()))) throw err('unauthenticated', 401);
+    const sessionDeadline = typeof viewer?.expiresAt === 'number' ? viewer.expiresAt : Date.parse(viewer?.expiresAt);
+    if (!viewer?.account?.id || (viewer.expiresAt != null && (!Number.isFinite(sessionDeadline) || sessionDeadline <= now()))) throw err('unauthenticated', 401);
     if (viewer.account.id !== ownerId) throw err('forbidden', 403);
     if (typeof searchId !== 'string' || !searchId || searchId.length > 128 || !Number.isSafeInteger(revision) || revision < 1
         || !Array.isArray(jobs) || jobs.length > 1000 || (generation != null && (typeof generation !== 'string' || generation.length > 128))) throw err('invalid_input');
