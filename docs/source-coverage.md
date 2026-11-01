@@ -45,6 +45,15 @@ approval metadata, or infers continuity. Adding link evidence does not change th
 deterministic comparison/count rules. Existing schema-1 injected adapter versions
 remain supported; the concrete reader and queue accept only the two Jobseek versions.
 
+Scope metadata is captured through `generatedAt`, while posting observations and
+coverage intervals stop at the fixed `asOf` period end. A scope reset after that
+cutoff, including a link approval or removal, may set `trackedSince` after `asOf`.
+It remains valid only through `generatedAt`; non-null `lastVerifiedAt` must be
+between that tracking start and generation. The changed scope is suppressed from
+weekly comparisons without rejecting other attributable scopes. Its original
+tracking/link evidence remains in the frozen snapshot and public source checks;
+the report shows incomplete history rather than zero or invented continuity.
+
 ## Read public source checks
 
 The [company report](company-hiring-reports.md) exposes one `sourceChecks.items`

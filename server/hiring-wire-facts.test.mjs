@@ -49,6 +49,34 @@ test('v2 missing, unapproved, malformed or future public-link approval fails clo
   ]) {const value=v2Fixture();value.scopes[0].publicLink.url=url;assert.throws(()=>compile(value),{code:'invalid_output'},url);}
 });
 
+test('v2 scope resets after the weekly boundary suppress only the changed scope',()=>{
+  const resetAt='2026-11-02T00:30:00.000Z';
+  for(const publicLink of [{...approvedLink(),approvedAt:resetAt},null]) {
+    for(const lastVerifiedAt of [null,'2026-11-02T00:45:00.000Z']) {
+      const value=v2Fixture(),stable=structuredClone(value.scopes[0]);
+      value.companies.push({id:'stable-company',name:'Stable Company',url:'https://stable.example.com/'});
+      value.scopes.push({...stable,id:'stable-board',companyId:'stable-company'});
+      value.postings.push(...value.postings.map(posting=>({...posting,id:`stable-${posting.id}`,scopeId:'stable-board'})));
+      Object.assign(value.scopes[0],{revision:'reset-revision',trackedSince:resetAt,lastVerifiedAt,publicLink,
+        coverage:stable.coverage.map(interval=>({...interval,state:'unknown'}))});
+      const original=structuredClone(value),result=compile(value);
+      assert.deepEqual(result.facts.map(fact=>[fact.company.id,fact.current,fact.previous,fact.scopeCount]),[['stable-company',3,2,1]]);
+      assert.deepEqual(result.suppressed,[{scopeId:'internal-board',reason:lastVerifiedAt===null?'never_verified_scope':'new_scope'}]);
+      assert.deepEqual(value,original);assert.deepEqual(result.snapshot,original);assert.equal(result.snapshotSha256,digest(original));
+    }
+  }
+});
+
+test('scope tracking and verification evidence cannot follow snapshot generation or precede a reset',()=>{
+  for(const create of [wireFixture,v2Fixture]) {
+    for(const alter of [
+      value=>{value.scopes[0].trackedSince=new Date(Date.parse(value.generatedAt)+1).toISOString();value.scopes[0].lastVerifiedAt=null;},
+      value=>value.scopes[0].lastVerifiedAt=new Date(Date.parse(value.generatedAt)+1).toISOString(),
+      value=>{value.scopes[0].trackedSince='2026-11-02T00:30:00.000Z';value.scopes[0].lastVerifiedAt=END;}
+    ]) {const value=create();alter(value);assert.throws(()=>compile(value),{code:'invalid_output'});}
+  }
+});
+
 test('counts distinct first observations in two fixed half-open weeks',()=>{
   const snapshot=wireFixture();snapshot.postings.push({...snapshot.postings[0]},{...snapshot.postings[2]});
   const result=compile(snapshot),fact=result.facts[0];

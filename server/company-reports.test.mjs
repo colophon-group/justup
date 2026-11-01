@@ -126,20 +126,23 @@ test('malformed v2 approval metadata makes published history unavailable even wi
   }
 });
 
-test('multi-board public links stay with their frozen scope checks and null never substitutes another URL',async t=>{
+test('multi-board links retain a post-cutoff scope reset without losing attributable history',async t=>{
   const f=fixture(t),value=snapshotV2();
+  const resetAt=iso(Date.parse(END)+30*60_000);
   value.scopes.push({...structuredClone(value.scopes[0]),id:'second-private-scope',revision:'new-private-revision',
-    publicLink:null,trackedSince:'2026-10-20T00:00:00.000Z',lastVerifiedAt:null,
+    publicLink:null,trackedSince:resetAt,lastVerifiedAt:null,
     coverage:[{start:'2026-10-12T00:00:00.000Z',end:END,state:'unknown'}]});
   await publish(f,value);
   const report=f.reports.report('company-1');
   assert.deepEqual(report.sourceChecks,{state:'partial',items:[
     {publicLink:value.scopes[0].publicLink,trackedSince:'2026-09-01T00:00:00.000Z',lastVerifiedAt:END},
-    {publicLink:null,trackedSince:'2026-10-20T00:00:00.000Z',lastVerifiedAt:null}
+    {publicLink:null,trackedSince:resetAt,lastVerifiedAt:null}
   ]});
   assert.equal(report.hiringHistory.state,'partial');
   assert.deepEqual(report.hiringHistory.points.map(point=>point.newListings),[null,null]);
+  assert.deepEqual(report.hiringHistory.points.map(point=>[point.observedListings,point.completeScopeCount]),[[1,1],[2,1]]);
   assert.equal(report.hiringHistory.points[0].reasons.includes('new_scope'),true);
+  assert.equal(report.hiringHistory.points[1].reasons.includes('new_scope'),true);
   assert.equal(JSON.stringify(report.sourceChecks).includes('employer.example'),false);
   assert.equal(JSON.stringify(report).includes('second-private-scope'),false);
   assert.equal(JSON.stringify(report).includes('new-private-revision'),false);
