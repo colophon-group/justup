@@ -65,7 +65,7 @@ export function intentCapabilities(jobs, aiAvailable = false) {
   const values = (items) => [...new Set(items.filter(Boolean))].sort();
   const companies = new Map(), seniors = new Map();
   for(const j of jobs) {
-    const existing=companies.get(j.companyId),aliases=[j.companyName,j.companySlug].filter(Boolean);
+    const existing=companies.get(j.companyId),aliases=[j.companyName,j.companySlug,j.sourceCompanyId].filter(Boolean);
     if(existing)existing.aliases=[...new Set([...existing.aliases,...aliases])];else companies.set(j.companyId,{id:j.companyId,name:j.companyName,aliases});
     if(j.seniority?.id)seniors.set(j.seniority.id,{id:j.seniority.id,name:j.seniority.name,aliases:[j.seniority.name].filter(Boolean)});
   }
@@ -166,10 +166,10 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       json_extract(data_json,'$.locales') AS locales_json,json_extract(data_json,'$.seniority') AS seniority_json
       FROM demo_jobs ORDER BY first_seen_at DESC,company_id LIMIT 1001`).all();
     if(rows.length>1000)throw err('dependency_unavailable',503,'The imported catalogue exceeds its bound.');
-    const caps=intentCapabilities(rows.map(r=>({companyId:r.companyId,companyName:r.companyName,companySlug:r.companySlug,
+    const caps=intentCapabilities(rows.map(r=>({companyId:feed.canonicalCompanyId?.(r.companyId)??r.companyId,sourceCompanyId:r.companyId,companyName:r.companyName,companySlug:r.companySlug,
       locations:JSON.parse(r.locations_json??'[]'),employmentTypes:JSON.parse(r.employment_json??'[]'),
       locales:JSON.parse(r.locales_json??'[]'),seniority:r.seniority_json==null?null:JSON.parse(r.seniority_json)})),aiAvailable);
-    for(const c of feed.requestedCompanies?.()??[])if(!caps.values.companies.some(v=>v.id===c.id))caps.values.companies.push({id:c.id,name:c.name,aliases:[c.name]});
+    for(const c of feed.requestedCompanies?.()??[]){const existing=caps.values.companies.find(v=>v.id===c.id);if(existing)existing.aliases=[...new Set([...existing.aliases,c.name])];else caps.values.companies.push({id:c.id,name:c.name,aliases:[c.name]});}
     caps.values.companies.sort((a,b)=>a.id.localeCompare(b.id));return caps;
   }
   function publicSearch(r) {

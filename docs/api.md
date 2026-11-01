@@ -155,6 +155,8 @@ A request contains `{id,input,scope,status,candidate,companyId,previewRevision,c
 
 A known immediate identity returns `201 {request}`; queued resolution returns `202 {request,task}`. Acceptance returns `200 {request}` with status accepted and references the exact server-held candidate and preview revision. Requirements use `{id,text,handling,reason}` and warnings use `{code,message,requirementIds}`; `handling` is primary/ai/preference/unsatisfied.
 
+When a reviewed import supplies verified official-domain company identity evidence, a later source UUID can alias the original accepted public company ID. Catalogue reads, follows and search filters use that canonical ID while stored source posting identities remain immutable. A name or posting URL alone cannot authorize a binding; the current listing exporter lacks this additional company identity evidence. See [source identity integration](reading-preferences.md).
+
 Imported companies have `coverage.state:"imported_snapshot"`; an accepted new identity has `coverage.state:"requested"`. Neither claims that a board has been configured or that Justup currently monitors it. Do not fabricate a company website from an applicant-tracking-system job URL, or expose private crawler board configuration. Request acceptance does not write to Jobseek or start crawler onboarding.
 
 ## Health and fixed build identity

@@ -24,6 +24,8 @@ Accepting an exact company preview publishes or reuses its canonical public cata
 
 Published company identity and source evidence are public catalogue data without a requester identifier. Deleting the private request or account removes its private state and leaves the published company available to other users. Following alone does not request setup priority. Setup progression and priority integration remain owned by the company-request workflow.
 
+A reviewed import can include optional `companyIdentities:[{companyId,officialDomain}]` evidence, where `companyId` is the immutable source-system company ID. Exact validated official domains bind a later source ID to the earlier accepted public ID. Public catalogue URLs, requests and follows retain that original canonical identity; job source IDs, source company IDs and discovery timestamps remain unchanged in stored source evidence. Names, slugs and ATS posting URLs never establish this binding. Conflicting reassignment rejects the import transaction. The current public-job exporter does not produce official identity evidence, so it does not emit this field or guess a mapping; its reviewed company-identity producer remains an integration requirement. See [job data](job-data.md).
+
 ## Select posting languages per search
 
 | Route | Request and response |
