@@ -7,7 +7,7 @@ import { App } from '../app/App.tsx';
 import { InterfacePresentation } from './InterfacePresentation.tsx';
 import { ErrorBoundary } from '../app/ErrorBoundary.tsx';
 import { readRoute, explicitRouteLocale, type Route } from '../app/useRoute.ts';
-import { decodeCompany, decodeCompanyCataloguePage, record } from '../api/decode.ts';
+import { decodeCompany, decodeCompanySourceReport, decodeCompanyCataloguePage, record } from '../api/decode.ts';
 import type { PublicBootstrap } from './bootstrap.ts';
 
 const MAX_BYTES = 384 * 1024;
@@ -112,6 +112,12 @@ export async function renderPublicDocument(request: Request, env: Record<string,
         const company = decodeCompany(value.company ?? value);
         if (company.id !== route.id) throw new Error('Mismatched public company');
         initial.company = publicCompany(company);
+        // Optional report evidence cannot suppress the independently valid company identity.
+        try {
+          const report = await publicJSON(new URL(`/api/v1/companies/${encodeURIComponent(route.id)}/report`, origin), fetchUpstream);
+          if (report.status === 200) initial.companySourceReport = decodeCompanySourceReport(report.value, company.id);
+        } catch { /* The browser can retry this public evidence separately. */ }
+
       }
     } catch { initial.outcome = 'unavailable'; }
   }

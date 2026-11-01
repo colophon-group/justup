@@ -14,12 +14,7 @@ export const messages = {
     "{current} nuovi annunci rilevati, rispetto a {previous} la settimana precedente",
     "{current} nuevas ofertas detectadas, frente a {previous} la semana anterior"
   ],
-  "Verified career-page links are unavailable.": [
-    "Verifizierte Links zu Karriereseiten sind nicht verfügbar.",
-    "Les liens vérifiés vers les pages carrières ne sont pas disponibles.",
-    "I link verificati alle pagine delle carriere non sono disponibili.",
-    "Los enlaces verificados a las páginas de empleo no están disponibles."
-  ],
+  "Last checked": ["Zuletzt geprüft", "Dernière vérification", "Ultima verifica", "Última comprobación"],
   "Your visitor search session expired. Reconnect to start a new search.": ["Deine Besuchersitzung ist abgelaufen. Verbinde dich erneut, um eine neue Suche zu starten.", "Ta session de recherche visiteur a expiré. Reconnecte-toi pour lancer une nouvelle recherche.", "La sessione di ricerca visitatore è scaduta. Riconnettiti per iniziare una nuova ricerca.", "Tu sesión de búsqueda de visitante ha caducado. Vuelve a conectarte para iniciar una nueva búsqueda."],
   "Your earlier check was interrupted. Submit this text when you want to try again.": ["Deine vorige Prüfung wurde unterbrochen. Sende diesen Text, wenn du es erneut versuchen möchtest.", "La vérification précédente a été interrompue. Envoie ce texte quand tu souhaites réessayer.", "La verifica precedente è stata interrotta. Invia questo testo quando vuoi riprovare.", "La comprobación anterior se interrumpió. Envía este texto cuando quieras volver a intentarlo."],
   "Sign in to keep your searches and continue.": ["Melde dich an, um deine Suchen zu behalten und fortzufahren.", "Connecte-toi pour conserver tes recherches et continuer.", "Accedi per conservare le tue ricerche e continuare.", "Inicia sesión para conservar tus búsquedas y continuar."],

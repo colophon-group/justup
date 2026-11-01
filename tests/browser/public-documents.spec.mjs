@@ -11,7 +11,7 @@ test('public company reports and catalogue work without JavaScript', async ({ br
   await page.goBack();
   await page.getByRole('link', { name: 'Test Library', exact: true }).click();
   await expect(page).toHaveURL(/\/companies\/library$/); await expect(page.getByRole('heading', { name: 'Test Library', exact: true })).toBeVisible();
-  await expect(page.locator('#company-page')).toContainText('Verified career-page links are unavailable.');
+  await expect(page.locator('#company-page a[href="https://careers.example.com/library"]')).toHaveCount(1);
   await expect(page.locator('#company-page a[href="https://employer.test/careers"]')).toHaveCount(0);
   await page.goto(`${origin}/companies/missing`); await expect(page.getByRole('heading', { name: 'Page not found.' })).toBeVisible();
   await context.close();
@@ -81,7 +81,7 @@ test('client company refetch cannot restore unsafe metadata or unsupported legac
   await page.setViewportSize({ width: 1280, height: 1100 }); await page.goto('/');
   await page.locator('.job-company').click(); await expect(page.getByRole('heading', { name: 'Test Library', exact: true })).toBeVisible();
   await expect(page.locator('#company-page a[href*="127.0.0.1:5432"], #company-page a[href*="boards.greenhouse.io"], #company-page img[src*="192.168.0.1"]')).toHaveCount(0);
-  await expect(page.locator('#company-page')).toContainText('Verified career-page links are unavailable.');
+  await expect(page.locator('#company-page')).not.toContainText('Verified career-page links are unavailable.');
   expect(privateRequests).toEqual([]);
 });
 test('a direct request fragment reconciles after public HTML hydration', async ({ page }) => {
