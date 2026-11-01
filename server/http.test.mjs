@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHandler } from './http.mjs';
+import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 const ORIGIN = 'https://preview.example.org';
 async function setup(t, options = {}) {
   const token = 'a'.repeat(43), account = { id: 'account-a', username: 'tester', expiresAt: null };
@@ -21,8 +22,9 @@ async function setup(t, options = {}) {
     list: ({ viewer }) => ({ items: [{ id: viewer ? 'preview' : 'public' }] }), companies: () => ({ items: [] }), company: () => ({ id: 'co' }) };
   const task = { id: 'task-a', status: 'succeeded', kind: 'search_intent', payload: { secret: 'private' }, output: { hiddenJob: 'never-serialize' } };
   const tasks = { get: (owner, id) => owner === account.id && id === task.id ? task : null, publicView: (row, result) => ({ id: row.id, status: row.status, result }) };
-  const config = { allowedOrigin: ORIGIN, csrfSecret: 'x'.repeat(32), inviteCode: 'test-invite', policiesReviewed: true,
-    privacyUrl: `${ORIGIN}/privacy.html`, usageUrl: `${ORIGIN}/usage.html`, policyVersion: 'reviewed-1', ...options.config };
+  const config = { allowedOrigin: ORIGIN, sourceCommit:'a'.repeat(40), csrfSecret: 'x'.repeat(32), inviteCode: 'test-invite', policiesReviewed: true,
+    privacyUrl: `${ORIGIN}/privacy.html`, usageUrl: `${ORIGIN}/usage.html`, policyVersion: 'reviewed-1',
+    policyAssetProof:syntheticPolicyProof({origin:ORIGIN,sourceCommit:'a'.repeat(40),version:'reviewed-1'}),...options.config };
   const services = options.services ?? [{ capabilities: { search: true }, route: async (ctx) => { calls.push(ctx); return ctx.path === '/searches' ? { status: 202, body: { ok: true } } : null; } }];
   const server = createServer(createHandler({ auth, feed, tasks, services, config, logger: (v) => logs.push(v) }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));

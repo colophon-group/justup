@@ -1,5 +1,9 @@
-import { useLayoutEffect, useRef } from "react";
+import { createContext, useContext, useLayoutEffect, useRef } from "react";
 import type { ReactNode } from "react";
+
+// Suspension removes the native modal layer while preserving the caller's dialog intent.
+export const DialogSuspension = createContext(false);
+export const useDialogSuspended = () => useContext(DialogSuspension);
 
 interface Props {
   open: boolean;
@@ -18,16 +22,18 @@ export function Dialog({
   children,
 }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
+  const suspended = useDialogSuspended();
+  const programmaticCloses = useRef(0);
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return;
-    if (open && !node.open) node.showModal();
-    if (!open && node.open) node.close();
-  }, [open]);
+    if (open && !suspended && !node.open) node.showModal();
+    if ((!open || suspended) && node.open) { programmaticCloses.current++; node.close(); }
+  }, [open, suspended]);
   useLayoutEffect(() => {
     const node = ref.current;
     return () => {
-      node?.close();
+      if (node?.open) { programmaticCloses.current++; node.close(); }
     };
   }, []);
   return (
@@ -38,13 +44,14 @@ export function Dialog({
       aria-describedby={describedBy}
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        if (!suspended) onClose();
       }}
       onClose={() => {
-        if (open && !ref.current?.open) onClose();
+        if (programmaticCloses.current) { programmaticCloses.current--; return; }
+        if (open && !suspended && !ref.current?.open) onClose();
       }}
       onClick={(event) => {
-        if (event.target !== event.currentTarget) return;
+        if (suspended || event.target !== event.currentTarget) return;
         const box = event.currentTarget.getBoundingClientRect();
         if (
           event.clientX < box.left ||

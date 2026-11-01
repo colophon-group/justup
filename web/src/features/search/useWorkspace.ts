@@ -32,6 +32,7 @@ export function useWorkspace(
   current.current = state;
   const serial = useRef(0);
   const [accountSuggested, setAccountSuggested] = useState(false);
+  const [resumption, setResumption] = useState(0);
   const apply = useCallback((action: Action) => {
     if (["editing", "query", "select", "new", "accepted", "submitted", "deleted"].includes(action.type)) serial.current++;
     current.current = workspaceReducer(current.current, action);
@@ -48,6 +49,20 @@ export function useWorkspace(
   const userId = session?.user?.id;
   const scope = session?.user ? "account" : session?.capabilities.visitorSearch ? "visitor" : null;
   const persistence = useWorkspacePersistence({ client, scope, owner: userId, hasVisitor: !!session?.visitor, onVisitorRebootstrap, state, current, serial, apply });
+  useEffect(() => {
+    const stop = client.onSessionSuspended(() => {
+      // Cancel the poll's wait as well as any current GET. Its recorded task
+      // remains on the search; no new interpretation is submitted on resume.
+      cancel();
+      apply({ type: 'busy', value: false });
+    });
+    const restart = client.onSessionResumed(() => {
+      const task = selectedSearch(current.current)?.draft?.taskId;
+      if (task) resumedTasks.current.delete(task);
+      setResumption(value => value + 1);
+    });
+    return () => { stop(); restart(); };
+  }, [client, cancel, apply]);
   useEffect(() => {
     mutations.current.clear();
     confirmationKeys.current.clear();
@@ -276,9 +291,9 @@ export function useWorkspace(
   const selected = selectedSearch(state);
   useEffect(() => {
     const taskId = selected?.draft?.taskId;
-    if (!persistence.loading && selected && taskId && !selected.proposal && !operation.current
+    if (!client.isSessionSuspended() && !persistence.loading && selected && taskId && !selected.proposal && !operation.current
       && !["interrupted", "failed"].includes(selected.draft?.status ?? "") && !resumedTasks.current.has(taskId)) void resume(selected);
-  }, [selected?.id, selected?.revision, selected?.draft?.taskId, selected?.proposal, persistence.loading, resume]);
+  }, [client, selected?.id, selected?.revision, selected?.draft?.taskId, selected?.proposal, persistence.loading, resume, resumption]);
   return {
     ...persistence,
     flush: flushForAuthentication,

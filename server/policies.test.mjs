@@ -6,13 +6,15 @@ import { DatabaseSync } from 'node:sqlite';
 import { policyState,requestLocale,validatePolicyConfig } from './policies.mjs';
 import { createProcessingAdmission } from './processing-admission.mjs';
 import { configFromEnv } from './main.mjs';
+import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 const origin='https://preview.example';
 const entry=(locale,reviewed=true)=>({privacyUrl:`${origin}/privacy${locale==='en'?'':'.'+locale}.html`,usageUrl:`${origin}/usage${locale==='en'?'':'.'+locale}.html`,version:'synthetic-reviewed',reviewed});
 const config={allowedOrigin:origin,sourceCommit:'a'.repeat(40),policiesReviewed:true,privacyUrl:origin+'/privacy.html',usageUrl:origin+'/usage.html',policyVersion:'synthetic-reviewed'};
-const assetProof=locales=>({origin,sourceCommit:config.sourceCommit,assetsSha256:'b'.repeat(64),locales:Object.fromEntries(locales.map(locale=>[locale,{version:'synthetic-reviewed',privacySha256:'c'.repeat(64),usageSha256:'d'.repeat(64)}]))});
+const assetProof=locales=>syntheticPolicyProof({origin,sourceCommit:config.sourceCommit,version:'synthetic-reviewed',locales});
 
-test('legacy English approval, exact locale reviews and explicit fallback never imply another locale approval',()=>{
-  assert.equal(policyState(config,'en').reviewed,true);
+test('English approval needs exact assets while locale approval and fallback remain scoped',()=>{
+  assert.equal(policyState(config,'en').reviewed,false);
+  assert.equal(policyState({...config,policyAssetProof:assetProof(['en'])},'en').reviewed,true);
   for(const locale of ['de','fr','it','es']){const p=policyState(config,locale);assert.equal(p.reviewed,false);assert.equal(p.version,'product-draft-5');assert.equal(p.privacyUrl,entry(locale).privacyUrl);assert.equal(p.reviewedLocale,null);}
   assert.equal(policyState({...config,privacyUrl:'https://elsewhere.example/privacy.html'}).reviewed,false);
   for(const patch of [{privacyUrl:origin+'/usage.html',usageUrl:origin+'/privacy.html'},
@@ -69,12 +71,13 @@ test('shared admission upgrades the existing row in place and binds exact policy
   const db=new DatabaseSync(':memory:');let time=100_000;
   try{
     db.exec("CREATE TABLE justup_visitor_admission(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL,source_commit TEXT,build_identity TEXT,policy_version TEXT,private_generation TEXT,checked_at INTEGER NOT NULL) STRICT; INSERT INTO justup_visitor_admission VALUES(1,1,'prior','prior','prior','prior',1)");
-    const c={...config,dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build'};
+    const c={...config,dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',policyAssetProof:assetProof(['en'])};
     const queue=createProcessingAdmission({db,config:c,now:()=>time});assert.equal(queue.processingAvailable(),false);
     assert.equal(db.prepare('SELECT source_commit FROM justup_processing_admission').get().source_commit,'prior');
     assert.equal(db.prepare("SELECT 1 FROM sqlite_schema WHERE name='justup_visitor_admission'").get(),undefined);
     const api=createProcessingAdmission({db,config:c,now:()=>time,availability:()=>true});assert.equal(api.processingAvailable('en'),true);assert.equal(queue.processingAvailable('de'),false);
-    const key=queue.processingPolicy('en').key;c.policyVersion='synthetic-revision';api.refreshAvailability();assert.notEqual(queue.processingPolicy('en').key,key);
+    const key=queue.processingPolicy('en').key;c.policyVersion='synthetic-revision';api.refreshAvailability();assert.equal(queue.processingAvailable('en'),false);
+    c.policyAssetProof.locales.en.version=c.policyVersion;api.refreshAvailability();assert.notEqual(queue.processingPolicy('en').key,key);
     assert.equal(createProcessingAdmission({db,config:{...c,buildIdentity:'other'},now:()=>time}).processingAvailable(),false);
     time+=90_000;assert.equal(queue.processingAvailable(),false);
     c.policiesReviewed=false;api.refreshAvailability();assert.equal(queue.processingAvailable(),false);

@@ -2,6 +2,7 @@
 // postings are synthetic; only localhost HTTP is used.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 import { randomBytes,createHash } from 'node:crypto';
 import { createApplication } from './main.mjs';
 import { createIntentService } from './intent.mjs';
@@ -28,7 +29,7 @@ async function setup(t,{model,modelAvailable=true,companyModel,provider,residual
   let time=START,modelCalls=0,providerCalls=0,companyCalls=0,failNextHandoff=false;
   const accounts=new Map(['one','two'].map(id=>[id,{id,username:`test-${id}`,expiresAt:null,access:{kind:'paid',fullAccess:true,legacy:false,premium:false,billingEnabled:false,until:null}}]));
   const sessions=new Map();let identity,intent,matching,visitor,companies,records;
-  const config={dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:ORIGIN,policiesReviewed,privacyUrl:`${ORIGIN}/privacy.html`,usageUrl:`${ORIGIN}/usage.html`,policyVersion:'test-reviewed',visitor:visitorConfig,...(realAuth?{requiresInvitation:false}:{}),...runtime};
+  const config={dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:ORIGIN,policiesReviewed,privacyUrl:`${ORIGIN}/privacy.html`,usageUrl:`${ORIGIN}/usage.html`,policyVersion:'test-reviewed',policyAssetProof:syntheticPolicyProof({origin:ORIGIN,sourceCommit:'a'.repeat(40),version:'test-reviewed'}),visitor:visitorConfig,...(realAuth?{requiresInvitation:false}:{}),...runtime};
   const app=await createApplication({now:()=>time,config,
     authFactory:realAuth?undefined:({db,deleteAccountData})=>({cleanup:()=>{},registrationState:()=>({enabled:true,reason:null}),accessForAccount:id=>accounts.get(id)?.access??null,
       session:token=>{const id=sessions.get(token),a=accounts.get(id);return a?{account:{id:a.id,username:a.username,expiresAt:null},expiresAt:time+DAY,access:a.access}:null;},
@@ -504,6 +505,33 @@ test('a live private pending marker stops visitor writes and independent queued 
   assert.equal((await s.results(c,id)).status,503);assert.equal(s.app.store.db.prepare('SELECT draft_json FROM justup_searches WHERE id=?').get(id).draft_json,before);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,count);await s.work('ai_match');assert.equal(s.providerCalls(),0);
   unlinkSync(generationPath+'.pending');s.advance(90_001);assert.equal(queue.principal(owner),null);s.identity.refreshAvailability();assert(queue.principal(owner));
   s.config.policiesReviewed=false;s.identity.refreshAvailability();assert.equal((await c.request('/visitor/session',{method:'DELETE',body:{}})).status,200);
+});
+
+test('English review without exact asset proof cannot register or accept a private search',async t=>{
+  const s=await setup(t,{realAuth:true,runtime:{policyAssetProof:undefined}}),c=s.client();await c.session();
+  const submitted=await c.request('/visitor/searches',{method:'POST',body:{query:'Private English query',requestKey:'no-english-proof'}});
+  const registered=await c.request('/auth/register',{method:'POST',body:{username:'unproved-english',password:'Synthetic unproved English password'}});
+  assert.deepEqual({registration:registered.status,submission:submitted.status},{registration:503,submission:503});
+  for(const table of ['auth_accounts','justup_visitors','justup_searches','justup_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+  assert.equal(s.modelCalls(),0);assert.equal(s.providerCalls(),0);assert.equal(s.companyCalls(),0);
+});
+
+test('removing English asset proof revokes existing account work while owned reads and deletion remain available',async t=>{
+  const policyAssetProof=syntheticPolicyProof({origin:ORIGIN,sourceCommit:'a'.repeat(40),version:'test-reviewed'});
+  const s=await setup(t,{realAuth:true,runtime:{policyAssetProof}}),c=s.client();await c.session();
+  const password='Synthetic retained English account password';
+  assert.equal((await c.request('/auth/register',{method:'POST',body:{username:'english-proof-owner',password}})).status,201);
+  assert.equal((await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'before-proof-removal'}})).status,202);
+  assert.equal((await c.request('/company-requests',{method:'POST',body:{input:'Private synthetic company',scope:null,requestKey:'company-before-proof-removal'}})).status,202);
+  delete s.config.policyAssetProof;
+  const current=await c.session();assert.equal(current.body.policies.reviewed,false);assert(current.body.user);
+  const count=s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n;
+  for(const [path,body]of [['/searches',{query:'Must not persist',requestKey:'denied'}],['/company-requests',{input:'Must not persist',scope:null,requestKey:'denied-company'}]])assert.equal((await c.request(path,{method:'POST',body})).status,503);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,count);
+  await s.work('search_intent');await s.work('company_resolution');assert.equal(s.modelCalls(),0);assert.equal(s.companyCalls(),0);
+  for(const path of ['/searches','/company-requests','/workspace','/account/billing'])assert.equal((await c.request(path)).status,200,path);
+  assert.equal((await c.request('/account',{method:'DELETE',body:{password}})).status,200);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM auth_accounts').get().n,0);
 });
 
 test('current policy closure stops an existing signed-in account submission and queued interpretation',async t=>{

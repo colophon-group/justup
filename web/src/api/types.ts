@@ -22,12 +22,15 @@ export interface SessionPolicies {
 }
 export interface Session {
   user: User | null;
+  serverTime?: string;
+  expiresAt?: string | null;
   visitor: { expiresAt: string } | null;
   csrfToken: string;
   access: {
     kind: string;
     fullAccess: boolean;
     billingEnabled: boolean;
+    until?: string | null;
     description?: string;
   };
   capabilities: Record<string, boolean>;

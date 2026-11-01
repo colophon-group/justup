@@ -12,6 +12,7 @@ import {createRunner} from './runner.mjs';
 import {createBillingRunnerHooks} from './runner-adapter.mjs';
 import {createStripeBillingRunner,validateStripeBillingConfig} from './stripe-billing.mjs';
 import {STRIPE_API_VERSION} from './account-provider-clients.mjs';
+import {syntheticPolicyProof} from './policy-test-fixtures.mjs';
 
 const PASSWORD='a sufficiently long password';
 const ORIGIN='https://preview.justup.work';
@@ -22,7 +23,7 @@ async function fixture(t,{storage={},hooks={}}={}) {
   let at=Date.parse('2026-11-01T15:00:00.000Z');const now=()=>at;
   const base={enabled:true,accountId:'acct_Sandbox',offers,portalConfigurationId:'bpc_Justup',origin:ORIGIN};
   const config={dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'b'.repeat(64),csrfSecret:'c'.repeat(32),
-    allowedOrigin:ORIGIN,privacyUrl:`${ORIGIN}/privacy.html`,usageUrl:`${ORIGIN}/usage.html`,policiesReviewed:true,policyVersion:'test-v1',requiresInvitation:false,
+    allowedOrigin:ORIGIN,privacyUrl:`${ORIGIN}/privacy.html`,usageUrl:`${ORIGIN}/usage.html`,policiesReviewed:true,policyVersion:'test-v1',policyAssetProof:syntheticPolicyProof({origin:ORIGIN,sourceCommit:'a'.repeat(40),version:'test-v1'}),requiresInvitation:false,
     stripeBilling:{...base,webhookSecret:'whsec_synthetic_endpoint_secret_value'},readiness:()=>({capabilities:{stripeBilling:true}}),...storage};
   let app=await createApplication({config,now});t.after(()=>app.close());let api=app.services.find(service=>service.stripeBilling);
   const state={customer:null,checkouts:[],subscription:null,invoice:null,intent:null,charge:null,calls:[],customerKeys:[],terminationKeys:[],unavailable:false};

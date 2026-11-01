@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApiServices,createApiReadiness,readRunnerStatus } from './composition.mjs';
 import { writeRunnerStatus,readRunnerConfig } from './runner-adapter.mjs';
+import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 const AT=Date.parse('2026-10-31T16:00:00Z'),sourceCommit='a'.repeat(40),buildIdentity='sha256:immutable';
 function fixture(t){const dir=mkdtempSync(join(tmpdir(),'justup-composition-')),path=join(dir,'runner-status.json');t.after(()=>rmSync(dir,{recursive:true,force:true}));return {dir,path,config:{sourceCommit,buildIdentity,runnerStatusPath:path},write(extra={}){const value={schemaVersion:1,identity:'queue-build',sourceCommit,buildIdentity,ready:true,updatedAt:new Date(AT).toISOString(),capabilities:{search:true,companyRequests:true,aiMatching:false},...extra};writeFileSync(path,JSON.stringify(value),{mode:0o640});return value;}};}
 test('missing/stale/wrong-build or malformed heartbeat fails closed without model access',t=>{
@@ -22,7 +23,7 @@ test('API advertises queue availability and enqueues work without constructing i
   const f=fixture(t);f.write();const db=new DatabaseSync(':memory:');t.after(()=>db.close());let serial=0;const queued=new Map();
   const tasks={enqueue(input){const task={...input,id:`task-${++serial}`,status:'pending',createdAt:new Date(AT).toISOString(),updatedAt:new Date(AT).toISOString()};queued.set(task.id,task);return task;},get:(owner,id)=>queued.get(id)?.ownerId===owner?queued.get(id):null,delete:(owner,id)=>queued.delete(id),complete:()=>false,publicView:task=>({id:task.id,status:task.status,result:null,error:null})};
   const feed={eligibleJobs:()=>[],publicJob:j=>j,companies:()=>({items:[]}),company:id=>({id}),generation:()=>null,coverage:()=>({stale:true})};
-  const config={...f.config,dbPath:':memory:',allowedOrigin:'https://preview.example',policiesReviewed:true,privacyUrl:'https://preview.example/privacy.html',usageUrl:'https://preview.example/usage.html',policyVersion:'fixture',get model(){throw Error('API read model config');},get jev(){throw Error('API read provider key');},get hiringWire(){throw Error('API read Wire proof/socket');},get sourceCoverage(){throw Error('API read source history path');}};
+  const config={...f.config,dbPath:':memory:',allowedOrigin:'https://preview.example',policiesReviewed:true,privacyUrl:'https://preview.example/privacy.html',usageUrl:'https://preview.example/usage.html',policyVersion:'fixture',policyAssetProof:syntheticPolicyProof({origin:'https://preview.example',sourceCommit,version:'fixture'}),get model(){throw Error('API read model config');},get jev(){throw Error('API read provider key');},get hiringWire(){throw Error('API read Wire proof/socket');},get sourceCoverage(){throw Error('API read source history path');}};
   const services=createApiServices({db,feed,tasks,config,visitorAvailability:()=>true,accessForAccount:()=>({kind:'paid',fullAccess:true}),now:()=>AT,beforePrivateDelete:()=>{}}),intent=services[0],company=services[1];
   assert.equal(intent.capabilities().search,true);assert.equal(company.capabilities().companyRequests,true);
   assert.deepEqual(services.at(-1).publicRoute({method:'GET',path:'/hiring-wire'}),{status:200,body:{state:'unavailable',edition:null}});
@@ -41,7 +42,7 @@ test('assembled core/auth/matching API consumes heartbeat, exposes real services
   try{({createConfiguredApplication}=await import('./main.mjs'));({createAuth}=await import('./auth.mjs'));await import('./matching.mjs');}
   catch(error){if(error.code==='ERR_MODULE_NOT_FOUND'){t.skip('Core/auth/matching dependency PRs must be assembled for this cross-module contract.');return;}throw error;}
   const f=fixture(t);f.write();const origin='http://127.0.0.1:18787',password='Synthetic-password-123!';
-  const application=await createConfiguredApplication({config:{...f.config,dbPath:':memory:',servicesEnabled:true,allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,privacyUrl:origin+'/privacy.html',usageUrl:origin+'/usage.html',policyVersion:'fixture',inviteCode:'fixture-invite',jev:{token:'must-never-enter-api-response'}},now:()=>AT,authFactory:createAuth});
+  const application=await createConfiguredApplication({config:{...f.config,dbPath:':memory:',servicesEnabled:true,allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,privacyUrl:origin+'/privacy.html',usageUrl:origin+'/usage.html',policyVersion:'fixture',policyAssetProof:syntheticPolicyProof({origin,sourceCommit,version:'fixture'}),inviteCode:'fixture-invite',jev:{token:'must-never-enter-api-response'}},now:()=>AT,authFactory:createAuth});
   t.after(()=>application.close());await new Promise(resolve=>application.server.listen(0,'127.0.0.1',resolve));const endpoint=`http://127.0.0.1:${application.server.address().port}/api/v1`;
   const account=await application.auth.register({username:'fixtureuser',password,inviteCode:'fixture-invite'}),headers={cookie:`justup_session=${account.token}`};
   // Cookie name is part of the core boundary, not a provider/session substitute.
