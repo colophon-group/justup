@@ -89,3 +89,23 @@ test('hydration seeds release to account or visitor preference while explicit ro
   assert.equal(resolvePresentationLocale({...options,accountOverride:{locale:null}}), 'fr');
   assert.equal(resolvePresentationLocale({...options,explicitLocale:'it',accountOverride:{locale:'de'}}), 'it');
 });
+
+
+test('processing admission, free-period and edge notices are translated as owned UI text', () => {
+  const notices = [
+    'Processing is unavailable until policies are approved for this language.',
+    'Processing is paused until current policy and data protections are available.',
+    'Verify your account to activate the free period.',
+    'The free period is unavailable.',
+    'Choose a supported interface language.',
+    'This task could not finish.',
+  ] as const;
+  for (const key of notices) {
+    assert.equal(translateNotice('en', key), key);
+    for (const locale of INTERFACE_LOCALES.filter(value => value !== 'en')) {
+      assert.equal(translateNotice(locale, key), translate(locale, key));
+      assert.notEqual(translateNotice(locale, key), key);
+    }
+  }
+  assert.equal(translateNotice('de', 'A source or model statement about hiring.'), 'A source or model statement about hiring.');
+});
