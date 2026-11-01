@@ -26,7 +26,8 @@ const assets = { fetch: async request => {
 createServer(async (req, res) => {
   try {
     if (await handleLocaleSeam(req, res)) return;
-    const result = await handle(new Request(`https://public.justup.test${req.url}`, { method: req.method, headers: req.headers }), { PUBLIC_ORIGIN: 'https://public.justup.test', API_ORIGIN: 'https://fixed-api.test', DEPLOYMENT_MODE: 'preview', RELEASE_JSON: JSON.stringify({ sourceSha: 'a'.repeat(40) }), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: assets });
+    const incomingHeaders = new Headers(req.headers); incomingHeaders.set('CF-Connecting-IP', '203.0.113.25');
+    const result = await handle(new Request(`https://public.justup.test${req.url}`, { method: req.method, headers: incomingHeaders }), { API_INGRESS_SECRET: 'A'.repeat(43), PUBLIC_ORIGIN: 'https://public.justup.test', API_ORIGIN: 'https://fixed-api.test', DEPLOYMENT_MODE: 'preview', RELEASE_JSON: JSON.stringify({ sourceSha: 'a'.repeat(40) }), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: assets });
     const headers = Object.fromEntries(result.headers);
     if (headers.location) headers.location = headers.location.replace('https://public.justup.test', origin);
     res.writeHead(result.status, headers); res.end(Buffer.from(await result.arrayBuffer()));

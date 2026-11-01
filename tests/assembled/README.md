@@ -22,6 +22,8 @@ npm run test:browser -- tests/browser/assembled-visitor-bootstrap.spec.mjs
 
 Run `npm run build` first under Node 24.22.2. An explicit ref is archived from local Git objects into a temporary directory; no fetch, credential loading or backend edit occurs. Without that variable, tests use the current source. Git, tar and OpenSSL must be available. Temporary TLS material, a local synthetic account, SQLite files, deletion generation and backup directory are isolated and removed afterward.
 
+The local HTTPS adapter supplies a synthetic Workers ingress binding and simulated incoming Cloudflare client address. The same synthetic secret is configured on the real API; no production credential or browser-supplied forwarding address is used.
+
 These journeys do not intercept or fabricate API responses. They run the built frontend and Worker over local HTTPS, the real HTTP API, authentication, cookie/CSRF rules, SQLite, private-deletion barrier and fixed feature composition. A deterministic local interpreter supplies structured output to real leased tasks, wrapped in the candidate's model-execution and journey hooks. Transport fault injection drops or holds actual committed HTTP responses. It does not replace their bodies or bypass authorization.
 
 `assembled-company-sources.spec.mjs` publishes a frozen synthetic v2 coverage snapshot through the real Wire service and SQLite, then checks approved links and missing check dates in public HTML and client navigation. Deleting that published evidence removes the source list while preserving company identity. It does not intercept API responses or qualify real source coverage.

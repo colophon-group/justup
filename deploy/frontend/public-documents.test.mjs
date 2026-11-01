@@ -3,22 +3,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createPublicHandler } from '../../web/worker-dist/worker.mjs';
+const ingressSecret = 'A'.repeat(43);
+const clientAddress = '203.0.113.25';
 const origin = 'https://public.justup.test';
 const template = await readFile(new URL('../../web/dist/index.html', import.meta.url), 'utf8');
 const company = { id: 'public-corp', name: 'Public & Co', description: 'Public company description.', coverage: { state: 'imported_snapshot' }, sources: [{ url: 'https://careers.example.test/jobs' }], privateAccount: 'PRIVATE_CANARY', modelEvidence: 'MODEL_CANARY', evidenceUrls: ['https://example.test/INTERNAL_EVIDENCE'] };
 function environment(mode = 'preview') {
-  return { PUBLIC_ORIGIN: origin, API_ORIGIN: 'https://fixed-api.test', DEPLOYMENT_MODE: mode, RELEASE_JSON: JSON.stringify({ sourceSha: 'a'.repeat(40) }), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: { fetch: async request => new Response(new URL(request.url).pathname === '/index.html' ? template : 'Static notice', { headers: { 'Content-Type': 'text/html' } }) } };
+  return { PUBLIC_ORIGIN: origin, API_ORIGIN: 'https://fixed-api.test', API_INGRESS_SECRET: ingressSecret, DEPLOYMENT_MODE: mode, RELEASE_JSON: JSON.stringify({ sourceSha: 'a'.repeat(40) }), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: { fetch: async request => new Response(new URL(request.url).pathname === '/index.html' ? template : 'Static notice', { headers: { 'Content-Type': 'text/html' } }) } };
 }
-const request = path => new Request(origin + path, { headers: { Cookie: 'PRIVATE_COOKIE', Authorization: 'PRIVATE_AUTH', 'X-Forwarded-Host': 'evil.test', 'Accept-Language': 'fr', 'X-Private': 'PRIVATE_HEADER', 'X-Justup-Locale': 'es' } });
+const request = path => new Request(origin + path, { headers: { 'CF-Connecting-IP': clientAddress, 'X-Justup-Ingress': 'FORGED_INGRESS', 'X-Justup-Client-IP': '198.51.100.2', Cookie: 'PRIVATE_COOKIE', Authorization: 'PRIVATE_AUTH', 'X-Forwarded-Host': 'evil.test', 'Accept-Language': 'fr', 'X-Private': 'PRIVATE_HEADER', 'X-Justup-Locale': 'es' } });
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
-test('public documents have real shared HTML, canonical localized URLs, no private state or credential forwarding', async () => {
+test('public documents have real shared HTML, canonical localized URLs, no private state or browser credential forwarding', async () => {
   let calls = 0;
   const handle = createPublicHandler(async (target, options) => {
     calls++;
     const url = new URL(target);
     assert.equal(url.origin, 'https://fixed-api.test');
     assert.equal(options.credentials, 'omit');
-    assert.deepEqual(options.headers, { Accept: 'application/json' });
+    assert.deepEqual([...options.headers], [['accept', 'application/json'], ['x-justup-client-ip', clientAddress], ['x-justup-ingress', ingressSecret]]);
     assert.equal(options.redirect, 'manual');
     assert.equal(options.cache, 'no-store');
     return json(url.pathname.endsWith('/companies') ? { items: [company], nextCursor: null, account: 'PRIVATE_CANARY' } : company);
@@ -36,7 +38,7 @@ test('public documents have real shared HTML, canonical localized URLs, no priva
     assert.ok(!result.headers.get('Content-Security-Policy').includes("script-src 'self' 'unsafe-inline'"));
     assert.match(html, /Public &amp; Co/); assert.match(html, /Public company description/);
     assert.match(html, /<template id="public-bootstrap" data-public=/);
-    assert.doesNotMatch(html, /PRIVATE_CANARY|MODEL_CANARY|INTERNAL_EVIDENCE|PRIVATE_COOKIE|PRIVATE_AUTH|PRIVATE_HEADER|csrfToken|savedSearches/);
+    assert.doesNotMatch(html, /PRIVATE_CANARY|MODEL_CANARY|INTERNAL_EVIDENCE|PRIVATE_COOKIE|PRIVATE_AUTH|PRIVATE_HEADER|FORGED_INGRESS|203\.0\.113\.25|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|csrfToken|savedSearches/);
     assert.ok(html.includes(`rel="canonical" href="${origin}${path}"`));
     if (path.startsWith('/de')) { assert.match(html, /<html lang="de">/); assert.match(html, /Stellenbericht/); }
   }
@@ -126,4 +128,32 @@ test('company documents hydrate only approved report links and preserve identity
     if (good) { assert.match(html, /href="https:\/\/careers.example.com\/jobs"/); assert.match(html, /Last checked/); }
     else assert.doesNotMatch(html, /careers.example.com/);
   }
+});
+
+
+test('public company reads fail closed without trusted ingress while independent landing and policies stay available', async () => {
+  let calls = 0;
+  const handle = createPublicHandler(() => { calls++; throw new Error('Must not fetch'); });
+  for (const [binding, address] of [[undefined, clientAddress], ['A'.repeat(42) + 'B', clientAddress], [ingressSecret, undefined], [ingressSecret, '203.0.113.25, 198.51.100.2']]) {
+    const headers = new Headers({ 'X-Justup-Ingress': ingressSecret, 'X-Justup-Client-IP': clientAddress });
+    if (address !== undefined) headers.set('CF-Connecting-IP', address);
+    const env = { ...environment(), API_INGRESS_SECRET: binding };
+    for (const path of ['/companies', '/companies/public-corp']) {
+      const result = await handle(new Request(origin + path, { headers }), env);
+      assert.equal(result.status, 503);
+      const html = await result.text(); assert.doesNotMatch(html, /AAAAAAAAAA|203\.0\.113|198\.51\.100/);
+    }
+    for (const path of ['/', '/privacy.html', '/usage.html']) assert.equal((await handle(new Request(origin + path), env)).status, 200);
+  }
+  assert.equal(calls, 0);
+});
+test('public source redirects are not followed with private ingress credentials', async () => {
+  let calls = 0;
+  const result = await createPublicHandler(async (target, options) => {
+    calls++; assert.equal(new URL(target).origin, 'https://fixed-api.test');
+    assert.equal(options.redirect, 'manual'); assert.equal(options.headers.get('X-Justup-Ingress'), ingressSecret);
+    return new Response(null, { status: 302, headers: { Location: 'https://foreign.example/private' } });
+  })(request('/companies'), environment());
+  assert.equal(result.status, 503); assert.equal(calls, 1);
+  assert.equal(result.headers.get('Location'), null);
 });

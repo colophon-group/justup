@@ -9,6 +9,8 @@ import { ErrorBoundary } from '../app/ErrorBoundary.tsx';
 import { readRoute, explicitRouteLocale, type Route } from '../app/useRoute.ts';
 import { decodeCompany, decodeCompanySourceReport, decodeCompanyCataloguePage, record } from '../api/decode.ts';
 import type { PublicBootstrap } from './bootstrap.ts';
+// @ts-expect-error Private dependency-free edge helper is covered by deployment contracts.
+import { trustedIngressHeaders } from '../../../deploy/frontend/worker.mjs';
 
 const MAX_BYTES = 384 * 1024;
 const MAX_COMPANIES = 20;
@@ -16,14 +18,16 @@ const TIMEOUT_MS = 2500;
 const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 
 
-async function publicJSON(target: URL, fetchUpstream: typeof fetch): Promise<{ status: number; value?: unknown }> {
+async function publicJSON(target: URL, fetchUpstream: typeof fetch, ingress: Headers): Promise<{ status: number; value?: unknown }> {
   const controller = new AbortController();
   let deadlineReject: (reason: Error) => void = () => {};
   const deadline = new Promise<never>((_, reject) => { deadlineReject = reject; });
   const timeout = setTimeout(() => { controller.abort(); deadlineReject(new Error('Public source deadline exceeded')); }, TIMEOUT_MS);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const response = await Promise.race([fetchUpstream(target, { headers: { Accept: 'application/json' }, credentials: 'omit', redirect: 'manual', signal: controller.signal, cache: 'no-store' }), deadline]);
+    const headers = new Headers(ingress);
+    headers.set('Accept', 'application/json');
+    const response = await Promise.race([fetchUpstream(target, { headers, credentials: 'omit', redirect: 'manual', signal: controller.signal, cache: 'no-store' }), deadline]);
     if (response.status === 404) { void response.body?.cancel().catch(() => {}); return { status: 404 }; }
     if (response.status !== 200 || !/^application\/json(?:;|$)/i.test(response.headers.get('content-type') || '')) { void response.body?.cancel().catch(() => {}); throw new Error('Public source unavailable'); }
     if (Number(response.headers.get('content-length')) > MAX_BYTES || !response.body) { void response.body?.cancel().catch(() => {}); throw new Error('Oversized public source'); }
@@ -95,9 +99,11 @@ export async function renderPublicDocument(request: Request, env: Record<string,
     try {
       const origin = new URL(env.API_ORIGIN!);
       if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw new Error('Invalid public source');
+      if (origin.origin === env.PUBLIC_ORIGIN) throw new Error('Invalid public source');
+      const ingress: Headers = trustedIngressHeaders(request, env);
       const target = new URL(route.page === 'companies' ? '/api/v1/companies' : `/api/v1/companies/${encodeURIComponent(route.id)}`, origin);
       if (route.page === 'companies') { target.searchParams.set('limit', String(MAX_COMPANIES)); target.searchParams.set('q', catalogueQuery); if (cursor) target.searchParams.set('cursor', cursor); }
-      const response = await publicJSON(target, fetchUpstream);
+      const response = await publicJSON(target, fetchUpstream, ingress);
       if (response.status === 404 && route.page === 'company') initial.outcome = 'not-found';
       else if (response.status !== 200) initial.outcome = 'unavailable';
       else if (route.page === 'companies') {
@@ -114,7 +120,7 @@ export async function renderPublicDocument(request: Request, env: Record<string,
         initial.company = publicCompany(company);
         // Optional report evidence cannot suppress the independently valid company identity.
         try {
-          const report = await publicJSON(new URL(`/api/v1/companies/${encodeURIComponent(route.id)}/report`, origin), fetchUpstream);
+          const report = await publicJSON(new URL(`/api/v1/companies/${encodeURIComponent(route.id)}/report`, origin), fetchUpstream, ingress);
           if (report.status === 200) initial.companySourceReport = decodeCompanySourceReport(report.value, company.id);
         } catch { /* The browser can retry this public evidence separately. */ }
 
