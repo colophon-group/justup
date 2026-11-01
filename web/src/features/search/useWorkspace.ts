@@ -14,11 +14,13 @@ import { useWorkspacePersistence } from "./useWorkspacePersistence.ts";
 interface Mutation {
   key: string;
   submission?: SearchSubmission;
+  attempted?: boolean;
 }
 interface Operation { controller: AbortController; token: symbol }
 export function useWorkspace(
   client: ApiClient,
   session: Session | null,
+  onVisitorRebootstrap: () => Promise<void>,
 ) {
   const [state, dispatch] = useReducer(
     workspaceReducer,
@@ -43,8 +45,8 @@ export function useWorkspace(
     operation.current = null;
   }, []);
   const userId = session?.user?.id;
-  const scope = session?.user ? "account" : session?.visitor && session.capabilities.visitorSearch ? "visitor" : null;
-  const persistence = useWorkspacePersistence({ client, scope, owner: userId, state, current, serial, apply });
+  const scope = session?.user ? "account" : session?.capabilities.visitorSearch ? "visitor" : null;
+  const persistence = useWorkspacePersistence({ client, scope, owner: userId, hasVisitor: !!session?.visitor, onVisitorRebootstrap, state, current, serial, apply });
   useEffect(() => {
     mutations.current.clear();
     confirmationKeys.current.clear();
@@ -133,8 +135,9 @@ export function useWorkspace(
       busy: true,
     });
     try {
-      await persistence.flush(active.controller.signal);
+      if (search || !mutation.attempted) await persistence.flush(active.controller.signal);
       if (active !== operation.current) return;
+      mutation.attempted = true;
       mutation.submission ??= search
         ? await client.editSearch(
             search.id,
@@ -161,6 +164,11 @@ export function useWorkspace(
         apply({ type: "submitted", search: mutation.submission.search, previousId: snapshot.selectedId });
         mutations.current.set(JSON.stringify([mutation.submission.search.id, mutation.submission.search.revision, query]), mutation);
       }
+      if (!search) {
+        if (!mutation.submission.task && mutation.submission.search.status === "ready") apply({ type: "submitted", search: mutation.submission.search, previousId: snapshot.selectedId });
+        await persistence.refreshAfterCreate({ id: mutation.submission.search.id, submitted: submittedText });
+        if (active !== operation.current) return;
+      }
       const result = mutation.submission.task
         ? await pollTask(
             client,
@@ -171,11 +179,15 @@ export function useWorkspace(
         : { search: mutation.submission.search };
       if (active !== operation.current) return;
       applyResult(active, result, mutation.submission.search.id, search?.revision ?? 0, submittedText,
-        search?.id ?? (mutation.submission.search.status === "ready" ? snapshot.selectedId : mutation.submission.search.id));
+        search?.id ?? mutation.submission.search.id);
       if ("search" in result)
         for (const [key, value] of mutations.current) if (value === mutation) mutations.current.delete(key);
     } catch (error) {
       if (active !== operation.current || isAbortError(error)) return;
+      if (!search && mutation.attempted && !mutation.submission && error instanceof ApiError && (error.status === 0 || error.status >= 500 || error.code === "invalid_response")) {
+        await persistence.refreshAfterCreate();
+        if (active !== operation.current) return;
+      }
       if (error instanceof TaskFailure) {
         for (const [key, value] of mutations.current) if (value === mutation) mutations.current.delete(key);
         if (mutation.submission) apply({ type: "taskFailed", id: mutation.submission.search.id });

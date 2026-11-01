@@ -1,7 +1,7 @@
-import { safeSourceURL } from "../api/decode.ts";
+import { safePublicCompanyURL } from "../api/publicCompanyUrls.ts";
 import type { Company } from "../api/types.ts";
 export function CompanyMark({ company }: { company: Company }) {
-  const source = safeSourceURL(company.logoUrl);
+  const source = safePublicCompanyURL(company.logoUrl);
   return source ? (
     <img
       className="mark company-logo"

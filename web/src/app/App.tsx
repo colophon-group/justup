@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { policyDocument } from "../i18n/policies.ts";
+import { useAccountLocale } from "../i18n/useAccountLocale.ts";
+import { localeName } from "../i18n/locales.ts";
+import { useInterfaceLocale } from "../i18n/LocaleProvider.tsx";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiClient, errorText, isAbortError } from "../api/client.ts";
 import type { CompanyRequestPrefill, Session } from "../api/types.ts";
 import { AccountControls } from "../features/account/AccountControls.tsx";
@@ -7,15 +11,23 @@ import { CompaniesPage } from "../features/companies/CompaniesPage.tsx";
 import { CompanyPage } from "../features/companies/CompanyPage.tsx";
 import { CompanyRequestPage } from "../features/companies/CompanyRequestPage.tsx";
 import { SearchWorkspace } from "../features/search/SearchWorkspace.tsx";
-import { useRoute } from "./useRoute.ts";
+import { useRoute, pageHref, navigate } from "./useRoute.ts";
+import type { PublicBootstrap } from "../public/bootstrap.ts";
 import { coverageDescription } from "../shared/coverage.ts";
+import { HiringWire } from "../features/news/HiringWire.tsx";
 
-export function App() {
+export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap | undefined }) {
+  const { t, locale, explicitRequestLocale, notice: localizeNotice } = useInterfaceLocale();
+  const [interactive, setInteractive] = useState(!initialPublicPage);
+  useEffect(() => setInteractive(true), []);
   const expiryHandler = useRef<() => void>(() => {});
   const visitorExpiryHandler = useRef<() => void>(() => {});
   const [client] = useState(
     () => new ApiClient({ onSessionExpired: () => expiryHandler.current(), onVisitorExpired: () => visitorExpiryHandler.current() }),
   );
+  useLayoutEffect(() => {
+    client.setExplicitRequestLocale(explicitRequestLocale);
+  }, [client, explicitRequestLocale]);
   const workspaceBridge = useRef<{ flush: (signal?: AbortSignal) => Promise<void> } | null>(null);
   const persistenceReady = useCallback((bridge: typeof workspaceBridge.current) => { workspaceBridge.current = bridge; }, []);
   const beforeAuthenticate = useCallback(async (signal: AbortSignal) => { await workspaceBridge.current?.flush(signal); }, []);
@@ -27,22 +39,23 @@ export function App() {
   const [companyPrefill, setCompanyPrefill] =
     useState<CompanyRequestPrefill | null>(null);
   const consumePrefill = useCallback(() => setCompanyPrefill(null), []);
-  const requestCompany = useCallback((prefill: CompanyRequestPrefill) => {
-    setCompanyPrefill(prefill);
-    location.hash = "request";
-  }, []);
+
   const [dialog, setDialog] = useState<AccountDialog>(null),
     [signInReason, setSignInReason] = useState("Sign in to save your edition.");
   const [reducedMotion, setReducedMotion] = useState(
-      () => matchMedia("(prefers-reduced-motion: reduce)").matches,
+      () => false,
     ),
     [backToTop, setBackToTop] = useState(false);
   const sessionRef = useRef<Session | null>(null),
     sessionRequest = useRef<AbortController | null>(null),
     requestGeneration = useRef(0);
-  const route = useRoute();
+  const route = useRoute(initialPublicPage?.route);
+  const requestCompany = useCallback((prefill: CompanyRequestPrefill) => { setCompanyPrefill(prefill); navigate(pageHref("request", locale)); }, [locale]);
+  const publicPage = initialPublicPage?.route.locale === route.locale && initialPublicPage.route.page === route.page && (route.page !== "company" || (initialPublicPage.route.page === "company" && initialPublicPage.route.id === route.id)) ? initialPublicPage : undefined;
+  const [editionDate] = useState(() => initialPublicPage?.renderedAt ?? new Date().toISOString());
   const topLink = useRef<HTMLAnchorElement>(null),
     mainRef = useRef<HTMLElement>(null);
+  const focusMain = useCallback(() => mainRef.current?.focus({ preventScroll: true }), []);
   const openSignIn = useCallback((reason = "Sign in to save your edition.") => {
     setSignInReason(reason);
     setDialog("sign-in");
@@ -71,7 +84,7 @@ export function App() {
     setConnecting(false);
     setNotice("Your visitor search session expired. Reconnect to start a new search.");
   };
-  const refreshSession = useCallback(async () => {
+  const refreshSession = useCallback(async (expectedReclamation = false) => {
     const generation = ++requestGeneration.current;
     sessionRequest.current?.abort();
     const controller = new AbortController();
@@ -90,7 +103,8 @@ export function App() {
       } else if (
         sessionRef.current &&
         (sessionRef.current.user?.id !== next.user?.id
-          || (!next.user && sessionRef.current.visitor?.expiresAt !== next.visitor?.expiresAt))
+          || (!next.user && sessionRef.current.visitor && sessionRef.current.visitor.expiresAt !== next.visitor?.expiresAt
+            && !(expectedReclamation && next.visitor === null)))
       ) {
         setEpoch((value) => value + 1);
         setCompanyPrefill(null);
@@ -107,11 +121,19 @@ export function App() {
       if (generation === requestGeneration.current) setConnecting(false);
     }
   }, [client]);
+  const rebootstrapVisitor = useCallback(async () => {
+    const previous = sessionRef.current;
+    await refreshSession(true);
+    const next = sessionRef.current;
+    if (!next || next === previous || next.user || !next.capabilities.visitorSearch
+      || previous?.visitor && next.visitor && previous.visitor.expiresAt !== next.visitor.expiresAt)
+      throw new Error("Reconnect the saved workspace before continuing.");
+  }, [refreshSession]);
   const signedOut = useCallback(async () => {
     clearPrivate();
-    location.hash = "jobs";
+    navigate(pageHref("jobs", route.locale));
     await refreshSession();
-  }, [clearPrivate, refreshSession]);
+  }, [clearPrivate, refreshSession, route.locale]);
   useEffect(() => {
     void refreshSession();
     return () => {
@@ -122,6 +144,7 @@ export function App() {
   useEffect(() => {
     const media = matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReducedMotion(media.matches);
+    update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
@@ -136,9 +159,22 @@ export function App() {
     return () => window.removeEventListener("scroll", update);
   }, []);
   useEffect(() => {
-    document.title = `Justup — ${route.page === "companies" ? "Company catalogue" : route.page === "company" ? "Hiring report" : route.page === "request" ? "Request a company" : "Fresh work. Clear sources."}`;
-  }, [route.page]);
-  const coverage = session?.coverage;
+    let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    if (!canonical) { canonical = document.createElement('link'); canonical.rel = 'canonical'; document.head.append(canonical); }
+    canonical.href = new URL(route.page === 'invalid' ? location.pathname : route.page === 'company' ? pageHref('company', route.locale, route.id) : route.page === 'companies' ? pageHref('companies', route.locale) : pageHref('jobs', route.locale).split('#')[0]!, location.origin).href;
+    if (route.page === 'invalid' || publicPage?.outcome === 'not-found') { document.title = `${t('Page not found')} — Justup`; return; }
+    if (publicPage?.outcome === 'unavailable') { document.title = `${t('Coverage temporarily unavailable')} — Justup`; return; }
+    if (route.page === "company") return;
+    document.title = `Justup — ${route.page === "companies" ? t("Company catalogue") : route.page === "request" ? t("Request a company") : t("Fresh work. Clear sources.")}`;
+  }, [route, publicPage, t]);
+  const interfaceLanguage = useAccountLocale(client, session);
+  const previousLocale = useRef({ locale, explicitRequestLocale });
+  useEffect(() => {
+    if (previousLocale.current.locale === locale && previousLocale.current.explicitRequestLocale === explicitRequestLocale) return;
+    previousLocale.current = { locale, explicitRequestLocale };
+    void refreshSession();
+  }, [locale, explicitRequestLocale, refreshSession]);
+  const coverage = session?.coverage ?? publicPage?.coverage;
   return (
     <>
       <a
@@ -148,35 +184,30 @@ export function App() {
           event.preventDefault();
           mainRef.current?.focus();
         }}
-      >
-        Skip to content
-      </a>
+      >{t("Skip to content")}</a>
       <div className="edition-note">
-        <span>English interface</span>
-        <span>Fresh work. Clear sources.</span>
+        <span>{t("Interface: {language}", { language: localeName[locale] })}</span>
+        <span>{t("Fresh work. Clear sources.")}</span>
       </div>
       <div className="paper">
         <header className="topbar">
-          <nav aria-label="Main navigation">
+          <nav aria-label={t("Main navigation")}>
             <a
               ref={topLink}
-              href="#jobs"
+              href={pageHref("jobs", locale)}
               aria-current={route.page === "jobs" ? "page" : undefined}
-            >
-              Positions
-            </a>
+            >{t("Positions")}</a>
             <a
-              href="#companies"
+              href={pageHref("companies", locale)}
               aria-current={route.page === "companies" ? "page" : undefined}
-            >
-              Companies
-            </a>
+            >{t("Companies")}</a>
           </nav>
           <span id="edition-date">
-            {new Date().toLocaleDateString("en", {
+            {new Date(editionDate).toLocaleDateString(locale, {
               weekday: "short",
               day: "numeric",
               month: "long",
+              timeZone: "UTC",
             })}
           </span>
           {session?.user ? null : (
@@ -184,14 +215,12 @@ export function App() {
               className="header-sign-in"
               id="header-sign-in"
               onClick={() => openSignIn()}
-            >
-              Sign in
-            </button>
+            >{t("Sign in")}</button>
           )}
           <button
             className="account"
             id="account-open"
-            aria-label="Settings"
+            aria-label={t("Settings")}
             aria-haspopup="dialog"
             onClick={() => setDialog("settings")}
           >
@@ -207,29 +236,26 @@ export function App() {
               <circle cx="12" cy="12" r="3" />
               <path d="m9 3-.8 2.5-2.4 1L3.5 6 2 8.6l1.7 1.9v3L2 15.4 3.5 18l2.3-.5 2.4 1L9 21h6l.8-2.5 2.4-1 2.3.5 1.5-2.6-1.7-1.9v-3L22 8.6 20.5 6l-2.3.5-2.4-1L15 3Z" />
             </svg>
-            <span>Settings</span>
+            <span>{t("Settings")}</span>
           </button>
         </header>
         <div className="masthead">
-          <a className="brand" href="#jobs" aria-label="Justup home">
+          <a className="brand" href={pageHref("jobs", locale)} aria-label={t("Justup home")}>
             JUST<span>UP.</span>
           </a>
-          <p className="motto">
-            Fresh work.
-            <br />
-            Clear sources.
-          </p>
+          <p className="motto">{t("Fresh work.")}<br />{t("Clear sources.")}</p>
           <span className="live">
             <i />
             <span id="live-label">
               {connecting
-                ? "CONNECTING"
+                ? t("CONNECTING")
                 : session
-                  ? "LIVE EDITION"
-                  : "SERVICE UNAVAILABLE"}
+                  ? t("LIVE EDITION")
+                  : t("SERVICE UNAVAILABLE")}
             </span>
           </span>
         </div>
+        <HiringWire client={client} connected={!!session} generation={epoch} reducedMotion={reducedMotion} dialogOpen={dialog !== null} onFocusExit={focusMain} />
         <main ref={mainRef} id="main" tabIndex={-1}>
           <div
             id="service-notice"
@@ -237,18 +263,16 @@ export function App() {
             role="status"
             hidden={!notice}
           >
-            <p>{notice}</p>
+            <p>{localizeNotice(notice)}</p>
             {!connecting ? (
               <button
                 id="retry-session"
                 className="button outline"
                 onClick={() => void refreshSession()}
-              >
-                Reconnect
-              </button>
+              >{t("Reconnect")}</button>
             ) : null}
           </div>
-          <SearchWorkspace
+          {interactive || route.page === "jobs" ? <SearchWorkspace
             key={`search-${epoch}-${searchGeneration}`}
             client={client}
             session={session}
@@ -259,21 +283,24 @@ export function App() {
             onCompanyRequest={requestCompany}
             onAccount={() => setDialog("settings")}
             onPersistenceReady={persistenceReady}
-          />
-          <CompaniesPage
+            onVisitorRebootstrap={rebootstrapVisitor}
+          /> : null}
+          {interactive || route.page === "companies" ? <CompaniesPage
             key={`companies-${epoch}`}
             client={client}
-            active={route.page === "companies"}
-            connected={!!session}
-          />
-          {route.page === "company" ? (
+            active={route.page === "companies" && publicPage?.outcome !== "unavailable"}
+            initialCompanies={publicPage?.companies}
+            initialCatalogue={publicPage?.catalogue}
+          /> : null}
+          {route.page === "company" && publicPage?.outcome !== "unavailable" && publicPage?.outcome !== "not-found" ? (
             <CompanyPage
               key={`${epoch}:${route.id}`}
               client={client}
               id={route.id}
+              initialCompany={initialPublicPage?.company?.id === route.id ? initialPublicPage.company : undefined}
             />
           ) : null}
-          <CompanyRequestPage
+          {interactive ? <CompanyRequestPage
             key={`request-${epoch}`}
             client={client}
             session={session}
@@ -282,30 +309,30 @@ export function App() {
             accountEpoch={epoch}
             prefill={companyPrefill}
             onPrefillConsumed={consumePrefill}
-          />
-          {route.page === "invalid" ? (
+          /> : null}
+          {publicPage?.outcome === "unavailable" ? <section className="page"><h1>{t('Coverage temporarily unavailable')}</h1><p>{t('The company directory could not be verified. Please try again shortly.')}</p><a className="button outline" href={pageHref(route.page === "company" ? "company" : "companies", locale, route.page === "company" ? route.id : undefined)}>{t('Try again')}</a><a href={pageHref("jobs", locale)}>{t("← Back to search")}</a></section> : null}
+          {route.page === "invalid" || publicPage?.outcome === "not-found" ? (
             <section>
-              <h1>Page not found.</h1>
-              <a className="button dark" href="#jobs">
-                Back to search ↗
-              </a>
+              <h1>{t("Page not found.")}</h1>
+              <a className="button dark" href={pageHref("jobs", locale)}>{t("Back to search ↗")}</a>
             </section>
           ) : null}
         </main>
         <footer className="policy-footer">
           <p id="coverage-disclosure">
-            {coverageDescription(coverage)}
+            {coverageDescription(coverage, locale)}
           </p>
-          <nav aria-label="Legal">
-            <a href="/privacy.html">Privacy</a>
-            <a href="/usage.html">Usage</a>
+          <nav aria-label={t("Legal")}>
+            <a href={policyDocument(locale, "privacy")}>{t("Privacy")}</a>
+            <a href={policyDocument(locale, "usage")}>{t("Usage")}</a>
           </nav>
         </footer>
       </div>
-      <AccountControls
+      {interactive ? <AccountControls
         key={`account-${epoch}`}
         client={client}
         session={session}
+        interfaceLanguage={interfaceLanguage}
         dialog={dialog}
         onDialogChange={setDialog}
         onSessionRefresh={refreshSession}
@@ -314,12 +341,12 @@ export function App() {
         onReducedMotionChange={setReducedMotion}
         signInReason={signInReason}
         onBeforeAuthenticate={beforeAuthenticate}
-      />
+      /> : null}
       <button
         className="back-to-top"
         id="back-to-top"
-        aria-label="Back to top"
-        title="Back to top"
+        aria-label={t("Back to top")}
+        title={t("Back to top")}
         hidden={!backToTop}
         onClick={() => {
           window.scrollTo({

@@ -25,11 +25,11 @@ export const queryText = (state: Workspace): string =>
   state.drafts[draftKey(state.selectedId)] ??
   selectedSearch(state)?.query ??
   "";
-export function savedWorkspace(state: Workspace): SavedWorkspaceState {
+export function savedWorkspace(state: Workspace, omitEmptyNew = false): SavedWorkspaceState {
   const ids = new Set(state.searches.map(search => search.id));
   return {
     activeSearchId: state.selectedId && ids.has(state.selectedId) ? state.selectedId : null,
-    drafts: Object.fromEntries(Object.entries(state.drafts).filter(([id]) => id === "new" || ids.has(id)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)),
+    drafts: Object.fromEntries(Object.entries(state.drafts).filter(([id, text]) => id === "new" ? !omitEmptyNew || text.length > 0 : ids.has(id)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)),
   };
 }
 // Only this browser's changes replace a newer stored copy after explicit review.
@@ -165,6 +165,7 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       if (currentDraft === undefined || currentDraft === action.submitted) {
         delete drafts[previousKey];
         delete drafts[action.search.id];
+        if (currentDraft !== undefined && currentDraft !== action.search.query) drafts[action.search.id] = currentDraft;
       } else if (action.previousId === null) {
         drafts[action.search.id] = currentDraft;
         delete drafts.new;

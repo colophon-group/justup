@@ -16,6 +16,7 @@ const session = () =>
       reason: "policy_unavailable",
     },
     policies: {
+      locale: "en", reviewedLocale: null, fallback: false,
       reviewed: false,
       version: null,
       privacyUrl: null,
@@ -193,4 +194,32 @@ test("cancellation wins even if an injected transport finishes a valid unauthori
     (error) => error instanceof Error && error.name === "AbortError",
   );
   assert.equal(expired, 0);
+});
+
+test('only an exact explicit route locale supplies the request header and clearing removes it', async () => {
+  const calls: {path: string; headers: Headers; body: BodyInit | null | undefined}[] = [];
+  const client = new ApiClient({fetch: async (path, init) => {
+    calls.push({path:String(path),headers:new Headers(init?.headers),body:init?.body});
+    return json({});
+  }});
+  client.setSession(session());
+  await client.request('/preferences', value => value);
+  assert.equal(calls.at(-1)?.headers.has('X-Justup-Locale'), false);
+  for (const locale of ['en','de','fr','it','es'] as const) {
+    client.setExplicitRequestLocale(locale);
+    await client.request('/session', value => value);
+    assert.equal(calls.at(-1)?.headers.get('X-Justup-Locale'), locale);
+  }
+  client.setExplicitRequestLocale('it');
+  const query = 'My exact query: accueil, 30h, no weekends';
+  await client.request('/searches', value => value, {method:'POST',body:{query}});
+  assert.equal(calls.at(-1)?.headers.get('X-Justup-Locale'), 'it');
+  assert.deepEqual(JSON.parse(String(calls.at(-1)?.body)), {query});
+  for (const invalid of ['esp','it-IT','IT','en,de','it\r\nX-Other: value','',undefined]) {
+    assert.throws(() => client.setExplicitRequestLocale(invalid as never), /Invalid explicit interface locale/);
+  }
+  client.setExplicitRequestLocale(null);
+  await client.request('/session', value => value);
+  assert.equal(calls.at(-1)?.headers.has('X-Justup-Locale'), false);
+  assert.equal(calls.some(call => call.path.includes('locale=')), false);
 });

@@ -1,3 +1,4 @@
+import type { InterfaceLocale } from "../i18n/locales.ts";
 // Public API models. Decode network data before placing it into application state.
 export interface User {
   id: string;
@@ -9,6 +10,15 @@ export interface Coverage {
   description?: string;
   verifiedAt?: string | null;
   stale?: boolean;
+}
+export interface SessionPolicies {
+  reviewed: boolean;
+  version: string | null;
+  privacyUrl: string | null;
+  usageUrl: string | null;
+  locale: InterfaceLocale;
+  reviewedLocale: InterfaceLocale | null;
+  fallback: boolean;
 }
 export interface Session {
   user: User | null;
@@ -28,12 +38,7 @@ export interface Session {
     requiresInvitation: boolean;
     reason: string | null;
   };
-  policies: {
-    reviewed: boolean;
-    version: string | null;
-    privacyUrl: string | null;
-    usageUrl: string | null;
-  };
+  policies: SessionPolicies;
   coverage?: Coverage;
 }
 export type SearchScope = "account" | "visitor";
@@ -100,12 +105,16 @@ export interface Company {
   websiteUrl?: string;
   domain?: string;
   evidenceUrls?: string[];
-  sources?: { url: string; label?: string; lastSuccessfulCheckAt?: string }[];
   lastSuccessfulCheckAt?: string;
   monitoringSince?: string;
   hiringHistory?: { date: string; count: number }[];
   hiringRoles?: { name: string; count?: number }[];
   reportedSalaries?: { role?: string; text: string }[];
+}
+export interface CompanyCataloguePage {
+  items: Company[];
+  nextCursor: string | null;
+  coverage?: Coverage;
 }
 export interface Job {
   id: string;
@@ -173,3 +182,28 @@ export interface RequestSubmission {
   request: CompanyRequest;
   task?: Task;
 }
+
+export interface HiringWireItem {
+  company: { id: string; name: string; url: string };
+  headline: string;
+  activity: {
+    current: number;
+    previous: number;
+    change: number;
+    percentageChange: number | null;
+  };
+  scope: "Comparable career pages";
+}
+export interface HiringWireEdition {
+  id: string;
+  title: "Hiring Wire";
+  period: { start: string; end: string; previousStart: string };
+  snapshotAt: string;
+  publishedAt: string;
+  expiresAt: string;
+  methodology: string;
+  items: HiringWireItem[];
+}
+export type HiringWire =
+  | { state: "unavailable"; edition: null }
+  | { state: "published"; edition: HiringWireEdition };

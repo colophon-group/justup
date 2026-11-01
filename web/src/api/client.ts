@@ -1,8 +1,10 @@
+import { parseInterfaceLocale, type InterfaceLocale } from "../i18n/locales.ts";
 // Same-origin transport owns credentials, timeouts and response validation, not UI state.
 import {
   decodeCompany,
-  decodeCompanyList,
+  decodeCompanyCataloguePage,
   decodeCompanyRequest,
+  decodeHiringWire,
   decodeRequestList,
   decodeRequestSubmission,
   decodeResults,
@@ -51,6 +53,7 @@ interface Options {
   signal?: AbortSignal | undefined;
   key?: string | undefined;
   keepalive?: boolean;
+  expectedVisitorReclamation?: boolean;
 }
 interface ClientOptions {
   fetch?: typeof fetch;
@@ -64,6 +67,7 @@ const ignored = (value: unknown): void => {
 const id = encodeURIComponent;
 const searchPath = (scope: SearchScope) => scope === "visitor" ? "/visitor/searches" : "/searches";
 export class ApiClient {
+  private explicitRequestLocale: InterfaceLocale | null = null;
   private csrfToken: string | null = null;
   private sessionVersion = 0;
   private readonly fetcher: typeof fetch;
@@ -75,6 +79,11 @@ export class ApiClient {
     this.onSessionExpired = options.onSessionExpired;
     this.onVisitorExpired = options.onVisitorExpired;
     this.timeoutMs = options.timeoutMs ?? 20_000;
+  }
+  // Request-only route presentation; never persists a preference or changes a query.
+  setExplicitRequestLocale(locale: InterfaceLocale | null): void {
+    if (locale !== null && parseInterfaceLocale(locale) === null) throw new TypeError('Invalid explicit interface locale.');
+    this.explicitRequestLocale = locale;
   }
   setSession(session: Session | null): void {
     this.sessionVersion++;
@@ -98,6 +107,7 @@ export class ApiClient {
       );
     const body = mutation && options.body === undefined ? {} : options.body;
     const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.explicitRequestLocale !== null) headers["X-Justup-Locale"] = this.explicitRequestLocale;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (mutation && this.csrfToken) headers["X-CSRF-Token"] = this.csrfToken;
     if (options.key) headers["Idempotency-Key"] = options.key;
@@ -193,6 +203,7 @@ export class ApiClient {
         if (
           response.status === 401 &&
           sessionVersion === this.sessionVersion &&
+          !(options.expectedVisitorReclamation && path === "/visitor/workspace" && method === "PATCH") &&
           ["unauthenticated", "session_expired"].includes(code)
         ) {
           this.setSession(null);
@@ -210,12 +221,15 @@ export class ApiClient {
   getSession(signal?: AbortSignal) {
     return this.request("/session", decodeSession, { signal });
   }
+  getHiringWire(signal?: AbortSignal) {
+    return this.request("/hiring-wire", decodeHiringWire, { signal });
+  }
   getWorkspace(scope: SearchScope, signal?: AbortSignal) {
     return this.request(`${scope === "visitor" ? "/visitor" : ""}/workspace`, decodeWorkspace, { signal });
   }
-  saveWorkspace(scope: SearchScope, state: SavedWorkspaceState, expectedRevision: number, signal?: AbortSignal) {
+  saveWorkspace(scope: SearchScope, state: SavedWorkspaceState, expectedRevision: number, signal?: AbortSignal, expectedVisitorReclamation = false) {
     return this.request(`${scope === "visitor" ? "/visitor" : ""}/workspace`, decodeWorkspace, {
-      method: "PATCH", body: { expectedRevision, ...state }, signal, keepalive: true,
+      method: "PATCH", body: { expectedRevision, ...state }, signal, keepalive: true, expectedVisitorReclamation: scope === "visitor" && expectedVisitorReclamation,
     });
   }
   recoverDraft(scope: SearchScope, draftId: string, action: "use" | "discard", expectedRevision: number, signal?: AbortSignal) {
@@ -288,12 +302,10 @@ export class ApiClient {
       { signal },
     );
   }
-  getCompanies(query: string, signal?: AbortSignal) {
-    return this.request(
-      "/companies?" + new URLSearchParams({ q: query }),
-      decodeCompanyList,
-      { signal },
-    );
+  getCompanyCataloguePage(query: string, cursor?: string | null, signal?: AbortSignal) {
+    const params = new URLSearchParams({ q: query, limit: '20' });
+    if (cursor) params.set('cursor', cursor);
+    return this.request('/companies?' + params, decodeCompanyCataloguePage, { signal });
   }
   getCompany(companyId: string, signal?: AbortSignal) {
     return this.request(

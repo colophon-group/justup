@@ -11,7 +11,7 @@ const session = () => decodeSession({
   user: null, visitor: { expiresAt: "2026-11-02T12:00:00.000Z" }, csrfToken: "test-only-csrf",
   access: { kind: "guest", fullAccess: false, billingEnabled: false }, capabilities: { search: true, visitorSearch: true },
   authentication: { method: "username_password", loginEnabled: true, registrationEnabled: true, reason: null },
-  policies: { reviewed: true, version: "test-only", privacyUrl: "/privacy.html", usageUrl: "/usage.html" },
+  policies: { locale: "en", reviewedLocale: "en", fallback: false, reviewed: true, version: "test-only", privacyUrl: "/privacy.html", usageUrl: "/usage.html" },
 });
 
 test("visitor searches, task polling and source visits use only their explicit cookie-bound routes", async () => {
@@ -89,4 +89,18 @@ test("workspace snapshots keep durable recovery records separate from editable d
     { ...snapshot, state: { activeSearchId: null, drafts: { new: "x".repeat(4001) } } },
     { ...snapshot, viewed: [{ jobId: "j", firstViewedAt: "not-a-date" }] },
   ]) assert.throws(() => decodeWorkspace(invalid), /invalid/);
+});
+test("only an expected visitor workspace clear can inspect a stale hint without clearing newer field text", async () => {
+  let visitorExpired = 0, accountExpired = 0;
+  const client = new ApiClient({ onVisitorExpired: () => visitorExpired++, onSessionExpired: () => accountExpired++,
+    fetch: async () => new Response(JSON.stringify({ error: { code: "unauthenticated", message: "Expired." } }), { status: 401 }),
+  });
+  client.setSession(session());
+  await assert.rejects(client.saveWorkspace("visitor", { activeSearchId: null, drafts: { new: "" } }, 1, undefined, true));
+  assert.equal(visitorExpired, 0);
+  await assert.rejects(client.getWorkspace("visitor"));
+  assert.equal(visitorExpired, 1);
+  client.setSession({ ...session(), user: { id: "reader", username: "tester" }, visitor: null });
+  await assert.rejects(client.request("/workspace", value => value, { method: "PATCH", body: {}, expectedVisitorReclamation: true }));
+  assert.equal(accountExpired, 1);
 });

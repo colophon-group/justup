@@ -3,7 +3,7 @@ export const search = (revision = 1, query = 'Remote library jobs') => ({ id: 's
 export const company = { id: 'library', name: 'Test Library', description: 'A test-only public library.', coverage: { state: 'imported_snapshot' }, sources: [{ url: 'https://employer.test/careers' }] };
 export const job = index => ({ id: `job-${index}`, title: `Librarian ${index}`, company, sourceUrl: `https://employer.test/careers/${index}`, firstObserved: '2026-10-31T08:00:00Z', locations: [{ name: 'London', workplace: 'remote' }], employmentTypes: ['full_time'], postingLanguages: ['en'], salary: null });
 export const session = (overrides = {}) => {
-  const result = { user: { id: 'reader', username: 'tester' }, visitor: null, csrfToken: 'test-only-csrf', access: { kind: 'account', fullAccess: true, billingEnabled: false, legacy: false, until: null }, capabilities: { search: true, companyRequests: true, follows: false, viewed: false, preferences: false, sse: false, hiddenMatchCounts: false }, authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true, reason: null }, policies: { reviewed: true, version: 'test-v1', privacyUrl: '/privacy.html', usageUrl: '/usage.html' }, coverage: { kind: 'imported_snapshot', verifiedAt: '2026-10-31T08:00:00Z', stale: false }, ...overrides };
+  const result = { user: { id: 'reader', username: 'tester' }, visitor: null, csrfToken: 'test-only-csrf', access: { kind: 'account', fullAccess: true, billingEnabled: false, legacy: false, until: null }, capabilities: { search: true, companyRequests: true, follows: false, viewed: false, preferences: false, sse: false, hiddenMatchCounts: false }, authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true, reason: null }, policies: { locale:'en', reviewedLocale:'en', fallback:false, reviewed: true, version: 'test-v1', privacyUrl: '/privacy.html', usageUrl: '/usage.html' }, coverage: { kind: 'imported_snapshot', verifiedAt: '2026-10-31T08:00:00Z', stale: false }, ...overrides };
   if (result.user === null && result.policies.reviewed) {
     if (!Object.hasOwn(overrides, 'visitor')) result.visitor = { expiresAt: '2026-11-02T12:00:00.000Z' };
     result.capabilities = { ...result.capabilities, visitorSearch: overrides.capabilities?.visitorSearch ?? result.visitor !== null };
@@ -46,6 +46,7 @@ export async function mockApi(page, handlers = {}) {
       else if (key === 'GET /companies/library') result = company;
       else result = { status: 503, body: { error: { code: 'unavailable', message: 'Endpoint unavailable in this test.' } } };
     }
+    if (key === 'GET /companies' && Array.isArray((result.body || result).items)) { const body = result.body || result; if (!Object.hasOwn(body, 'nextCursor')) { if (result.body) result = { ...result, body: { ...body, nextCursor: null } }; else result = { ...result, nextCursor: null }; } }
     if (key === 'GET /session' && !result.abort && (result.httpStatus || (typeof result.status === 'number' ? result.status : 200)) < 400) {
       const next = (result.body || result).user?.id || 'visitor';
       if (owner === 'visitor' && next !== 'visitor') {

@@ -1,7 +1,9 @@
+import { pageHref } from '../../app/useRoute.ts';
+import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 import { useEffect, useRef } from "react";
 import type { Job } from "../../api/types.ts";
 import { CompanyMark } from "../../shared/CompanyMark.tsx";
-import { ageText, salaryText } from "./format.ts";
+import { ageText, salaryText, metadataText } from "./format.ts";
 export function JobRow({
   job,
   animated,
@@ -15,6 +17,7 @@ export function JobRow({
   viewed: boolean;
   onViewed?: ((jobId: string) => void) | undefined;
 }) {
+  const { t, locale } = useInterfaceLocale();
   const row = useRef<HTMLElement>(null),
     animate = useRef(animated && !reducedMotion);
   useEffect(() => {
@@ -29,11 +32,11 @@ export function JobRow({
     return () => motion?.cancel();
   }, []);
   const posting = useRef<HTMLAnchorElement>(null),
-    pay = salaryText(job.salary);
+    pay = salaryText(job.salary, locale);
   const locations = job.locations.map((location) => location.name).join(", "),
     workplace = [
       ...new Set(
-        job.locations.map((location) => location.workplace).filter(Boolean),
+        job.locations.map((location) => location.workplace ? metadataText(location.workplace, locale) : null).filter(Boolean),
       ),
     ].join(", ");
   return (
@@ -52,15 +55,15 @@ export function JobRow({
         }}
       >
         <div className="job-age">
-          {job.isNew ? <span className="new-badge" aria-hidden={viewed} style={{ visibility: viewed ? "hidden" : "visible" }}>New</span> : null}
+          {job.isNew ? <span className="new-badge" aria-hidden={viewed} style={{ visibility: viewed ? "hidden" : "visible" }}>{t("New")}</span> : null}
           <time
             dateTime={job.firstObserved}
-            title={`First observed ${new Date(job.firstObserved).toLocaleDateString("en")}`}
+            title={t("First observed {date}", { date: new Date(job.firstObserved).toLocaleDateString(locale) })}
           >
-            {ageText(job.firstObserved)}
+            {ageText(job.firstObserved, locale)}
           </time>
           <svg viewBox="0 0 20 14" width="14" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"
-            role={viewed ? "img" : undefined} aria-label={viewed ? "Viewed" : undefined} aria-hidden={!viewed}
+            role={viewed ? "img" : undefined} aria-label={viewed ? t("Viewed") : undefined} aria-hidden={!viewed}
             style={{ marginLeft: 6, verticalAlign: "middle", visibility: viewed ? "visible" : "hidden" }}>
             <path d="M1 7c3-7 15-7 18 0-3 7-15 7-18 0Z" /><circle cx="10" cy="7" r="2.5" />
           </svg>
@@ -90,7 +93,7 @@ export function JobRow({
             {job.employmentTypes.length ? (
               <span>
                 {job.employmentTypes
-                  .map((value) => value.replaceAll("_", " "))
+                  .map((value) => metadataText(value, locale))
                   .join(", ")}
               </span>
             ) : null}
@@ -105,12 +108,12 @@ export function JobRow({
         <div className="job-employer">
           <a
             className="job-company"
-            href={`#company/${encodeURIComponent(job.company.id)}`}
+            href={pageHref("company", locale, job.company.id)}
           >
             <CompanyMark company={job.company} />
             <span>{job.company.name}</span>
           </a>
-          <p className="job-source">Direct from employer</p>
+          <p className="job-source">{t("Direct from employer")}</p>
         </div>
         <span className="open-posting" aria-hidden="true">
           ↗

@@ -16,6 +16,7 @@ test-results/
 
 # Production application build output
 web/dist/
+web/worker-dist/
 *.tsbuildinfo
 
 # Isolated demo storage and private public-source exports

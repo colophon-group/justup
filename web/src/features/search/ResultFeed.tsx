@@ -1,3 +1,5 @@
+import { translateCount } from "../../i18n/messages.ts";
+import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 import { useRef } from "react";
 import type { ApiClient } from "../../api/client.ts";
 import type { Search, Session } from "../../api/types.ts";
@@ -28,6 +30,7 @@ export function ResultFeed({
   viewed,
   onViewed,
 }: Props) {
+  const { t, locale, notice } = useInterfaceLocale();
   const { feed, next, retry, refresh } = useFeed(client, search, active && !paused, session?.user ? "account" : "visitor"),
     tailRef = useRef<HTMLDivElement>(null);
   const canContinue =
@@ -51,10 +54,8 @@ export function ResultFeed({
   if (feed.error)
     status = (
       <>
-        {feed.error}{" "}
-        <button className="text-link" id="retry-results" onClick={retry}>
-          Retry
-        </button>
+        {notice(feed.error)}{" "}
+        <button className="text-link" id="retry-results" onClick={retry}>{t("Retry")}</button>
       </>
     );
   else if (feed.loading || buffered || feed.continuation.state === "pending")
@@ -64,9 +65,7 @@ export function ResultFeed({
           <i />
           <i />
           <i />
-        </span>
-        Still checking for matching positions…
-      </span>
+        </span>{t("Still checking for matching positions…")}</span>
     );
   else if (
     feed.continuation.state === "paused" ||
@@ -75,62 +74,56 @@ export function ResultFeed({
     status = (
       <>
         {feed.coverage?.stale || feed.coverage?.state === "import_unavailable"
-          ? feed.coverage.description || "Imported listings need verification."
+          ? (feed.coverage.description ? notice(feed.coverage.description) : "") || t("Imported listings need verification.")
           : feed.continuation.state === "failed"
-            ? "Requirement checks failed. These positions are not included."
-            : "Search paused. There may be more matches."}{" "}
-        <button className="text-link" id="resume-results" onClick={retry}>
-          Check again
-        </button>
+            ? t("Requirement checks failed. These positions are not included.")
+            : t("Search paused. There may be more matches.")}{" "}
+        <button className="text-link" id="resume-results" onClick={retry}>{t("Check again")}</button>
       </>
     );
   else if (feed.continuation.state === "exhausted")
     status = feed.jobs.length
-      ? "You’re through the available matches."
-      : "No matching positions found in the completed search.";
+      ? t("You’re through the available matches.")
+      : t("No matching positions found in the completed search.");
   else
     status = (
       <>
-        More results are not available yet.{" "}
-        <button className="text-link" id="resume-results" onClick={retry}>
-          Check again
-        </button>
+        {t("More results are not available yet.")}{" "}
+        <button className="text-link" id="resume-results" onClick={retry}>{t("Check again")}</button>
       </>
     );
   return (
     <>
       <p id="live-status" className="small-print" role="status">
-        Check the latest results without changing your search.{" "}
-        <button className="text-link" id="refresh-results" disabled={feed.loading || paused} onClick={refresh}>
-          Check for new positions
-        </button>
+        {t("Check the latest results without changing your search.")}{" "}
+        <button className="text-link" id="refresh-results" disabled={feed.loading || paused} onClick={refresh}>{t("Check for new positions")}</button>
       </p>
       <div id="search-results">
         <div className="section-heading feed-heading">
-          <h1>Just in.</h1>
-          <span className="eyebrow">Last 14 days</span>
-          <span className="feed-order">Newest first</span>
+          <h1>{t("Just in.")}</h1>
+          <span className="eyebrow">{t("Last 14 days")}</span>
+          <span className="feed-order">{t("Newest first")}</span>
         </div>
         {feed.hiddenMatches.count !== null && feed.hiddenMatches.count > 0 ? (
           <section id="hidden-matches" className="hidden-matches" aria-labelledby="hidden-matches-title">
             <div className="compressed-matches" aria-hidden="true"><i /><i /><i /></div>
             <div className="hidden-matches-prompt">
               <div>
-                <span className="eyebrow">More in this edition</span>
-                <h2 id="hidden-matches-title">{feed.hiddenMatches.status === "exact" ? '' : 'At least '}{feed.hiddenMatches.count.toLocaleString('en')} recent {feed.hiddenMatches.count === 1 ? 'match' : 'matches'} hidden</h2>
-                <p>{session?.user ? 'Your current account access does not include these matches.' : 'Sign in to see the newest matches.'}</p>
+                <span className="eyebrow">{t("More in this edition")}</span>
+                <h2 id="hidden-matches-title">{t(feed.hiddenMatches.status === "exact" ? feed.hiddenMatches.count === 1 ? "{count} recent match hidden" : "{count} recent matches hidden" : feed.hiddenMatches.count === 1 ? "At least {count} recent match hidden" : "At least {count} recent matches hidden", { count: feed.hiddenMatches.count.toLocaleString(locale) })}</h2>
+                <p>{session?.user ? t("Your current account access does not include these matches.") : t("Sign in to see the newest matches.")}</p>
               </div>
               <button className="button dark" onClick={() => session?.user ? onAccount() : onSignIn('Sign in to see the newest matches.')}>
-                {session?.user ? 'Account access ↗' : 'Sign in ↗'}
+                {session?.user ? t("Account access ↗") : t("Sign in ↗")}
               </button>
             </div>
           </section>
         ) : null}
         <div className="column-labels" aria-hidden="true">
-          <span>First seen</span>
-          <span>Position</span>
-          <span>Employer / source</span>
-          <span>Open</span>
+          <span>{t("First seen")}</span>
+          <span>{t("Position")}</span>
+          <span>{t("Employer / source")}</span>
+          <span>{t("Open")}</span>
         </div>
         <div id="feed">
           {visible.map((job, index) => (
@@ -149,19 +142,17 @@ export function ResultFeed({
             {status}
             {feed.ai.pending ? (
               <span className="end-note">
-                {feed.ai.pending} positions still awaiting requirement checks.
+                {translateCount(locale, feed.ai.pending, {one: "{count} position still awaiting requirement checks.", other: "{count} positions still awaiting requirement checks."})}
               </span>
             ) : null}
             {feed.ai.failed ? (
               <span className="end-note">
-                {feed.ai.failed} checks failed. These positions are not
-                included.
+                {translateCount(locale, feed.ai.failed, {one: "{count} check failed. This position is not included.", other: "{count} checks failed. These positions are not included."})}
               </span>
             ) : null}
             {feed.ai.insufficientEvidence ? (
               <span className="end-note">
-                {feed.ai.insufficientEvidence} positions lack enough evidence to
-                confirm a match.
+                {translateCount(locale, feed.ai.insufficientEvidence, {one: "{count} position lacks enough evidence to confirm a match.", other: "{count} positions lack enough evidence to confirm a match."})}
               </span>
             ) : null}
           </div>
