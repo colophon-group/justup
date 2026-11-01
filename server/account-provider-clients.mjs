@@ -27,7 +27,9 @@ async function requestJson(fetchImpl,url,options,{signal}={}) {
   const timer=setTimeout(abort,TIMEOUT_MS);timer.unref?.();
   signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
   try {
+    if(controller.signal.aborted)throw failure();
     const response=await fetchImpl(url,{...options,redirect:'error',signal:controller.signal});
+    if(controller.signal.aborted)throw failure();
     if(!response?.ok||!response.body)throw failure(response?.status===429?'provider_rate_limit':'provider_unavailable');
     const length=response.headers.get('content-length');
     if(length!==null&&(!/^\d+$/.test(length)||Number(length)>MAX_RESPONSE))throw failure();

@@ -155,6 +155,9 @@ test('checkout expiry and a lapsed provider idempotency window never erase an un
   f.advance(23*3_600_000);f.state.unavailable=false;
   await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});const before=f.state.customerKeys.length;
   assert.equal((await f.work()).result.status,'failed');assert.equal(f.state.customerKeys.length,before);assert.ok(f.app.auth.session(f.owner.token));
+  const termination=f.api.handleBilling(f.ctx(undefined,'/account/billing','GET')).body.billing.termination;
+  assert.equal(termination.error.code,'billing_operator_reconciliation_required');assert.equal(termination.error.retryable,false);
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_unavailable'});
 });
 
 test('an aborted checkout cannot commit a hosted URL even when a fake provider ignores cancellation',async t=>{

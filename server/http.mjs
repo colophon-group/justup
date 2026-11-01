@@ -29,6 +29,7 @@ const SAFE_ERRORS = new Map([
   ['billing_account_lifetime','Test billing needs a durable account.'],
   ['billing_termination_pending','Billing termination is in progress. Retry account deletion after it finishes.'],
   ['billing_termination_unavailable','Billing could not be stopped yet. Your account has not been deleted.'],
+  ['billing_operator_reconciliation_required','Billing needs an operator check before deletion. Your account has not been deleted.'],
   ['billing_evidence_invalid','Payment status needs verification.'],
   ['billing_configuration_mismatch','Test billing configuration needs attention.'],
   ['invalid_provider_signature','Invalid provider notification.'],

@@ -98,8 +98,8 @@ export function createStripeBillingApi({db,tasks,config={},now=Date.now,getAuth,
     const allowed=operation.kind==='terminate'||enabled()&&admission.processingPolicy(operation.locale)?.key===operation.policy_key&&operation.configuration_hash===configurationHash(settings);
     const ready=operation.status==='ready'&&allowed&&(!closing||operation.kind==='terminate')&&(operation.expires_at==null||operation.expires_at>now());
     return {id:operation.id,kind:operation.kind,status:ready?'ready':['pending','running','ambiguous'].includes(operation.status)?'pending':'failed',
-      url:ready&&operation.url?operation.url:null,expiresAt:iso(operation.expires_at),retryAfterMs:ready?null:5000,
-      error:operation.error_code||!allowed?{code:operation.error_code??'processing_unavailable',retryable:true}:null};
+      url:ready&&operation.url?operation.url:null,expiresAt:iso(operation.expires_at),retryAfterMs:ready||operation.error_code==='billing_operator_reconciliation_required'?null:5000,
+      error:operation.error_code||!allowed?{code:operation.error_code??'processing_unavailable',retryable:operation.error_code!=='billing_operator_reconciliation_required'}:null};
   }
   function cleanup() {
     const expired=db.prepare('SELECT id FROM justup_billing_operations WHERE url IS NOT NULL AND expires_at<=?').all(now());
@@ -142,7 +142,8 @@ export function createStripeBillingApi({db,tasks,config={},now=Date.now,getAuth,
         db.prepare('UPDATE justup_billing_operations SET url=NULL WHERE account_id=?').run(accountId);}
       binding=accountRow(db,accountId);
       let operation=db.prepare("SELECT * FROM justup_billing_operations WHERE account_id=? AND kind='terminate' ORDER BY created_at DESC LIMIT 1").get(accountId);
-      if(operation){if(operation.updated_at+5000<=now()&&!['pending','running'].includes(operation.status)){beforePrivateDelete();enqueue(db,tasks,operation,now);}return;}
+      if(operation){if(operation.error_code==='billing_operator_reconciliation_required')fail('billing_termination_unavailable',503);
+        if(operation.updated_at+5000<=now()&&!['pending','running'].includes(operation.status)){beforePrivateDelete();enqueue(db,tasks,operation,now);}return;}
       insertOperation(db,tasks,{owner:accountId,kind:'terminate',key:`termination:${binding.closing_revision}`,inputHash:hash(`termination:${binding.closing_revision}`),
         locale:binding.locale,policyKey:binding.policy_key,configHash:configurationHash(settings)},now);
     });
@@ -305,7 +306,7 @@ export function createStripeBillingRunner({db,tasks,config={},now=Date.now,clien
     if(!binding.customer_id){
       const unknown=unfinished.find(value=>value.resource_kind==='customer'&&['running','ambiguous'].includes(value.status));
       if(unknown){
-        if(unknown.created_at+23*3_600_000<=now())fail('billing_termination_unavailable');
+        if(unknown.created_at+23*3_600_000<=now())fail('billing_operator_reconciliation_required');
         const customer=await client.createCustomer(binding.billing_reference,providerOptions(unknown,signal,'customer'));
         save(task,()=>{db.prepare('UPDATE justup_billing_accounts SET customer_id=? WHERE account_id=? AND customer_id IS NULL').run(customer.id,task.ownerId);
           db.prepare("UPDATE justup_billing_operations SET resource_id=?,status='failed',error_code='billing_termination_pending',updated_at=? WHERE id=?").run(customer.id,now(),unknown.id);});
@@ -341,8 +342,8 @@ export function createStripeBillingRunner({db,tasks,config={},now=Date.now,clien
     }catch(error){
       const operation=operationRow(db,task.ownerId,task.payload?.operationId);
       if(operation&&taskActive(tasks,task,now))db.prepare("UPDATE justup_billing_operations SET status=?,error_code=?,updated_at=? WHERE id=?")
-        .run(operation.status==='running'?'ambiguous':'failed',['billing_termination_pending','billing_evidence_invalid','billing_configuration_mismatch','processing_unavailable'].includes(error.code)?error.code:'billing_unavailable',now(),operation.id);
-      return {status:'failed',errorCode:['billing_termination_pending','billing_evidence_invalid','billing_configuration_mismatch','processing_unavailable','task_interrupted'].includes(error.code)?error.code:'billing_unavailable'};
+        .run(operation.status==='running'?'ambiguous':'failed',['billing_termination_pending','billing_operator_reconciliation_required','billing_evidence_invalid','billing_configuration_mismatch','processing_unavailable'].includes(error.code)?error.code:'billing_unavailable',now(),operation.id);
+      return {status:'failed',errorCode:['billing_termination_pending','billing_operator_reconciliation_required','billing_evidence_invalid','billing_configuration_mismatch','processing_unavailable','task_interrupted'].includes(error.code)?error.code:'billing_unavailable'};
     }finally{signals.delete(task);}
   }
   return {available:()=>enabled,runTask,kinds:KINDS};
