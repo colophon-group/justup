@@ -5,7 +5,7 @@ import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 // Account dialogs use only authoritative session state and explicit server mutations.
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { type ApiClient, ApiError, errorText, isAbortError } from '../../api/client';
-import type { Session } from '../../api/types';
+import type { RegistrationAcceptance, Session } from '../../api/types';
 import { Dialog, useDialogSuspended } from '../../shared/Dialog';
 
 export type AccountDialog = 'settings' | 'sign-in' | 'delete-account' | null;
@@ -44,6 +44,8 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
   const loginEnabled = reviewed && session?.authentication.method === 'username_password' && session.authentication.loginEnabled;
   const registrationEnabled = loginEnabled && session?.authentication.registrationEnabled === true;
   const requiresInvitation = session?.authentication.requiresInvitation !== false;
+  const registrationScope = useRef({ session, locale, registrationEnabled });
+  useLayoutEffect(() => { registrationScope.current = { session, locale, registrationEnabled }; }, [session, locale, registrationEnabled]);
 
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current++; controller.current?.abort(); }; }, []);
   useLayoutEffect(() => {
@@ -75,6 +77,11 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy || !loginEnabled) return;
+    const creatingAccount = registration;
+    const acceptance: RegistrationAcceptance | null = creatingAccount && registrationEnabled && session?.policies.version ? {
+      usageVersion: session.policies.version, locale, adultAndCapable: true,
+    } : null;
+    if (creatingAccount && !acceptance) return;
     const action = begin();
     const credentials = { username, password };
     const inviteCode = invitation;
@@ -83,8 +90,18 @@ export function AccountControls({ client, interfaceLanguage, session, dialog, on
     try {
       await onBeforeAuthenticate?.(action.abort.signal);
       if (!action.valid()) return;
+      if (acceptance) {
+        const current = registrationScope.current;
+        const currentLinks = reviewedPolicyLinks(current.session?.policies, current.locale, window.location.origin);
+        // Saving a visitor draft can outlast a policy or locale refresh. The
+        // reader's action affirms only the notice scope visible when submitted.
+        if (!current.registrationEnabled || !currentLinks
+          || current.locale !== acceptance.locale || current.session?.policies.version !== acceptance.usageVersion
+          || currentLinks.privacy !== policyLinks?.privacy || currentLinks.usage !== policyLinks?.usage
+          || currentLinks.fallbackLocale !== policyLinks?.fallbackLocale) return;
+      }
       credentialsSent = true;
-      if (registration && registrationEnabled) await client.register({ ...credentials, ...(requiresInvitation ? { inviteCode } : {}) }, action.abort.signal);
+      if (acceptance) await client.register({ ...credentials, ...(requiresInvitation ? { inviteCode } : {}), acceptance }, action.abort.signal);
       else await client.login(credentials, action.abort.signal);
       if (!action.valid()) return;
       onDialogChange(null);
