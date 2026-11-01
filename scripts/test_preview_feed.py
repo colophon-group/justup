@@ -20,15 +20,17 @@ SHA = 'a' * 64
 
 def source_files(directory, *, complete=False, body=b'{"schemaVersion":1,"rows":[{}]}'):
     directory = Path(directory)
-    part_name = f'batch-{BATCH_ID}-part-0001.json'
-    manifest_name = f'batch-{BATCH_ID}-manifest.json'
-    part = directory / part_name
+    batch = directory / f'batch-{BATCH_ID}'
+    batch.mkdir(mode=0o700)
+    part_name = 'part-0001.json'
+    manifest_name = 'manifest.json'
+    part = batch / part_name
     part.write_bytes(body)
     part.chmod(0o600)
     manifest = {'schemaVersion': 1, 'kind': 'changes', 'complete': complete,
                 'rows': 1, 'parts': [{'file': part_name,
                                       'sha256': hashlib.sha256(body).hexdigest(), 'rows': 1}]}
-    path = directory / manifest_name
+    path = batch / manifest_name
     path.write_text(json.dumps(manifest, separators=(',', ':')))
     path.chmod(0o600)
     return path, part, manifest
@@ -64,12 +66,13 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(result['status'], 'staged')
             self.assertFalse(result['acknowledgeable'])
             staged = inbox / f'batch-{BATCH_ID}'
-            self.assertEqual((staged / manifest.name).read_bytes(), manifest.read_bytes())
+            self.assertEqual((staged / 'manifest.json').read_bytes(), manifest.read_bytes())
             self.assertEqual((staged / part.name).read_bytes(), part.read_bytes())
             self.assertEqual((staged / part.name).stat().st_mode & 0o777, 0o600)
             self.assertFalse((staged / 'stage-receipt.json').exists())
             self.assertEqual(FEED.receive(io.BytesIO(payload), inbox, os.geteuid())['status'], 'already_staged')
-            self.assertEqual(len(list(inbox.iterdir())), 1)
+            self.assertEqual([item.name for item in inbox.iterdir() if item.name.startswith('batch-')],
+                             [f'batch-{BATCH_ID}'])
 
     def test_bad_digest_or_trailing_bytes_never_publishes_batch(self):
         with tempfile.TemporaryDirectory() as root:
@@ -84,7 +87,26 @@ class TransportTests(unittest.TestCase):
             for payload in (valid[:-1] + b'x', valid + b'!', valid[:-3]):
                 with self.subTest(size=len(payload)), self.assertRaises(FEED.FeedStageError):
                     FEED.receive(io.BytesIO(payload), inbox, os.geteuid())
-                self.assertEqual(list(inbox.iterdir()), [])
+                self.assertFalse(any(item.name.startswith('batch-') or item.name.startswith('.receiving-')
+                                     for item in inbox.iterdir()))
+
+    def test_interrupted_private_stage_is_reaped_before_exact_replay(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root).resolve() / 'source'
+            inbox = Path(root).resolve() / 'inbox'
+            source.mkdir(mode=0o700)
+            inbox.mkdir(mode=0o700)
+            orphan = inbox / '.receiving-abcdefgh'
+            orphan.mkdir(mode=0o700)
+            stale = orphan / 'part-0001.json'
+            stale.write_bytes(b'incomplete private body')
+            stale.chmod(0o600)
+            manifest, _, _ = source_files(source)
+            wire = io.BytesIO()
+            FEED.send(manifest, wire)
+            self.assertEqual(FEED.receive(io.BytesIO(wire.getvalue()), inbox, os.geteuid())['status'], 'staged')
+            self.assertFalse(orphan.exists())
+            self.assertTrue((inbox / f'batch-{BATCH_ID}' / 'manifest.json').is_file())
 
     def test_manifest_rejects_paths_duplicate_fields_and_inconsistent_counts(self):
         with tempfile.TemporaryDirectory() as root:
@@ -96,18 +118,30 @@ class TransportTests(unittest.TestCase):
             ]
             for item in bad:
                 with self.subTest(item=item), self.assertRaises(FEED.FeedStageError):
-                    FEED.manifest_metadata(manifest.name, json.dumps(item).encode())
+                    FEED.manifest_metadata(f'batch-{BATCH_ID}/manifest.json', json.dumps(item).encode())
             with self.assertRaises(FEED.FeedStageError):
-                FEED.manifest_metadata(manifest.name, b'{"schemaVersion":1,"schemaVersion":1}')
+                FEED.manifest_metadata(f'batch-{BATCH_ID}/manifest.json', b'{"schemaVersion":1,"schemaVersion":1}')
 
 
 class ImportSequenceTests(unittest.TestCase):
+    def test_wrong_independent_digest_blocks_import_authorization(self):
+        with patch.object(FEED, 'batch_files', return_value=(Path('/safe'), Path('/safe/manifest.json'), {}, SHA)), \
+                patch.object(FEED, 'active_release') as release, \
+                patch.object(FEED, 'run_as_api') as app:
+            with self.assertRaises(FEED.FeedStageError):
+                FEED.authorized_batch(BATCH_ID, 'b' * 64)
+            release.assert_not_called()
+            app.assert_not_called()
+        with self.assertRaises(FEED.FeedStageError):
+            FEED.require_source_digest(SHA, 'not-a-digest')
+        FEED.require_source_digest(SHA, SHA)
+
     def _case(self, complete, *, candidate_exists=False, adapter_failure=False, already_imported=False):
         stack = tempfile.TemporaryDirectory()
         root = Path(stack.name)
         directory = root / f'batch-{BATCH_ID}'
         directory.mkdir()
-        manifest = directory / f'batch-{BATCH_ID}-manifest.json'
+        manifest = directory / 'manifest.json'
         manifest.write_text('{}')
         inbox = root / 'inbox'
         inbox.mkdir()

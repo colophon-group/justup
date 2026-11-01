@@ -7,14 +7,18 @@ the preview slice and owns all parsing, hashing, storage and receipts.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import pwd
 import re
+import resource
 import shutil
+import signal
 import socket
 import sqlite3
 import stat
@@ -28,12 +32,12 @@ INBOX = BASE / 'state/feed-inbox'
 RECEIPTS = BASE / 'config/feed-receipts'
 SOCKET = Path('/run/justup-preview-feed.sock')
 MAGIC = b'JUF1\n'
-MAX_MANIFEST = 64 * 1024
+MAX_MANIFEST = 1024 * 1024
 MAX_PART = 64 * 1024 * 1024
 MAX_BATCH = 128 * 1024 * 1024
 MIN_FREE_AFTER = 64 * 1024 * 1024
-MAX_PARTS = 32
-NAME = re.compile(r'^batch-([0-9a-f]{32})-(manifest|part-[0-9]{4})\.json$')
+MAX_PARTS = 1001
+MANIFEST_NAME = re.compile(r'^batch-([0-9a-f]{32})/manifest\.json$')
 SHA = re.compile(r'^[0-9a-f]{64}$')
 
 
@@ -51,8 +55,8 @@ def unique_object(pairs):
 
 
 def manifest_metadata(name, data):
-    match = NAME.fullmatch(name)
-    if not match or match[2] != 'manifest' or len(data) > MAX_MANIFEST:
+    match = MANIFEST_NAME.fullmatch(name)
+    if not match or len(data) > MAX_MANIFEST:
         raise FeedStageError('Invalid feed manifest name or size.')
     try:
         value = json.loads(data.decode('utf-8'), object_pairs_hook=unique_object)
@@ -67,11 +71,11 @@ def manifest_metadata(name, data):
     seen = set()
     count = 0
     for index, part in enumerate(value['parts'], 1):
-        expected = f'batch-{match[1]}-part-{index:04d}.json'
+        expected = f'part-{index:04d}.json'
         if (not isinstance(part, dict) or set(part) != {'file', 'sha256', 'rows'}
                 or part.get('file') != expected or not isinstance(part.get('sha256'), str)
                 or not SHA.fullmatch(part['sha256']) or type(part.get('rows')) is not int
-                or not 1 <= part['rows'] <= 250 or part['file'] in seen):
+                or not 1 <= part['rows'] <= 100 or part['file'] in seen):
             raise FeedStageError('Invalid feed part metadata.')
         seen.add(part['file'])
         count += part['rows']
@@ -118,12 +122,22 @@ def checked_file(path, owner):
 
 def send(manifest_path, output):
     manifest_path = Path(manifest_path).expanduser().absolute()
+    source_dir = manifest_path.parent
+    if (manifest_path.name != 'manifest.json' or not re.fullmatch(r'batch-[0-9a-f]{32}', source_dir.name)
+            or source_dir.resolve() != source_dir or source_dir.parent.resolve() != source_dir.parent):
+        raise FeedStageError('Feed manifest path is invalid.')
+    for directory in (source_dir.parent, source_dir):
+        meta = directory.lstat()
+        if (not stat.S_ISDIR(meta.st_mode) or meta.st_uid != os.geteuid()
+                or stat.S_IMODE(meta.st_mode) != 0o700):
+            raise FeedStageError('Feed source directory is not private.')
     if checked_file(manifest_path, os.geteuid()) > MAX_MANIFEST:
         raise FeedStageError('Feed manifest exceeds its limit.')
     data = manifest_path.read_bytes()
-    metadata, _ = manifest_metadata(manifest_path.name, data)
+    name_text = source_dir.name + '/manifest.json'
+    metadata, _ = manifest_metadata(name_text, data)
     output.write(MAGIC)
-    name = manifest_path.name.encode('ascii')
+    name = name_text.encode('ascii')
     output.write(struct.pack('!H', len(name)) + name + struct.pack('!I', len(data)) + data)
     total = len(data)
     for part in metadata['parts']:
@@ -181,9 +195,50 @@ def host_module():
     return host
 
 
+@contextmanager
+def receiver_lock(inbox):
+    path = inbox / '.receive.lock'
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600):
+            raise FeedStageError('Feed receive lock is unsafe.')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise FeedStageError('Another feed transfer is active.') from exc
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def clean_incomplete(inbox):
+    for path in inbox.iterdir():
+        if not re.fullmatch(r'\.receiving-[A-Za-z0-9_]{8}', path.name):
+            continue
+        info = path.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o700 or info.st_dev != inbox.stat().st_dev):
+            raise FeedStageError('Interrupted feed stage needs operator review.')
+        for child in path.iterdir():
+            if child.name != 'manifest.json' and not re.fullmatch(r'part-[0-9]{4}\.json', child.name):
+                raise FeedStageError('Interrupted feed stage needs operator review.')
+            checked_file(child, os.geteuid())
+        shutil.rmtree(path)
+    fsync_dir(inbox)
+
+
 def receive(stream, inbox=INBOX, owner=None):
     inbox = private_inbox(inbox, owner)
-    name, data, manifest, batch_id = read_header(stream)
+    with receiver_lock(inbox):
+        clean_incomplete(inbox)
+        return receive_locked(stream, inbox)
+
+
+def receive_locked(stream, inbox):
+    _name, data, manifest, batch_id = read_header(stream)
     target = inbox / f'batch-{batch_id}'
     manifest_sha = hashlib.sha256(data).hexdigest()
     already_staged = target.exists() or target.is_symlink()
@@ -192,7 +247,7 @@ def receive(stream, inbox=INBOX, owner=None):
         if (not stat.S_ISDIR(target_meta.st_mode) or target_meta.st_uid != os.geteuid()
                 or stat.S_IMODE(target_meta.st_mode) != 0o700):
             raise FeedStageError('Feed batch identity is unsafe.')
-        current = target / name
+        current = target / 'manifest.json'
         if checked_file(current, os.geteuid()) != len(data) or current.read_bytes() != data:
             raise FeedStageError('Feed batch identity already exists.')
     if not already_staged and shutil.disk_usage(inbox).free < MAX_BATCH + MIN_FREE_AFTER:
@@ -203,7 +258,7 @@ def receive(stream, inbox=INBOX, owner=None):
     total = len(data)
     try:
         if temporary is not None:
-            write_private(temporary / name, data)
+            write_private(temporary / 'manifest.json', data)
         for part in manifest['parts']:
             size = struct.unpack('!I', read_exact(stream, 4))[0]
             if size > MAX_PART or total + size > MAX_BATCH:
@@ -281,6 +336,14 @@ def relay(socket_path=SOCKET, source=None, output=None):
         output.flush()
 
 
+def limit_relay():
+    # SSH runs this byte copier outside the application slice. It parses no
+    # source content and has its own strict short-lived process ceiling.
+    resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+    resource.setrlimit(resource.RLIMIT_AS, (128 * 1024 * 1024, 128 * 1024 * 1024))
+    signal.alarm(330)
+
+
 def prepare(inbox=INBOX):
     if os.geteuid() != 0:
         raise FeedStageError('Feed inbox preparation requires the operator.')
@@ -322,8 +385,8 @@ def batch_files(batch_id, inbox=INBOX):
     if (not stat.S_ISDIR(meta.st_mode) or meta.st_uid != owner
             or stat.S_IMODE(meta.st_mode) != 0o700):
         raise FeedStageError('Feed batch directory is unsafe.')
-    name = f'batch-{batch_id}-manifest.json'
-    manifest_file = directory / name
+    name = f'batch-{batch_id}/manifest.json'
+    manifest_file = directory / 'manifest.json'
     if checked_file(manifest_file, owner) > MAX_MANIFEST:
         raise FeedStageError('Feed manifest exceeds its limit.')
     data = manifest_file.read_bytes()
@@ -360,6 +423,17 @@ def root_receipt(batch_id, digest):
     if receipt != {'schemaVersion': 1, 'manifestSha256': digest}:
         raise FeedStageError('Feed receipt differs from staged batch.')
     return receipt
+
+
+def require_source_digest(actual, expected):
+    if not isinstance(expected, str) or not SHA.fullmatch(expected) or not hmac.compare_digest(actual, expected):
+        raise FeedStageError('Staged feed differs from the independently reviewed source digest.')
+
+
+def authorized_batch(batch_id, expected_manifest_sha256):
+    batch = batch_files(batch_id)
+    require_source_digest(batch[3], expected_manifest_sha256)
+    return batch
 
 
 def store_receipt(batch_id, digest):
@@ -507,7 +581,7 @@ def consume_batch(directory, manifest_path, manifest, digest, release, release_m
             'manifestSha256': digest, 'releaseBuildIdentity': release_manifest['buildIdentity']}
 
 
-def process_batch(batch_id, max_jobs=500):
+def process_batch(batch_id, expected_manifest_sha256, max_jobs=500):
     if os.geteuid() != 0:
         raise FeedStageError('Feed import requires the operator.')
     if type(max_jobs) is not int or not 1 <= max_jobs <= 1000:
@@ -525,7 +599,7 @@ def process_batch(batch_id, max_jobs=500):
                 or lock_meta.st_nlink != 1 or stat.S_IMODE(lock_meta.st_mode) != 0o600):
             raise FeedStageError('Feed import lock is unsafe.')
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        directory, manifest_path, manifest, digest = batch_files(batch_id)
+        directory, manifest_path, manifest, digest = authorized_batch(batch_id, expected_manifest_sha256)
         if root_receipt(batch_id, digest) is not None:
             return {'status': 'already_accepted', 'manifestSha256': digest}
         release, release_manifest = active_release()
@@ -536,10 +610,10 @@ def process_batch(batch_id, max_jobs=500):
         os.close(lock_fd)
 
 
-def show_receipt(batch_id):
+def show_receipt(batch_id, expected_manifest_sha256):
     if os.geteuid() != 0:
         raise FeedStageError('Feed receipt requires the operator.')
-    _, _, _, digest = batch_files(batch_id)
+    _, _, _, digest = authorized_batch(batch_id, expected_manifest_sha256)
     receipt = root_receipt(batch_id, digest)
     if receipt is None:
         raise FeedStageError('Feed batch has no accepted receipt.')
@@ -556,9 +630,11 @@ def main(argv=None):
     command.add_parser('prepare')
     import_parser = command.add_parser('import')
     import_parser.add_argument('--batch-id', required=True)
+    import_parser.add_argument('--manifest-sha256', required=True)
     import_parser.add_argument('--max-jobs', type=int, default=500)
     receipt_parser = command.add_parser('receipt')
     receipt_parser.add_argument('--batch-id', required=True)
+    receipt_parser.add_argument('--manifest-sha256', required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == 'send':
@@ -574,14 +650,15 @@ def main(argv=None):
             result = receive(sys.stdin.buffer)
             print(json.dumps(result, separators=(',', ':')))
         elif args.command == 'relay':
+            limit_relay()
             relay()
         elif args.command == 'prepare':
             result = prepare()
             print(json.dumps(result, separators=(',', ':')))
         elif args.command == 'import':
-            print(json.dumps(process_batch(args.batch_id, args.max_jobs), separators=(',', ':')))
+            print(json.dumps(process_batch(args.batch_id, args.manifest_sha256, args.max_jobs), separators=(',', ':')))
         else:
-            print(json.dumps(show_receipt(args.batch_id), separators=(',', ':')))
+            print(json.dumps(show_receipt(args.batch_id, args.manifest_sha256), separators=(',', ':')))
         return 0
     except (FeedStageError, OSError, ValueError) as exc:
         # Never echo a source body, source path or exception chain to SSH.
