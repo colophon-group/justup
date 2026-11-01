@@ -86,7 +86,7 @@ The smoke command has a 60-second budget, per-request timeout and maximum 200 as
 
 ## Run the deployed browser journey
 
-The `JUSTUP_SMOKE_URL=https://<fixed-host> npm run test:browser` mode is read-only. The separate acceptance mode below registers one generated test account and submits two search interpretations. Run it only after the release owner has recorded the fixed frontend/API/runner candidate, actual provider isolation and spend guard, reviewed policies, fresh imported data and an approved preview invite. Local tests of the harness are not deployed evidence.
+The `JUSTUP_SMOKE_URL=https://<fixed-host> npm run test:browser` mode is read-only. The separate acceptance mode below runs five isolated language journeys, each registering its own generated account and submitting two search interpretations: ten bounded interpretations in total. Run it only after the release owner has recorded the fixed frontend/API/runner candidate, actual provider isolation and spend guard, reviewed policies, fresh imported data and an approved preview invite. Local tests of the harness are not deployed evidence.
 
 First run the exact-byte smoke above against the retained artifact. Then prepare a JSON configuration outside the checkout with these fields, replacing every placeholder with the recorded identity or reviewed real-source scenario:
 
@@ -110,9 +110,49 @@ First run the exact-byte smoke above against the retained artifact. Then prepare
     "importGeneration": "<recorded snapshot generation UUID>"
   },
   "policies": {
-    "version": "<operator-reviewed policy version>",
-    "privacySha256": "<reviewed privacy.html byte hash>",
-    "usageSha256": "<reviewed usage.html byte hash>"
+    "admittedLocales": {
+      "en": {
+        "locale": "en", "reviewed": true, "reviewedLocale": "en", "fallback": false,
+        "version": "<operator-reviewed en policy version>",
+        "privacyUrl": "https://<candidate-specific-owned-host>/privacy.html",
+        "usageUrl": "https://<candidate-specific-owned-host>/usage.html",
+        "privacySha256": "<reviewed privacy.html byte hash>",
+        "usageSha256": "<reviewed usage.html byte hash>"
+      },
+      "de": {
+        "locale": "de", "reviewed": true, "reviewedLocale": "de", "fallback": false,
+        "version": "<operator-reviewed de policy version>",
+        "privacyUrl": "https://<candidate-specific-owned-host>/privacy.de.html",
+        "usageUrl": "https://<candidate-specific-owned-host>/usage.de.html",
+        "privacySha256": "<reviewed privacy.de.html byte hash>",
+        "usageSha256": "<reviewed usage.de.html byte hash>"
+      },
+      "fr": {
+        "locale": "fr", "reviewed": true, "reviewedLocale": "fr", "fallback": false,
+        "version": "<operator-reviewed fr policy version>",
+        "privacyUrl": "https://<candidate-specific-owned-host>/privacy.fr.html",
+        "usageUrl": "https://<candidate-specific-owned-host>/usage.fr.html",
+        "privacySha256": "<reviewed privacy.fr.html byte hash>",
+        "usageSha256": "<reviewed usage.fr.html byte hash>"
+      },
+      "it": {
+        "locale": "it", "reviewed": true, "reviewedLocale": "it", "fallback": false,
+        "version": "<operator-reviewed it policy version>",
+        "privacyUrl": "https://<candidate-specific-owned-host>/privacy.it.html",
+        "usageUrl": "https://<candidate-specific-owned-host>/usage.it.html",
+        "privacySha256": "<reviewed privacy.it.html byte hash>",
+        "usageSha256": "<reviewed usage.it.html byte hash>"
+      },
+      "es": {
+        "locale": "es", "reviewed": true, "reviewedLocale": "es", "fallback": false,
+        "version": "<operator-reviewed es policy version>",
+        "privacyUrl": "https://<candidate-specific-owned-host>/privacy.es.html",
+        "usageUrl": "https://<candidate-specific-owned-host>/usage.es.html",
+        "privacySha256": "<reviewed privacy.es.html byte hash>",
+        "usageSha256": "<reviewed usage.es.html byte hash>"
+      }
+    },
+    "fallbackApprovals": {}
   },
   "scenario": {
     "query": "<reviewed query yielding the selected real posting>",
@@ -124,15 +164,23 @@ First run the exact-byte smoke above against the retained artifact. Then prepare
 }
 ```
 
-Use a supported primary-filter query and a previously reviewed warned edit. Do not use personal search text, a new speculative company lead or an unbounded residual-matching scenario. Search interpretation can invoke the approved model, including its bounded repair; the known-company identity request must resolve immediately from the fixed imported catalogue without company research. The invitation is supplied as `JUSTUP_ACCEPTANCE_INVITE` by the protected process environment, never in this JSON, a command argument, a URL or source control. With that environment already set:
+The former English-only `policies.version`, `privacySha256` and `usageSha256` fields are no longer accepted. Migrate release evidence by listing **all five** interface locales in `policies.admittedLocales`, each with the seven exact server policy-state fields above and both approved document hashes. Locale keys and fields are strict; repeated JSON keys, including escaped equivalents, reject the file. Partial locale maps cannot pass full acceptance. The URLs must be the candidate origin’s exact English root or `.de.html`, `.fr.html`, `.it.html` and `.es.html` notice routes; query strings, fragments, foreign origins and alternate paths are rejected. The live UI journey always runs once for each of the five fixed locales; a scenario cannot narrow that set.
+
+The empty `fallbackApprovals` map means no fallback is approved. Only an explicit operator decision can justify a fallback. For example, an approved German-to-English fallback would keep the `de` admitted entry but set `locale:"de"`, `reviewedLocale:"en"`, `fallback:true`, and the exact same version, English URLs and hashes as the directly reviewed `en` entry. It also requires `fallbackApprovals.de = {"reviewedLocale":"en","version":"<same approved version>","operatorApproved":true}`. The server must report that exact selected locale, reviewed target and fallback. A fallback target must itself be directly reviewed and declared; fallbacks cannot chain. Recording an example or setting a boolean does not supply the operator decision, approve English fallback or approve the current drafts.
+
+The read-only preflight probes each admitted locale through the request-only `X-Justup-Locale` header, without creating a preference cookie. It checks every declared locale against authoritative session policy metadata, then hashes each unique reviewed document’s actual bytes. Its `html.lang`, kind, body and meta version, `approved` status and `reviewed=true` metadata must agree with the recorded target. Correct hashes alone cannot admit a draft or a document in the wrong language. The generated `product-draft-5` notices remain unapproved and cannot pass this gate, even if someone records their exact draft hashes and a server incorrectly claims review.
+
+Use a supported primary-filter query and a previously reviewed warned edit yielding an eligible limited-access posting first seen between 48 hours and 14 days ago. Registration remains unverified and limited; this journey neither grants full access nor establishes provider eligibility or a free period. Do not use personal search text, a new speculative company lead or an unbounded residual-matching scenario. Search interpretation can invoke the approved model, including its bounded repair; the known-company identity request must resolve immediately from the fixed imported catalogue without company research. The invitation is supplied as `JUSTUP_ACCEPTANCE_INVITE` by the protected process environment, never in this JSON, a command argument, a URL or source control. With that environment already set:
 
 ```sh
 JUSTUP_ACCEPTANCE_CONFIG=/private/path/candidate-gate.json npm run test:browser
 ```
 
-Missing configuration, invitation or matching identities fails closed. The acceptance harness requires preview mode; it cannot run its mutating test-account journey against a production configuration. The read-only preflight checks the fixed frontend/API/runner/import identities, runner heartbeat, fresh snapshot, reviewed policy hashes and public URLs, registration/search/request availability, visitor private-route denial and 48-hour-to-14-day result bounds. Only then can registration start. The one 240-second browser journey registers a generated account, logs out/in, searches for the selected real source, preserves accepted rows and revision during a warned edit, explicitly confirms it, records the known company identity, and verifies wrong-password handling and its own account deletion. It rechecks fixed identities before the company request and at completion.
+Missing configuration, invitation or matching identities fails closed. The acceptance harness requires preview mode; it cannot run its mutating test-account journeys against a production configuration. The read-only preflight checks the fixed frontend/API/runner/import identities, runner heartbeat, fresh snapshot, all five admitted policy states, approved document hashes/versions/languages and exact public URLs, registration/search/request availability, visitor private-route denial and 48-hour-to-14-day result bounds. Only then can registration start. Each of the five browser journeys has a 240-second timeout and a fresh context. It registers its own generated account, logs out/in, searches for the selected real source, preserves accepted rows and revision during a warned edit, explicitly confirms it, records the known company identity, and verifies wrong-password handling and its own account deletion. It rechecks fixed identities and the selected locale’s exact policy state before registration, before the company request and at completion. Non-English journeys use their explicit public route prefix and stable controls rather than English labels.
 
-The journey creates only its own random username/password and keeps them in memory. Cleanup verifies that session ownership matches that generated account before deleting it, and refuses foreign users or changed account ids. A transport failure can prevent cleanup; a failed cleanup requires private operator verification before rerunning. Automatic test retries are disabled. Live mode disables traces, screenshots, video, automatic error-context Markdown and persisted browser state; failures report a fixed stage label without request bodies, credentials or Playwright fill call logs. Record only sanitized pass/fail, candidate identities and the verified cleanup outcome in release evidence.
+Every language journey creates only its own random username/password and keeps them in memory; cleanup runs for that isolated account even when the journey fails. Cleanup verifies the exact frontend/API/runner/import candidate and that session ownership matches that generated account before deleting it, and refuses foreign users or changed account ids. Withdrawal of policy approval blocks new processing but does not prevent attempting permitted deletion of the still-owned signed-in account. If withdrawn approval prevents the post-deletion login check, cleanup remains conservatively unconfirmed and requires operator verification; policy denial is not proof that credentials were removed. A transport failure can prevent cleanup; a failed cleanup requires private operator verification before rerunning. Automatic test retries are disabled. Live mode disables traces, screenshots, video, automatic error-context Markdown and persisted browser state; failures report a fixed stage label without request bodies, credentials or Playwright fill call logs. Record only sanitized pass/fail, candidate identities and the verified cleanup outcome in release evidence.
+
+The same reviewed query and company/source data are used unchanged across language journeys; employer content and user search text are not translated. Ten interpreted requests, their bounded repairs and any evaluations remain subject to the existing cumulative/provider caps at an eventual approved run. The harness does not bypass spend guards. Five localized UI journeys are not multilingual model-quality evidence; that evidence is required separately.
 
 This journey does not establish real provider-down recovery, ambiguous-company research, resource/load limits, physical retention/deletion, restore/rollback, SSE or unavailable product features. Those checks remain in the API/runner/operations and full release report. The harness does not publish `Preview / verified` or authorize runtime promotion.
 

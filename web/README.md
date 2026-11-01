@@ -5,7 +5,7 @@ read_when: Changing the interface, connecting the API or checking compiled front
 
 # Justup web application
 
-The browser application uses React and strict TypeScript, built by Vite. Its source lives in `src/`; `public/` contains the static Privacy and Usage documents. Generated `dist/` assets are ignored by Git. The application calls the authoritative same-origin `/api/v1` service for account access, accepted searches, job evidence and company requests.
+The browser application uses React and strict TypeScript, built by Vite. Its source lives in `src/`; `policies/` contains aligned Privacy and Usage drafts and their static generator; `public/` contains local assets such as policy CSS. Generated `dist/` assets are ignored by Git. The application calls the authoritative same-origin `/api/v1` service for account access, accepted searches, job evidence and company requests.
 
 ## Develop and build
 
@@ -38,7 +38,7 @@ The production build runs TypeScript checking and emits hashed assets into `web/
 | Company catalogue, source reports and identity requests | `src/features/companies/` |
 | Dialog, company mark and measured viewport reveal behavior | `src/shared/` |
 | Coral, cream and ink tokens and component styling | `src/styles/` |
-| Public documents readable without JavaScript | `public/` |
+| Public documents readable without JavaScript | `policies/` (generated static HTML), `public/policies.css` |
 
 Account, query, draft and request state remains in memory or on the server, never in application localStorage. A session change cancels old operations and clears private view state. Network data is validated before rendering; React renders text without raw HTML insertion. Company evidence is displayed without inferring headquarters, missing pay, monitoring dates or hiring history.
 
@@ -76,4 +76,4 @@ Presentation links select the matching static Privacy and Usage documents: `/pri
 
 When result responses supply hidden-match metadata, the access notice displays the reported exact count or an explicit lower bound; absent or zero counts produce no notice. The compressed-paper illustration contains no restricted job data.
 
-`/privacy.html` and `/usage.html` remain static, explicitly unapproved drafts. Their successful build or integration does not approve the notices or enable sign-in. Actual data flows, public policy version/URLs, operator review and deployed verification remain required before sharing the service. See the [policy review guide](../docs/policies.md) and [hosting guide](../docs/frontend-delivery.md).
+`/privacy.html` and `/usage.html`, plus `.de.html`, `.fr.html`, `.it.html` and `.es.html` variants, are generated static, explicitly unapproved drafts. Development and public client builds use the same generator; private SSR bundles receive no policy assets. Their successful build or integration does not approve the notices or enable sign-in. Actual data flows, public policy version/URLs, operator review and deployed verification remain required before sharing the service. See the [policy review guide](../docs/policies.md) and [hosting guide](../docs/frontend-delivery.md).

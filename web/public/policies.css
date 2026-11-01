@@ -23,9 +23,10 @@ a:focus-visible { outline: 3px solid var(--ink); outline-offset: 5px; }
 .policy-brand span { color: var(--cream); }
 nav { display: flex; gap: 22px; flex-wrap: wrap; font-size: 12px; font-weight: 700; }
 nav [aria-current] { text-decoration-thickness: 2px; }
+.policy-languages { justify-content: flex-end; margin: 18px 0 0; gap: 12px 20px; }
 main { padding: 38px 0 50px; min-height: 62vh; }
 .eyebrow { margin: 0 0 10px; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; font-weight: 700; }
-h1 { font: 900 clamp(54px, 9vw, 100px)/1 Impact, "Arial Black", sans-serif; margin: 0 0 32px; text-transform: uppercase; letter-spacing: -1px; }
+h1 { font: 900 clamp(54px, 9vw, 100px)/1 Impact, "Arial Black", sans-serif; margin: 0 0 32px; text-transform: uppercase; letter-spacing: -1px; overflow-wrap: anywhere; }
 .policy-status { max-width: 760px; background: var(--cream); border-left: 4px solid var(--ink); padding: 24px; margin-bottom: 24px; }
 .policy-status p { margin: 0; }
 .policy-status p + p { margin-top: 12px; }
@@ -41,6 +42,7 @@ footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 20
   .policy-header { align-items: flex-start; gap: 20px; }
   .policy-brand { font-size: 32px; }
   nav { justify-content: flex-end; gap: 10px 16px; font-size: 11px; }
+  .policy-languages { justify-content: flex-start; }
   main { padding-top: 28px; }
   .policy-status { padding: 20px; }
 }
