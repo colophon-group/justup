@@ -81,7 +81,9 @@ export function compileWireSnapshot(input, {periodEnd, now = Date.now()} = {}) {
     token(scope.id); token(scope.revision);
     if (!companies.has(scope.companyId) || scopes.has(scope.id) || !Array.isArray(scope.coverage) || scope.coverage.length > 128) throw wireError('invalid_output');
     const tracked = iso(scope.trackedSince), verified = scope.lastVerifiedAt===null?null:iso(scope.lastVerifiedAt);
-    if (tracked > end || verified!==null&&(verified > generatedAt || tracked > verified)) throw wireError('invalid_output');
+    // Scope metadata is captured at generation, after the observation cutoff.
+    // A later reset is valid evidence, but cannot establish comparable history.
+    if (tracked > generatedAt || verified!==null&&(verified > generatedAt || tracked > verified)) throw wireError('invalid_output');
     let reason = verified===null?'never_verified_scope':tracked > start ? 'new_scope' : verified < end ? 'stale_scope' : null;
     let cursor = start;
     for (const interval of scope.coverage) {
