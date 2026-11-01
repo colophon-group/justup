@@ -1,4 +1,4 @@
-"""Select and run Justup pull-request checks; read when changing CI impact rules."""
+"""Select and run Justup CI suites; read when changing impact or full-run rules."""
 
 from __future__ import annotations
 
@@ -21,6 +21,16 @@ MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 MARKDOWN_HEADER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 WORK_BRANCH = re.compile(r"^(?:work|hotfix)/[a-z0-9]+(?:-[a-z0-9]+)+$")
 RELEASE_BRANCH = re.compile(r"^release/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+FULL_SUITES = ("typecheck", "build", "web", "deployment", "server", "python", "browser")
+IMPACT = {
+    "docs": (),
+    "web": ("typecheck", "build", "web", "deployment", "browser"),
+    "server": ("server", "deployment", "python"),
+    "python": ("python", "deployment"),
+    "deployment": ("build", "deployment", "server", "python", "browser"),
+    "tooling": FULL_SUITES,
+    "unknown": FULL_SUITES,
+}
 
 
 def validate_branch_name(name: str) -> None:
@@ -80,7 +90,7 @@ def changed_paths(base: str, head: str) -> list[str]:
 
 
 def classify(path: str) -> str:
-    if path in {"README.md", "AGENTS.md", ".github/PULL_REQUEST_TEMPLATE.md", "scripts/README.md", "deploy/frontend/README.md"}:
+    if path in {"README.md", "AGENTS.md", ".github/PULL_REQUEST_TEMPLATE.md", "scripts/README.md"} or (path.startswith("deploy/") and path.endswith("/README.md")):
         return "docs"
     if path.startswith("docs/") and path.endswith(".md"):
         return "docs"
@@ -88,38 +98,38 @@ def classify(path: str) -> str:
         return "docs"
     if path.endswith(".md") and path.startswith(("apps/", "src/", "web/", "server/")):
         return "docs"
-    if path.startswith(("deploy/frontend/", "deploy/justup-preview/", "scripts/preview-")) or (path.startswith("scripts/frontend-") and path.endswith(".mjs")):
+    if path.startswith(("deploy/", "scripts/preview-")) or (path.startswith("scripts/frontend-") and path.endswith(".mjs")):
         return "deployment"
     if path in {"scripts/ci.py", "scripts/test-server.mjs", "scripts/test-deployment.mjs", "scripts/test-python.py", "scripts/test-web.mjs", ".gitignore", ".github/CODEOWNERS"} or path.startswith(".github/workflows/"):
         return "tooling"
     if path == "scripts/import-jobs.py" or (path.startswith("scripts/test_") and path.endswith(".py")):
-        return "app"
+        return "python"
     if path in {"package.json", "package-lock.json", "npm-shrinkwrap.json", "vite.config.ts", "tsconfig.json"}:
-        return "app"
-    if path.startswith(("web/", "tests/browser/", "server/")):
-        return "app"
+        return "tooling"
+    if path.startswith(("web/", "tests/browser/", "src/public/")):
+        return "web"
+    if path.startswith("server/"):
+        return "server"
     if path.startswith(("vite.config.", "tsconfig")) or path.startswith("playwright.config."):
-        return "app"
+        return "tooling"
     return "unknown"
 
 
-def select(paths: list[str], base_branch: str, full_override: bool) -> tuple[bool, bool, str]:
+def select(paths: list[str], base_branch: str, full_override: bool) -> tuple[tuple[str, ...], bool, str]:
     kinds = {classify(path) for path in paths}
-    full = full_override or "unknown" in kinds or "app" in kinds or "tooling" in kinds or "deployment" in kinds
-    blocked_main = base_branch == "main" and bool(kinds & {"app", "deployment", "unknown"})
-    if full_override:
+    selected = FULL_SUITES if full_override or base_branch == "main" else tuple(
+        suite for suite in FULL_SUITES if any(suite in IMPACT[kind] for kind in kinds)
+    )
+    blocked_main = base_branch == "main" and bool(kinds - {"docs"})
+    if base_branch == "main":
+        reason = "release or hotfix target requires every suite"
+    elif full_override:
         reason = "full-ci label requested every available suite"
     elif "unknown" in kinds:
         reason = "unrecognized path requires the full suite"
-    elif "deployment" in kinds:
-        reason = "deployment contracts changed; run typecheck, build, web/edge/server contracts and browser journeys"
-    elif "app" in kinds:
-        reason = "application or test files require typecheck, build, web/deployment/server and browser checks"
-    elif "tooling" in kinds:
-        reason = "CI tooling changed; run every available suite"
     else:
-        reason = "guide and template changes need the fast policy and link checks"
-    return full, blocked_main, reason
+        reason = "reviewed impact map: " + ", ".join(sorted(kinds))
+    return selected, blocked_main, reason
 
 
 def check_local_links() -> int:
@@ -180,10 +190,6 @@ def full_script_present() -> bool:
     return "test:full" in scripts
 
 
-def application_present() -> bool:
-    return any((ROOT / path).exists() for path in ("apps", "src", "web", "server"))
-
-
 def append_summary(lines: list[str]) -> None:
     target = os.getenv("GITHUB_STEP_SUMMARY")
     if target:
@@ -198,9 +204,10 @@ def run_pr(event_path: Path) -> None:
     base_branch = pr["base"]["ref"]
     paths = changed_paths(pr["base"]["sha"], pr["head"]["sha"])
     full_override = any(label.get("name") == "full-ci" for label in pr.get("labels", []))
-    full, blocked_main, reason = select(paths, base_branch, full_override)
+    selected, blocked_main, reason = select(paths, base_branch, full_override)
     summary = ["### CI selection", f"- Target: `{base_branch}`", f"- Reason: {reason}", "- Changed paths:"]
     summary.extend(f"  - `{path}` ({classify(path)})" for path in paths)
+    summary.append("- Selected suites: " + (", ".join(selected) if selected else "policy and links only"))
     if blocked_main:
         summary.append("- Release gate: runtime changes to `main` are blocked until real preview verification exists.")
     append_summary(summary)
@@ -214,38 +221,60 @@ def run_pr(event_path: Path) -> None:
     guides = check_guidebook()
     print(f"Checked {links} local Markdown links, {guides} indexed guides and all contribution checklist items.")
 
-    if blocked_main:
-        raise ValueError("Application or unrecognized changes cannot target main until the real release preview gate exists; target dev.")
-
-    if not full:
+    if not selected:
         print("Runtime suites skipped: only guides and templates changed.")
         append_summary(["- Runtime suites: skipped; guides and templates only."])
         return
+    run_suites(selected)
+    if blocked_main:
+        raise ValueError("Runtime changes to main require the release preview gate, which is not implemented yet; target dev.")
 
-    if not full_script_present():
-        raise ValueError("A broad or unrecognized change requires a registered test:full suite; add it or update the reviewed CI impact rules.")
 
-    if not browser_scripts_present():
-        if not application_present() and not any(classify(path) in {"app", "unknown"} for path in paths):
-            print("Browser suite unavailable: this baseline has no application runner yet; CI tooling checks passed.")
-            append_summary(["- Browser suite: unavailable; no application runner exists in this baseline."])
-            selftest()
-            return
-        raise ValueError("The full suite is required, but package.json, package-lock.json or test scripts are missing.")
-
+def run_suites(selected: tuple[str, ...]) -> None:
+    total_started = time.monotonic()
+    if not selected or any(suite not in FULL_SUITES for suite in selected):
+        raise ValueError("CI selected an empty or unrecognized runtime suite set.")
+    if selected == FULL_SUITES and not full_script_present():
+        raise ValueError("A full run requires a registered test:full suite.")
+    package = ROOT / "package.json"
+    lockfile = ROOT / "package-lock.json"
+    if not package.is_file() or not lockfile.is_file():
+        raise ValueError("Selected suites require package.json and package-lock.json.")
+    scripts = json.loads(package.read_text(encoding="utf-8")).get("scripts", {})
+    commands = required_commands(selected, scripts)
+    if "browser" in selected and not browser_scripts_present():
+        raise ValueError("The browser suite is required but its runner or lockfile is missing.")
     selftest()
-    run("npm", "ci")
-    run(str(ROOT / "node_modules/.bin/playwright"), "install", "--with-deps", "chromium")
-    scripts = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"]
-    for suite in ("typecheck", "build", "web", "deployment", "server", "python", "browser"):
-        command = suite if suite in {"typecheck", "build"} else f"test:{suite}"
-        if command not in scripts:
-            raise ValueError(f"Registered full suite is missing {command}")
+    if selected != ("python",):
         started = time.monotonic()
-        run("npm", "run", command)
-        seconds = time.monotonic() - started
-        append_summary([f"- {suite} runner: completed in {seconds:.2f}s; exact files and unavailable-suite reasons are in its log."])
-    append_summary(["- Full suite: passed (strict typecheck, production build, web/deployment/server/Python contracts and built-application browser journeys)."])
+        run("npm", "ci")
+        append_summary([f"- Dependency installation: {time.monotonic() - started:.2f}s."])
+    if "browser" in selected:
+        started = time.monotonic()
+        run(str(ROOT / "node_modules/.bin/playwright"), "install", "--with-deps", "chromium")
+        append_summary([f"- Browser installation: {time.monotonic() - started:.2f}s."])
+    for suite, command in zip(selected, commands):
+        started = time.monotonic()
+        try:
+            run("npm", "run", command)
+        except subprocess.CalledProcessError:
+            append_summary([f"- {suite}: failed after {time.monotonic() - started:.2f}s."])
+            raise
+        append_summary([f"- {suite}: passed in {time.monotonic() - started:.2f}s; test files appear in the runner log."])
+    append_summary([f"- Selected runtime suites: passed in {time.monotonic() - total_started:.2f}s."])
+
+
+def required_commands(selected: tuple[str, ...], scripts: dict[str, str]) -> tuple[str, ...]:
+    commands = tuple(suite if suite in {"typecheck", "build"} else f"test:{suite}" for suite in selected)
+    for command in commands:
+        if command not in scripts:
+            raise ValueError(f"Selected suite is missing {command}; CI cannot report success.")
+    return commands
+
+
+def run_full() -> None:
+    append_summary(["### Full dev suite", "- Source: checked-out dev commit.", "- Selected suites: " + ", ".join(FULL_SUITES)])
+    run_suites(FULL_SUITES)
 
 
 def selftest() -> None:
@@ -280,39 +309,47 @@ def selftest() -> None:
             pass
         else:
             raise AssertionError(f"Invalid branch name passed validation: {name}")
-    assert select(["docs/README.md"], "dev", False)[:2] == (False, False)
-    assert select(["web/src/app/App.tsx"], "dev", False)[:2] == (True, False)
-    assert select(["web/src/app/App.tsx"], "main", False)[:2] == (True, True)
-    assert select(["mystery/file"], "dev", False)[:2] == (True, False)
-    assert select(["scripts/ci.py"], "dev", False)[:2] == (True, False)
+    assert select(["docs/README.md"], "dev", False)[:2] == ((), False)
+    assert select(["web/src/app/App.tsx"], "dev", False)[:2] == (("typecheck", "build", "web", "deployment", "browser"), False)
+    assert select(["web/src/app/App.tsx"], "main", False)[:2] == (FULL_SUITES, True)
+    assert select(["mystery/file"], "dev", False)[:2] == (FULL_SUITES, False)
+    assert select(["scripts/ci.py"], "dev", False)[:2] == (FULL_SUITES, False)
     assert classify("scripts/README.md") == "docs"
     assert classify("deploy/frontend/README.md") == "docs"
-    assert select(["deploy/frontend/worker.mjs"], "dev", False)[:2] == (True, False)
-    assert select(["deploy/frontend/worker.mjs"], "main", False)[:2] == (True, True)
-    assert select(["scripts/frontend-smoke.mjs"], "main", False)[:2] == (True, True)
-    assert select(["web/public/privacy.html", "web/public/policies.css"], "dev", False)[:2] == (True, False)
-    assert select(["web/public/usage.html"], "main", False)[:2] == (True, True)
-    assert select(["docs/operations.md"], "dev", True)[:2] == (True, False)
-    assert select(["new-server/runtime.go"], "main", False)[:2] == (True, True)
-    assert select([".github/workflows/ci.yml"], "dev", False)[:2] == (True, False)
+    assert select(["deploy/frontend/worker.mjs"], "dev", False)[:2] == (("build", "deployment", "server", "python", "browser"), False)
+    assert select(["deploy/frontend/worker.mjs"], "main", False)[:2] == (FULL_SUITES, True)
+    assert select(["scripts/frontend-smoke.mjs"], "main", False)[:2] == (FULL_SUITES, True)
+    assert select(["web/public/privacy.html", "web/public/policies.css"], "dev", False)[:2] == (("typecheck", "build", "web", "deployment", "browser"), False)
+    assert select(["web/public/usage.html"], "main", False)[:2] == (FULL_SUITES, True)
+    assert select(["docs/operations.md"], "dev", True)[:2] == (FULL_SUITES, False)
+    assert select(["new-server/runtime.go"], "main", False)[:2] == (FULL_SUITES, True)
+    assert select([".github/workflows/ci.yml"], "dev", False)[:2] == (FULL_SUITES, False)
     assert classify("scripts/unregistered.mjs") == "unknown"
     assert classify("scripts/test-server.mjs") == "tooling"
     assert classify("scripts/test-web.mjs") == "tooling"
-    assert select(["web/src/api/client.ts", "web/src/app/App.tsx", "web/src/styles/index.css"], "dev", False)[:2] == (True, False)
-    assert select(["web/src/app/App.tsx"], "main", False)[:2] == (True, True)
-    assert select(["vite.config.ts", "tsconfig.json"], "dev", False)[:2] == (True, False)
+    assert select(["web/src/api/client.ts", "web/src/app/App.tsx", "web/src/styles/index.css"], "dev", False)[:2] == (("typecheck", "build", "web", "deployment", "browser"), False)
+    assert select(["web/src/app/App.tsx"], "main", False)[:2] == (FULL_SUITES, True)
+    assert select(["vite.config.ts", "tsconfig.json"], "dev", False)[:2] == (FULL_SUITES, False)
     assert classify("web/README.md") == "docs"
-    assert select(["deploy/justup-preview/limits.test.mjs", "scripts/preview-install.sh"], "dev", False)[:2] == (True, False)
-    assert select(["scripts/import-jobs.py", "scripts/test_import_jobs.py"], "dev", False)[:2] == (True, False)
-    assert select(["scripts/import-jobs.py"], "main", False)[:2] == (True, True)
-    assert select(["server/auth.mjs", "server/auth.test.mjs"], "dev", False)[:2] == (True, False)
-    assert select(["server/auth.mjs"], "main", False)[:2] == (True, True)
+    assert select(["deploy/justup-preview/limits.test.mjs", "scripts/preview-install.sh"], "dev", False)[:2] == (("build", "deployment", "server", "python", "browser"), False)
+    assert select(["scripts/import-jobs.py", "scripts/test_import_jobs.py"], "dev", False)[:2] == (("deployment", "python"), False)
+    assert select(["scripts/import-jobs.py"], "main", False)[:2] == (FULL_SUITES, True)
+    assert select(["server/auth.mjs", "server/auth.test.mjs"], "dev", False)[:2] == (("deployment", "server", "python"), False)
+    assert select(["server/auth.mjs"], "main", False)[:2] == (FULL_SUITES, True)
     browser_pr_paths = [
         ".gitignore", "package.json", "package-lock.json", "playwright.config.mjs",
         "vite.config.ts", "tsconfig.json", "tests/browser/flows.spec.mjs",
     ]
-    assert {classify(path) for path in browser_pr_paths} == {"tooling", "app"}
-    assert select(browser_pr_paths, "dev", False)[:2] == (True, False)
+    assert {classify(path) for path in browser_pr_paths} == {"tooling", "web"}
+    assert select(browser_pr_paths, "dev", False)[:2] == (FULL_SUITES, False)
+    assert select(["server/auth.mjs", "web/src/app/App.tsx"], "dev", False)[0] == FULL_SUITES
+    assert required_commands(("server",), {"test:server": "node scripts/test-server.mjs"}) == ("test:server",)
+    try:
+        required_commands(("server",), {})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("An unregistered selected suite must fail CI")
     body = "\n".join(f"- [x] {guideline} Rule — N/A: no behavior in this guide" for guideline in sorted(GUIDELINES))
     validate_pr_body(body)
     linked = body.replace(
@@ -341,10 +378,13 @@ def main() -> int:
     run_command = subparsers.add_parser("run")
     run_command.add_argument("--event", type=Path, required=True)
     subparsers.add_parser("selftest")
+    subparsers.add_parser("full")
     args = parser.parse_args()
     try:
         if args.command == "selftest":
             selftest()
+        elif args.command == "full":
+            run_full()
         else:
             run_pr(args.event)
     except (ValueError, KeyError, subprocess.CalledProcessError) as error:
