@@ -149,22 +149,20 @@ export function createTasks({ db, now = Date.now, maxActiveTasks = 96, maxStored
   function deleteOwner(ownerId) { db.prepare('DELETE FROM justup_tasks WHERE owner_id=?').run(ownerId); }
   function deleteTask(ownerId, id) { return db.prepare('DELETE FROM justup_tasks WHERE owner_id=? AND id=? AND kind<>?').run(ownerId, id, CLEANUP_KIND).changes === 1; }
   // The billing service supplies a synchronous proof from its authoritative
-  // operation/account rows. Check and release in one SQLite transaction so a
-  // result cannot change between proof and removal. This is an internal API;
-  // no request handler accepts a caller-supplied proof.
+  // operation/account rows inside its private-deletion transaction. Check and
+  // release in that same transaction so backup protection covers the removal.
+  // This is an internal API; no request handler accepts a caller proof.
   function releaseCleanupReceipt(ownerId, id, hasAbsorbedResult) {
     if (typeof hasAbsorbedResult !== 'function') throw new TypeError('A synchronous billing proof is required.');
-    const work = () => {
-      const row = db.prepare('SELECT * FROM justup_tasks WHERE owner_id=? AND id=? AND kind=?').get(ownerId, id, CLEANUP_KIND);
-      if (!row || !TERMINAL.has(row.status)) return false;
-      const receipt = hydrate(row);
-      const proved = hasAbsorbedResult(receipt);
-      if (proved && typeof proved.then === 'function') throw new TypeError('Billing proof must be synchronous.');
-      if (proved !== true) return false;
-      return db.prepare('DELETE FROM justup_tasks WHERE owner_id=? AND id=? AND kind=? AND status=?')
-        .run(ownerId, id, CLEANUP_KIND, row.status).changes === 1;
-    };
-    return db.isTransaction ? work() : transaction(db, work);
+    if (!db.isTransaction) throw new TypeError('A private billing transaction is required.');
+    const row = db.prepare('SELECT * FROM justup_tasks WHERE owner_id=? AND id=? AND kind=?').get(ownerId, id, CLEANUP_KIND);
+    if (!row || !TERMINAL.has(row.status)) return false;
+    const receipt = hydrate(row);
+    const proved = hasAbsorbedResult(receipt);
+    if (proved && typeof proved.then === 'function') throw new TypeError('Billing proof must be synchronous.');
+    if (proved !== true) return false;
+    return db.prepare('DELETE FROM justup_tasks WHERE owner_id=? AND id=? AND kind=? AND status=?')
+      .run(ownerId, id, CLEANUP_KIND, row.status).changes === 1;
   }
   function cancelOwner(ownerId) {
     db.prepare("UPDATE justup_tasks SET status='cancelled',payload_json='null',output_json=NULL,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=? WHERE owner_id=? AND status IN ('pending','running')").run(now(), ownerId);
