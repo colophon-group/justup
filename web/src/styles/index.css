@@ -19,7 +19,6 @@ a:hover, button:hover:not(:disabled) { text-decoration: underline; text-underlin
 .sr-only, .skip:not(:focus) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .skip:focus { position: fixed; z-index: 20; top: 10px; left: 10px; background: var(--cream); padding: 12px; }
 .paper { max-width: 1240px; margin: auto; padding: 0 44px; }
-.edition-note, .environment-note { padding: 8px max(24px, calc((100vw - 1152px) / 2)); display: flex; justify-content: space-between; gap: 12px; background: var(--ink); color: var(--cream); font-size: 10px; line-height: 1.5; }
 .topbar { display: flex; align-items: center; gap: 26px; min-height: 59px; border-bottom: 1px solid; font-size: 11px; }
 .topbar nav { display: flex; gap: 22px; font-size: 13px; font-weight: 600; }
 .topbar nav a[aria-current] { text-decoration: underline; text-underline-offset: 7px; }
