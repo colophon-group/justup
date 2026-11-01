@@ -4,6 +4,8 @@ import type {
   CompanyRequest,
   CompanyRequestPrefill,
   Coverage,
+  HiringWire,
+  HiringWireItem,
   Job,
   RequestSubmission,
   Requirement,
@@ -87,6 +89,71 @@ function date(value: unknown): string {
     new Date(result).toISOString().slice(0, 19) === result.slice(0, 19)
     ? result
     : fail("timestamp");
+}
+
+// A public edition carries comparable weekly facts, never inferred history or free-form links.
+export function decodeHiringWire(value: unknown): HiringWire {
+  const envelope = record(value, "company news");
+  if (envelope.state === "unavailable" && envelope.edition === null)
+    return { state: "unavailable", edition: null };
+  if (envelope.state !== "published") fail("company news state");
+  const edition = record(envelope.edition, "company news edition");
+  try {
+    if (new TextEncoder().encode(JSON.stringify(edition)).byteLength > 16_384) fail("company news edition size");
+  } catch { return fail("company news edition size"); }
+  const bounded = (value: unknown, label: string, maximum: number) => {
+    const result = text(value, label);
+    return result.trim() && result.length <= maximum && !/[\u0000-\u001f\u007f<>]/u.test(result)
+      ? result : fail(label);
+  };
+  const identifier = (value: unknown) => {
+    const result = text(value, "news company identity");
+    return /^[A-Za-z0-9_.:-]{1,128}$/u.test(result) ? result : fail("news company identity");
+  };
+  const homepage = (value: unknown) => {
+    const result = bounded(value, "news company URL", 2048);
+    let url: URL;
+    try { url = new URL(result); } catch { return fail("news company URL"); }
+    return url.protocol === "https:" && !url.username && !url.password && !url.port
+      && !url.search && !url.hash && url.pathname === "/" && url.href === result
+      && /^[a-z0-9.-]+\.[a-z]{2,}$/u.test(url.hostname)
+      && !/(?:^|\.)(?:localhost|local|internal|invalid|test)$/u.test(url.hostname)
+      && url.hostname.split(".").every(part => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(part))
+      ? result : fail("news company URL");
+  };
+  const period = record(edition.period, "news comparison period");
+  const start = date(period.start), end = date(period.end), previousStart = date(period.previousStart);
+  const snapshotAt = date(edition.snapshotAt), publishedAt = date(edition.publishedAt), expiresAt = date(edition.expiresAt);
+  const week = 7 * 86_400_000;
+  if (Date.parse(end) - Date.parse(start) !== week || Date.parse(start) - Date.parse(previousStart) !== week
+    || new Date(end).getUTCDay() !== 1 || Date.parse(end) % 86_400_000 !== 0
+    || snapshotAt !== end || Date.parse(publishedAt) < Date.parse(end)
+    || Date.parse(expiresAt) - Date.parse(end) !== week || Date.parse(publishedAt) >= Date.parse(expiresAt)
+    || edition.id !== end.slice(0, 10) || edition.title !== "Hiring Wire") fail("news comparison period");
+  if (!Array.isArray(edition.items) || edition.items.length < 1 || edition.items.length > 6) fail("company news items");
+  const seen = new Set<string>();
+  const items = list(edition.items, value => {
+    const item = record(value, "company news item"), company = record(item.company, "news company");
+    const id = identifier(company.id);
+    if (seen.has(id)) fail("duplicate news company");
+    seen.add(id);
+    const activity = record(item.activity, "listing activity");
+    const current = count(activity.current, "listing activity"), previous = count(activity.previous, "listing activity");
+    const change = current - previous;
+    const percentageChange = previous === 0 ? null : Math.round(change / previous * 1000) / 10;
+    if (current + previous === 0 || activity.change !== change || activity.percentageChange !== percentageChange
+      || item.scope !== "Comparable career pages") fail("listing comparison");
+    return {
+      company: { id, name: bounded(company.name, "news company name", 200), url: homepage(company.url) },
+      headline: bounded(item.headline, "news headline", 320),
+      activity: { current, previous, change, percentageChange },
+      scope: "Comparable career pages",
+    } satisfies HiringWireItem;
+  }, "company news items");
+  return { state: "published", edition: {
+    id: text(edition.id, "news edition identity"), title: "Hiring Wire", period: { start, end, previousStart },
+    snapshotAt, publishedAt, expiresAt, methodology: bounded(edition.methodology, "news methodology", 1000), items,
+  } };
 }
 export function decodeCoverage(value: unknown): Coverage {
   const o = record(value, "coverage");

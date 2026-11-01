@@ -3,6 +3,7 @@ import {
   decodeCompany,
   decodeCompanyList,
   decodeCompanyRequest,
+  decodeHiringWire,
   decodeRequestList,
   decodeRequestSubmission,
   decodeResults,
@@ -201,6 +202,9 @@ export class ApiClient {
   }
   getSession(signal?: AbortSignal) {
     return this.request("/session", decodeSession, { signal });
+  }
+  getHiringWire(signal?: AbortSignal) {
+    return this.request("/hiring-wire", decodeHiringWire, { signal });
   }
   listSearches(signal?: AbortSignal) {
     return this.request("/searches", decodeSearchList, { signal });

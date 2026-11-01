@@ -9,6 +9,7 @@ import { CompanyRequestPage } from "../features/companies/CompanyRequestPage.tsx
 import { SearchWorkspace } from "../features/search/SearchWorkspace.tsx";
 import { useRoute } from "./useRoute.ts";
 import { coverageDescription } from "../shared/coverage.ts";
+import { HiringWire } from "../features/news/HiringWire.tsx";
 
 export function App() {
   const expiryHandler = useRef<() => void>(() => {});
@@ -38,6 +39,7 @@ export function App() {
   const route = useRoute();
   const topLink = useRef<HTMLAnchorElement>(null),
     mainRef = useRef<HTMLElement>(null);
+  const focusMain = useCallback(() => mainRef.current?.focus({ preventScroll: true }), []);
   const openSignIn = useCallback((reason = "Sign in to save your edition.") => {
     setSignInReason(reason);
     setDialog("sign-in");
@@ -211,6 +213,7 @@ export function App() {
             </span>
           </span>
         </div>
+        <HiringWire client={client} connected={!!session} generation={epoch} reducedMotion={reducedMotion} dialogOpen={dialog !== null} onFocusExit={focusMain} />
         <main ref={mainRef} id="main" tabIndex={-1}>
           <div
             id="service-notice"

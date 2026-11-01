@@ -156,3 +156,28 @@ export interface RequestSubmission {
   request: CompanyRequest;
   task?: Task;
 }
+
+export interface HiringWireItem {
+  company: { id: string; name: string; url: string };
+  headline: string;
+  activity: {
+    current: number;
+    previous: number;
+    change: number;
+    percentageChange: number | null;
+  };
+  scope: "Comparable career pages";
+}
+export interface HiringWireEdition {
+  id: string;
+  title: "Hiring Wire";
+  period: { start: string; end: string; previousStart: string };
+  snapshotAt: string;
+  publishedAt: string;
+  expiresAt: string;
+  methodology: string;
+  items: HiringWireItem[];
+}
+export type HiringWire =
+  | { state: "unavailable"; edition: null }
+  | { state: "published"; edition: HiringWireEdition };
