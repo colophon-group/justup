@@ -64,7 +64,7 @@ function resolutionData(wrapper) {
   if (!['candidate', 'clarification', 'unresolved'].includes(value.status) || typeof wrapper.evidenceVerified !== 'boolean') throw problem('invalid_input');
   if (value.status === 'candidate') {
     if (wrapper.evidenceVerified !== true || value.clarification !== null) throw problem('invalid_input');
-    const candidate={ id: randomUUID(), ...candidateData(value.candidate), coverage: { state: 'requested' } };
+    const candidate={ id: randomUUID(), companyId:null, ...candidateData(value.candidate), coverage: { state: 'requested' } };
     const provenance=wrapper.evidenceProvenance??[];
     if(!Array.isArray(provenance)||provenance.length>2)throw problem('invalid_input');
     for(const proof of provenance){exactKeys(proof,['url','finalUrl','status','bytes','sha256']);if(!candidate.evidenceUrls.includes(validateCompanyUrl(proof.url,{official:true}))||new URL(proof.url).origin!==new URL(validateCompanyUrl(proof.finalUrl,{official:true})).origin||proof.status!==200||!Number.isInteger(proof.bytes)||proof.bytes<1||proof.bytes>131072||typeof proof.sha256!=='string'||!/^[a-f0-9]{64}$/.test(proof.sha256))throw problem('invalid_input');}
@@ -97,11 +97,11 @@ function importedCandidate(company) {
   for (const evidence of company.evidence ?? []) {
     try { evidenceUrls.push(validateCompanyUrl(evidence.url)); } catch { /* Ignore unsupported imported links. */ }
   }
-  return { id: randomUUID(), name: text(company.name, 200), domain: root, websiteUrl,
-    evidenceUrls: [...new Set(evidenceUrls)].slice(0, 8), coverage: { state: 'imported_snapshot' } };
+  return { id: randomUUID(), companyId:company.id, name: text(company.name, 200), domain: root, websiteUrl,
+    evidenceUrls: [...new Set(evidenceUrls)].slice(0, 8), coverage: { state: company.coverage?.state??'imported_snapshot' } };
 }
 
-export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, afterPrivateTransaction, withPrivateTransaction, model = null, availability } = {}) {
+export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, afterPrivateTransaction, withPrivateTransaction, model = null, availability, readingPreferences, ownerAuthority } = {}) {
   if (!db || !feed?.companies || !tasks?.enqueue || (beforePrivateDelete != null && typeof beforePrivateDelete !== 'function')) throw new TypeError('Invalid company service configuration.');
   const maxPerOwner = config.maxCompanyRequestsPerOwner ?? 32;
   if (!Number.isSafeInteger(maxPerOwner) || maxPerOwner < 1 || maxPerOwner > 96) throw new TypeError('Invalid company request limit.');
@@ -126,6 +126,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
   const row = (ownerId, id) => db.prepare('SELECT * FROM demo_company_requests WHERE owner_id=? AND id=?').get(ownerId, id);
   function view(found) {
     return { id: found.id, input: found.input_text, scope: found.scope, status: found.status,
+      companyId:found.candidate_json?JSON.parse(found.candidate_json).companyId??null:null,
       candidate: found.candidate_json == null ? null : JSON.parse(found.candidate_json), previewRevision: found.preview_revision,
       clarification: found.clarification, taskId: found.task_id, createdAt: new Date(found.created_at).toISOString() };
   }
@@ -140,7 +141,12 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
   function insertKey(ownerId, requestKey, json, id) {
     db.prepare('INSERT INTO demo_company_request_keys VALUES (?,?,?,?)').run(ownerId, requestKey, json, id);
   }
-  function create(ownerId, body) {
+  const admitted=(owner,locale)=>typeof ownerAuthority!=='function'?true:ownerAuthority(owner,{locale});
+  const taskAdmitted=task=>{const current=admitted(task.ownerId,task.payload.presentationLocale);return current&&(!current.processingPolicy||current.processingPolicy.key===task.payload.policyKey);};
+  function create(ownerId, body,locale) {
+    const current=admitted(ownerId,locale);
+    if(!current)throw problem('policy_unavailable',503);
+    const policyPayload={...(locale?{presentationLocale:locale}:{}),...(current.processingPolicy?{policyKey:current.processingPolicy.key}:{})};
     const input = normalizedInput(body), json = JSON.stringify(input);
     const key = db.prepare('SELECT * FROM demo_company_request_keys WHERE owner_id=? AND request_key=?').get(ownerId, body.requestKey);
     if (key) {
@@ -156,7 +162,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     const duplicate = db.prepare('SELECT * FROM demo_company_requests WHERE owner_id=? AND fingerprint=?').get(ownerId, fingerprint);
     if (duplicate) {
       if(duplicate.status==='unresolved'){
-        const retry=tasks.enqueue({ownerId,kind:'company_resolution',requestKey:body.requestKey,payload:{requestId:duplicate.id}});
+        const retry=tasks.enqueue({ownerId,kind:'company_resolution',requestKey:body.requestKey,payload:{requestId:duplicate.id,...policyPayload}});
         try{transaction(db,()=>{
           db.prepare("UPDATE demo_company_requests SET status='pending',candidate_json=NULL,clarification=NULL,task_id=? WHERE id=? AND owner_id=? AND status='unresolved'").run(retry.id,duplicate.id,ownerId);
           insertKey(ownerId,body.requestKey,json,duplicate.id);
@@ -184,7 +190,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     const id = randomUUID();
     let task = null;
     try {
-      if (!known) task = tasks.enqueue({ ownerId, kind: 'company_resolution', requestKey: body.requestKey, payload: { requestId: id } });
+      if (!known) task = tasks.enqueue({ ownerId, kind: 'company_resolution', requestKey: body.requestKey, payload: { requestId: id,...policyPayload } });
       transaction(db, () => {
         db.prepare(`INSERT INTO demo_company_requests (id,owner_id,input_text,domain,career_url,scope,fingerprint,status,candidate_json,preview_revision,clarification,task_id,created_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, ownerId, input.input, input.domain, input.careerUrl, input.scope, fingerprint,
@@ -207,12 +213,23 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
           || !['candidate', 'accepted'].includes(found.status)) throw problem('preview_conflict', 409, 'This preview changed. Reload it and try again.');
       if (found.status === 'accepted') {
         if (found.accept_key !== idempotencyKey) throw problem('idempotency_conflict', 409, 'This preview was already accepted.');
+        // An exact retry of a preview accepted by an older server can establish
+        // its catalogue identity once. Existing explicit follow choices win.
+        if(!candidate.companyId&&feed.publishCompany){
+          candidate.companyId=feed.publishCompany(candidate);
+          db.prepare('UPDATE demo_company_requests SET candidate_json=? WHERE owner_id=? AND id=?').run(JSON.stringify(candidate),ownerId,id);
+          readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId);
+          return result(row(ownerId,id));
+        }
         return result(found);
       }
       const used = db.prepare('SELECT id FROM demo_company_requests WHERE owner_id=? AND accept_key=?').get(ownerId, idempotencyKey);
       if (used) throw problem('idempotency_conflict', 409, 'This request key was already used.');
-      db.prepare("UPDATE demo_company_requests SET status='accepted',accept_key=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
-        .run(idempotencyKey, ownerId, id, body.previewRevision);
+      if(feed.publishCompany)candidate.companyId=feed.publishCompany(candidate);
+      if(readingPreferences&&!candidate.companyId)throw problem('dependency_unavailable',503);
+      db.prepare("UPDATE demo_company_requests SET status='accepted',accept_key=?,candidate_json=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
+        .run(idempotencyKey,JSON.stringify(candidate),ownerId,id,body.previewRevision);
+      if(candidate.companyId)readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId);
       return result(row(ownerId, id));
     });
   }
@@ -234,9 +251,10 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
   async function route(ctx) {
     if (ctx.path !== '/company-requests' && !/^\/company-requests\/[^/]+(?:\/accept)?$/u.test(ctx.path)) return null;
     const ownerId = requireOwner(ctx);
+    if(ctx.method!=='GET'&&ctx.method!=='DELETE'&&!admitted(ownerId,ctx.interfaceLocale))throw problem('policy_unavailable',503);
     if (ctx.path === '/company-requests') {
       if (ctx.method === 'GET') return { status: 200, body: { items: db.prepare('SELECT * FROM demo_company_requests WHERE owner_id=? ORDER BY created_at DESC,id').all(ownerId).map(view) } };
-      if (ctx.method === 'POST') return create(ownerId, ctx.body);
+      if (ctx.method === 'POST') return create(ownerId, ctx.body,ctx.interfaceLocale);
       return null;
     }
     let id;
@@ -272,18 +290,20 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
   }
   async function runTask(task, { signal = task.signal } = {}) {
     if (task.kind !== 'company_resolution' || typeof task.payload?.requestId !== 'string' || task.payload.requestId.length > 128) return { status: 'failed', output: null, errorCode: 'invalid_output' };
+    if(!taskAdmitted(task))return {status:'failed',output:null,errorCode:'processing_unavailable'};
     const found = row(task.ownerId, task.payload?.requestId);
-    if (!found || found.task_id !== task.id || found.status !== 'pending' || !live(task, signal)) return { status: 'failed', output: null, errorCode: 'preview_conflict' };
+    if ( !found || found.task_id !== task.id || found.status !== 'pending' || !live(task, signal)) return { status: 'failed', output: null, errorCode: 'preview_conflict' };
     let resolution, failure = null;
     try {
       if (typeof model?.resolveCompany !== 'function' || (typeof model.available === 'function' && !model.available('company_resolution'))) throw problem('dependency_unavailable', 503);
-      resolution = resolutionData(await model.resolveCompany({ input: found.input_text, domain: found.domain, careerUrl: found.career_url, scope: found.scope }, { signal }));
+      resolution = resolutionData(await model.resolveCompany({ input: found.input_text, domain: found.domain, careerUrl: found.career_url, scope: found.scope,...(task.payload.presentationLocale?{presentationLocale:task.payload.presentationLocale}:{}) }, { signal }));
     } catch (error) {
       failure = error.code === 'dependency_unavailable' ? 'dependency_unavailable' : error.code === 'invalid_input' || error.code === 'invalid_output' ? 'invalid_output' : 'provider_unavailable';
       resolution = { status: 'unresolved', candidate: null, clarification: failure === 'invalid_output' ? 'The company evidence could not be verified.' : 'Company research is temporarily unavailable. Try again later.' };
     }
     try {
       return transaction(db, () => {
+        if(!taskAdmitted(task))return {status:'failed',output:null,errorCode:'processing_unavailable'};
         if (!live(task, signal)) return { status: 'failed', output: null, errorCode: 'preview_conflict' };
         const current = row(task.ownerId, found.id);
         if (!current || current.task_id !== task.id || current.status !== 'pending') return { status: 'failed', output: null, errorCode: 'preview_conflict' };

@@ -88,3 +88,10 @@ test('signed-in accounts without full access receive only the guest slice', (t) 
     assert.deepEqual(feed.list({viewer:{account:{id:'restricted'},access}}).items.map(j=>j.id), feed.list().items.map(j=>j.id));
   }
 });
+
+test('private latest cohort shares source gates and excludes the exact visible cutoff',t=>{
+  const {s,feed,add,advance}=setup(t);add([['new',1],['boundary',2],['older',3]]);
+  assert.deepEqual(feed.restrictedLatestJobs().map(j=>j.id),['new']);
+  s.db.prepare("UPDATE demo_jobs SET reserved=1 WHERE id='new'").run();assert.deepEqual(feed.restrictedLatestJobs(),[]);
+  s.db.prepare("UPDATE demo_jobs SET reserved=0 WHERE id='new'").run();advance(DAY_MS);assert.deepEqual(feed.restrictedLatestJobs(),[]);assert.equal(feed.coverage().stale,true);
+});

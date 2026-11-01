@@ -59,7 +59,7 @@ def payload():
              'app/scripts/import-jobs.py': b'# canonical importer fixture\n',
              'app/server/main.mjs': b'export const ready = true;'}
     files.update({'app/server/' + name + '.mjs': b'export {};' for name in
-                 ('auth', 'http', 'store', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter')})
+                 ('auth', 'http', 'store', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter', 'policies', 'processing-admission')})
     files.update(CODEX_FIXTURES)
     manifest = {'formatVersion': 2, 'sourceCommit': 'a' * 40, 'sourceTree': 'b' * 40,
                 'schemaVersion': 1, 'nodeVersion': '24.22.2', 'platform': 'linux-arm64',
@@ -145,7 +145,7 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_canonical_importer_and_runtime_adapter_are_required_together(self):
         manifest, _ = payload()
-        for name in ('app/scripts/import-jobs.py', 'app/server/config.mjs', 'app/server/composition.mjs', 'app/server/runner-adapter.mjs'):
+        for name in ('app/scripts/import-jobs.py', 'app/server/config.mjs', 'app/server/composition.mjs', 'app/server/runner-adapter.mjs', 'app/server/policies.mjs', 'app/server/processing-admission.mjs'):
             with self.subTest(name=name):
                 incomplete = deepcopy(manifest)
                 del incomplete['files'][name]
@@ -823,6 +823,51 @@ process.stdout.write('actual_node_configuration_boundaries_match\n');
                        {'JUSTUP_ACCOUNT_EXPIRES_AT': '1.5'}, {'JUSTUP_ACCOUNT_TTL_MS': str(2 ** 53)}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 launcher.child_environment({**config, **change}, manifest)
+
+    def test_policy_locale_launcher_matches_actual_node_configuration(self):
+        manifest, _ = payload()
+        base = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
+                'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_POLICIES_REVIEWED': 'false'}
+        entry = {'privacyUrl': base['JUSTUP_ORIGIN'] + '/privacy.de.html',
+                 'usageUrl': base['JUSTUP_ORIGIN'] + '/usage.de.html',
+                 'version': 'synthetic-reviewed', 'reviewed': True}
+        variants = [base, {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': entry})},
+                    {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': entry}),
+                     'JUSTUP_POLICY_FALLBACKS': '{"it":"de"}'},
+                    {**base, 'JUSTUP_POLICY_LOCALES': '[]'},
+                    {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': {**entry, 'reviewed': 'true'}})},
+                    {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': {**entry, 'privacyUrl': 'https://other.example/privacy.de.html'}})},
+                    {**base, 'JUSTUP_POLICY_LOCALES': json.dumps({'de': {**entry, 'usageUrl': entry['usageUrl'] + '?x=1'}})},
+                    {**base, 'JUSTUP_POLICY_FALLBACKS': '{"it":"de"}'},
+                    {**base, 'JUSTUP_POLICY_LOCALES': 'x' * 8193}]
+        accepted = []
+        for variant in variants:
+            try:
+                launcher.child_environment(variant, manifest)
+                accepted.append(True)
+            except ValueError:
+                accepted.append(False)
+        script = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const input=JSON.parse(readFileSync(0,'utf8'));
+const {configFromEnv}=await import(input.apiUrl);
+const {policyState}=await import(input.policyUrl);
+for(const [index,env]of input.variants.entries()){
+  let accepted=false;
+  try{const config=configFromEnv(env);assert.equal(policyState(config,'de').reviewed,false);accepted=true;}catch{}
+  assert.equal(accepted,input.accepted[index],`Policy config compatibility case ${index}`);
+}
+process.stdout.write('actual_node_policy_configuration_matches\n');
+"""
+        result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
+                                input=json.dumps({'variants': variants, 'accepted': accepted,
+                                    'apiUrl': (HERE.parent / 'server/main.mjs').resolve().as_uri(),
+                                    'policyUrl': (HERE.parent / 'server/policies.mjs').resolve().as_uri()}),
+                                capture_output=True, timeout=15,
+                                env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('actual_node_policy_configuration_matches', result.stdout)
 
     def test_api_configuration_rejects_aliases_links_and_nonprivate_modes(self):
         with tempfile.TemporaryDirectory() as temp:

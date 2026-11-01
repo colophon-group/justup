@@ -25,7 +25,7 @@ function requestData(value){if(!plain(value)||Object.keys(value).sort().join(','
 function usageData(value){const keys=['inputTokens','cachedInputTokens','outputTokens','reasoningOutputTokens'];if(!plain(value)||Object.keys(value).some(k=>!keys.includes(k))||keys.some(k=>!Number.isSafeInteger(value[k])||value[k]<0))throw problem('invalid_output');return Object.fromEntries(keys.map(k=>[k,value[k]]));}
 
 function companyInput(value){
-  if(!plain(value)||Object.keys(value).sort().join(',')!=='careerUrl,domain,input,scope')throw problem('invalid_input');
+  if(!plain(value)||Object.keys(value).filter(k=>k!=='presentationLocale').sort().join(',')!=='careerUrl,domain,input,scope'||value.presentationLocale!==undefined&&!['en','de','fr','it','es'].includes(value.presentationLocale))throw problem('invalid_input');
   for(const [key,max] of [['input',300],['domain',253],['careerUrl',2048],['scope',500]]){
     if(value[key]===null&&key!=='input')continue;
     if(typeof value[key]!=='string'||!value[key].trim()||value[key].length>max||/[\u0000-\u001f\u007f]/u.test(value[key]))throw problem('invalid_input');
@@ -89,6 +89,7 @@ export async function resolveCompanyIdentity(task,{executeStage,fetchPage=fetchC
   const combined=signal?AbortSignal.any([signal,deadline]):deadline,usage=emptyUsage();let calls=0,toolCalls=0;
   const finish=(data,provenance=[])=>({data,usage,toolCalls,evidenceVerified:data.status==='candidate',evidenceProvenance:provenance});
   async function infer(stage,prompt,maxOutputTokens){
+    if(input.presentationLocale)prompt=`Generate clarification text only in interface language ${input.presentationLocale}. Preserve the user input and all official company names, domains, URLs and source evidence verbatim.\n${prompt}`;
     const remaining=Math.min(timeoutMs,60_000)-(now()-started);
     if(combined.aborted||remaining<1)throw problem('task_timeout');
     if(++calls>2||Buffer.byteLength(prompt)>24_576)throw problem('invalid_input');

@@ -19,7 +19,7 @@ The browser application lives in `web/` and deploys its compiled React/Vite arti
 
 ## HTTP rules
 
-All browser calls use same-origin `/api/v1` routes. Bodies and responses are JSON except health text if needed. Times are ISO 8601 UTC; job discovery timestamps always retain their source value. IDs come from the server. Private records derive ownership from the session, never a supplied account ID.
+All browser calls use same-origin `/api/v1` routes. Bodies and responses are JSON except the workspace event streams, which use `text/event-stream`. Times are ISO 8601 UTC; job discovery timestamps always retain their source value. IDs come from the server. Private records derive ownership from the session, never a supplied account ID.
 
 API responses use `Cache-Control: private, no-store` and `X-Robots-Tag: noindex` in both preview and production frontend modes. Do not send hidden job IDs, titles, bodies or URLs and rely on browser blur for access control. Mutation requests require the session cookie, an allowed `Origin` and `X-CSRF-Token`. Authentication uses a host-only, HttpOnly, Secure, SameSite=Lax opaque session cookie. Local test HTTP is a separately explicit configuration.
 
@@ -35,7 +35,7 @@ Use 400 for malformed input, 401 for a missing/expired session, 403 for denied a
 
 The implemented login provider is Justup itself: local username/password accounts. `JUSTUP_REQUIRES_INVITATION` defaults true; setting it false permits public registration without an invitation, still subject to backend admission, policy and security checks. The safe default account cap is 30 and can be configured explicitly. Accounts are durable by default. Optional `JUSTUP_ACCOUNT_TTL_MS` or `JUSTUP_ACCOUNT_EXPIRES_AT` assign new temporary accounts a stored deadline; later policy changes do not alter existing accounts. Sessions expire independently after seven days by default. There is no external identity, payment identity, free-period activation, recovery or legacy entitlement in the current runtime. See [account contracts](auth.md) and the `account-access` launch criteria.
 
-Keep registration and login disabled until the static Privacy and Usage pages have been reviewed. Deploy the approved HTTPS page URLs and policy version with the API. The pages are frontend-owned; there is no policy JSON endpoint.
+Keep registration, login and private processing disabled until the exact effective-language Privacy and Usage pages have been reviewed. The [processing admission guide](processing-admission.md) defines fixed-locale approval, explicit fallback, session metadata and the shared account/visitor queue proof. The pages are frontend-owned; there is no policy JSON endpoint.
 
 | Route | Input or result |
 | --- | --- |
@@ -44,6 +44,10 @@ Keep registration and login disabled until the static Privacy and Usage pages ha
 | `POST /auth/login` | `{username,password}` → account/session; same policy gate. |
 | `POST /session/logout` | Revoke the current session and clear its cookie. |
 | `DELETE /account` | `{password}` → confirmed deletion of the account, sessions and its private searches, requests, tasks and cached model decisions. |
+| `GET /follows` | `{accountId,revision,items:[{companyId,followedAt}],invalidatedSearchIds:[]}`. |
+| `PATCH /follows/:companyId` | `{followed,expectedRevision}` → current owner-bound follow snapshot; canonical catalogue ID required. |
+| `GET /preferences?languages=de-CH,fr,en` | Saved interface override, supported locales and resolution against the ordered browser list. |
+| `PATCH /preferences` | `{expectedRevision,interfaceLocale}` → saved owner-bound preference snapshot. |
 
 Session example:
 
@@ -55,17 +59,19 @@ Session example:
   "access":{"kind":"account","fullAccess":true,"legacy":false,"billingEnabled":false,"until":null},
   "authentication":{"method":"username_password","loginEnabled":true,"registrationEnabled":true,"requiresInvitation":true,"reason":null,"registrationReason":null},
   "csrfToken":"opaque-token",
-  "capabilities":{"search":true,"aiMatching":true,"companyRequests":true,"sse":false,"follows":false,"viewed":false,"preferences":false,"hiddenMatchCounts":false},
-  "policies":{"privacyUrl":"https://preview.justup.work/privacy","usageUrl":"https://preview.justup.work/usage","version":"reviewed-version","reviewed":true},
+  "capabilities":{"search":true,"aiMatching":true,"companyRequests":true,"sse":false,"follows":true,"viewed":true,"preferences":true,"hiddenMatchCounts":true},
+  "policies":{"privacyUrl":"https://preview.justup.work/privacy.html","usageUrl":"https://preview.justup.work/usage.html","version":"reviewed-version","reviewed":true,"locale":"en","reviewedLocale":"en","fallback":false},
   "coverage":{"kind":"imported_snapshot","verifiedAt":"2026-10-31T15:00:00Z","stale":false}
 }
 ```
 
-The URLs and enabled flags above are illustrative. Return the deployed configuration and actual provider availability. A visitor has `user:null`, `access.kind:"guest"` and `fullAccess:false`. Anonymous visitors can read the public feed; creating or editing a model-backed search requires sign-in. The browser may preserve an unsubmitted visitor draft in memory, without inventing a saved account search.
+The URLs and enabled flags above are illustrative. Return the deployed configuration and actual provider availability. A visitor has `user:null`, `access.kind:"guest"` and `fullAccess:false`. With reviewed policies and the composed visitor service, signed-out visitors can submit and refine cookie-owned searches through `/visitor/searches`, read only eligible older matches and confirmed hidden counts, and persist unsent drafts through `/visitor/workspace`. The public `/jobs` feed remains separate. See the [visitor-search contract](visitor-search.md) for temporary retention, Origin/CSRF checks, exact workspace compare-and-set, viewed actions, durable draft recovery and atomic verified sign-in handoff. Account routes retain their existing account requirement.
 
-`authentication.reason` is null or `policy_unavailable`, `deletion_unavailable`, `dependency_unavailable`. Login requires reviewed configured policies and working retention/deletion protections. Registration additionally requires backend registration availability and remaining configured account capacity. Invitation configuration is required only in invitation mode. The response always reports the authoritative boolean `requiresInvitation`; clients conservatively treat an absent value as true. Stable cookies are `__Host-justup_session` and `__Host-justup_csrf`, with explicit localhost-only variants. The `product-draft-4` policy is unapproved; this illustrative reviewed example does not authorize activation. Model availability is separate from login and account deletion. A wrong deletion password returns `invalid_credentials` while preserving the valid session; an expired session returns `unauthenticated`.
+`authentication.reason` is null or `policy_unavailable`, `deletion_unavailable`, `dependency_unavailable`. Login requires reviewed configured policies and working retention/deletion protections. Registration additionally requires backend registration availability and remaining configured account capacity. Invitation configuration is required only in invitation mode. The response always reports the authoritative boolean `requiresInvitation`; clients conservatively treat an absent value as true. Stable cookies are `__Host-justup_session` and `__Host-justup_csrf`, with explicit localhost-only variants. The `product-draft-5` policies are unapproved; this illustrative reviewed example does not authorize activation. Model availability is separate from login and account deletion. A wrong deletion password returns `invalid_credentials` while preserving the valid session; an expired session returns `unauthenticated`.
 
 Accounts with `access.fullAccess:true` can read eligible imported jobs first observed within 14 days. Visitors can read only jobs first observed 48 hours to 14 days ago. A signed-in account without full access receives the same withheld-job protection as a visitor. The current account access is not a paid-plan or free-trial claim. Access is rechecked on every result page.
+
+[Reading state and language preferences](reading-preferences.md) defines the full follow, option and locale contract. Follows and explicit unfollows survive sessions and are removed with the account. A follow change invalidates affected followed-only search revisions; reload the returned `invalidatedSearchIds`. The interface preference DTO is `{accountId,revision,interfaceLocale,supportedInterfaceLocales:["en","de","fr","it","es"],defaultInterfaceLocale:"en",resolvedInterfaceLocale}`. Null means ordered browser matching with regional-to-base normalization and English fallback; an explicit supported locale wins. Browser lists are not stored. Posting languages are independent of this interface choice.
 
 ## Searches, tasks and results
 
@@ -73,12 +79,17 @@ Accounts with `access.fullAccess:true` can read eligible imported jobs first obs
 | --- | --- |
 | `GET /jobs?cursor=…&limit=12` | Access-controlled imported feed; works without an account. |
 | `GET /searches` | Account-owned saved searches. |
-| `POST /searches` | `{query,requestKey}` → new search and bounded interpretation task. |
-| `PATCH /searches/:id` | `{query,expectedRevision,requestKey}` → interpretation task; preserve the last accepted revision until validation succeeds. |
+| `GET /search-options` | Available imported posting-language `{id,name}` values and explicit any/OR/intersection semantics. |
+| `POST /searches` | `{query,requestKey,options?,presentationLocale?}` → new search and bounded interpretation task. |
+| `PATCH /searches/:id` | `{query,expectedRevision,requestKey,presentationLocale?}` → interpretation task; preserve the last accepted revision until validation succeeds. |
+| `PATCH /searches/:id/options` | `{expectedRevision,followedOnly,postingLanguages}` → updated `{search}` without inference. |
 | `POST /searches/:id/confirm` | `{proposalId,expectedRevision}` → explicitly accept a warned partial configuration; never apply one silently. |
 | `DELETE /searches/:id` | Delete that search and invalidate its tasks/cursors. |
 | `GET /tasks/:id` | Owner-only pending/running/succeeded/warning/failed task result. |
 | `GET /searches/:id/results?revision=…&cursor=…&limit=12` | Confirmed eligible matches and truthful scan status. |
+| `GET /workspace/events?searchId=…&revision=…` | Cookie-authorized active-search SSE snapshots with opaque resume identity. Visitors use `/visitor/workspace/events` with the same required parameters. |
+
+The [live-results contract](live-results.md) defines prefix arrivals separately from complete retained-ID reconciliation. A partial or pending prefix cannot erase older displayed rows. Close and reopen on active-tab changes: inactive tabs cannot enqueue scans or classification work through a stream. The transport rechecks current cookie authority and protection gates throughout the connection, reconciles access/closure/expiry, and refreshes authoritatively on reconnect. It does not advance ordinary result cursors or delivery offsets. Events are limited to 1 MiB. Deployed edge delivery and browser reader stability remain release-gate evidence.
 
 Long work returns `202` with `{search,task:{id,status:"pending"}}` or `{request,task:{id,status:"pending"}}`. Poll the owner-only task with bounded backoff. Its completed result contains the accepted search/request or a warning/clarification. `requestKey` makes retried submissions idempotent. The runner stores leases, uses execution/time/output limits and recovers interrupted work without duplicating acceptance.
 
@@ -86,7 +97,9 @@ The full public task shape is `{id,kind,status,createdAt,updatedAt,result,error}
 
 `POST`/`PATCH` search submissions return the full public task alongside the search. A first pending search has revision zero; an edit preserves its last accepted revision plus its draft. Confirmation returns `200 {search}`. `GET /searches` and `GET /company-requests` return `{items:[...]}`; deleting one returns `200 {deleted:true}`.
 
-An accepted search has `{id,revision,query,title,description,configuration,requirements,warnings,status:"ready"}`. The browser shows the user's query, generated tab title and warnings; the collapsed description is accepted metadata, not a separate visible criteria summary. Keep drafts/proposals distinct from this accepted state. A timeout, failed normalization, unresolved hard requirement or stale response cannot overwrite it. A warned proposal has a server-issued `proposalId`, expected revision and explicit unmet-requirement reasons.
+An accepted search has `{id,revision,query,title,description,configuration,requirements,warnings,options,status:"ready"}`. `options` defaults to `{followedOnly:false,postingLanguages:[]}`. An empty language set means any; a selected set uses OR and excludes unknown posting language. Its intersection with query-derived requirements and follows runs before residual AI and hidden-match evaluation. Conflicting language requirements produce zero matches without loosening either side. There is no arbitrary selected-language count cap; identifiers come from the validated finite imported catalogue and requests use the existing body bound. Visitor language options use `/visitor/search-options` and `/visitor/searches/:id/options`; followed-only requires an account. The browser shows the user's query, generated tab title and warnings; the collapsed description is accepted metadata, not a separate visible criteria summary. Keep drafts/proposals distinct from this accepted state. A timeout, failed normalization, unresolved hard requirement or stale response cannot overwrite it. A warned proposal has a server-issued `proposalId`, expected revision and explicit unmet-requirement reasons.
+
+Options persist per search through text edits and sign-in transfer. Actual changes increment the search revision, cancel incompatible pending work and invalidate old scans, proposals and cursors, preserving accepted query and draft text. A cancelled submitted draft reports `taskId:null,status:"interrupted"`. Explicit settings changes do not invoke the model. Optional `presentationLocale` is limited to the supported interface set and governs generated title/reason wording only; omitted context uses the saved override or English. Neither queries nor source content are translated or rewritten.
 
 A compiler-generated `company_not_found` warning may include `companyRequestPrefill:{input,scope}`. `input` is a plain company name of at most 200 characters; non-null `scope` has the same limit. Strings must be nonempty after trimming and contain no controls. Offer this only for a stated positive company requirement that the full imported catalogue cannot resolve; known aliases, ambiguity, exclusions and unrelated mentions must not generate a hint. Strip the model's internal company-reference fields from public requirements. Ignore malformed optional prefill metadata while retaining the ordinary warning. An explicit warning action can prefill the existing company form; only the user's form submission creates a request.
 
@@ -125,20 +138,20 @@ Missing or stale imported evidence returns an empty `paused` page with `retryAft
 
 Residual matching runs only after freshness and primary filters. JEV returns accept/reject/insufficient-evidence; provider failure is separate. Cached decisions bind condition, evidence hash and classifier version, scoped for account deletion. Batch enough candidates for low acceptance rates within bounded concurrency/work budgets. Deliver a resolved newest-first prefix; never substitute unevaluated candidates. Pauses and outages retain scan position and active AI requirements.
 
-SSE, follows, viewed state, preferences and hidden-match counts currently report unavailable. These accepted product paths remain launch requirements, alongside attributable company hiring reports and persisted posting-language preferences. Existing locale filters alone do not establish the preference journey. Capability flags describe implemented availability; they cannot defer an accepted release requirement. The Hiring Wire API and worker are being integrated under their own bounded contract.
+The composed runtime implements follows, viewed observations, interface preferences, posting-language options and confirmed hidden-match counts. Their complete browser and deployed journeys remain release gates. Resumable SSE and attributable company hiring reports remain first-release requirements. Capability flags describe implemented availability; they cannot defer an accepted release requirement. The Hiring Wire API and worker are being integrated under their own bounded contract.
 
 ## Companies and identity requests
 
 | Route | Input or result |
 | --- | --- |
-| `GET /companies?q=…` | Bounded catalogue using only imported public evidence. |
-| `GET /companies/:id` | Imported identity/available source evidence; absent history remains unavailable. |
+| `GET /companies?q=…` | Bounded catalogue of imported identities and accepted company-request identities. |
+| `GET /companies/:id` | Public canonical identity/source evidence; absent history remains unavailable. |
 | `GET /company-requests` | Account-owned requests and current state. |
 | `POST /company-requests` | `{input,domain?,careerUrl?,scope?,requestKey}` → known candidate or bounded identity-resolution task. |
-| `POST /company-requests/:id/accept` | `{candidateId,previewRevision}` and `Idempotency-Key` → record that exact accepted identity/scope once. |
+| `POST /company-requests/:id/accept` | `{candidateId,previewRevision}` and `Idempotency-Key` → atomically publish/reuse canonical company identity and follow once, preserving explicit unfollow. |
 | `DELETE /company-requests/:id` | Remove the account's request, preview and associated task data. |
 
-A request contains `{id,input,scope,status,candidate,previewRevision,clarification,taskId,createdAt}`. Status is pending/candidate/clarification/unresolved/accepted. A candidate contains `{id,name,domain,websiteUrl,evidenceUrls,coverage}`. Material ambiguity returns a short clarification with candidate null. Search known identities before invoking Codex Luna. Treat provided pages as untrusted evidence, restrict tools and validate output URLs and sizes.
+A request contains `{id,input,scope,status,candidate,companyId,previewRevision,clarification,taskId,createdAt}`. Status is pending/candidate/clarification/unresolved/accepted. A candidate contains `{id,companyId,name,domain,websiteUrl,evidenceUrls,coverage}`. Its exact-preview ID differs from the canonical catalogue `companyId`, which is null until known or accepted. Imported identities keep their original IDs; new accepted identities share a catalogue record by validated official domain and retain `coverage.state:"requested"`. Public identity/evidence has no requester ID and survives private request/account deletion. Material ambiguity returns a short clarification with candidate null. Search known identities before invoking Codex Luna. Treat provided pages as untrusted evidence, restrict tools and validate output URLs and sizes.
 
 A known immediate identity returns `201 {request}`; queued resolution returns `202 {request,task}`. Acceptance returns `200 {request}` with status accepted and references the exact server-held candidate and preview revision. Requirements use `{id,text,handling,reason}` and warnings use `{code,message,requirementIds}`; `handling` is primary/ai/preference/unsatisfied.
 
