@@ -31,4 +31,16 @@ The feed's Python contracts also run the actual feed adapter and pinned Node SQL
 
 Every accepted receipt read syncs the validated file and its parent directory before returning proof. A synchronization failure blocks acknowledgement on both publication and replay; a durable historical receipt remains replayable after a later build switch.
 
+
+`account-test-journey.mjs` is an explicit protected operator mailbox-proof command
+and an importable synthetic-test helper. It creates one disposable account,
+queues one authorized email through the existing adapter, requires mailbox code
+input, activates the ordinary week separately and verifies account deletion in
+`finally`. It uses no provider credentials, activates no runtime configuration
+and never runs Stripe. Failed cleanup retains a protected recovery file and
+fails the receipt. Review the exact recipient packet and limits in
+[account verification](../docs/account-verification.md#run-one-bounded-operator-mailbox-proof)
+before an operator runs it. Its automatic contract suite lives at
+`server/account-test-journey.test.mjs`; CI uses synthetic transport only.
+
 `justup-incident-watch.py` is a Mac LaunchAgent tool for optional read-only IRM polling and a fixed Codex incident prompt. It does not run on the application host or deliver phone pages. Read [incident alerting](../docs/incident-alerting.md) before configuring it; `test_incident_watch.py` uses only synthetic local responses.

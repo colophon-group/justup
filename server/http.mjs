@@ -221,7 +221,16 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
           if(visitorToken&&visitorService){handoffRan=true;visitorHandoff=visitorService.handoff(visitorToken,context);}
           return visitorHandoff;
         };
-        const result = path === '/auth/register' ? await auth.register(body,{afterAuthenticated}) : await auth.login(body,{afterAuthenticated});
+        if (path === '/auth/register') {
+          const acceptance = body.acceptance;
+          if (!acceptance || typeof acceptance !== 'object' || Array.isArray(acceptance)
+              || Object.keys(acceptance).sort().join(',') !== 'adultAndCapable,locale,usageVersion'
+              || acceptance.locale !== interfaceLocale || acceptance.usageVersion !== policies(interfaceLocale).version
+              || acceptance.adultAndCapable !== true) throw problem('invalid_input');
+        }
+        const result = path === '/auth/register'
+          ? await auth.register(body,{afterAuthenticated,registrationAcceptance:body.acceptance})
+          : await auth.login(body,{afterAuthenticated});
         const verifiedViewer=auth.session(result.token);
         if(!handoffRan)throw problem('dependency_unavailable',503);
         if(path==='/auth/register')try{productRecords?.observe({ownerId:verifiedViewer.account.id,event:'account_registered',key:'registration',viewer:verifiedViewer,locale:interfaceLocale,outcome:'accepted'});}catch{}

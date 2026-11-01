@@ -26,6 +26,9 @@ async function fixture(t) {
   db.exec(LEGACY_DDL);db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
   const auth=createAuth({db,config:{requiresInvitation:false,maxAccounts:null},now:()=>AT});
   const account=await auth.register({username:'migration-user',password:PASSWORD}),owner=account.account.id;
+  // This frozen epoch-1 fixture predates registration acceptance; do not invent
+  // historical attestation when current auth is used only to seed credentials.
+  db.exec('DROP TABLE auth_registration_acceptance');
   const insert=(table,values)=>db.prepare(`INSERT INTO ${table} VALUES (${values.map(()=>'?').join(',')})`).run(...values);
   insert('access_identities',[owner,'verified-subject','verified-legacy',AT-30]);
   insert('access_free_periods',[owner,'legacy',AT-20,AT+100000]);

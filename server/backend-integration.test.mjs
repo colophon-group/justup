@@ -59,7 +59,7 @@ test('composed draft, retry, sign-in, language/follow, live-policy and deletion 
   await f.work();assert.equal(f.modelCalls(),1);assert.equal(f.count('justup_model_executions'),1);
   assert.equal((await c.call(`/visitor/searches/${id}/results?revision=1`)).body.items.length,2);
   const before=f.count('justup_journey_events'),visitor=f.db.prepare('SELECT id FROM justup_visitors').get().id,password='Synthetic composed account password';
-  const registered=await c.call('/auth/register','POST',{username:'composed-account',password});assert.equal(registered.status,201);assert.equal(registered.body.visitorHandoff.status,'complete');
+  const registered=await c.call('/auth/register','POST',{acceptance:{usageVersion:'synthetic-reviewed',locale:'en',adultAndCapable:true},username:'composed-account',password});assert.equal(registered.status,201);assert.equal(registered.body.visitorHandoff.status,'complete');
   assert.equal(f.db.prepare('SELECT count(*) n FROM justup_journey_events WHERE owner_id=?').get(visitor).n,0);assert.equal(f.count('justup_journey_events'),before+1);
   assert.equal((await c.call('/follows/existing','PATCH',{followed:true,expectedRevision:0})).status,200);
   const options=await c.call(`/searches/${id}/options`,'PATCH',{expectedRevision:1,followedOnly:true,postingLanguages:['fr']});assert.equal(options.status,200);assert.equal(options.body.search.revision,2);
@@ -76,8 +76,8 @@ test('composed draft, retry, sign-in, language/follow, live-policy and deletion 
 
 test('composed known-company priority stores its access grant and measures setup revisions without inference',async t=>{
   const f=await fixture(t),a=f.client(),b=f.client();await a.call('/session');await b.call('/session');
-  const account=(await a.call('/auth/register','POST',{username:'priority-owner',password:'Synthetic priority account password'})).body.user;
-  await b.call('/auth/register','POST',{username:'other-owner',password:'Synthetic other account password'});
+  const account=(await a.call('/auth/register','POST',{acceptance:{usageVersion:'synthetic-reviewed',locale:'en',adultAndCapable:true},username:'priority-owner',password:'Synthetic priority account password'})).body.user;
+  await b.call('/auth/register','POST',{acceptance:{usageVersion:'synthetic-reviewed',locale:'en',adultAndCapable:true},username:'other-owner',password:'Synthetic other account password'});
   let target;for(let i=0;i<25;i++)target=f.app.feed.publishCompany({name:`Company ${String(i).padStart(2,'0')}`,domain:`company${i}.example.org`,websiteUrl:`https://company${i}.example.org/`,evidenceUrls:[]});
   const path=`/account/companies/${target}/priority`;assert.equal((await a.call(path,'POST',{requestKey:'known'})).status,403);
   f.db.prepare("INSERT INTO access_subscriptions VALUES(?,?,1,'active','monthly',?,0)").run('synthetic-paid',account.id,AT+DAY);

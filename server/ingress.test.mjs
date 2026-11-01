@@ -149,7 +149,8 @@ test('protected requests preserve cookies and still require Origin and CSRF for 
     assert.equal(res.status, 403);
   }
   assert.equal(s.calls.registrations, 0);
-  const res = await fetch(s.base + '/api/v1/auth/register', { method: 'POST', headers, body: '{}' });
+  const res = await fetch(s.base + '/api/v1/auth/register', { method: 'POST', headers,
+    body: JSON.stringify({ acceptance: { usageVersion: 'fixture', locale: 'en', adultAndCapable: true } }) });
   assert.equal(res.status, 201); assert.equal(s.calls.registrations, 1);
 });
 

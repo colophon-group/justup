@@ -156,7 +156,7 @@ test('registration availability comes from backend state and public mode remains
   assert.equal((await s.request('/auth/register', { method:'POST', headers:{...headers, Origin:'https://evil.example'}, body:'{}' })).res.status,403);
   assert.equal((await s.request('/auth/register', { method:'POST', headers:{...headers, 'X-CSRF-Token':'bad'}, body:'{}' })).res.status,403);
   assert.equal(s.mutations(),0);
-  const registered = await s.request('/auth/register', {method:'POST',headers,body:'{}'});
+  const registered = await s.request('/auth/register', {method:'POST',headers,body:JSON.stringify({acceptance:{usageVersion:'reviewed-1',locale:'en',adultAndCapable:true}})});
   assert.equal(registered.res.status,201); assert.equal(registered.body.user.expiresAt,null);
   assert.ok(Number.isFinite(Date.parse(registered.body.expiresAt)));
   const denied = await setup(t, {config:{requiresInvitation:false}, registrationState:{enabled:false,reason:'account_limit'}});
