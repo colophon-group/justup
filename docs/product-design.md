@@ -340,7 +340,7 @@ The strip moves continuously at a calm, constant speed in a fixed-height area. N
 
 The free period begins when a verified account activates full search access, with no payment card required. Show the end date clearly. Full access ending does not delete tabs or force the user through onboarding again.
 
-Verified former Jobseek account owners receive one calendar month free instead of the ordinary week. Require authoritative proof of that ownership; a matching name or unverified email is insufficient. Do not copy old preferences into the new profile without a choice. Offer an account-recovery path when identities differ and define the eligibility cutoff before launch. Erase all free-period redemption evidence when an account is deleted; a person who verifies again may qualify again. Do not start a person's welcome month before they activate the new service.
+Verified former Jobseek account owners receive one calendar month free instead of the ordinary week. Require authoritative proof of that ownership; a matching name or unverified email is insufficient. Do not copy old preferences into the new profile without a choice. Offer an account-recovery path when identities differ. Eligibility includes verified owners of Jobseek accounts created before Jobseek closes account creation at retirement; Justup opens afterward. Preserve an authoritative way to prove that ownership before retiring Jobseek authentication. Erase all free-period redemption evidence when an account is deleted; a person who verifies again may qualify again. Do not start a person's welcome month before they activate the new service.
 
 ### Paid access
 
