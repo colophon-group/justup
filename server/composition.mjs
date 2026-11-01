@@ -29,7 +29,7 @@ export function createApiServices(deps){
   // Explicit allowlist: even an accidental caller config containing secrets is
   // never passed into feature providers or retained in an API-side model object.
   const apiConfig={maxCompanyRequestsPerOwner:config.maxCompanyRequestsPerOwner,matching:config.matching,visitor:config.visitor};
-  const identity=createVisitorIdentity({...deps,config:apiConfig});
+  const identity=createVisitorIdentity({...deps,config:{...apiConfig,dbPath:config.dbPath??':memory:',sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity,policyVersion:config.policyVersion,privateGenerationPath:config.privateGenerationPath}});
   const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
   const heartbeat=()=>readRunnerStatus({config:{dbPath:config.dbPath,runnerStatusPath:config.runnerStatusPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},now}).capabilities;
   const matching=createMatchingService({...deps,...ownership,config:apiConfig,readOnlyProvider:true,availability:()=>heartbeat().aiMatching});
