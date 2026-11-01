@@ -1,3 +1,4 @@
+import { safePublicCompanyURL, safePublicCompanyDomain } from './publicCompanyUrls.ts';
 import { parseInterfaceLocale } from "../i18n/locales.ts";
 // Validate public response shapes at the network boundary; ignore unrequested private fields.
 import type {
@@ -105,40 +106,19 @@ export function decodeCoverage(value: unknown): Coverage {
 }
 export function decodeCompany(value: unknown): Company {
   const o = record(value, "company");
+  const domain = safePublicCompanyDomain(o.domain), websiteUrl = safePublicCompanyURL(o.websiteUrl);
   return {
     id: text(o.id, "company identity"),
     name: text(o.name, "company name"),
     ...optionalText(o, "description"),
     ...optionalText(o, "industry"),
-    ...optionalText(o, "domain"),
-    ...optionalText(o, "websiteUrl"),
-    ...(o.logoUrl == null ? {} : { logoUrl: safeSourceURL(o.logoUrl) }),
+    ...(domain ? { domain } : {}),
+    ...(websiteUrl ? { websiteUrl } : {}),
+    ...(o.logoUrl == null ? {} : { logoUrl: safePublicCompanyURL(o.logoUrl) }),
     ...(o.coverage == null ? {} : { coverage: decodeCoverage(o.coverage) }),
-    ...(o.evidenceUrls == null
-      ? {}
-      : {
-          evidenceUrls: list(
-            o.evidenceUrls,
-            (v) => safeSourceURL(v) ?? fail("company evidence URL"),
-            "company evidence",
-          ),
-        }),
-    ...(o.sources == null
-      ? {}
-      : {
-          sources: list(
-            o.sources,
-            (v) => {
-              const source = record(v, "company source");
-              return {
-                url: safeSourceURL(source.url) ?? fail("company source URL"),
-                ...optionalText(source, "label"),
-                ...optionalText(source, "lastSuccessfulCheckAt"),
-              };
-            },
-            "company sources",
-          ),
-        }),
+    // Raw legacy sources never establish approved career-page links. Only the later
+    // report sourceChecks contract may supply those; do not retain them in hydration data.
+    ...(Array.isArray(o.evidenceUrls) ? { evidenceUrls: o.evidenceUrls.map(safePublicCompanyURL).filter((url): url is string => url !== null) } : {}),
     ...optionalText(o, "lastSuccessfulCheckAt"),
     ...optionalText(o, "monitoringSince"),
     ...(o.hiringHistory == null

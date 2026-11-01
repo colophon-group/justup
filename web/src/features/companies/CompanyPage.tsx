@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { type ApiClient, errorText, isAbortError } from '../../api/client';
 import type { Company } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
-import { coverageLabel, reportDate, safeSourceUrl } from './presentation';
+import { coverageLabel, reportDate } from './presentation';
 
 export interface CompanyPageProps { client: ApiClient; id: string; initialCompany?: Company | undefined }
 export function CompanyPage({ client, id, initialCompany }: CompanyPageProps) {
@@ -39,7 +39,7 @@ export function CompanyPage({ client, id, initialCompany }: CompanyPageProps) {
     {company.hiringRoles?.length ? <section><h2>{t("Hiring roles.")}</h2><ul>{company.hiringRoles.map((role, index) => <li key={`${role.name}:${index}`}>{role.name}{role.count !== undefined ? ` · ${role.count.toLocaleString(locale)}` : ''}</li>)}</ul></section> : null}
     {company.reportedSalaries?.length ? <section><h2>{t("Reported salaries.")}</h2><ul>{company.reportedSalaries.map((salary, index) => <li key={index}>{salary.role ? `${salary.role} ` : ''}{salary.text}</li>)}</ul></section> : null}
     <section className="tracked-sources"><h2>{t("At the source.")}</h2><p>{company.lastSuccessfulCheckAt ? <>{t("Last successful check")}{" "}<time dateTime={company.lastSuccessfulCheckAt}>{reportDate(company.lastSuccessfulCheckAt, locale)}</time></> : t("No successful check reported.")}</p>
-      {company.sources?.length ? <ul>{company.sources.map(source => { const url = safeSourceUrl(source.url); return url ? <li key={url}><a href={url} target="_blank" rel="noopener noreferrer">{url.replace(/^https?:\/\//, '').replace(/\/$/, '')} ↗</a>{source.lastSuccessfulCheckAt ? ` · ${reportDate(source.lastSuccessfulCheckAt, locale)}` : ''}</li> : null; })}</ul> : <p>{t("No tracked career pages reported.")}</p>}
+      <p>{t("Verified career-page links are unavailable.")}</p>
     </section>
   </section>;
 }

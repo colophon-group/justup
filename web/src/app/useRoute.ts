@@ -69,6 +69,7 @@ export function useRoute(initialRoute?: Route): Route {
     window.addEventListener('popstate', update);
     window.addEventListener('hashchange', update);
     document.addEventListener('click', click);
+    update();
     return () => {
       window.removeEventListener('popstate', update);
       window.removeEventListener('hashchange', update);

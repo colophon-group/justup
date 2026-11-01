@@ -2,6 +2,12 @@
 import type { InterfaceLocale } from './locales.ts';
 
 export const messages = {
+  "Verified career-page links are unavailable.": [
+    "Verifizierte Links zu Karriereseiten sind nicht verfügbar.",
+    "Les liens vérifiés vers les pages carrières ne sont pas disponibles.",
+    "I link verificati alle pagine delle carriere non sono disponibili.",
+    "Los enlaces verificados a las páginas de empleo no están disponibles."
+  ],
   "Processing is unavailable until policies are approved for this language.": [
     "Die Verarbeitung ist erst verfügbar, wenn die Hinweise für diese Sprache freigegeben sind.",
     "Le traitement est indisponible tant que les notices ne sont pas approuvées pour cette langue.",

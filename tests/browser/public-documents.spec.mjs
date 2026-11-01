@@ -11,7 +11,8 @@ test('public company reports and catalogue work without JavaScript', async ({ br
   await page.goBack();
   await page.getByRole('link', { name: 'Test Library', exact: true }).click();
   await expect(page).toHaveURL(/\/companies\/library$/); await expect(page.getByRole('heading', { name: 'Test Library', exact: true })).toBeVisible();
-  await expect(page.getByRole('link', { name: /employer.test\/careers/ })).toHaveAttribute('href', 'https://employer.test/careers');
+  await expect(page.locator('#company-page')).toContainText('Verified career-page links are unavailable.');
+  await expect(page.locator('#company-page a[href="https://employer.test/careers"]')).toHaveCount(0);
   await page.goto(`${origin}/companies/missing`); await expect(page.getByRole('heading', { name: 'Page not found.' })).toBeVisible();
   await context.close();
 });
@@ -63,4 +64,34 @@ test('company report dates hydrate consistently across browser time zones', asyn
   await expect(page.locator('time[datetime="2026-10-31T23:30:00Z"]')).toHaveText('Oct 31, 2026');
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeEnabled();
   expect(errors).toEqual([]);
+});
+test('client company refetch cannot restore unsafe metadata or unsupported legacy career links', async ({ page }) => {
+  const privateRequests = [];
+  await page.route(/https?:\/\/(?:127\.0\.0\.1:5432|192\.168\.0\.1|internal\.lan)/, route => { privateRequests.push(route.request().url()); return route.abort(); });
+  await mockApi(page, { 'GET /searches': { items: [search()] }, 'GET /searches/search-1/results': completed([job(1)]),
+    'GET /companies/library': { id: 'library', name: 'Test Library', logoUrl: 'https://192.168.0.1/logo.svg', websiteUrl: 'http://127.0.0.1:5432/internal',
+      sources: [{ url: 'http://127.0.0.1:5432/internal' }, { url: 'https://boards.greenhouse.io/public/jobs?location=remote' }] } });
+  await page.setViewportSize({ width: 1280, height: 1100 }); await page.goto('/');
+  await page.locator('.job-company').click(); await expect(page.getByRole('heading', { name: 'Test Library', exact: true })).toBeVisible();
+  await expect(page.locator('#company-page a[href*="127.0.0.1:5432"], #company-page a[href*="boards.greenhouse.io"], #company-page img[src*="192.168.0.1"]')).toHaveCount(0);
+  await expect(page.locator('#company-page')).toContainText('Verified career-page links are unavailable.');
+  expect(privateRequests).toEqual([]);
+});
+test('a direct request fragment reconciles after public HTML hydration', async ({ page }) => {
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/#request');
+  await expect(page.locator('#request-page')).toBeVisible();
+  await expect(page.locator('#jobs-page')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+test('changing interface language preserves accepted catalogue criteria and cursor while keeping an unsent edit', async ({ page }) => {
+  await page.goto('/companies?q=Public&cursor=public-next');
+  await page.locator('#company-query').fill('Unsent company search');
+  await page.locator('#account-open').click();
+  await page.locator('#interface-language').selectOption('de');
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/de/companies');
+  expect(new URL(page.url()).searchParams.get('q')).toBe('Public');
+  expect(new URL(page.url()).searchParams.get('cursor')).toBe('public-next');
+  await expect(page.locator('#company-query')).toHaveValue('Unsent company search');
+  await page.reload(); await expect(page.locator('#company-query')).toHaveValue('Public');
 });

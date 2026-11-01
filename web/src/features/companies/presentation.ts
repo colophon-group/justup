@@ -1,3 +1,4 @@
+import { safePublicCompanyURL } from '../../api/publicCompanyUrls.ts';
 import type { InterfaceLocale } from "../../i18n/locales.ts";
 import { translate } from "../../i18n/messages.ts";
 // Company evidence is displayed without inferring locations, history or source ownership.
@@ -8,9 +9,7 @@ export function coverageLabel(state: string | undefined, locale: InterfaceLocale
   return translate(locale, 'Coverage not reported');
 }
 export function safeSourceUrl(value: string | undefined): string | null {
-  if (!value) return null;
-  try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null; }
-  catch { return null; }
+  return safePublicCompanyURL(value);
 }
 export function reportDate(value: string, locale: InterfaceLocale = 'en'): string {
   const date = new Date(value);

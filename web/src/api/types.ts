@@ -91,7 +91,6 @@ export interface Company {
   websiteUrl?: string;
   domain?: string;
   evidenceUrls?: string[];
-  sources?: { url: string; label?: string; lastSuccessfulCheckAt?: string }[];
   lastSuccessfulCheckAt?: string;
   monitoringSince?: string;
   hiringHistory?: { date: string; count: number }[];

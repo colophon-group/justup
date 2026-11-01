@@ -24,7 +24,15 @@ export function InterfacePresentation({ initialPublicPage, children }: {
   const changeLocale = (selected: InterfaceLocale | null) => {
     const route = readRoute(location.pathname, location.hash);
     // Choosing browser defaults removes the prefix rather than locking today's browser match.
-    navigate(pageHref(route.page === 'invalid' ? 'jobs' : route.page, selected ?? 'en', route.page === 'company' ? route.id : undefined));
+    const target = new URL(pageHref(route.page === 'invalid' ? 'jobs' : route.page, selected ?? 'en', route.page === 'company' ? route.id : undefined), location.origin);
+    if (route.page === 'companies') {
+      const current = new URL(location.href);
+      for (const [key, limit] of [['q', 100], ['cursor', 4096]] as const) {
+        const values = current.searchParams.getAll(key);
+        if (values.length === 1 && values[0] && values[0].length <= limit && !/[\u0000-\u001f\u007f]/u.test(values[0])) target.searchParams.set(key, values[0]);
+      }
+    }
+    navigate(target.href);
   };
   return <InterfaceLocaleProvider
     {...(explicitLocale ? { initialLocale: explicitLocale } : {})}

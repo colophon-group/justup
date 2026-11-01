@@ -93,3 +93,22 @@ test('public catalogue pages preserve only catalogue criteria and expose real co
   const unbounded = await createPublicHandler(() => json({ items: Array.from({ length: 21 }, (_, i) => ({ ...company, id: String(i) })), nextCursor: null }))(request('/companies'), environment());
   assert.equal(unbounded.status, 503);
 });
+test('indexable company HTML excludes unapproved legacy links and browser-local company URLs', async () => {
+  const unsafe = { ...company, logoUrl: 'https://127.0.0.1/private-logo.svg', websiteUrl: 'https://internal.lan/admin', domain: 'internal.lan',
+    sources: [{ url: 'http://127.0.0.1:5432/internal' }, { url: 'https://boards.greenhouse.io/public/jobs?location=remote' }],
+    evidenceUrls: ['https://192.168.0.1/evidence'] };
+  const result = await createPublicHandler(() => json(unsafe))(request('/companies/public-corp'), environment('production'));
+  assert.equal(result.status, 200); assert.equal(result.headers.get('X-Robots-Tag'), null);
+  const html = await result.text();
+  assert.doesNotMatch(html, /127\.0\.0\.1|internal\.lan|192\.168\.0\.1|boards\.greenhouse\.io/);
+  assert.match(html, /Verified career-page links are unavailable/);
+});
+test('production public filtered catalogue stays noindex and follow without weakening preview or API privacy', async () => {
+  const handle = createPublicHandler(() => json({ items: [company], nextCursor: null }));
+  const production = await handle(request('/companies?q=Public'), environment('production'));
+  assert.equal(production.status, 200); assert.equal(production.headers.get('X-Robots-Tag'), 'noindex, follow');
+  const preview = await handle(request('/companies?q=Public'), environment());
+  assert.match(preview.headers.get('X-Robots-Tag'), /noindex, nofollow/);
+  const api = await createPublicHandler(() => new Response('{}', { headers: { 'Content-Type': 'application/json', 'X-Robots-Tag': 'noindex, follow' } }))(request('/api/v1/companies'), environment('production'));
+  assert.match(api.headers.get('X-Robots-Tag'), /noindex, nofollow/);
+});

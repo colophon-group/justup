@@ -47,7 +47,7 @@ async function publicJSON(target: URL, fetchUpstream: typeof fetch): Promise<{ s
   }
 }
 function publicCompany(company: ReturnType<typeof decodeCompany>) {
-  const { evidenceUrls: _evidence, ...publicFacts } = company;
+  const { evidenceUrls: _evidence, ...publicFacts } = decodeCompany(company);
   return publicFacts;
 }
 function canonicalPath(route: Route): string {

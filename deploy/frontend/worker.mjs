@@ -16,11 +16,11 @@ export function httpsOrigin(value) {
   return url.origin;
 }
 
-function response(body, status, headers = {}, privateResponse = false, indexable = false) {
+function response(body, status, headers = {}, privateResponse = false, indexable = false, publicRobots = null) {
   const result = new Headers(headers);
   for (const [key, value] of Object.entries(SECURITY_HEADERS)) result.set(key, value);
   if (indexable) result.delete('X-Robots-Tag');
-  else result.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+  else result.set('X-Robots-Tag', publicRobots ?? 'noindex, nofollow, noarchive');
   result.set('Cache-Control', privateResponse ? 'private, no-store, max-age=0' : 'no-cache');
   result.set('CDN-Cache-Control', 'no-store');
   result.set('Cloudflare-CDN-Cache-Control', 'no-store');
@@ -110,7 +110,7 @@ export function createHandler(fetchUpstream = globalThis.fetch, renderPublicDocu
         const template = await env.ASSETS.fetch(new Request(templateUrl));
         if (template.status !== 200) return unavailable('document_template_unavailable');
         const rendered = await renderPublicDocument(request, env, await template.text(), fetchUpstream);
-        return response(request.method === 'HEAD' ? null : rendered.body, rendered.status, rendered.headers, true, mode === 'production' && rendered.status === 200 && !rendered.headers.has('X-Robots-Tag'));
+        return response(request.method === 'HEAD' ? null : rendered.body, rendered.status, rendered.headers, true, mode === 'production' && rendered.status === 200 && !rendered.headers.has('X-Robots-Tag'), mode === 'production' && rendered.status === 200 && rendered.headers.get('X-Robots-Tag') === 'noindex, follow' ? 'noindex, follow' : null);
       } catch { return unavailable('public_document_unavailable'); }
     }
     try {
