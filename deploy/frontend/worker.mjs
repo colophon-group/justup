@@ -1,6 +1,5 @@
-// Preview edge boundary. Read when changing public routing, privacy headers or API streaming.
+// Frontend edge boundary. Read when changing public routing, privacy headers or API streaming.
 const SECURITY_HEADERS = {
-  'X-Robots-Tag': 'noindex, nofollow, noarchive',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
@@ -17,9 +16,11 @@ export function httpsOrigin(value) {
   return url.origin;
 }
 
-function response(body, status, headers = {}, privateResponse = false) {
+function response(body, status, headers = {}, privateResponse = false, indexable = false) {
   const result = new Headers(headers);
   for (const [key, value] of Object.entries(SECURITY_HEADERS)) result.set(key, value);
+  if (indexable) result.delete('X-Robots-Tag');
+  else result.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
   result.set('Cache-Control', privateResponse ? 'private, no-store, max-age=0' : 'no-cache');
   result.set('CDN-Cache-Control', 'no-store');
   result.set('Cloudflare-CDN-Cache-Control', 'no-store');
@@ -33,17 +34,19 @@ function response(body, status, headers = {}, privateResponse = false) {
 }
 
 function unavailable(code = 'dependency_unavailable', status = 503) {
-  return response(JSON.stringify({ error: { code, message: status === 403 ? 'Request origin is not allowed.' : 'The preview service is unavailable.', requestId: crypto.randomUUID(), retryAfter: 30 } }), status, { 'Content-Type': 'application/json', 'Retry-After': '30' }, true);
+  return response(JSON.stringify({ error: { code, message: status === 403 ? 'Request origin is not allowed.' : 'The service is unavailable.', requestId: crypto.randomUUID(), retryAfter: 30 } }), status, { 'Content-Type': 'application/json', 'Retry-After': '30' }, true);
 }
 
 export function createHandler(fetchUpstream = globalThis.fetch) {
   return async function handle(request, env) {
     const url = new URL(request.url);
+    const mode = env.DEPLOYMENT_MODE;
+    if (!['preview', 'production'].includes(mode)) return unavailable('deployment_mode_unavailable');
     let publicOrigin;
     try { publicOrigin = httpsOrigin(env.PUBLIC_ORIGIN); } catch { return unavailable(); }
     // Do not expose the service through alternate workers.dev/version hostnames.
     if (url.origin !== publicOrigin) return unavailable('origin_not_allowed', 403);
-    if (url.pathname === '/__preview/version') {
+    if (url.pathname === '/__release/version') {
       if (!['GET', 'HEAD'].includes(request.method)) return response(null, 405, { Allow: 'GET, HEAD' }, true);
       try {
         const release = JSON.parse(env.RELEASE_JSON);
@@ -53,10 +56,10 @@ export function createHandler(fetchUpstream = globalThis.fetch) {
           return [key, release[key]];
         }));
         if (!/^[a-f0-9]{64}$/.test(env.RUNTIME_CONFIG_SHA256)) throw new Error('Missing config identity');
-        return response(request.method === 'HEAD' ? null : JSON.stringify({ ...identity, runtimeConfigSha256: env.RUNTIME_CONFIG_SHA256, apiPrefix: '/api/v1' }), 200, { 'Content-Type': 'application/json' }, true);
+        return response(request.method === 'HEAD' ? null : JSON.stringify({ ...identity, runtimeConfigSha256: env.RUNTIME_CONFIG_SHA256, apiPrefix: '/api/v1', deploymentMode: mode }), 200, { 'Content-Type': 'application/json' }, true);
       } catch { return unavailable('release_identity_unavailable'); }
     }
-    if (url.pathname === '/robots.txt') return response('User-agent: *\nDisallow: /\n', 200, { 'Content-Type': 'text/plain' });
+    if (url.pathname === '/robots.txt') return response(mode === 'preview' ? 'User-agent: *\nDisallow: /\n' : 'User-agent: *\nDisallow: /api/\nDisallow: /__release/\n', 200, { 'Content-Type': 'text/plain' }, false, mode === 'production');
     if (url.pathname === '/api/v1' || url.pathname.startsWith('/api/v1/')) {
       let apiOrigin;
       try { apiOrigin = httpsOrigin(env.API_ORIGIN); } catch { return unavailable(); }
@@ -95,12 +98,12 @@ export function createHandler(fetchUpstream = globalThis.fetch) {
         return response(upstream.body, upstream.status, outgoing, true);
       } catch { return unavailable(); }
     }
-    if (!['GET', 'HEAD'].includes(request.method)) return response(null, 405, { Allow: 'GET, HEAD' });
+    if (!['GET', 'HEAD'].includes(request.method)) return response(null, 405, { Allow: 'GET, HEAD' }, true);
     try {
       const assetUrl = new URL(request.url);
       if (assetUrl.pathname === '/') assetUrl.pathname = '/index.html';
       const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
-      return response(asset.body, asset.status, asset.headers);
+      return response(asset.body, asset.status, asset.headers, asset.status < 200 || asset.status >= 300, mode === 'production' && asset.status >= 200 && asset.status < 300);
     } catch { return unavailable(); }
   };
 }

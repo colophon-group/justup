@@ -1,4 +1,4 @@
-// The catalogue shows bounded imported evidence; unsupported account filters are not advertised.
+// The catalogue displays reported coverage; account filters require their own supported API.
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { type ApiClient, errorText, isAbortError } from '../../api/client';
 import type { Company } from '../../api/types';
@@ -32,7 +32,7 @@ export function CompaniesPage({ client, active, connected = true }: CompaniesPag
   const { visible, revealing, initialCount } = useViewportReveal({ items, resetKey: key, tailRef: tail, active, loading: status === 'loading' });
   function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setSearch(previous => ({ query: query.trim(), revision: previous.revision + 1 })); }
   return <section id="companies-page" className="page" hidden={!active}>
-    <div className="intro-grid"><p>Good coverage starts with being clear about it.<br />Every company in this snapshot. On the record.</p></div>
+    <div className="intro-grid"><p>Good coverage starts with being clear about it.<br />Every company in our catalogue. On the record.</p></div>
     <form id="company-search" className="catalogue-search" onSubmit={submit}>
       <label htmlFor="company-query">Find a company</label>
       <div className="query-field"><input id="company-query" type="search" placeholder="Name, website or industry" autoComplete="off" value={query} onChange={event => setQuery(event.target.value)} /><button className="search-submit" type="submit">Search <span aria-hidden="true">↵</span></button></div>

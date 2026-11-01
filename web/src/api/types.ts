@@ -24,6 +24,7 @@ export interface Session {
     method: string;
     loginEnabled: boolean;
     registrationEnabled: boolean;
+    requiresInvitation: boolean;
     reason: string | null;
   };
   policies: {

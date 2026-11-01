@@ -17,7 +17,7 @@ test('fixed deployed candidate completes its disposable-account search and reque
     if (bytes.length > 1_048_576 || !/noindex/.test(response.headers()['x-robots-tag'] ?? '')) throw new Error('Invalid public response boundary.');
     if (path.startsWith('/api/') && !/no-store/.test(response.headers()['cache-control'] ?? '')) throw new Error('Private API response was cacheable.');
     let json;
-    if (path.startsWith('/api/') || path === '/__preview/version') json = JSON.parse(bytes.toString('utf8'));
+    if (path.startsWith('/api/') || path === '/__release/version') json = JSON.parse(bytes.toString('utf8'));
     return { status: response.status(), json, bytes };
   };
   const mutation = async (path, body, csrf) => {
@@ -26,7 +26,7 @@ test('fixed deployed candidate completes its disposable-account search and reque
     return { status: response.status(), json: await response.json() };
   };
   const session = async () => (await read('/api/v1/session')).json;
-  const identity = async () => verifyBuilds(config, (await read('/__preview/version')).json, (await read('/api/v1/version')).json, (await read('/api/v1/health')).json);
+  const identity = async () => verifyBuilds(config, (await read('/__release/version')).json, (await read('/api/v1/version')).json, (await read('/api/v1/health')).json);
   const responseFor = (method, path) => page.waitForResponse(response => response.request().method() === method && new URL(response.url()).pathname === path, { timeout: 15_000 });
   try {
     await preflight(config, read);
