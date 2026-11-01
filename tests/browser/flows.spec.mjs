@@ -259,7 +259,7 @@ for (const registration of [false, true]) {
     await page.locator('#job-search button[type=submit]').click(); await expect(page.locator('[data-job]')).toHaveCount(1);
     const create = calls.find(call => call.key === 'POST /searches'); expect(create.headers['x-csrf-token']).toBe('fresh-account-csrf'); expect(create.body.query).toBe(draft);
     const credentials = calls.find(call => call.key === authPath).body;
-    expect(credentials).toEqual({ username: 'tester', password: 'test-only-password', ...(registration ? { inviteCode: 'test-only-invite' } : {}) });
+    expect(credentials).toEqual({ username: 'tester', password: 'test-only-password', ...(registration ? { inviteCode: 'test-only-invite', acceptance: { usageVersion: 'test-v1', locale: 'en', adultAndCapable: true } } : {}) });
     await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(page.locator('#header-sign-in')).toBeVisible(); await expect(page.locator('[data-job]')).toHaveCount(0); await expect(page.getByRole('tab', { name: 'Library desk' })).toHaveCount(0); await expect(page.locator('#query')).toHaveValue(''); await expect(page.locator('#auth-username')).toHaveValue('');
   });
