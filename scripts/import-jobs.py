@@ -6,6 +6,7 @@ Read docs/job-data.md before running this explicit operator command.
 import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
+import hmac
 from html.parser import HTMLParser
 import ipaddress
 import json
@@ -14,6 +15,7 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+from typing import NamedTuple
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -46,6 +48,14 @@ ATS_DOMAINS = ("greenhouse.io", "lever.co", "workdayjobs.com", "myworkdayjobs.co
 
 class ImportFailure(Exception):
     """Safe operator error without request headers, response bodies or source content."""
+
+
+class BodyRead(NamedTuple):
+    """Bytes and source provenance for one observed description version."""
+
+    data: bytes
+    url: str | None
+    expected_sha256: str | None = None
 
 
 def utc(value):
@@ -283,7 +293,8 @@ class PublicClient:
         return item
 
     def body(self, posting_id, locale):
-        return self.fetch(f"{ASSET_ORIGIN}/job/{posting_id}/{locale}/latest.html", limit=BODY_LIMIT)
+        url = f"{ASSET_ORIGIN}/job/{posting_id}/{locale}/latest.html"
+        return BodyRead(self.fetch(url, limit=BODY_LIMIT), url)
 
 
 def documents(result, limit):
@@ -378,15 +389,26 @@ def normalize_job(raw, fetched_at, client, clock=None, body_budget=None):
         "bodyBytes": 0, "truncated": False, "aiEligible": False, "bodyError": None,
     }
     locale = locales[0] if locales else "en"
-    body_url = f"{ASSET_ORIGIN}/job/{posting_id}/{locale}/latest.html"
     body_text = None
     try:
         if body_budget is not None and body_budget["remaining"] <= 0:
             raise ImportFailure("body_budget_exceeded")
-        body = client.body(posting_id, locale)
+        observed = client.body(posting_id, locale)
+        if not isinstance(observed, BodyRead) or not isinstance(observed.data, bytes):
+            raise ImportFailure("body_invalid_source")
+        body_url = observed.url
+        if body_url is not None and (safe_url(body_url) != body_url or not body_url.startswith("https://")):
+            raise ImportFailure("body_invalid_source")
+        expected_hash = observed.expected_sha256
+        if expected_hash is not None and (not isinstance(expected_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_hash)):
+            raise ImportFailure("body_invalid_source")
+        body = observed.data
         if len(body) > BODY_LIMIT:
             raise ImportFailure("body_too_large")
-        evidence.update(bodyFetchedAt=iso(clock()) if clock else fetched_at, bodyUrl=body_url, bodyBytes=len(body), bodySha256=hashlib.sha256(body).hexdigest())
+        actual_hash = hashlib.sha256(body).hexdigest()
+        if expected_hash is not None and not hmac.compare_digest(actual_hash, expected_hash):
+            raise ImportFailure("body_hash_mismatch")
+        evidence.update(bodyFetchedAt=iso(clock()) if clock else fetched_at, bodyUrl=body_url, bodyBytes=len(body), bodySha256=actual_hash)
         body_text = normalize_html(body) or None
         if body_text and body_budget is not None:
             size = len(body_text.encode("utf-8"))
@@ -396,8 +418,8 @@ def normalize_job(raw, fetched_at, client, clock=None, body_budget=None):
             body_budget["remaining"] -= size
         evidence.update(textSha256=hashlib.sha256(body_text.encode()).hexdigest() if body_text else None, aiEligible=bool(body_text and len(body_text) >= 200))
     except ImportFailure as exc:
-        code = str(exc) if str(exc) in ("body_too_large", "body_invalid_utf8", "body_invalid_html", "body_budget_exceeded") else "body_unavailable"
-        evidence.update(bodyError=code, truncated=code == "body_too_large", bodyUrl=body_url)
+        code = str(exc) if str(exc) in ("body_too_large", "body_invalid_utf8", "body_invalid_html", "body_budget_exceeded", "body_hash_mismatch", "body_invalid_source") else "body_unavailable"
+        evidence.update(bodyError=code, truncated=code == "body_too_large")
     return {
         "id": posting_id, "companyId": company_id, "companyName": company_name,
         "companySlug": text(raw.get("company_slug"), 200) or None, "title": title,
