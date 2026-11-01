@@ -70,7 +70,7 @@ test('privacy distinguishes current code from deployment and provider review gap
   await expect(page.locator('.policy-status')).toContainText('Sign-in must remain disabled');
   await expect(page.locator('.policy-status')).toContainText('No effective date has been set.');
   const account = page.locator('section[aria-labelledby="section-1"]');
-  for (const fact of ['local username and password', 'salted password hash', 'default session lifetime is 7 days', 'a deployment can configure a different lifetime', 'Accounts are retained until you delete them', 'keyed identity-proof hashes', 'Signing in alone does not grant full access', 'not been selected or approved', 'account-held followed companies', 'explicit unfollow choices', 'interface and posting-language preferences', 'account lifetime and deletion rules']) await expect(account).toContainText(fact);
+  for (const fact of ['local username and password', 'salted password hash', 'default session lifetime is 7 days', 'a deployment can configure a different lifetime', 'Accounts are retained until you delete them', 'keyed identity-proof hashes', 'Signing in alone does not grant full access', 'Identity verification and billing still require separate reviewed activation', 'account-held followed companies', 'explicit unfollow choices', 'interface and posting-language preferences', 'account lifetime and deletion rules']) await expect(account).toContainText(fact);
   const deployment = page.locator('section[aria-labelledby="deployment-settings"]');
   for (const fact of ['verified and disclosed before invitations', 'Accounts have no automatic expiry by default', 'not subscription rules', '2 SQLite backups', '7-day usable age']) await expect(deployment).toContainText(fact);
   const ai = page.locator('section[aria-labelledby="section-2"]');
@@ -100,6 +100,19 @@ test('conditional visitor and first-party measurement disclosures preserve bound
   await page.goto('/usage.html');
   await expect(page.locator('main')).toContainText('not prove immediate deletion');
   await expect(page.locator('main')).toContainText('not an application, interview or hire');
+});
+
+test('optional email notices disclose the recipient and US storage without claiming activation or deletion guarantees', async ({ page }) => {
+  await page.goto('/privacy.html');
+  const account = page.locator('section[aria-labelledby="section-1"]');
+  for (const fact of ['Ordinary registration and sign-in use a local username and password', 'optional email-ownership verification step can ask a signed-in user for an address', 'if it is integrated, reviewed and enabled', 'a signed-in user can provide an address to prove control of that mailbox', 'Verification alone does not activate a free period', 'Resend receives that recipient address', 'verification message with its short-lived code', 'delivery reference', 'address is held only in the temporary verification record', 'removed through local cleanup after delivery, failure or expiry', 'Codes are not saved as readable text in local records', 'Delivery-task metadata, without the address or code, has a 30-day limit', 'running service and safe deletion controls', 'valid for 10 minutes', 'bound to the original signed-in session and language', 'Changing interface language does not change that binding', 'confirmed during a delivery-queue or AI outage', 'Availability of a new send is separate from confirmation']) await expect(account).toContainText(fact);
+  const hosting = page.locator('section[aria-labelledby="section-5"]');
+  for (const fact of ['When enabled', 'accounts@notify.justup.work', 'with sending routed through Ireland', 'stores message content, delivery logs, webhook payloads and its account records in the United States', 'does not move that storage to Ireland', 'verified for the selected provider account', 'does not itself promise deletion of Resend’s copies']) await expect(hosting).toContainText(fact);
+  await expect(hosting).not.toContainText('30 days');
+  await expect(page.locator('body')).toHaveAttribute('data-policy-reviewed', 'false');
+  await page.goto('/usage.html');
+  await expect(page.locator('main')).toContainText('If reviewed and enabled, signed-in users can provide an address');
+  await expect(page.locator('main')).toContainText('Verification alone does not activate a free period or grant full access');
 });
 
 test('usage keeps signed-in but unentitled accounts limited and future providers inactive', async ({ page }) => {
