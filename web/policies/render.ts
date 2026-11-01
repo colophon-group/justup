@@ -1,4 +1,4 @@
-// One static document layout for all aligned, unapproved notice translations.
+// One static document layout for all aligned notice translations.
 import { CONTACT, en, FACTS, LOCALE_NAMES, POLICY_LOCALES, POLICY_STATUS, POLICY_VERSION, SECTIONS } from "./content.ts";
 import type { PolicyCopy, PolicyKind, PolicyLocale } from "./content.ts";
 import { de } from "./de.ts";
@@ -41,16 +41,16 @@ ${paragraphs.map(key => `        <p data-copy="${key}">${paragraph(copy[key])}</
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex,nofollow">
+  <meta name="robots" content="index,follow">
   <meta name="justup-policy-status" content="${POLICY_STATUS}">
   <meta name="justup-policy-version" content="${POLICY_VERSION}">
-  <meta name="justup-policy-reviewed" content="false">
+  <meta name="justup-policy-reviewed" content="true">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'">
   <title>${text(`${kind}.title`)} — Justup</title>
   <meta name="description" content="${text(`${kind}.description`)}">
   <link rel="stylesheet" href="/policies.css">
 </head>
-<body data-policy="${kind}" data-policy-status="${POLICY_STATUS}" data-policy-version="${POLICY_VERSION}" data-policy-reviewed="false">
+<body data-policy="${kind}" data-policy-status="${POLICY_STATUS}" data-policy-version="${POLICY_VERSION}" data-policy-reviewed="true">
   <a class="skip-link" href="#main">${text(`${kind}.skip`)}</a>
   <div class="policy-paper">
     <header class="policy-header">
