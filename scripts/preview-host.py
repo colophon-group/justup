@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -22,7 +23,9 @@ import tempfile
 import uuid
 import importlib.util
 import re
+import select
 import stat
+import time
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
@@ -47,6 +50,9 @@ EXT4_FORMAT_OPTIONS = 'nodiscard,lazy_itable_init=0,lazy_journal_init=0'
 UNIT_ROOT = Path('/etc/systemd/system')
 PROC_ROOT = Path('/proc')
 UPGRADE_LOCK = '.preview-ops-upgrade.lock'
+FEED_UNITS = ('justup-preview-feed.socket', 'justup-preview-feed@.service')
+FEED_ADDITIONS = {'scripts/preview-feed.py', *(f'deploy/justup-preview/{name}' for name in FEED_UNITS)}
+FEED_SOCKET = Path('/run/justup-preview-feed.sock')
 
 
 def call(*args, capture=False):
@@ -415,6 +421,8 @@ def verify_operator_files(folder, scripts):
 
 def verify_operator_units(files):
     for name in UNITS:
+        if f'deploy/justup-preview/{name}' not in files:
+            continue
         target = UNIT_ROOT / name
         owned_path(target)
         if digest(target) != files[f'deploy/justup-preview/{name}']:
@@ -444,8 +452,149 @@ def require_idle_preview():
             continue
 
 
+def _feed_key_identity():
+    """Bind the probe to the still-restricted, root-owned deploy key."""
+    deploy = pwd.getpwnam('justup-deploy')
+    home = Path(deploy.pw_dir)
+    owned_path(home, directory=True)
+    owned_path(home / '.ssh', directory=True)
+    key_path = home / '.ssh/authorized_keys'
+    owned_path(key_path)
+    data = key_path.read_bytes()
+    lines = [line for line in data.splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise ValueError('The deploy key must retain its exact identity-probe command.')
+    options, separator, key = lines[0].partition(b' ssh-ed25519 ')
+    if (not separator or not key or options.split(b',').count(b'command="/usr/bin/id"') != 1
+            or any(b'command=' in option for option in options.split(b',')
+                   if option != b'command="/usr/bin/id"')):
+        raise ValueError('The deploy key must retain its exact identity-probe command.')
+    return key_path, digest(key_path), deploy
+
+
+def _probe_receiver_cgroup():
+    api_uid = pwd.getpwnam(USER).pw_uid
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        for path in PROC_ROOT.iterdir():
+            if not path.name.isdigit():
+                continue
+            try:
+                status = (path / 'status').read_text()
+                ids = next(line.split()[1:] for line in status.splitlines() if line.startswith('Uid:'))
+                command = (path / 'cmdline').read_bytes().rstrip(b'\x00').split(b'\x00')
+                group = (path / 'cgroup').read_text()
+            except (FileNotFoundError, ProcessLookupError, StopIteration):
+                continue
+            if (len(ids) == 4 and all(value.isdigit() for value in ids)
+                    and all(int(value) == api_uid for value in ids)
+                    and command == [b'/usr/bin/python3', os.fsencode(BASE / 'ops/preview-feed.py'), b'receive']):
+                if not any(SLICE in Path(line[3:]).parts
+                           and re.fullmatch(r'justup-preview-feed@[^/]+\.service', Path(line[3:]).name)
+                           for line in group.splitlines()
+                           if line.startswith('0::')):
+                    raise ValueError('The feed receiver is outside the preview slice.')
+                return
+        time.sleep(0.1)
+    raise ValueError('The bounded feed receiver did not start inside the preview slice.')
+
+
+def _verify_feed_probe_storage(inbox, receipt_dir, api_uid):
+    """Invalid input may leave only the receiver's persistent, idle lock."""
+    if any(receipt_dir.iterdir()) or {path.name for path in inbox.iterdir()} - {'.receive.lock'}:
+        raise ValueError('Synthetic refusal left feed content or receipts.')
+    lock = inbox / '.receive.lock'
+    if not os.path.lexists(lock):
+        return
+    fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        meta = os.fstat(fd)
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != api_uid or meta.st_nlink != 1
+                or stat.S_IMODE(meta.st_mode) != 0o600 or meta.st_size != 0):
+            raise ValueError('The receiver lock has unsafe identity or content.')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('The feed receiver still holds its intake lock.') from None
+    finally:
+        os.close(fd)
+
+
+def qualify_feed_units():
+    """Temporarily prove the exact installed receiver; leave intake disabled."""
+    socket_unit = FEED_UNITS[0]
+    key_path, old_key_digest, deploy = _feed_key_identity()
+    for name in FEED_UNITS:
+        call('systemd-analyze', 'verify', str(UNIT_ROOT / name))
+    if (call('systemctl', 'show', '--property=UnitFileState', '--value', socket_unit, capture=True) != 'disabled'
+            or call('systemctl', 'show', '--property=ActiveState', '--value', socket_unit, capture=True) != 'inactive'
+            or os.path.lexists(FEED_SOCKET)):
+        raise ValueError('The new feed socket must begin disabled and inactive.')
+    subprocess.run(['/usr/bin/python3', str(BASE / 'ops/preview-feed.py'), 'prepare'],
+                   check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=30,
+                   env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'PYTHONDONTWRITEBYTECODE': '1'})
+    inbox = BASE / 'state/feed-inbox'
+    receipt_dir = BASE / 'config/feed-receipts'
+    api_uid = pwd.getpwnam(USER).pw_uid
+    if (not stat.S_ISDIR(inbox.lstat().st_mode) or inbox.stat().st_uid != api_uid
+            or stat.S_IMODE(inbox.stat().st_mode) != 0o700
+            or not stat.S_ISDIR(receipt_dir.lstat().st_mode) or receipt_dir.stat().st_uid != 0
+            or stat.S_IMODE(receipt_dir.stat().st_mode) != 0o700):
+        raise ValueError('The private feed paths have unsafe ownership or modes.')
+    _verify_feed_probe_storage(inbox, receipt_dir, api_uid)
+    # Connect as the deploy UID, then hold the socket open so the actual
+    # socket-activated service can be observed in /proc before refusing bytes.
+    probe_code = ('import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); '
+                  'sys.stdout.write("ready\\n"); sys.stdout.flush(); sys.stdin.buffer.read(1); '
+                  's.sendall(b"invalid\\n"); s.shutdown(socket.SHUT_WR); '
+                  'response=s.recv(1024); s.close(); sys.exit(0 if response==b"" else 1)')
+    def demote():
+        os.setgroups([])
+        os.setgid(deploy.pw_gid)
+        os.setuid(deploy.pw_uid)
+    process = None
+    try:
+        call('systemctl', 'start', socket_unit)
+        meta = FEED_SOCKET.lstat()
+        if (not stat.S_ISSOCK(meta.st_mode) or meta.st_uid != deploy.pw_uid
+                or stat.S_IMODE(meta.st_mode) != 0o600):
+            raise ValueError('The feed socket permits an unexpected identity.')
+        process = subprocess.Popen(['/usr/bin/python3', '-c', probe_code, str(FEED_SOCKET)],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, preexec_fn=demote,
+                                   env={'PATH': '/usr/bin:/bin', 'LANG': 'C'})
+        ready, _, _ = select.select([process.stdout], [], [], 5)
+        if not ready or process.stdout.readline() != b'ready\n':
+            raise ValueError('The deploy UID could not reach the feed socket.')
+        _probe_receiver_cgroup()
+        process.stdin.write(b'x')
+        process.stdin.flush()
+        if process.wait(timeout=5) != 0:
+            raise ValueError('The receiver did not refuse synthetic invalid input.')
+        _verify_feed_probe_storage(inbox, receipt_dir, api_uid)
+    finally:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        call('systemctl', 'stop', socket_unit)
+    if (call('systemctl', 'show', '--property=ActiveState', '--value', socket_unit, capture=True) != 'inactive'
+            or call('systemctl', 'show', '--property=UnitFileState', '--value', socket_unit, capture=True) != 'disabled'
+            or os.path.lexists(FEED_SOCKET) or digest(key_path) != old_key_digest):
+        raise ValueError('The feed intake did not return to its disabled identity.')
+
+
 def upgrade_ops(root, previous_plan_path, previous_sha, expected, host_fingerprint):
     """Swap only a complete stopped operator directory; retain all private state."""
+    return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint)
+
+
+def upgrade_feed(root, previous_plan_path, previous_sha, expected, host_fingerprint):
+    """Install only the reviewed private feed script and disabled unit pair."""
+    return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, add_feed=True)
+
+
+def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, *, add_feed=False):
     reviewed(root, expected, host_fingerprint)
     require_operator()
     root = Path(root).absolute()
@@ -466,15 +615,26 @@ def upgrade_ops(root, previous_plan_path, previous_sha, expected, host_fingerpri
         raise ValueError('Previous plan does not match its exact reviewed digest.')
     candidate = plan(root, host_fingerprint)
     unchanged = lambda value: {key: item for key, item in value.items() if key not in {'files', 'planSha256'}}
-    if (previous_sha == expected or unchanged(previous) != unchanged(candidate)
-            or previous.get('files', {}).keys() != candidate['files'].keys()):
-        raise ValueError('Operator updates cannot change the host, resource boundary or inventory paths.')
+    old_files, new_files = previous['files'], candidate['files']
+    if previous_sha == expected or unchanged(previous) != unchanged(candidate):
+        raise ValueError('Operator updates cannot change the host or resource boundary.')
+    if add_feed:
+        if (set(new_files) - set(old_files) != FEED_ADDITIONS or set(old_files) - set(new_files)
+                or any(old_files[key] != new_files[key] for key in old_files if key != 'scripts/preview-host.py')):
+            raise ValueError('Feed upgrade accepts only the exact reviewed script and unit additions.')
+    elif old_files.keys() != new_files.keys():
+        raise ValueError('Operator updates cannot change inventory paths.')
     scripts = {Path(name).name: checksum for name, checksum in previous['files'].items() if name.startswith('scripts/')}
     new_scripts = {Path(name).name: checksum for name, checksum in candidate['files'].items() if name.startswith('scripts/')}
     for name, checksum in previous['files'].items():
         if not name.startswith('scripts/') and candidate['files'][name] != checksum:
             raise ValueError('Operator updates cannot change units, native runtime pins or licenses.')
     verify_operator_units(previous['files'])
+    if add_feed and any(os.path.lexists(UNIT_ROOT / name) for name in FEED_UNITS):
+        raise ValueError('A new feed unit path already exists; inspect it before installing.')
+    if add_feed:
+        for name in FEED_UNITS:
+            owned_path(root / 'deploy/justup-preview' / name)
     for name in new_scripts:
         owned_path(root / 'scripts' / name)
     owned_path(BASE, directory=True)
@@ -502,9 +662,11 @@ def upgrade_ops(root, previous_plan_path, previous_sha, expected, host_fingerpri
     os.fsync(fd)
     os.close(fd)
     sync_directory(BASE)
-    withdrawn = moved_old = moved_new = qualified = False
+    withdrawn = moved_old = moved_new = qualified = history_created = False
+    installed_feed_units = []
     try:
         history.mkdir(mode=0o700)
+        history_created = True
         sync_directory(history_root)
         new_ops = history / 'prepared-ops'
         new_ops.mkdir(mode=0o755)
@@ -533,23 +695,65 @@ def upgrade_ops(root, previous_plan_path, previous_sha, expected, host_fingerpri
         sync_directory(history)
         sync_directory(BASE)
         verify_operator_files(BASE / 'ops', new_scripts)
+        if add_feed:
+            for name in FEED_UNITS:
+                key = f'deploy/justup-preview/{name}'
+                # An exclusive create may succeed before a later write/fsync
+                # fails. Track the attempt so unknown partial bytes can never
+                # escape rollback verification and restore the old receipt.
+                installed_feed_units.append(name)
+                write_update_file(UNIT_ROOT / name, (root / key).read_bytes(), 0o644)
+            sync_directory(UNIT_ROOT)
+            call('systemctl', 'daemon-reload')
         verify_operator_units(candidate['files'])
+        if add_feed:
+            qualify_feed_units()
+            require_idle_preview()
         guard()
         publish_receipt(marker, history / 'new-receipt.tmp',
                         (json.dumps({'formatVersion': 1, 'planSha256': expected}) + '\n').encode())
         qualified = True
         return {'previousPlanSha256': previous_sha, 'planSha256': expected, 'operatorFiles': len(new_scripts),
+                'feedUnitsInstalled': add_feed,
+                'feedInboxPrepared': add_feed,
                 'privateStateTouched': False, 'activated': False}
     except Exception:
+        if not withdrawn and history_created:
+            # Preparation has not changed live files. Discard only this new
+            # private history after re-proving the old receipt and inventory.
+            current = owned_path(marker)
+            if ((current.st_dev, current.st_ino) != (marker_meta.st_dev, marker_meta.st_ino)
+                    or marker.read_bytes() != marker_data):
+                raise ValueError('The old receipt changed; retain the pending lock for review.')
+            verify_operator_files(BASE / 'ops', scripts)
+            verify_operator_units(previous['files'])
+            guard()
+            owned_path(history, directory=True)
+            shutil.rmtree(history)
+            sync_directory(history_root)
+            qualified = True
         if withdrawn:
             # A missing receipt is the fail-closed state for a crash or a failed
             # rollback. Never restore it over unknown or partly replaced bytes.
             if os.path.lexists(marker):
                 raise ValueError('A receipt appeared during update publication; retain the pending lock for review.')
+            if add_feed:
+                # Qualification may have started a real receiver. Prove every
+                # dedicated identity idle before restoring files or a receipt.
+                require_idle_preview()
             if moved_new:
                 (BASE / 'ops').rename(history / 'rejected-ops')
             if moved_old:
                 (history / 'previous-ops').rename(BASE / 'ops')
+            if add_feed:
+                for name in installed_feed_units:
+                    target = UNIT_ROOT / name
+                    owned_path(target)
+                    if digest(target) != candidate['files'][f'deploy/justup-preview/{name}']:
+                        raise ValueError('A feed unit changed during rollback; retain pending state.')
+                    target.unlink()
+                sync_directory(UNIT_ROOT)
+                call('systemctl', 'daemon-reload')
             sync_directory(history)
             sync_directory(BASE)
             verify_operator_files(BASE / 'ops', scripts)
@@ -669,7 +873,7 @@ def teardown(erase_data=False, expected_plan=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
@@ -693,6 +897,11 @@ def main():
                 raise ValueError('The exact previous reviewed plan file is required.')
             result = upgrade_ops(args.source_root, args.previous_plan, args.previous_plan_sha,
                                  args.reviewed_plan_sha, args.host_machine_sha)
+        elif args.command == 'upgrade-feed':
+            if args.previous_plan is None:
+                raise ValueError('The exact previous reviewed plan file is required.')
+            result = upgrade_feed(args.source_root, args.previous_plan, args.previous_plan_sha,
+                                  args.reviewed_plan_sha, args.host_machine_sha)
         elif args.command == 'prove':
             result = proof()
         elif args.command == 'guard':
@@ -713,7 +922,7 @@ def main():
             result = stop_preview()
         print(json.dumps({'ok': True, 'result': result}, sort_keys=True))
         return 0
-    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         # Do not publish raw command output, environment or provider responses.
         print(json.dumps({'ok': False, 'error': type(error).__name__}), file=sys.stderr)
         return 1
