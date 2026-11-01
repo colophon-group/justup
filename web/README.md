@@ -66,7 +66,9 @@ The browser consumes the same-origin `/api/v1` account and search API through th
 
 Source coverage is evidence, not an environment label. Imported snapshots are identified explicitly, with verification time and stale state when supplied. Other source types retain their reported description without being called a snapshot or treated as continuously monitored. Company pages display only reported facts.
 
-The interface is currently English. The typing examples are decorative and never become input values or submit searches. Posting-language selection, followed-company filters, viewed-state writes, live result streaming, subscription controls and Hiring Wire require supported service/UI contracts before they can be offered. These are product-readiness requirements. Until live streaming is supported, the explicit results action checks new data for the accepted revision without a model call.
+The interface is currently English. The typing examples are decorative and never become input values or submit searches. Posting-language selection, followed-company filters, viewed-state writes, live result streaming and subscription controls require supported service/UI contracts before they can be offered. These are product-readiness requirements. Until live streaming is supported, the explicit results action checks new data for the accepted revision without a model call.
+
+Hiring Wire reads published weekly editions from the public API. The cream strip keeps moving past pointer hover and click; keyboard reading and reduced motion provide static access to the original links. Visual repeats are not additional keyboard or screen-reader content. An expired, malformed or unavailable edition is hidden while its reserved space stays stable. There are no sample headlines or inferred history. A compatible publication service and verified comparable source history remain required before a real edition can appear.
 
 When result responses supply hidden-match metadata, the access notice displays the reported exact count or an explicit lower bound; absent or zero counts produce no notice. The compressed-paper illustration contains no restricted job data.
 
