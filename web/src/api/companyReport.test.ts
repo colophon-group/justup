@@ -85,6 +85,38 @@ test('unavailable current evidence discards stale numeric claims while preservin
   assert.equal(value.sourceChecks.items[0]?.publicLink?.url, report().sourceChecks.items[0]?.publicLink?.url);
   assert.deepEqual(decodeCompanyReport(value, 'company'), value);
 });
+test('unknown aggregate bounds retain reported group counts and units without numeric substitution', () => {
+  const raw = currentReport(); raw.reportedSalaries.groups[0]!.min = null; raw.reportedSalaries.groups[0]!.max = null;
+  const value = decodeCompanyReport(raw, 'company');
+  assert.deepEqual(value.hiringRoles, raw.hiringRoles);
+  assert.deepEqual(value.sourceChecks, decodeCompanyReport(report(), 'company').sourceChecks);
+  assert.equal(value.reportedSalaries?.state, 'available');
+  if (value.reportedSalaries?.state === 'available') {
+    assert.deepEqual(value.reportedSalaries.groups[0], { currency: 'EUR', period: 'hour', sampleSize: 1, min: null, max: null });
+    assert.equal(value.reportedSalaries.groupedSampleSize, 3); assert.equal(value.reportedSalaries.incompleteSampleSize, 1);
+  }
+  assert.deepEqual(decodeCompanyReport(value, 'company'), value);
+});
+test('newer per-record evidence does not overwrite or invalidate the separate full-snapshot clock', () => {
+  const store = openStore(), fullAt = at - 2 * 3_600_000, changedAt = at - 3_600_000;
+  const job = (observedAt: number) => ({ id: 'changed-record', companyId: 'company', companyName: 'Sample company', companySlug: 'sample', title: 'Sample role', sourceUrl: 'https://example.org/jobs/changed-record',
+    firstObserved: iso(at - 3 * 86_400_000), lastObserved: null, active: true, reserved: false, hasContent: true, locales: [], locations: [], employmentTypes: [], seniority: null,
+    salary: null, bodyText: null, evidence: { source: 'jobseek_public', metadataFetchedAt: iso(observedAt), bodyFetchedAt: null, bodyUrl: null, bodySha256: null, textSha256: null, bodyBytes: 0, normalizationVersion: 1, truncated: false } });
+  const load = (observedAt: number) => store.importSnapshot({ schemaVersion: 1, snapshotAt: iso(observedAt), verifiedAt: iso(observedAt), jobs: [job(observedAt)], observations: [], unknownIds: [],
+    selection: { source: 'jobseek_feed_v1', feed: { fullSnapshotAt: iso(fullAt) } } });
+  try {
+    load(fullAt); load(changedAt);
+    const feed = createFeed({ db: store.db, now: () => at });
+    const raw = createCompanyReports({ db: store.db, feed, now: () => at }).report('company');
+    assert.equal(raw.provenance.importVerifiedAt, '2026-11-01T10:00:00.000Z');
+    assert.equal(raw.provenance.sampleObservedThrough, '2026-11-01T11:00:00.000Z');
+    const value = decodeCompanyReport(raw, 'company');
+    assert.equal(value.asOf, '2026-11-01T12:00:00.000Z');
+    assert.equal(value.provenance?.importVerifiedAt, raw.provenance.importVerifiedAt);
+    assert.equal(value.provenance?.sampleObservedThrough, raw.provenance.sampleObservedThrough);
+    assert.equal(value.freshness?.listings, 'fresh'); assert.equal(value.hiringRoles?.state, 'available');
+  } finally { store.close(); }
+});
 test('partial, inconsistent, unbounded or misleading current sample evidence is rejected', () => {
   const cases: [string, (v: ReturnType<typeof currentReport>) => void][] = [
     ['partial analytics', v => { Reflect.deleteProperty(v, 'scope'); }],
@@ -117,7 +149,6 @@ test('partial, inconsistent, unbounded or misleading current sample evidence is 
     ['non-finite amount', v => { v.reportedSalaries.groups[0]!.min = Infinity; }],
     ['negative amount', v => { v.reportedSalaries.groups[0]!.min = -1; }],
     ['reversed amount', v => { v.reportedSalaries.groups[2]!.min = 300; }],
-    ['empty amount group', v => { v.reportedSalaries.groups[0]!.min = null; v.reportedSalaries.groups[0]!.max = null; }],
     ['missing bound', v => { Reflect.deleteProperty(v.reportedSalaries.groups[0]!, 'max'); }],
   ];
   for (const [label, change] of cases) { const raw = currentReport(); change(raw); assert.throws(() => decodeCompanyReport(raw, 'company'), label); }

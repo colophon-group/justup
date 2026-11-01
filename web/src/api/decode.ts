@@ -244,7 +244,7 @@ function decodeCompanySamples(o: Record<string, unknown>, asOf: string): Pick<Co
     return { ...common, freshness: { listings: "unavailable" }, hiringRoles: { state: "unavailable" }, reportedSalaries: { state: "unavailable" } };
   }
   if (roles.state !== "available" || salaries.state !== "available" || !importGeneration || !importVerifiedAt
-      || Date.parse(importVerifiedAt) > at || (sampleObservedThrough && Date.parse(sampleObservedThrough) > Date.parse(importVerifiedAt))) fail("company sample freshness");
+      || Date.parse(importVerifiedAt) > at || (sampleObservedThrough && Date.parse(sampleObservedThrough) > at)) fail("company sample freshness");
   const sampleSize = sampleCount(roles.sampleSize, "company sample size");
   const labelledSampleSize = sampleCount(roles.labelledSampleSize, "labelled role sample"), unknownRoleSampleSize = sampleCount(roles.unknownSampleSize, "unlabelled role sample");
   if (labelledSampleSize + unknownRoleSampleSize !== sampleSize || sampleCount(salaries.sampleSize, "salary sample size") !== sampleSize
@@ -266,7 +266,7 @@ function decodeCompanySamples(o: Record<string, unknown>, asOf: string): Pick<Co
   const groups = salaryEntries.map(value => {
     const item = record(value, "company salary group"), currency = reportText(item.currency, "salary currency", 10), period = reportText(item.period, "salary period", 30);
     const sampleSize = sampleCount(item.sampleSize, "salary group sample"), min = reportAmount(item.min), max = reportAmount(item.max), unit = JSON.stringify([currency, period]);
-    if (!sampleSize || units.has(unit) || min === null && max === null || min !== null && max !== null && min > max) fail("company salary group");
+    if (!sampleSize || units.has(unit) || min !== null && max !== null && min > max) fail("company salary group");
     units.add(unit); return { currency, period, sampleSize, min, max };
   });
   if (groups.reduce((sum, item) => sum + item.sampleSize, 0) !== groupedSampleSize) fail("company salary group denominator");
