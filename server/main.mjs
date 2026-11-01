@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, resolve, isAbsolute, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { openStore } from './store.mjs';
+import { SCHEMA_VERSION, migrateDatabaseFile } from './schema.mjs';
 import { createFeed } from './feed.mjs';
 import { createTasks } from './tasks.mjs';
 import { createHandler,policyState } from './http.mjs';
@@ -142,8 +143,9 @@ export async function createConfiguredApplication({ config = {}, ...options } = 
   return createApplication({ ...options, config: { ...configured, readiness: createApiReadiness({ config: configured, now: options.now ?? Date.now }) },
     serviceFactories: [createApiServices] });
 }
-export async function prepareRestoredDatabase({ dbPath, authFactory } = {}) {
+export async function prepareRestoredDatabase({ dbPath, authFactory, migrateV1 = false } = {}) {
   if (typeof dbPath !== 'string' || dbPath === ':memory:' || !lstatSync(dbPath).isFile() || lstatSync(dbPath).isSymbolicLink()) throw new Error('Use an existing restored application database file.');
+  if (migrateV1) migrateDatabaseFile(dbPath);
   const store = openStore(dbPath);
   try {
     const createAuth = authFactory ?? (await import('./auth.mjs')).createAuth;
@@ -154,7 +156,7 @@ export async function prepareRestoredDatabase({ dbPath, authFactory } = {}) {
     const result = auth.invalidateAllSessions();
     if (result && typeof result.then === 'function' || !Number.isSafeInteger(result?.sessionsDeleted) || result.sessionsDeleted < 0
         || store.db.isTransaction) throw new Error('Restored session invalidation failed.');
-    return { schemaVersion: 1, sessionsInvalidated: true, remainingSessions: 0, sessionsDeleted: result.sessionsDeleted };
+    return { schemaVersion: SCHEMA_VERSION, sessionsInvalidated: true, remainingSessions: 0, sessionsDeleted: result.sessionsDeleted };
   } finally { store.close(); }
 }
 export function readImportFile(path) {
@@ -185,10 +187,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
   process.umask(config.sharedState ? 0o007 : 0o077);
   const args = process.argv.slice(2);
   if (!config.dbPath || (!config.allowedOrigin && args.length === 0)) throw new Error('Set explicit JUSTUP_DB_PATH and JUSTUP_ORIGIN.');
-  if (args[0] === '--prepare-restored-db' && args.length === 2) {
+  if (args[0] === '--migrate-db' && args.length === 1) {
+    console.log(JSON.stringify(migrateDatabaseFile(config.dbPath)));
+  } else if (args[0] === '--prepare-restored-db' && (args.length === 2 || args.length === 3 && args[2] === '--migrate-v1')) {
     const restored = resolve(args[1]);
     if (restored === resolve(config.dbPath) || !lstatSync(restored).isFile() || lstatSync(restored).isSymbolicLink()) throw new Error('Use a separate restored application database file.');
-    console.log(JSON.stringify(await prepareRestoredDatabase({ dbPath: restored })));
+    console.log(JSON.stringify(await prepareRestoredDatabase({ dbPath: restored, migrateV1: args[2] === '--migrate-v1' })));
   } else if (args[0] === '--import' && args.length === 2) {
     const store = openStore(config.dbPath, { sharedState: config.sharedState });
     try { console.log(JSON.stringify(store.importSnapshot(readImportFile(args[1])))); }

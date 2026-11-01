@@ -206,6 +206,7 @@ def main():
         artifact = module('preview-artifact')
         artifact.read_host_plan(BASE)
         manifest = artifact.verify_directory(release)
+        artifact.check_database_schema(BASE / 'state/preview.sqlite', manifest, allow_missing=True)
         config = read_configuration(BASE / 'config/api.json')
         environment = child_environment(config, manifest)
         child = subprocess.Popen([str(release / 'runtime/bin/node'), str(release / manifest['entrypoint'])],

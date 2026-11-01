@@ -142,29 +142,29 @@ export function primaryMatches(job, {filters:f}) {
 
 export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability,ownerAuthority,visitorIdentity,readingPreferences}={}) {
   if(!db||!feed||!tasks) throw new TypeError('Search dependencies are required.');
-  db.exec(`CREATE TABLE IF NOT EXISTS demo_searches(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,accepted_json TEXT,draft_json TEXT,task_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
-    CREATE INDEX IF NOT EXISTS demo_searches_owner ON demo_searches(owner_id);
-    CREATE TABLE IF NOT EXISTS demo_search_submissions(owner_id TEXT NOT NULL,request_key TEXT NOT NULL,search_id TEXT NOT NULL,input_hash TEXT NOT NULL,task_id TEXT NOT NULL,PRIMARY KEY(owner_id,request_key)) STRICT;
-    CREATE TABLE IF NOT EXISTS demo_search_proposals(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,expected_revision INTEGER NOT NULL,task_id TEXT NOT NULL,proposal_json TEXT NOT NULL) STRICT;
-    CREATE TABLE IF NOT EXISTS demo_search_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,position INTEGER NOT NULL,created_at INTEGER NOT NULL) STRICT;
-    CREATE TABLE IF NOT EXISTS demo_search_delegate_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,delegate_cursor TEXT,created_at INTEGER NOT NULL) STRICT;`);
+  db.exec(`CREATE TABLE IF NOT EXISTS justup_searches(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,accepted_json TEXT,draft_json TEXT,task_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
+    CREATE INDEX IF NOT EXISTS justup_searches_owner ON justup_searches(owner_id);
+    CREATE TABLE IF NOT EXISTS justup_search_submissions(owner_id TEXT NOT NULL,request_key TEXT NOT NULL,search_id TEXT NOT NULL,input_hash TEXT NOT NULL,task_id TEXT NOT NULL,PRIMARY KEY(owner_id,request_key)) STRICT;
+    CREATE TABLE IF NOT EXISTS justup_search_proposals(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,expected_revision INTEGER NOT NULL,task_id TEXT NOT NULL,proposal_json TEXT NOT NULL) STRICT;
+    CREATE TABLE IF NOT EXISTS justup_search_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,position INTEGER NOT NULL,created_at INTEGER NOT NULL) STRICT;
+    CREATE TABLE IF NOT EXISTS justup_search_delegate_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,delegate_cursor TEXT,created_at INTEGER NOT NULL) STRICT;`);
   const ownerOf=ctx=>ctx.viewer?.visitor?.id??ctx.accountId;
   const authority=(owner,cleanup=false,locale)=>typeof ownerAuthority==='function'?ownerAuthority(owner,{allowUnavailable:cleanup,locale}):null;
-  const row=(owner,id)=>db.prepare('SELECT * FROM demo_searches WHERE owner_id=? AND id=?').get(owner,id);
+  const row=(owner,id)=>db.prepare('SELECT * FROM justup_searches WHERE owner_id=? AND id=?').get(owner,id);
   const searchOptions=(owner,id)=>readingPreferences?.options(owner,id)??structuredClone(DEFAULT_SEARCH_OPTIONS);
   const configurationFor=(owner,search)=>readingPreferences?.configurationForSearch(owner,search)??search.configuration;
   const executionAvailable=()=>typeof model?.interpretIntent==='function'&&(typeof model.available!=='function'||model.available('search_intent'));
   const available=()=>typeof availability==='function'?availability()===true:executionAvailable();
   function catalogueCapabilities(){
     const aiAvailable=Boolean(matching?.available?.()??config.aiMatchingAvailable);
-    if(!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='demo_jobs'").get())return intentCapabilities(feed.eligibleJobs({viewer:{account:{id:'catalogue'}}}),aiAvailable);
+    if(!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='justup_jobs'").get())return intentCapabilities(feed.eligibleJobs({viewer:{account:{id:'catalogue'}}}),aiAvailable);
     // The bounded imported metadata catalogue is independent of result eligibility.
     // SQL projects only canonical fields: no posting identity/title/body is read.
     const rows=db.prepare(`SELECT company_id AS companyId,
       json_extract(data_json,'$.companyName') AS companyName,json_extract(data_json,'$.companySlug') AS companySlug,
       json_extract(data_json,'$.locations') AS locations_json,json_extract(data_json,'$.employmentTypes') AS employment_json,
       json_extract(data_json,'$.locales') AS locales_json,json_extract(data_json,'$.seniority') AS seniority_json
-      FROM demo_jobs ORDER BY first_seen_at DESC,company_id LIMIT 1001`).all();
+      FROM justup_jobs ORDER BY first_seen_at DESC,company_id LIMIT 1001`).all();
     if(rows.length>1000)throw err('dependency_unavailable',503,'The imported catalogue exceeds its bound.');
     const caps=intentCapabilities(rows.map(r=>({companyId:feed.canonicalCompanyId?.(r.companyId)??r.companyId,sourceCompanyId:r.companyId,companyName:r.companyName,companySlug:r.companySlug,
       locations:JSON.parse(r.locations_json??'[]'),employmentTypes:JSON.parse(r.employment_json??'[]'),
@@ -175,7 +175,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
   function publicSearch(r) {
     if(!r) return null;
     const accepted=r.accepted_json?JSON.parse(r.accepted_json):{id:r.id,revision:r.revision,query:JSON.parse(r.draft_json)?.query??'',title:'New search',description:'',configuration:null,requirements:[],warnings:[],status:'pending'};
-    const proposal=db.prepare('SELECT proposal_json FROM demo_search_proposals WHERE owner_id=? AND search_id=? AND expected_revision=? AND task_id=?').get(r.owner_id,r.id,r.revision,r.task_id);
+    const proposal=db.prepare('SELECT proposal_json FROM justup_search_proposals WHERE owner_id=? AND search_id=? AND expected_revision=? AND task_id=?').get(r.owner_id,r.id,r.revision,r.task_id);
     return {...accepted,options:searchOptions(r.owner_id,r.id),...(r.draft_json?{draft:JSON.parse(r.draft_json)}:{}),...(proposal?{proposal:JSON.parse(proposal.proposal_json)}:{})};
   }
   function invalidateSearch(owner,id) {
@@ -183,30 +183,30 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(current.task_id)tasks.cancel(owner,current.task_id);
     const accepted=current.accepted_json?{...JSON.parse(current.accepted_json),revision:current.revision+1}:null;
     const draft=current.draft_json?{...JSON.parse(current.draft_json),taskId:null,status:'interrupted'}:null;
-    db.prepare('UPDATE demo_searches SET revision=revision+1,accepted_json=?,draft_json=?,task_id=NULL,updated_at=? WHERE owner_id=? AND id=?').run(accepted?JSON.stringify(accepted):null,draft?JSON.stringify(draft):null,now(),owner,id);
-    for(const table of ['demo_search_proposals','demo_search_cursors','demo_search_delegate_cursors'])db.prepare(`DELETE FROM ${table} WHERE owner_id=? AND search_id=?`).run(owner,id);
+    db.prepare('UPDATE justup_searches SET revision=revision+1,accepted_json=?,draft_json=?,task_id=NULL,updated_at=? WHERE owner_id=? AND id=?').run(accepted?JSON.stringify(accepted):null,draft?JSON.stringify(draft):null,now(),owner,id);
+    for(const table of ['justup_search_proposals','justup_search_cursors','justup_search_delegate_cursors'])db.prepare(`DELETE FROM ${table} WHERE owner_id=? AND search_id=?`).run(owner,id);
     matching?.deleteSearchData?.(owner,id);
   }
   readingPreferences?.setFollowInvalidator(owner=>{
-    const ids=db.prepare('SELECT id FROM demo_searches WHERE owner_id=?').all(owner).filter(r=>searchOptions(owner,r.id).followedOnly).map(r=>r.id);
+    const ids=db.prepare('SELECT id FROM justup_searches WHERE owner_id=?').all(owner).filter(r=>searchOptions(owner,r.id).followedOnly).map(r=>r.id);
     for(const id of ids)invalidateSearch(owner,id);return ids;
   });
   function purgeSearch(owner,id) {
-    for(const s of db.prepare('SELECT task_id FROM demo_search_submissions WHERE owner_id=? AND search_id=?').all(owner,id)) tasks.delete(owner,s.task_id);
-    for(const table of ['demo_search_proposals','demo_search_cursors','demo_search_delegate_cursors','demo_search_submissions']) db.prepare(`DELETE FROM ${table} WHERE owner_id=? AND search_id=?`).run(owner,id);
-    db.prepare('DELETE FROM demo_searches WHERE owner_id=? AND id=?').run(owner,id);
+    for(const s of db.prepare('SELECT task_id FROM justup_search_submissions WHERE owner_id=? AND search_id=?').all(owner,id)) tasks.delete(owner,s.task_id);
+    for(const table of ['justup_search_proposals','justup_search_cursors','justup_search_delegate_cursors','justup_search_submissions']) db.prepare(`DELETE FROM ${table} WHERE owner_id=? AND search_id=?`).run(owner,id);
+    db.prepare('DELETE FROM justup_searches WHERE owner_id=? AND id=?').run(owner,id);
     matching?.deleteSearchData?.(owner,id);
     readingPreferences?.deleteSearchData(owner,id);
   }
   function deleteAccountData(owner) {
-    for(const s of db.prepare('SELECT id FROM demo_searches WHERE owner_id=?').all(owner)) purgeSearch(owner,s.id);
+    for(const s of db.prepare('SELECT id FROM justup_searches WHERE owner_id=?').all(owner)) purgeSearch(owner,s.id);
   }
   function live(task) { const t=tasks.get(task.ownerId,task.id); return t?.status==='running'&&t.leaseToken===task.leaseToken&&t.leaseUntil>now(); }
   function taskResult(task,ctx) {
     if(task.kind!=='search_intent'||task.ownerId!==ownerOf(ctx)||!['succeeded','warning'].includes(task.status)) return undefined;
     const r=row(ownerOf(ctx),task.output?.searchId);
     if(!r) return undefined;
-    if(task.status==='warning') { const p=db.prepare('SELECT proposal_json FROM demo_search_proposals WHERE id=? AND owner_id=? AND search_id=? AND expected_revision=? AND task_id=?').get(task.output?.proposalId,ownerOf(ctx),r.id,r.revision,task.id); return p?{proposal:JSON.parse(p.proposal_json)}:undefined; }
+    if(task.status==='warning') { const p=db.prepare('SELECT proposal_json FROM justup_search_proposals WHERE id=? AND owner_id=? AND search_id=? AND expected_revision=? AND task_id=?').get(task.output?.proposalId,ownerOf(ctx),r.id,r.revision,task.id); return p?{proposal:JSON.parse(p.proposal_json)}:undefined; }
     return r.revision===task.output?.revision&&r.accepted_json?{search:publicSearch(r)}:undefined;
   }
   const taskAuthority=task=>{const current=authority(task.ownerId,false,task.payload.presentationLocale);return current&&(!current.processingPolicy||current.processingPolicy.key===task.payload.policyKey)?current:null;};
@@ -242,12 +242,12 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       const complete=(result)=>{if(!tasks.complete(task.id,task.leaseToken,result)) throw err('revision_conflict',409,'This search changed. Reload it and try again.');return {...result,committed:true};};
       if(result.value.warnings.length) {
         const proposal={proposalId:randomUUID(),searchId:r.id,expectedRevision:r.revision,query:task.payload.query,...result.value};
-        db.prepare('INSERT INTO demo_search_proposals VALUES(?,?,?,?,?,?)').run(proposal.proposalId,task.ownerId,r.id,r.revision,task.id,JSON.stringify(proposal));
+        db.prepare('INSERT INTO justup_search_proposals VALUES(?,?,?,?,?,?)').run(proposal.proposalId,task.ownerId,r.id,r.revision,task.id,JSON.stringify(proposal));
         return complete({status:'warning',output:{searchId:r.id,proposalId:proposal.proposalId}});
       }
       const search={id:r.id,revision:r.revision+1,query:task.payload.query,...result.value,options:searchOptions(task.ownerId,r.id),status:'ready'};
-      db.prepare('UPDATE demo_searches SET revision=?,accepted_json=?,draft_json=NULL,task_id=NULL,updated_at=? WHERE id=? AND owner_id=? AND revision=? AND task_id=?').run(search.revision,JSON.stringify(search),now(),r.id,task.ownerId,r.revision,task.id);
-      db.prepare('DELETE FROM demo_search_proposals WHERE search_id=? AND owner_id=?').run(r.id,task.ownerId);
+      db.prepare('UPDATE justup_searches SET revision=?,accepted_json=?,draft_json=NULL,task_id=NULL,updated_at=? WHERE id=? AND owner_id=? AND revision=? AND task_id=?').run(search.revision,JSON.stringify(search),now(),r.id,task.ownerId,r.revision,task.id);
+      db.prepare('DELETE FROM justup_search_proposals WHERE search_id=? AND owner_id=?').run(r.id,task.ownerId);
       return complete({status:'succeeded',output:{searchId:r.id,revision:search.revision}});
     });
   }
@@ -259,8 +259,8 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(!Number.isInteger(limit)||limit<1||limit>(snapshot?1000:50)) throw err('invalid_limit');
     const generation=feed.generation?.()??null,accessHash=hash({accountId:ownerOf(ctx),access:ctx.viewer?.access??null});
     const residual=Boolean(search.configuration.residualAi),coverage=feed.coverage();
-    const table=residual?'demo_search_delegate_cursors':'demo_search_cursors';
-    for(const name of ['demo_search_cursors','demo_search_delegate_cursors'])db.prepare(`DELETE FROM ${name} WHERE created_at<=?`).run(now()-600_000);
+    const table=residual?'justup_search_delegate_cursors':'justup_search_cursors';
+    for(const name of ['justup_search_cursors','justup_search_delegate_cursors'])db.prepare(`DELETE FROM ${name} WHERE created_at<=?`).run(now()-600_000);
     let position=0,delegateCursor=null;
     if(cursor){
       if(cursor.length>128)throw err('invalid_cursor');
@@ -297,7 +297,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     return {...base,items:page.map(j=>feed.publicJob(j)),continuation:{cursor:more?continuationToken(position+page.length):null,state:more?'open':'exhausted',retryAfterMs:null},ai:{status:'not_required'},...(snapshot?{reconciliation:{complete:true,retainedItemIds:jobs.map(j=>j.id)}}:{})};
   }
 
-  const acceptedRows=owner=>db.prepare('SELECT * FROM demo_searches WHERE owner_id=? AND accepted_json IS NOT NULL ORDER BY id').all(owner);
+  const acceptedRows=owner=>db.prepare('SELECT * FROM justup_searches WHERE owner_id=? AND accepted_json IS NOT NULL ORDER BY id').all(owner);
   const revisionKey=rows=>JSON.stringify(rows.map(r=>[r.id,r.revision]));
   function evidenceKey(viewer){
     const identity=jobs=>jobs.map(j=>[j.id,j.evidenceHash??null,j.verifiedAt??null,j.firstObserved,j.companyId]);
@@ -323,7 +323,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(!ownerOf(ctx)||!ctx.viewer||!authority(ownerOf(ctx),ctx.method==='DELETE'||ctx.method==='GET'&&!ctx.path.endsWith('/results'),ctx.interfaceLocale)) throw err('unauthenticated',401,'Sign in to continue.');
     const id=ctx.path.split('/')[2],r=id?row(ownerOf(ctx),id):null;
     if(id&&!r) throw err('not_found',404,'Not found.');
-    if(ctx.method==='GET'&&ctx.path==='/searches') return {status:200,body:{items:db.prepare('SELECT * FROM demo_searches WHERE owner_id=? ORDER BY created_at,id').all(ownerOf(ctx)).map(publicSearch)}};
+    if(ctx.method==='GET'&&ctx.path==='/searches') return {status:200,body:{items:db.prepare('SELECT * FROM justup_searches WHERE owner_id=? ORDER BY created_at,id').all(ownerOf(ctx)).map(publicSearch)}};
     if(ctx.method==='GET'&&ctx.path===`/searches/${id}/results`) return {status:200,body:await results(r,ctx)};
     if(ctx.method==='PATCH'&&ctx.path===`/searches/${id}/options`&&readingPreferences) {
       bodyKeys(ctx.body,['expectedRevision','followedOnly','postingLanguages']);const expected=revision(ctx.body.expectedRevision);
@@ -345,11 +345,11 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(ctx.method==='POST'&&ctx.path===`/searches/${id}/confirm`) {
       bodyKeys(ctx.body,['proposalId','expectedRevision']); const expected=revision(ctx.body.expectedRevision);
       return tx(db,()=>{
-        const current=row(ownerOf(ctx),id),p=db.prepare('SELECT * FROM demo_search_proposals WHERE id=? AND owner_id=? AND search_id=?').get(text(ctx.body.proposalId,128),ownerOf(ctx),id);
+        const current=row(ownerOf(ctx),id),p=db.prepare('SELECT * FROM justup_search_proposals WHERE id=? AND owner_id=? AND search_id=?').get(text(ctx.body.proposalId,128),ownerOf(ctx),id);
         if(!p||!current||current.revision!==expected||p.expected_revision!==expected||current.task_id!==p.task_id) throw err('revision_conflict',409,'This search changed. Reload it and try again.');
         const {proposalId,searchId,expectedRevision,...data}=JSON.parse(p.proposal_json),search={id,revision:expected+1,...data,options:searchOptions(ownerOf(ctx),id),status:'ready'};
-        db.prepare('UPDATE demo_searches SET revision=?,accepted_json=?,draft_json=NULL,task_id=NULL,updated_at=? WHERE id=? AND owner_id=?').run(search.revision,JSON.stringify(search),now(),id,ownerOf(ctx));
-        db.prepare('DELETE FROM demo_search_proposals WHERE search_id=? AND owner_id=?').run(id,ownerOf(ctx));
+        db.prepare('UPDATE justup_searches SET revision=?,accepted_json=?,draft_json=NULL,task_id=NULL,updated_at=? WHERE id=? AND owner_id=?').run(search.revision,JSON.stringify(search),now(),id,ownerOf(ctx));
+        db.prepare('DELETE FROM justup_search_proposals WHERE search_id=? AND owner_id=?').run(id,ownerOf(ctx));
         return {status:200,body:{search}};
       });
     }
@@ -362,7 +362,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       if(ctx.viewer.visitor&&value?.followedOnly)throw err('unauthenticated',401);
       const presentationLocale=ctx.body.presentationLocale??ctx.interfaceLocale;if(presentationLocale!==undefined&&(!SUPPORTED_INTERFACE_LOCALES.includes(presentationLocale)||ctx.interfaceLocale&&presentationLocale!==ctx.interfaceLocale))throw err('invalid_input');
       const fingerprint=hash({id:creating?null:id,query,expectedRevision:expected,...(value?{options:value}:{}),...(presentationLocale?{presentationLocale}:{})});
-      const prior=db.prepare('SELECT * FROM demo_search_submissions WHERE owner_id=? AND request_key=?').get(ownerOf(ctx),requestKey);
+      const prior=db.prepare('SELECT * FROM justup_search_submissions WHERE owner_id=? AND request_key=?').get(ownerOf(ctx),requestKey);
       if(prior) {
         if(prior.input_hash!==fingerprint) throw err('idempotency_conflict',409,'This request key was already used.');
         const old=row(ownerOf(ctx),prior.search_id),task=tasks.get(ownerOf(ctx),prior.task_id);
@@ -372,18 +372,18 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       if(editing&&r.revision!==expected) throw err('revision_conflict',409,'This search changed. Reload it and try again.');
       if(ctx.viewer.visitor)visitorIdentity?.admit(ownerOf(ctx),{creating});
       if(!available()) throw err('dependency_unavailable',503,'Search interpretation is temporarily unavailable.');
-      if(creating&&db.prepare('SELECT count(*) n FROM demo_searches WHERE owner_id=?').get(ownerOf(ctx)).n>=20) throw err('task_limit',429,'The search limit has been reached.');
+      if(creating&&db.prepare('SELECT count(*) n FROM justup_searches WHERE owner_id=?').get(ownerOf(ctx)).n>=20) throw err('task_limit',429,'The search limit has been reached.');
       const searchId=creating?randomUUID():id;
       const task=tasks.enqueue({ownerId:ownerOf(ctx),kind:'search_intent',requestKey,payload:{searchId,query,expectedRevision:expected,...(presentationLocale?{presentationLocale}:{}),...(authority(ownerOf(ctx),false,presentationLocale)?.processingPolicy?{policyKey:authority(ownerOf(ctx),false,presentationLocale).processingPolicy.key}:{})}});
       try { tx(db,()=>{
         if(ctx.viewer.visitor)visitorIdentity?.recordSubmission(ownerOf(ctx));
-        if(creating) db.prepare('INSERT INTO demo_searches VALUES(?,?,0,NULL,?,?,?,?)').run(searchId,ownerOf(ctx),JSON.stringify({query,taskId:task.id}),task.id,now(),now());
+        if(creating) db.prepare('INSERT INTO justup_searches VALUES(?,?,0,NULL,?,?,?,?)').run(searchId,ownerOf(ctx),JSON.stringify({query,taskId:task.id}),task.id,now(),now());
         else {
           if(r.task_id) tasks.cancel(ownerOf(ctx),r.task_id);
-          db.prepare('UPDATE demo_searches SET draft_json=?,task_id=?,updated_at=? WHERE id=? AND owner_id=? AND revision=?').run(JSON.stringify({query,taskId:task.id}),task.id,now(),id,ownerOf(ctx),expected);
-          db.prepare('DELETE FROM demo_search_proposals WHERE search_id=? AND owner_id=?').run(id,ownerOf(ctx));
+          db.prepare('UPDATE justup_searches SET draft_json=?,task_id=?,updated_at=? WHERE id=? AND owner_id=? AND revision=?').run(JSON.stringify({query,taskId:task.id}),task.id,now(),id,ownerOf(ctx),expected);
+          db.prepare('DELETE FROM justup_search_proposals WHERE search_id=? AND owner_id=?').run(id,ownerOf(ctx));
         }
-        db.prepare('INSERT INTO demo_search_submissions VALUES(?,?,?,?,?)').run(ownerOf(ctx),requestKey,searchId,fingerprint,task.id);
+        db.prepare('INSERT INTO justup_search_submissions VALUES(?,?,?,?,?)').run(ownerOf(ctx),requestKey,searchId,fingerprint,task.id);
         if(value)readingPreferences.saveOptions(ownerOf(ctx),searchId,value);
       }); } catch(e) { tasks.delete(ownerOf(ctx),task.id); throw e; }
       return {status:202,body:{search:publicSearch(row(ownerOf(ctx),searchId)),task:tasks.publicView(task)}};
@@ -393,12 +393,12 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
   function transferOwner(from,to) {
     tasks.cancelOwner?.(from);
     readingPreferences?.transferSearches(from,to);
-    for(const r of db.prepare('SELECT * FROM demo_searches WHERE owner_id=?').all(from)) {
+    for(const r of db.prepare('SELECT * FROM justup_searches WHERE owner_id=?').all(from)) {
       const draft=r.draft_json?{...JSON.parse(r.draft_json),taskId:null,status:'interrupted'}:null;
-      db.prepare('UPDATE demo_searches SET owner_id=?,draft_json=? WHERE owner_id=? AND id=?').run(to,draft?JSON.stringify(draft):null,from,r.id);
+      db.prepare('UPDATE justup_searches SET owner_id=?,draft_json=? WHERE owner_id=? AND id=?').run(to,draft?JSON.stringify(draft):null,from,r.id);
     }
-    db.prepare('UPDATE demo_search_proposals SET owner_id=? WHERE owner_id=?').run(to,from);
-    for(const table of ['demo_search_cursors','demo_search_delegate_cursors','demo_search_submissions'])db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(from);
+    db.prepare('UPDATE justup_search_proposals SET owner_id=? WHERE owner_id=?').run(to,from);
+    for(const table of ['justup_search_cursors','justup_search_delegate_cursors','justup_search_submissions'])db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(from);
   }
   function admitVisitorCreation(body){
     bodyKeys(body,['query','requestKey','options','presentationLocale']);text(body.query);key(body.requestKey);

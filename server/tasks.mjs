@@ -11,7 +11,7 @@ const WIRE_KIND = 'hiring_wire', WIRE_OWNER = '__hiring_wire__';
 export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOwner = 4, maxAttempts = 3, retentionMs = 30 * DAY_MS } = {}) {
   if (!db || ![maxTasks, maxPendingPerOwner, maxAttempts, retentionMs].every((n) => Number.isSafeInteger(n) && n > 0)
       || maxTasks > 96 || retentionMs > 30 * DAY_MS) throw new TypeError('Invalid task configuration.');
-  db.exec(`CREATE TABLE IF NOT EXISTS demo_tasks (
+  db.exec(`CREATE TABLE IF NOT EXISTS justup_tasks (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL, request_key TEXT NOT NULL,
     payload_json TEXT NOT NULL, output_json TEXT, status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','warning','failed','cancelled')),
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, lease_until INTEGER, lease_token TEXT, worker_id TEXT,
@@ -21,8 +21,8 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
     id INTEGER PRIMARY KEY CHECK(id=1),task_id TEXT NOT NULL,created_at INTEGER NOT NULL,
     reason TEXT NOT NULL CHECK(reason='cleanup_unproven')
   ) STRICT;
-  CREATE INDEX IF NOT EXISTS demo_tasks_owner ON demo_tasks(owner_id);
-  CREATE INDEX IF NOT EXISTS demo_tasks_queue ON demo_tasks(status,created_at);`);
+  CREATE INDEX IF NOT EXISTS justup_tasks_owner ON justup_tasks(owner_id);
+  CREATE INDEX IF NOT EXISTS justup_tasks_queue ON justup_tasks(status,created_at);`);
   function hydrate(row) {
     return row ? { id: row.id, ownerId: row.owner_id, kind: row.kind, requestKey: row.request_key,
       payload: JSON.parse(row.payload_json), output: row.output_json == null ? null : JSON.parse(row.output_json),
@@ -30,7 +30,7 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
       leaseUntil: row.lease_until, leaseToken: row.lease_token, workerId: row.worker_id, attempts: row.attempts,
       errorCode: row.error_code } : null;
   }
-  const byId = (id) => hydrate(db.prepare('SELECT * FROM demo_tasks WHERE id=?').get(id));
+  const byId = (id) => hydrate(db.prepare('SELECT * FROM justup_tasks WHERE id=?').get(id));
   function get(ownerId, id) {
     const task = byId(id);
     return task?.ownerId === ownerId ? task : null;
@@ -41,24 +41,24 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
         || (kind === WIRE_KIND) !== (ownerId === WIRE_OWNER)) throw problem('invalid_input');
     const json = boundedJson(payload, 16_384);
     return transaction(db, () => {
-      const existing = db.prepare('SELECT * FROM demo_tasks WHERE owner_id=? AND kind=? AND request_key=?').get(ownerId, kind, requestKey);
+      const existing = db.prepare('SELECT * FROM justup_tasks WHERE owner_id=? AND kind=? AND request_key=?').get(ownerId, kind, requestKey);
       if (existing) {
         if (existing.payload_json !== json) throw problem('idempotency_conflict', 409, 'This request key was already used.');
         return hydrate(existing);
       }
-      db.prepare('DELETE FROM demo_tasks WHERE updated_at<=? AND status IN (\'succeeded\',\'warning\',\'failed\',\'cancelled\')').run(now() - retentionMs);
-      if (db.prepare('SELECT count(*) AS n FROM demo_tasks').get().n >= maxTasks
-          || db.prepare('SELECT count(*) AS n FROM demo_tasks WHERE owner_id=? AND status IN (\'pending\',\'running\')').get(ownerId).n >= maxPendingPerOwner) {
+      db.prepare('DELETE FROM justup_tasks WHERE updated_at<=? AND status IN (\'succeeded\',\'warning\',\'failed\',\'cancelled\')').run(now() - retentionMs);
+      if (db.prepare('SELECT count(*) AS n FROM justup_tasks').get().n >= maxTasks
+          || db.prepare('SELECT count(*) AS n FROM justup_tasks WHERE owner_id=? AND status IN (\'pending\',\'running\')').get(ownerId).n >= maxPendingPerOwner) {
         throw Object.assign(problem('task_limit', 429, 'The task limit has been reached.'), { retryAfter: 60 });
       }
       const id = randomUUID(), at = now();
-      db.prepare('INSERT INTO demo_tasks (id,owner_id,kind,request_key,payload_json,status,created_at,updated_at) VALUES (?,?,?,?,?,\'pending\',?,?)').run(id, ownerId, kind, requestKey, json, at, at);
+      db.prepare('INSERT INTO justup_tasks (id,owner_id,kind,request_key,payload_json,status,created_at,updated_at) VALUES (?,?,?,?,?,\'pending\',?,?)').run(id, ownerId, kind, requestKey, json, at, at);
       return byId(id);
     });
   }
   function recoverWithinTransaction() {
     if(halted())return;
-    db.prepare(`UPDATE demo_tasks SET status=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,
+    db.prepare(`UPDATE justup_tasks SET status=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,
       error_code=CASE WHEN attempts>=? THEN 'task_interrupted' ELSE NULL END,updated_at=?,lease_until=NULL,lease_token=NULL,worker_id=NULL
       WHERE status='running' AND lease_until<=?`).run(maxAttempts, maxAttempts, now(), now());
   }
@@ -70,30 +70,30 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
     return transaction(db, () => {
       if(halted())return null;
       recoverWithinTransaction();
-      if (db.prepare("SELECT 1 FROM demo_tasks WHERE status='running' LIMIT 1").get()) return null;
+      if (db.prepare("SELECT 1 FROM justup_tasks WHERE status='running' LIMIT 1").get()) return null;
       const priority = "CASE WHEN kind='hiring_wire' THEN 1 ELSE 0 END,created_at,id";
-      const row = kinds == null ? db.prepare(`SELECT id FROM demo_tasks WHERE status='pending' ORDER BY ${priority} LIMIT 1`).get()
-        : kinds.length ? db.prepare(`SELECT id FROM demo_tasks WHERE status='pending' AND kind IN (${kinds.map(() => '?').join(',')}) ORDER BY ${priority} LIMIT 1`).get(...kinds) : null;
+      const row = kinds == null ? db.prepare(`SELECT id FROM justup_tasks WHERE status='pending' ORDER BY ${priority} LIMIT 1`).get()
+        : kinds.length ? db.prepare(`SELECT id FROM justup_tasks WHERE status='pending' AND kind IN (${kinds.map(() => '?').join(',')}) ORDER BY ${priority} LIMIT 1`).get(...kinds) : null;
       if (!row) return null;
-      db.prepare("UPDATE demo_tasks SET status='running',worker_id=?,lease_token=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?")
+      db.prepare("UPDATE justup_tasks SET status='running',worker_id=?,lease_token=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?")
         .run(workerId, randomUUID(), now() + leaseMs, now(), row.id);
       return byId(row.id);
     });
   }
   function heartbeat(id, leaseToken, leaseMs = 60_000) {
     if (!Number.isSafeInteger(leaseMs) || leaseMs < 1000 || leaseMs > 300_000) throw problem('invalid_input');
-    return db.prepare("UPDATE demo_tasks SET lease_until=?,updated_at=? WHERE id=? AND status='running' AND lease_token=? AND lease_until>?")
+    return db.prepare("UPDATE justup_tasks SET lease_until=?,updated_at=? WHERE id=? AND status='running' AND lease_token=? AND lease_until>?")
       .run(now() + leaseMs, now(), id, leaseToken, now()).changes === 1;
   }
   function complete(id, leaseToken, { status, output = null, errorCode = null }) {
     if (!TERMINAL.has(status) || status === 'cancelled' || (errorCode != null && !KIND.test(errorCode))) throw problem('invalid_input');
     const json = boundedJson(output);
-    return db.prepare(`UPDATE demo_tasks SET status=?,output_json=?,error_code=?,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=?
+    return db.prepare(`UPDATE justup_tasks SET status=?,output_json=?,error_code=?,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=?
       WHERE id=? AND status='running' AND lease_token=? AND lease_until>?
       AND NOT EXISTS (SELECT 1 FROM hiring_wire_cleanup_halt WHERE id=1)`).run(status, json, errorCode, now(), id, leaseToken, now()).changes === 1;
   }
   function hasForeground() {
-    return !!db.prepare("SELECT 1 FROM demo_tasks WHERE status='pending' AND kind<>'hiring_wire' LIMIT 1").get();
+    return !!db.prepare("SELECT 1 FROM justup_tasks WHERE status='pending' AND kind<>'hiring_wire' LIMIT 1").get();
   }
   function halted() {
     return !!db.prepare('SELECT 1 FROM hiring_wire_cleanup_halt WHERE id=1').get();
@@ -104,7 +104,7 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
     return transaction(db,()=>{
       const existing=db.prepare('SELECT task_id FROM hiring_wire_cleanup_halt WHERE id=1').get();
       if(existing)return existing.task_id===id;
-      const live=db.prepare("SELECT 1 FROM demo_tasks WHERE id=? AND kind='hiring_wire' AND owner_id=? AND status='running' AND lease_token=? AND lease_until>?")
+      const live=db.prepare("SELECT 1 FROM justup_tasks WHERE id=? AND kind='hiring_wire' AND owner_id=? AND status='running' AND lease_token=? AND lease_until>?")
         .get(id,WIRE_OWNER,leaseToken,now());
       if(!live)return false;
       db.prepare("INSERT INTO hiring_wire_cleanup_halt VALUES (1,?,?,'cleanup_unproven')").run(id,now());
@@ -114,7 +114,7 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
   // Called only after the runner has awaited Wire cancellation and native
   // cleanup. Keep the same task/period and bound repeated interruptions.
   function pauseWire(id, leaseToken) {
-    return db.prepare(`UPDATE demo_tasks SET status=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,
+    return db.prepare(`UPDATE justup_tasks SET status=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,
       error_code=CASE WHEN attempts>=? THEN 'task_preempted' ELSE NULL END,
       output_json=NULL,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=?
       WHERE id=? AND kind='hiring_wire' AND owner_id=? AND status='running' AND lease_token=? AND lease_until>?
@@ -123,13 +123,13 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
   }
   // These helpers deliberately do not open transactions: auth and feature deletion
   // compose them inside their existing transaction, making late completions inert.
-  function deleteOwner(ownerId) { db.prepare('DELETE FROM demo_tasks WHERE owner_id=?').run(ownerId); }
-  function deleteTask(ownerId, id) { return db.prepare('DELETE FROM demo_tasks WHERE owner_id=? AND id=?').run(ownerId, id).changes === 1; }
+  function deleteOwner(ownerId) { db.prepare('DELETE FROM justup_tasks WHERE owner_id=?').run(ownerId); }
+  function deleteTask(ownerId, id) { return db.prepare('DELETE FROM justup_tasks WHERE owner_id=? AND id=?').run(ownerId, id).changes === 1; }
   function cancelOwner(ownerId) {
-    db.prepare("UPDATE demo_tasks SET status='cancelled',payload_json='null',output_json=NULL,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=? WHERE owner_id=? AND status IN ('pending','running')").run(now(), ownerId);
+    db.prepare("UPDATE justup_tasks SET status='cancelled',payload_json='null',output_json=NULL,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=? WHERE owner_id=? AND status IN ('pending','running')").run(now(), ownerId);
   }
   function cancel(ownerId, id) {
-    return db.prepare("UPDATE demo_tasks SET status='cancelled',payload_json='null',output_json=NULL,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=? WHERE owner_id=? AND id=? AND status IN ('pending','running')").run(now(), ownerId, id).changes === 1;
+    return db.prepare("UPDATE justup_tasks SET status='cancelled',payload_json='null',output_json=NULL,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=? WHERE owner_id=? AND id=? AND status IN ('pending','running')").run(now(), ownerId, id).changes === 1;
   }
   function publicView(task, result = null) {
     if (task.kind === WIRE_KIND || task.ownerId === WIRE_OWNER) throw problem('not_found',404,'Task not found.');
