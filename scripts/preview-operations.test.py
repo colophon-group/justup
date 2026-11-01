@@ -670,6 +670,44 @@ class OperatorUpgradeContracts(unittest.TestCase):
                 artifact.read_host_plan(fixture.base)
             self.assert_private_state_unchanged(fixture)
 
+    def test_partial_feed_unit_write_never_republishes_old_receipt(self):
+        for failed_unit in host.FEED_UNITS:
+            with self.subTest(unit=failed_unit), self.installation(add_feed=True) as fixture:
+                write = host.write_update_file
+                def fail_after_creation(path, data, mode=0o444):
+                    if Path(path) == fixture.units / failed_unit:
+                        write(path, data[:8], mode)
+                        raise OSError('unit write interrupted after exclusive creation')
+                    return write(path, data, mode)
+                with patch.object(host, 'write_update_file', side_effect=fail_after_creation):
+                    with self.assertRaises((OSError, ValueError)):
+                        host.upgrade_feed(fixture.new, fixture.previous,
+                                          fixture.before['planSha256'], fixture.after['planSha256'], 'a' * 64)
+                self.assertFalse(fixture.marker.exists())
+                self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
+                self.assertEqual((fixture.units / failed_unit).read_bytes(),
+                                 (fixture.new / 'deploy/justup-preview' / failed_unit).read_bytes()[:8])
+                with self.assertRaisesRegex(ValueError, 'adoption is blocked'):
+                    artifact.read_host_plan(fixture.base)
+                self.assert_private_state_unchanged(fixture)
+
+    def test_complete_feed_unit_write_error_rolls_back_only_verified_new_bytes(self):
+        for failed_unit in host.FEED_UNITS:
+            with self.subTest(unit=failed_unit), self.installation(add_feed=True) as fixture:
+                write = host.write_update_file
+                def fail_after_complete_bytes(path, data, mode=0o444):
+                    write(path, data, mode)
+                    if Path(path) == fixture.units / failed_unit:
+                        raise OSError('unit fsync completion uncertain')
+                with patch.object(host, 'write_update_file', side_effect=fail_after_complete_bytes):
+                    with self.assertRaisesRegex(OSError, 'completion uncertain'):
+                        host.upgrade_feed(fixture.new, fixture.previous,
+                                          fixture.before['planSha256'], fixture.after['planSha256'], 'a' * 64)
+                self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
+                self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+                self.assertFalse(any((fixture.units / name).exists() for name in host.FEED_UNITS))
+                self.assert_private_state_unchanged(fixture)
+
     def test_feed_crash_after_unit_install_leaves_pending_receipt_withdrawn(self):
         class Crash(BaseException):
             pass

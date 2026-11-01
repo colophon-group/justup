@@ -698,8 +698,11 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
         if add_feed:
             for name in FEED_UNITS:
                 key = f'deploy/justup-preview/{name}'
-                write_update_file(UNIT_ROOT / name, (root / key).read_bytes(), 0o644)
+                # An exclusive create may succeed before a later write/fsync
+                # fails. Track the attempt so unknown partial bytes can never
+                # escape rollback verification and restore the old receipt.
                 installed_feed_units.append(name)
+                write_update_file(UNIT_ROOT / name, (root / key).read_bytes(), 0o644)
             sync_directory(UNIT_ROOT)
             call('systemctl', 'daemon-reload')
         verify_operator_units(candidate['files'])
