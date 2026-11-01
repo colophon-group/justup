@@ -48,6 +48,22 @@ The importer also makes at most four public `company` collection lookups of 250 
 
 Positive int32 `occupation_id` plus a nonempty source `occupation_name` become the optional structured occupation label used by company reports. Missing or malformed occupation evidence stays null. The report does not infer roles from title sampling queries or call another classifier.
 
+### Refresh a fixed QA company cohort
+
+For operator QA, add `--company-ids-file /private/job-data/companies.json` to the same import command. Keep this selector outside Git in the protected data directory, with mode `0600`. Its exact schema is:
+
+```json
+{"schemaVersion":1,"companyIds":["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]}
+```
+
+Use actual source company UUIDs from reviewed source evidence. The file accepts 1–100 unique lowercase canonical UUIDs and at most 16 KiB; extra keys, duplicate keys/IDs, malformed IDs and unsupported schema versions fail before source access. The selector cannot supply an arbitrary filter. Every initial age, company, diversity and fill query adds exact `company_id` membership to the existing active, content, nonreserved and fixed 14-day filters. Returned out-of-cohort records are discarded before description fetches. The existing 1,000-document read ceiling, job limit, exact-ID company website lookups and original discovery times remain unchanged. Omitting the option preserves the global sample.
+
+Freeze company identities rather than posting IDs: use a fresh fixed `--snapshot` and the same selector at candidate verification, plus `--previous` for known-ID refresh. Every previous posting ID is still checked independently for closures/reservations, even when its company is outside the current selection. An active out-of-cohort posting is not re-exported or given fresh evidence; missing/failed refresh results remain unknown. No global fallback fills a deficient cohort.
+
+Private snapshot metadata adds `selection.companySelection:{schemaVersion:1,requestedCount,requestedSetSha256,missingCount}`. The digest is SHA-256 of UTF-8 compact JSON containing the sorted UUID list. `missingCount` counts requested companies with no eligible exported job; it does not assert that those companies have no vacancies. The command's count receipt includes that metadata and `observedLocales`, the declared locales present in exported jobs. Review missing companies and language gaps explicitly rather than inferring full coverage. No company UUID list enters the selection metadata or a public API.
+
+This option selects a QA export, not an approved product launch segment. It does not delete earlier evidence already in the store, restrict the product's whole inventory, approve career URLs, qualify source history or schedule a refresh.
+
 ## Description evidence
 
 For an accepted listing, the importer chooses the first valid non-`__none` locale, or `en`, and fetches the public asset at `https://jobseek-assets.colophon-group.org/job/{id}/{locale}/latest.html` with a Mozilla-compatible User-Agent. Each response is bounded to 512 KiB and must be valid UTF-8. It derives plain text deterministically, excludes script/style/template content and explicit hidden elements, removes controls and normalizes whitespace. No HTML is retained or sent to the browser. This parser does not execute page scripts or evaluate external stylesheets; it is bounded source-text normalization, not a browser rendering claim.
