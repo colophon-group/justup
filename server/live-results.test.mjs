@@ -27,7 +27,7 @@ function job(id, first = AT - 3 * DAY, title = 'Engineer') {
       bodyBytes: Buffer.byteLength(bodyText), normalizationVersion: 1, truncated: false, aiEligible: true } };
 }
 async function setup(t, options = {}) {
-  const { verificationTtlMs, persistent = false, ...transportOptions } = options;
+  const { verificationTtlMs, persistent = false, policyLocales, policyAssetProof, ...transportOptions } = options;
   const directory = persistent ? mkdtempSync(join(tmpdir(), 'justup-live-results-')) : null;
   const storage = directory ? { dbPath: join(directory, 'store.sqlite'), privateGenerationPath: join(directory, 'private-generation'), backupDir: join(directory, 'backups') } : {};
   if (directory) { mkdirSync(storage.backupDir, { mode: 0o700 }); writeFileSync(storage.privateGenerationPath, `${randomUUID()}\n`, { mode: 0o600 }); }
@@ -36,7 +36,7 @@ async function setup(t, options = {}) {
   const app = await createApplication({ now: () => time, config: { allowedOrigin: ORIGIN, policiesReviewed: true,
     privacyUrl: `${ORIGIN}/privacy.html`, usageUrl: `${ORIGIN}/usage.html`, policyVersion: 'fixture',
     dbPath: ':memory:', sourceCommit: 'a'.repeat(40), buildIdentity: 'fixture-build',
-    ...storage, requiresInvitation: false, verificationTtlMs, liveResults: { pollMs: 10, heartbeatMs: 30, ...transportOptions } },
+    ...storage, requiresInvitation: false, verificationTtlMs, policyLocales,policyAssetProof,liveResults: { pollMs: 10, heartbeatMs: 30, ...transportOptions } },
     serviceFactories: [deps => {
       identity = createVisitorIdentity(deps);
       const ownership = { ownerAuthority: identity.principal, visitorIdentity: identity, taskAdmission: identity.admitMatching };
@@ -64,10 +64,10 @@ async function setup(t, options = {}) {
     app.store.db.prepare('INSERT INTO demo_searches(id,owner_id,revision,accepted_json,created_at,updated_at) VALUES(?,?,1,?,?,?)').run(id, accounts.get(owner)?.account.id ?? owner, JSON.stringify(accepted), time, time);
     return accepted;
   }
-  async function connect(owner = 'a', { headers = {}, visitorToken, searchId = visitorToken ? 'visitor-search' : `search-${owner}`, revision = 1, ...requestOptions } = {}) {
+  async function connect(owner = 'a', { headers = {}, visitorToken, searchId = visitorToken ? 'visitor-search' : `search-${owner}`, revision = 1, locale,extraQuery='',...requestOptions } = {}) {
     const controller = new AbortController(); t.after(() => controller.abort());
     const path = visitorToken ? '/visitor/workspace/events' : '/workspace/events';
-    const res = await fetch(`${base}${path}?searchId=${encodeURIComponent(searchId)}&revision=${revision}`, {
+    const res = await fetch(`${base}${path}?searchId=${encodeURIComponent(searchId)}&revision=${revision}${locale===undefined?'':'&locale='+encodeURIComponent(locale)}${extraQuery}`, {
       ...requestOptions, signal: controller.signal, headers: { Cookie: visitorToken ? `__Host-justup_visitor=${visitorToken}` : `__Host-justup_session=${accounts.get(owner)?.token}`, ...headers } });
     if (res.status !== 200) return { res, body: await res.json(), close: () => controller.abort() };
     const reader = res.body.getReader(); let buffer = '';
@@ -114,6 +114,21 @@ test('local HTTP streams incremental canonical arrivals and recovers bound opaqu
   assert.equal((await resumed.next()).data.reason, 'resumed'); resumed.close();
   const missed = await s.connect('a', { headers: { 'Last-Event-ID': 'z'.repeat(43) } }); assert.equal((await missed.next()).data.reason, 'recovery');
   const bad = await s.connect('a', { headers: { 'Last-Event-ID': 'invalid' } }); assert.equal(bad.res.status, 400);
+});
+
+test('explicit stream locale requires one supported query value and binds replay to the exact reviewed policy proof',async t=>{
+  const entry=locale=>({privacyUrl:`${ORIGIN}/privacy${locale==='en'?'':'.'+locale}.html`,usageUrl:`${ORIGIN}/usage${locale==='en'?'':'.'+locale}.html`,version:'fixture',reviewed:locale==='fr'});
+  const policyAssetProof={origin:ORIGIN,sourceCommit:'a'.repeat(40),assetsSha256:'b'.repeat(64),locales:{fr:{version:'fixture',privacySha256:'c'.repeat(64),usageSha256:'d'.repeat(64)}}};
+  const s=await setup(t,{policyLocales:{en:entry('en'),fr:entry('fr')},policyAssetProof});s.importJobs([job('eligible')]);s.search();
+  assert.equal((await s.connect()).res.status,503);
+  for(const query of [{locale:'ja'},{locale:'fr-FR'},{locale:'fr',extraQuery:'&locale=fr'},{locale:'fr',extraQuery:'&unexpected=1'},
+    {locale:'fr',headers:{'X-Justup-Locale':'en'}}])assert.equal((await s.connect('a',query)).res.status,400);
+  const stream=await s.connect('a',{locale:'fr'}),first=await stream.next();assert.deepEqual(ids(first),['eligible']);
+  policyAssetProof.locales.fr.privacySha256='e'.repeat(64);
+  assert.equal((await stream.next('unavailable')).data.reason,'dependency_unavailable');
+  const resumed=await s.connect('a',{locale:'fr',headers:{'Last-Event-ID':first.id}});assert.equal((await resumed.next()).data.reason,'recovery');resumed.close();
+  const headerOnly=await s.connect('a',{headers:{'X-Justup-Locale':'fr'}});assert.deepEqual(ids(await headerOnly.next()),['eligible']);headerOnly.close();
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_search_cursors').get().n,0);
 });
 
 test('closure, fourteen-day expiry and paid downgrade remove now-ineligible identities while fresh zero differs from outage', async t => {

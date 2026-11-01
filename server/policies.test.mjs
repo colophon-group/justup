@@ -46,6 +46,8 @@ test('localized approval needs exact retained asset proof and changed hashes rev
 });
 
 test('saved account override or browser default ignores guest locale cookies while guests retain their explicit choice',()=>{
+  assert.equal(requestLocale({explicitLocale:'it',savedLocale:'fr',cookie:'justup_interface_locale=de',acceptLanguage:'es-ES'}),'it');
+  for(const explicitLocale of ['it-IT','it,it','',null])assert.throws(()=>requestLocale({explicitLocale}),/explicit interface locale/);
   assert.equal(requestLocale({savedLocale:'fr',cookie:'justup_interface_locale=de',acceptLanguage:'it-CH'}),'fr');
   assert.equal(requestLocale({savedLocale:null,cookie:'justup_interface_locale=es',acceptLanguage:'fr-CH'}),'fr');
   assert.equal(requestLocale({cookie:'justup_interface_locale=es',acceptLanguage:'fr-CH'}),'es');

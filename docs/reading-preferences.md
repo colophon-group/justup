@@ -57,7 +57,7 @@ The response is `{accountId,revision,interfaceLocale,supportedInterfaceLocales:[
 
 `interfaceLocale:null` uses browser preferences in their supplied order, matching regional tags to a supported base language and falling back to English. A saved explicit locale wins browser preferences. Unsupported saved choices are rejected; malformed browser language tags are rejected. Clearing an override returns to browser matching. Posting-language selections remain unchanged.
 
-Search creation and text refinement may pass an allowlisted `presentationLocale`. It takes precedence for that request; otherwise the saved override or English fallback supplies the context. The browser should pass its resolved current locale when following browser preferences. Only generated titles and reason messages use that presentation language. Query text, exact requirement terms, canonical filter values and employer source content retain their original form. The interface does not translate or rewrite searches.
+Search creation and text refinement may pass an allowlisted `presentationLocale`. It must match the resolved request locale: explicit `X-Justup-Locale`, then the account override or browser/default selection; guests can use their device cookie. The browser should pass its resolved current locale when following browser preferences. Only generated titles and reason messages use that presentation language. Query text, exact requirement terms, canonical filter values and employer source content retain their original form. The interface does not translate or rewrite searches.
 
 ## Private retention and recovery
 

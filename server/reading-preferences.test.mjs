@@ -312,7 +312,9 @@ test('French-only policy approval admits preference, follow and automatic accept
     const data=await res.json();if(data.csrfToken)csrf=data.csrfToken;return {status:res.status,body:data};
   }
   const session=await call('/session');assert.equal(session.body.policies.reviewedLocale,'fr');
-  const registered=await call('/auth/register','POST',{username:'french-only',password:'A synthetic French account password'});assert.equal(registered.status,201);
+  jar.set('justup_interface_locale','es');language='en';
+  const registered=await call('/auth/register','POST',{username:'french-only',password:'A synthetic French account password'},{'X-Justup-Locale':'fr'});assert.equal(registered.status,201);
+  assert.equal(registered.body.policies.locale,'fr');assert.equal(app.store.db.prepare('SELECT count(*) n FROM justup_preferences').get().n,0);language='fr';
   jar.set('justup_interface_locale','es');assert.equal((await call('/session')).body.policies.locale,'fr');
   const owner=registered.body.user.id;assert.equal(identity.principal(owner),null);assert(identity.principal(owner,{locale:'fr'}));
   const preferred=await call('/preferences','PATCH',{expectedRevision:0,interfaceLocale:'fr'});assert.equal(preferred.status,200,JSON.stringify(preferred.body));
@@ -325,6 +327,7 @@ test('French-only policy approval admits preference, follow and automatic accept
   assert.equal((await companies.runTask(task)).committed,true);assert.equal(modelCalls,1);
   const request=(await call('/company-requests')).body.items[0],acceptPath=`/company-requests/${request.id}/accept`,acceptBody={candidateId:request.candidate.id,previewRevision:request.previewRevision};
   language='en';const deniedSession=await call('/session');assert.equal(deniedSession.body.policies.reviewed,false);
+  assert.equal((await call('/session','GET',undefined,{'X-Justup-Locale':'fr'})).body.policies.reviewed,true);
   for(const [path,method,body,headers] of [
     ['/preferences','PATCH',{expectedRevision:2,interfaceLocale:'en'}],
     ['/follows/alpha','PATCH',{expectedRevision:1,followed:false}],

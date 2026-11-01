@@ -54,7 +54,8 @@ export function policyJson(value) {
   if(typeof value!=='string'||value.length>8192)throw new TypeError('Invalid policy locale configuration.');
   try{const result=JSON.parse(value);if(!object(result))throw Error();return result;}catch{throw new TypeError('Invalid policy locale configuration.');}
 }
-export function requestLocale({cookie,acceptLanguage,savedLocale}={}) {
+export function requestLocale({explicitLocale,cookie,acceptLanguage,savedLocale}={}) {
+  if(explicitLocale!==undefined){if(!POLICY_LOCALES.includes(explicitLocale))throw new TypeError('Invalid explicit interface locale.');return explicitLocale;}
   if(POLICY_LOCALES.includes(savedLocale))return savedLocale;
   if(savedLocale===undefined&&typeof cookie==='string'&&cookie.length<=8192){const values=cookie.split(';').map(v=>v.trim()).filter(v=>v.startsWith('justup_interface_locale='));if(values.length===1){const v=values[0].slice(24);if(POLICY_LOCALES.includes(v))return v;}}
   if(typeof acceptLanguage==='string'&&acceptLanguage.length<=512){

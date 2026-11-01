@@ -51,6 +51,16 @@ test('session and auth set opaque host-only secure cookies and honest capabiliti
   const session = await s.request('/session', { headers: { Cookie: result.cookie } }); assert.equal(session.body.csrfToken, result.body.csrfToken);
 });
 
+test('explicit locale headers select current request metadata and reject invalid or duplicate values before auth',async t=>{
+  const s=await setup(t);
+  const localized=await s.request('/session',{headers:{'X-Justup-Locale':'it','Accept-Language':'en'}});
+  assert.equal(localized.body.policies.locale,'it');assert.equal(localized.body.policies.reviewed,false);
+  for(const value of ['it-IT','it,fr','en,en',''])assert.equal((await s.request('/session',{headers:{'X-Justup-Locale':value}})).res.status,400);
+  assert.equal((await s.request('/session',{headers:[['X-Justup-Locale','en'],['X-Justup-Locale','en']]})).res.status,400);
+  const blocked=await s.request('/auth/login',{method:'POST',headers:{Origin:ORIGIN,'X-CSRF-Token':s.guest.body.csrfToken,Cookie:s.guestCookie,'Content-Type':'application/json','X-Justup-Locale':'it'},body:'{}'});
+  assert.equal(blocked.res.status,503);assert.equal(blocked.body.error.code,'policy_unavailable');assert.equal(s.mutations(),0);
+});
+
 test('public catalogue passes bounded pagination without viewer state and rejects private projections', async t => {
   const calls = [], feed = { coverage: () => ({}), companies: args => { calls.push(args); return { items: [], coverage: {}, nextCursor: null }; } };
   const s = await setup(t, { feed });

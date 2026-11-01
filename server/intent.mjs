@@ -310,7 +310,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(!(deadline>now()))throw err('unauthenticated',401);
     const active=row(ownerId,activeSearchId);if(!active?.accepted_json||active.revision!==activeRevision)throw err('revision_conflict',409);
     const rows=[active],key=revisionKey(rows),generation=feed.generation?.()??null,accessKey=hash(current.access??null),evidence=evidenceKey(current),searches=[];
-    for(const r of rows)searches.push(await results(r,{accountId:current.account?.id??null,viewer:current,url:new URL(`https://snapshot.invalid/?revision=${r.revision}&limit=96`)},{snapshot:true}));
+    for(const r of rows)searches.push(await results(r,{accountId:current.account?.id??null,viewer:current,interfaceLocale:current.interfaceLocale,url:new URL(`https://snapshot.invalid/?revision=${r.revision}&limit=96`)},{snapshot:true}));
     const latest=authority(ownerId,false,viewer?.interfaceLocale);if(!latest)throw err('unauthenticated',401);
     if(accessKey!==hash(latest.access??null)||key!==revisionKey(acceptedRows(ownerId).filter(r=>r.id===activeSearchId))||generation!==(feed.generation?.()??null)||evidence!==evidenceKey(latest)||!(deadline>now()))throw err('revision_conflict',409);
     const databaseKey=`${db.prepare('PRAGMA data_version').get().data_version}:${db.prepare('SELECT total_changes() AS n').get().n}`;
