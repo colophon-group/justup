@@ -22,8 +22,10 @@ test('legacy English approval, exact locale reviews and explicit fallback never 
   for(const patch of [{policyLocales:{de:entry('en')}},{policyLocales:{de:{...entry('de'),privacyUrl:origin+'/privacy.de.html?tracking=1'}}},{policyLocales:{xx:entry('de')}},{policyFallbacks:{de:'fr'}},{policyFallbacks:{de:'de'}},{policyLocales:{de:{...entry('de'),version:''}}}])assert.throws(()=>validatePolicyConfig({...config,...patch}),/policy/);
 });
 
-test('saved account locale beats explicit device choice, then bounded browser tags, without retaining browser lists',()=>{
+test('saved account override or browser default ignores guest locale cookies while guests retain their explicit choice',()=>{
   assert.equal(requestLocale({savedLocale:'fr',cookie:'justup_interface_locale=de',acceptLanguage:'it-CH'}),'fr');
+  assert.equal(requestLocale({savedLocale:null,cookie:'justup_interface_locale=es',acceptLanguage:'fr-CH'}),'fr');
+  assert.equal(requestLocale({cookie:'justup_interface_locale=es',acceptLanguage:'fr-CH'}),'es');
   assert.equal(requestLocale({cookie:'justup_interface_locale=de',acceptLanguage:'it-CH'}),'de');
   assert.equal(requestLocale({cookie:'justup_interface_locale=invalid',acceptLanguage:'ja-JP,es-MX;q=0.9,de-CH;q=0.8'}),'es');
   assert.equal(requestLocale({cookie:'justup_interface_locale=de; justup_interface_locale=it',acceptLanguage:'fr-CH'}),'fr');

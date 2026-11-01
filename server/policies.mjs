@@ -35,7 +35,7 @@ export function policyJson(value) {
 }
 export function requestLocale({cookie,acceptLanguage,savedLocale}={}) {
   if(POLICY_LOCALES.includes(savedLocale))return savedLocale;
-  if(typeof cookie==='string'&&cookie.length<=8192){const values=cookie.split(';').map(v=>v.trim()).filter(v=>v.startsWith('justup_interface_locale='));if(values.length===1){const v=values[0].slice(24);if(POLICY_LOCALES.includes(v))return v;}}
+  if(savedLocale===undefined&&typeof cookie==='string'&&cookie.length<=8192){const values=cookie.split(';').map(v=>v.trim()).filter(v=>v.startsWith('justup_interface_locale='));if(values.length===1){const v=values[0].slice(24);if(POLICY_LOCALES.includes(v))return v;}}
   if(typeof acceptLanguage==='string'&&acceptLanguage.length<=512){
     const tags=acceptLanguage.split(',').slice(0,16).map((part,index)=>{const [tag,q]=part.trim().split(';');const quality=q===undefined?1:/^q=(?:0(?:\.\d{1,3})?|1(?:\.0{1,3})?)$/.test(q)?Number(q.slice(2)):0;return {tag,quality,index};}).sort((a,b)=>b.quality-a.quality||a.index-b.index);
     for(const {tag,quality} of tags){if(!quality||tag.length>80||!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(tag))continue;try{const v=Intl.getCanonicalLocales(tag)[0].split('-')[0];if(POLICY_LOCALES.includes(v))return v;}catch{}}

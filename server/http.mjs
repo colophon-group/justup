@@ -125,7 +125,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       const token = parsedCookies[cookieName] ?? null, viewer = token ? auth.session(token) : null;
       const sessionToken = viewer ? token : null;
       const readingPreferences=services.find(s=>typeof s.preferences==='function');
-      const interfaceLocale=requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:viewer?readingPreferences?.preferences(viewer.account.id).interfaceLocale:null});
+      const interfaceLocale=requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:viewer?readingPreferences?.preferences(viewer.account.id).interfaceLocale??null:undefined});
       let guestToken = parsedCookies[csrfCookie] ?? randomBytes(32).toString('base64url');
       const visitorToken=parsedCookies[visitorCookie]??null;
       const visitorRoute=Boolean(visitorService)&&/^\/visitor\/(?:searches(?:\/[^/]+(?:\/(?:confirm|results|options))?)?|search-options|tasks\/[^/]+|workspace(?:\/recovered-drafts\/[^/]+)?|viewed|session)$/.test(path);
@@ -166,7 +166,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       if (authRoute) {
         let visitorHandoff={status:'none'},handoffRan=!visitorToken||!visitorService;
         const afterAuthenticated=context=>{
-          const locale=requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:readingPreferences?.preferences(context.accountId).interfaceLocale});
+          const locale=requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:readingPreferences?.preferences(context.accountId).interfaceLocale??null});
           const state=authentication(locale);if(!state.loginEnabled)throw problem(state.reason,503);
           if(visitorToken&&visitorService){handoffRan=true;visitorHandoff=visitorService.handoff(visitorToken,context);}
           return visitorHandoff;
@@ -175,7 +175,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         const verifiedViewer=auth.session(result.token);
         if(!handoffRan)throw problem('dependency_unavailable',503);
         res.setHeader('Set-Cookie', [cookie(cookieName, result.token, result.expiresAt), cookie(csrfCookie, '', now()),cookie(visitorCookie,'',now())]);
-        return finish(path === '/auth/register' ? 201 : 200, {...sessionBody(verifiedViewer, result.token, guestToken,null,requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:readingPreferences?.preferences(verifiedViewer.account.id).interfaceLocale})),visitorHandoff});
+        return finish(path === '/auth/register' ? 201 : 200, {...sessionBody(verifiedViewer, result.token, guestToken,null,requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:readingPreferences?.preferences(verifiedViewer.account.id).interfaceLocale??null})),visitorHandoff});
       }
       if(viewer&&mutation&&method!=='DELETE'&&path!=='/session/logout'){const state=authentication(interfaceLocale);if(!state.loginEnabled)throw problem(state.reason,503);}
       if(method==='POST'&&path==='/access/activate') {
@@ -227,7 +227,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         const anonymous = path.startsWith('/visitor/');
         const readAuthority = () => {
           const current = token ? auth.session(token) : null;
-          const locale=requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:current?readingPreferences?.preferences(current.account.id).interfaceLocale:null});
+          const locale=requestLocale({cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:current?readingPreferences?.preferences(current.account.id).interfaceLocale??null:undefined});
           const state = authentication(locale);
           if (!state.loginEnabled) throw problem(state.reason, 503);
           if (!anonymous) { if (!current) throw problem('unauthenticated',401); return {...current,interfaceLocale:locale}; }
