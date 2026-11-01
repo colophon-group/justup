@@ -99,7 +99,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   function capabilities() {
     const result = { search: false, aiMatching: false, companyRequests: false, hiringWire: false };
     for (const service of services) Object.assign(result, typeof service.capabilities === 'function' ? service.capabilities() : service.capabilities);
-    return { follows:false,preferences:false,viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
+    return { viewed:false,hiddenMatchCounts:false,visitorSearch:false,...result, ...DISABLED,
       sse:authentication().loginEnabled&&result.sse===true,
       visitorSearch:policies().reviewed&&config.deletionReady?.()!==false&&result.visitorSearch===true };
   }
