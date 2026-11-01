@@ -35,12 +35,15 @@ def posting(identifier="job-1", **changes):
 
 
 class FakeSource:
-    def __init__(self, initial=(), refresh=(), body=b"<p>Public role details.</p>", refresh_failure=False, companies=()):
+    def __init__(self, initial=(), refresh=(), body=b"<p>Public role details.</p>", refresh_failure=False, companies=(),
+                 body_url="https://feed.example/descriptions/job-1/de", expected_hash=None):
         self.initial = list(initial)
         self.refresh = list(refresh)
         self.body_data = body
         self.refresh_failure = refresh_failure
         self.companies = list(companies)
+        self.body_url = body_url
+        self.expected_hash = expected_hash
         self.searches = []
         self.body_calls = []
 
@@ -61,7 +64,7 @@ class FakeSource:
         self.body_calls.append((identifier, locale))
         if isinstance(self.body_data, Exception):
             raise self.body_data
-        return self.body_data
+        return IMPORT.BodyRead(self.body_data, self.body_url, self.expected_hash)
 
 
 class FakePublicHttp:
@@ -292,7 +295,33 @@ class PublicImportTests(unittest.TestCase):
         self.assertNotIn("<", job["bodyText"])
         self.assertTrue(job["evidence"]["aiEligible"])
         self.assertEqual(job["evidence"]["bodySha256"], IMPORT.hashlib.sha256(body).hexdigest())
+        self.assertEqual(job["evidence"]["bodyUrl"], source.body_url)
         self.assertEqual(job["evidence"]["normalizationVersion"], 1)
+
+    def test_body_provenance_verifies_the_declared_version_before_retaining_text(self):
+        body = b"<p>Verified role details. " + b"Useful evidence. " * 20 + b"</p>"
+        digest = IMPORT.hashlib.sha256(body).hexdigest()
+        source = FakeSource([posting()], body=body, body_url="https://feed.example/versioned/job-1/de", expected_hash=digest)
+        evidence = IMPORT.import_snapshot(source, SNAPSHOT, max_jobs=1, now=NOW)["jobs"][0]["evidence"]
+        self.assertEqual(evidence["bodyUrl"], source.body_url)
+        self.assertEqual(evidence["bodySha256"], digest)
+        self.assertIsNone(evidence["bodyError"])
+
+        stale = FakeSource([posting()], body=body, expected_hash="0" * 64)
+        job = IMPORT.import_snapshot(stale, SNAPSHOT, max_jobs=1, now=NOW)["jobs"][0]
+        self.assertIsNone(job["bodyText"])
+        self.assertEqual(job["evidence"]["bodyError"], "body_hash_mismatch")
+        self.assertIsNone(job["evidence"]["bodyFetchedAt"])
+        self.assertIsNone(job["evidence"]["bodySha256"])
+        self.assertFalse(job["evidence"]["aiEligible"])
+
+    def test_body_provenance_rejects_untrusted_source_reference(self):
+        for url in ("http://feed.example/job", "https://feed.example@127.0.0.1/job", "file:///private/body"):
+            with self.subTest(url=url):
+                job = IMPORT.import_snapshot(FakeSource([posting()], body_url=url), SNAPSHOT, max_jobs=1, now=NOW)["jobs"][0]
+                self.assertIsNone(job["bodyText"])
+                self.assertEqual(job["evidence"]["bodyError"], "body_invalid_source")
+                self.assertIsNone(job["evidence"]["bodyUrl"])
 
     def test_observation_times_follow_actual_query_and_body_completion(self):
         ticks = iter(NOW + timedelta(seconds=second) for second in range(4))
