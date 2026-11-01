@@ -128,6 +128,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       const parsedCookies = cookies(req.headers.cookie);
       const token = parsedCookies[cookieName] ?? null, viewer = token ? auth.session(token) : null;
       const sessionToken = viewer ? token : null;
+      const productRecords=services.find(s=>typeof s.observe==='function'&&typeof s.onModelMetric==='function');
       const readingPreferences=services.find(s=>typeof s.preferences==='function');
       const interfaceLocale=requestLocale({explicitLocale,cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:viewer?readingPreferences?.preferences(viewer.account.id).interfaceLocale??null:undefined});
       let guestToken = parsedCookies[csrfCookie] ?? randomBytes(32).toString('base64url');
@@ -179,6 +180,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         const result = path === '/auth/register' ? await auth.register(body,{afterAuthenticated}) : await auth.login(body,{afterAuthenticated});
         const verifiedViewer=auth.session(result.token);
         if(!handoffRan)throw problem('dependency_unavailable',503);
+        if(path==='/auth/register')try{productRecords?.observe({ownerId:verifiedViewer.account.id,event:'account_registered',key:'registration',viewer:verifiedViewer,locale:interfaceLocale,outcome:'accepted'});}catch{}
         res.setHeader('Set-Cookie', [cookie(cookieName, result.token, result.expiresAt), cookie(csrfCookie, '', now()),cookie(visitorCookie,'',now())]);
         return finish(path === '/auth/register' ? 201 : 200, {...sessionBody(verifiedViewer, result.token, guestToken,null,requestLocale({explicitLocale,cookie:req.headers.cookie,acceptLanguage:req.headers['accept-language'],savedLocale:readingPreferences?.preferences(verifiedViewer.account.id).interfaceLocale??null})),visitorHandoff});
       }
@@ -208,7 +210,9 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         const rawLimit = url.searchParams.get('limit');
         const limit = rawLimit == null ? 20 : /^[1-9]\d?$/.test(rawLimit) ? Number(rawLimit) : NaN;
         if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw problem('invalid_limit');
-        return finish(200, feed.companies({ q: url.searchParams.get('q') ?? '', cursor: url.searchParams.get('cursor'), limit }));
+        const catalogue=feed.companies({ q: url.searchParams.get('q') ?? '', cursor: url.searchParams.get('cursor'), limit });
+        try{productRecords?.inspect({viewer,interfaceLocale},'coverage_served');}catch{}
+        return finish(200,catalogue);
       }
       if (method === 'GET' && /^\/companies\/[^/]+$/.test(path)) return finish(200, feed.company(decodePath(path.split('/')[2])));
       if (method === 'GET' && path === '/health') {
@@ -257,7 +261,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       // The fixed runtime composes these services; mutations never use this hook.
       if (method === 'GET') for (const service of services) {
         const result = await service.publicRoute?.({ method, path, url, viewer, accountId: viewer?.account.id ?? null, requestId, db });
-        if (result != null) return finish(result.status ?? 200, result.body);
+        if (result != null) {if(/^\/companies\/[^/]+\/report$/.test(path))try{productRecords?.inspect({viewer,interfaceLocale},'report_served');}catch{}return finish(result.status ?? 200, result.body);}
       }
       if(visitorRoute) {
         if(method!=='DELETE'){

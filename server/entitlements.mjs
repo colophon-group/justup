@@ -89,7 +89,7 @@ export function createAccessReader({ db, now = Date.now } = {}) {
   };
 }
 
-export function createEntitlements({ db, now = Date.now, identityProofVerifier = null, billingEventVerifier = null } = {}) {
+export function createEntitlements({ db, now = Date.now, identityProofVerifier = null, billingEventVerifier = null, onAccessTransition = () => {} } = {}) {
   if (!db || typeof now !== 'function' || (identityProofVerifier !== null && typeof identityProofVerifier !== 'function')
       || (billingEventVerifier !== null && typeof billingEventVerifier !== 'function')) {
     throw new TypeError('Invalid entitlement dependencies.');
@@ -197,6 +197,7 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
       const endsAt = legacy ? calendarMonthAfter(startedAt) : startedAt + WEEK_MS;
       if (!validTime(endsAt) || endsAt <= startedAt) throw new TypeError('Invalid free-period deadline.');
       insertPeriod.run(accountId, legacy ? 'legacy' : 'standard', startedAt, endsAt);
+      try{onAccessTransition({ownerId:accountId,event:'free_activated',key:'free-period',viewer:{access:accessForAccount(accountId)},outcome:'active'});}catch{}
       return accessForAccount(accountId);
     });
   }
@@ -258,6 +259,7 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
       }
       updateSubscription.run(snapshot.status, snapshot.plan ?? null, snapshot.paidThroughAt ?? null, subscriptionHash);
       insertBillingEvent.run(eventHash, canonicalHash, event.accountId, subscriptionHash, reservation.version, now());
+      try{onAccessTransition({ownerId:event.accountId,event:'subscription_transition',key:eventHash,viewer:{access:accessForAccount(event.accountId)},outcome:snapshot.status});}catch{}
       return { applied: true, access: accessForAccount(event.accountId) };
     });
   }

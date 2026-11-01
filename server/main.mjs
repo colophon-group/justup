@@ -105,7 +105,7 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
       tasks.deleteOwner(ownerId);
     };
     const createAuth = authFactory ?? (await import('./auth.mjs')).createAuth;
-    auth = createAuth({ db: store.db, config, now, deleteAccountData });
+    auth = createAuth({ db: store.db, config, now, deleteAccountData,onAccessTransition:data=>{try{services.find(s=>typeof s.observe==='function'&&typeof s.onModelMetric==='function')?.observe(data);}catch{}} });
     function maintainAuth() {
       try {
         if (typeof auth.cleanup !== 'function') return;

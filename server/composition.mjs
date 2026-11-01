@@ -10,6 +10,7 @@ import { createLiveResultsService } from './live-results.mjs';
 import { createReadingPreferencesService } from './reading-preferences.mjs';
 import { createHiringWireApi } from './hiring-wire-integration.mjs';
 import { createCompanyReports } from './company-reports.mjs';
+import { createProductRecords } from './product-records.mjs';
 
 const disabled=()=>({search:false,companyRequests:false,aiMatching:false});
 export function runnerStatusPath(config){return config.runnerStatusPath??(typeof config.dbPath==='string'&&isAbsolute(config.dbPath)?join(dirname(config.dbPath),'runner-status.json'):null);}
@@ -38,6 +39,8 @@ export function createApiServices(deps){
   // without reading any provider configuration from the caller.
   for(const key of ['policyVersion','policiesReviewed','policyLocales','policyFallbacks','policyAssetProof','privacyUrl','usageUrl','allowedOrigin','allowInsecureLocalhost'])Object.defineProperty(identityConfig,key,{enumerable:true,get:()=>config[key]});
   const identity=createVisitorIdentity({...deps,config:identityConfig});
+  const records=createProductRecords({...deps,ownerAuthority:identity.principal});
+  deps={...deps,records};
   const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
   const readingPreferences=createReadingPreferencesService({...deps,ownerAuthority:identity.principal});
   const heartbeat=()=>readRunnerStatus({config:{dbPath:config.dbPath,runnerStatusPath:config.runnerStatusPath,sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity},now}).capabilities;
@@ -48,5 +51,5 @@ export function createApiServices(deps){
   const liveResults=createLiveResultsService({...deps,intent});
   const wire=createHiringWireApi({db:deps.db,now});
   const reports=createCompanyReports({db:deps.db,feed:deps.feed,now});
-  return [intent,companies,matching,visitor,readingPreferences,liveResults,reports,wire];
+  return [intent,companies,matching,visitor,readingPreferences,liveResults,reports,records,wire];
 }

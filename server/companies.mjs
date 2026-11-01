@@ -101,7 +101,7 @@ function importedCandidate(company) {
     evidenceUrls: [...new Set(evidenceUrls)].slice(0, 8), coverage: { state: company.coverage?.state??'imported_snapshot' } };
 }
 
-export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, afterPrivateTransaction, withPrivateTransaction, model = null, availability, readingPreferences, ownerAuthority } = {}) {
+export function createCompanyService({ db, feed, tasks, config = {}, now = Date.now, beforePrivateDelete, afterPrivateTransaction, withPrivateTransaction, model = null, availability, readingPreferences, ownerAuthority, records } = {}) {
   if (!db || !feed?.companies || !tasks?.enqueue || (beforePrivateDelete != null && typeof beforePrivateDelete !== 'function')) throw new TypeError('Invalid company service configuration.');
   const maxPerOwner = config.maxCompanyRequestsPerOwner ?? 32;
   if (!Number.isSafeInteger(maxPerOwner) || maxPerOwner < 1 || maxPerOwner > 96) throw new TypeError('Invalid company request limit.');
@@ -230,6 +230,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
       db.prepare("UPDATE justup_company_requests SET status='accepted',accept_key=?,candidate_json=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
         .run(idempotencyKey,JSON.stringify(candidate),ownerId,id,body.previewRevision);
       if(candidate.companyId)readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId,locale);
+      try{records?.observe({ownerId,event:'company_accepted',key:id,referenceId:id,locale,outcome:'accepted'});}catch{}
       return result(row(ownerId, id));
     });
   }
@@ -242,6 +243,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     db.prepare('DELETE FROM justup_company_request_keys WHERE owner_id=? AND request_id=?').run(ownerId, id);
     db.prepare('DELETE FROM justup_company_evidence WHERE owner_id=? AND request_id=?').run(ownerId, id);
     db.prepare('DELETE FROM justup_company_requests WHERE owner_id=? AND id=?').run(ownerId, id);
+    records?.deleteReference(ownerId,id);
     return true;
   }
   function deleteAccountData(ownerId) {
@@ -253,14 +255,14 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     const ownerId = requireOwner(ctx);
     if(ctx.method!=='GET'&&ctx.method!=='DELETE'&&!admitted(ownerId,ctx.interfaceLocale))throw problem('policy_unavailable',503);
     if (ctx.path === '/company-requests') {
-      if (ctx.method === 'GET') return { status: 200, body: { items: db.prepare('SELECT * FROM justup_company_requests WHERE owner_id=? ORDER BY created_at DESC,id').all(ownerId).map(view) } };
+      if (ctx.method === 'GET') {const items=db.prepare('SELECT * FROM justup_company_requests WHERE owner_id=? ORDER BY created_at DESC,id').all(ownerId).map(view);try{for(const item of items)records?.observe({ownerId,event:'company_progress',key:`${item.id}:${item.status}:${item.previewRevision}`,referenceId:item.id,viewer:ctx.viewer,locale:ctx.interfaceLocale,outcome:item.status});}catch{}return {status:200,body:{items}};}
       if (ctx.method === 'POST') return create(ownerId, ctx.body,ctx.interfaceLocale);
       return null;
     }
     let id;
     try { id = decodeURIComponent(ctx.path.split('/')[2]); } catch { throw problem('invalid_input'); }
     if (!id || id.length > 128 || id.includes('/')) throw problem('invalid_input');
-    if (ctx.path.endsWith('/accept') && ctx.method === 'POST') return accept(ownerId, id, ctx.body, ctx.idempotencyKey,ctx.interfaceLocale);
+    if (ctx.path.endsWith('/accept') && ctx.method === 'POST') return accept(ownerId,id,ctx.body,ctx.idempotencyKey,ctx.interfaceLocale);
     if (!ctx.path.endsWith('/accept') && ctx.method === 'DELETE') {
       const remove=() => {
         if (!row(ownerId, id)) throw problem('not_found', 404, 'Not found.');

@@ -140,7 +140,7 @@ export function primaryMatches(job, {filters:f}) {
   return true;
 }
 
-export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability,ownerAuthority,visitorIdentity,readingPreferences}={}) {
+export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability,ownerAuthority,visitorIdentity,readingPreferences,records}={}) {
   if(!db||!feed||!tasks) throw new TypeError('Search dependencies are required.');
   db.exec(`CREATE TABLE IF NOT EXISTS justup_searches(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,accepted_json TEXT,draft_json TEXT,task_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
     CREATE INDEX IF NOT EXISTS justup_searches_owner ON justup_searches(owner_id);
@@ -197,6 +197,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     db.prepare('DELETE FROM justup_searches WHERE owner_id=? AND id=?').run(owner,id);
     matching?.deleteSearchData?.(owner,id);
     readingPreferences?.deleteSearchData(owner,id);
+    records?.deleteReference(owner,id);
   }
   function deleteAccountData(owner) {
     for(const s of db.prepare('SELECT id FROM justup_searches WHERE owner_id=?').all(owner)) purgeSearch(owner,s.id);
@@ -228,6 +229,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       try {raw=await model.interpretIntent(intentModelInput({query:task.payload.query,prior:accepted,capabilities:caps,explicitSearchOptions:searchOptions(task.ownerId,r.id),presentationLocale:task.payload.presentationLocale??readingPreferences?.preferences(task.ownerId).resolvedInterfaceLocale,...(attempt?{repair:{diagnostics:result.diagnostics,previous}}:{})}),{signal}); }
       catch { return {status:'failed',errorCode:signal?.aborted?'task_timeout':'provider_unavailable'}; }
       result=compileIntent(raw,caps,{query:task.payload.query});
+      try{records?.compilation(result.ok);}catch{}
       if(result.ok) break;
       // Invalid JSON/schema data is never echoed into a repair. Valid bounded
       // model data can accompany field diagnostics in the one new invocation.
@@ -324,7 +326,11 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     const id=ctx.path.split('/')[2],r=id?row(ownerOf(ctx),id):null;
     if(id&&!r) throw err('not_found',404,'Not found.');
     if(ctx.method==='GET'&&ctx.path==='/searches') return {status:200,body:{items:db.prepare('SELECT * FROM justup_searches WHERE owner_id=? ORDER BY created_at,id').all(ownerOf(ctx)).map(publicSearch)}};
-    if(ctx.method==='GET'&&ctx.path===`/searches/${id}/results`) return {status:200,body:await results(r,ctx)};
+    if(ctx.method==='GET'&&ctx.path===`/searches/${id}/results`) {
+      const body=await results(r,ctx);
+      try{if(body.items.length||body.continuation.state!=='exhausted'||!ctx.url.searchParams.has('cursor'))records?.observe({ownerId:ownerOf(ctx),event:'results_served',key:`${id}:${r.revision}:${body.items.length?'usable':body.continuation.state==='exhausted'?'no_results':'paused'}`,referenceId:id,viewer:ctx.viewer,locale:ctx.interfaceLocale,outcome:body.items.length?'usable':body.continuation.state==='exhausted'?'no_results':'paused'});records?.observe({ownerId:ownerOf(ctx),event:'search_use',key:`day:${Math.floor(now()/86400000)}`,outcome:'accepted',locale:ctx.interfaceLocale});}catch{}
+      return {status:200,body};
+    }
     if(ctx.method==='PATCH'&&ctx.path===`/searches/${id}/options`&&readingPreferences) {
       bodyKeys(ctx.body,['expectedRevision','followedOnly','postingLanguages']);const expected=revision(ctx.body.expectedRevision);
       const value=readingPreferences.validateOptions({followedOnly:ctx.body.followedOnly,postingLanguages:ctx.body.postingLanguages},catalogueCapabilities().values.postingLanguages,searchOptions(ownerOf(ctx),id));
@@ -386,6 +392,8 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
         db.prepare('INSERT INTO justup_search_submissions VALUES(?,?,?,?,?)').run(ownerOf(ctx),requestKey,searchId,fingerprint,task.id);
         if(value)readingPreferences.saveOptions(ownerOf(ctx),searchId,value);
       }); } catch(e) { tasks.delete(ownerOf(ctx),task.id); throw e; }
+      if(editing)try{records?.evaluations.stage({ownerId:ownerOf(ctx),referenceId:searchId,revision:expected,task:'search_intent',reason:'edit_requires_review'});}catch{}
+      try{records?.observe({ownerId:ownerOf(ctx),event:'search_submitted',key:task.id,referenceId:searchId,viewer:ctx.viewer,locale:ctx.interfaceLocale,outcome:'accepted'});}catch{}
       return {status:202,body:{search:publicSearch(row(ownerOf(ctx),searchId)),task:tasks.publicView(task)}};
     }
     return null;

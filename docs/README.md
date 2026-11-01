@@ -15,6 +15,7 @@ read_when: You need to find a policy or setup guide.
 | Preparing frontend delivery, a preview hostname or deployed byte verification | [Frontend delivery guide](frontend-delivery.md) |
 | Filing a discovery, changing code, reviewing a pull request, or planning a release | [Development and release guide](development-process.md) |
 | Reviewing privacy, usage or sign-in disclosure | [Policy guide](policies.md) |
+| Reading private product counts or curating reviewed model cases | [Product evidence](product-evidence.md) |
 | Setting up local credentials or changing service access | [Secrets and contributor setup](secrets.md) |
 
 The product guide defines the first-release experience. Implementation guides identify what works today and what remains to release. Reasons behind changes and earlier alternatives live in issues and commits.

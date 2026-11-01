@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createAuth } from './auth.mjs';
+import { createProductRecords } from './product-records.mjs';
+import { createTasks } from './tasks.mjs';
 import { createAccessReader } from './entitlements.mjs';
 import { createFeed } from './feed.mjs';
 import { openStore } from './store.mjs';
@@ -16,10 +18,12 @@ const key = (value) => createHash('sha256').update(value).digest('base64url');
 
 function fixture(t, options = {}) {
   const db = new DatabaseSync(':memory:');
-  let at = START;
+  let at = START,records;
   const auth = createAuth({ db, now: () => at, config: { requiresInvitation: false, ...options.config },
     identityProofVerifier: options.identityProofVerifier ?? (async (proof) => proof),
-    billingEventVerifier: options.billingEventVerifier ?? (async (event) => event) });
+    billingEventVerifier: options.billingEventVerifier ?? (async (event) => event),
+    onAccessTransition:data=>records?.observe(data),deleteAccountData:id=>records?.deleteAccountData(id) });
+  if(options.measurement)records=createProductRecords({db,tasks:createTasks({db,now:()=>at}),now:()=>at,ownerAuthority:id=>{const access=auth.accessForAccount(id);return access?{account:{id},access}:null;}});
   t.after(() => db.close());
   const register = async (username = 'tester') => auth.register({ username, password: PASSWORD });
   const verify = (accountId, subjectId = 'person-subject-0001', legacyProofId = null) =>
@@ -32,7 +36,7 @@ function fixture(t, options = {}) {
       accountId: verified.accountId, subscriptionId: verified.subscriptionId, observedAt: at, status: 'active',
       plan: 'weekly', paidThroughAt: at + 7 * DAY, ...snapshot })) });
   };
-  return { db, auth, register, verify, event, advance: (ms) => { at += ms; }, setTime: (value) => { at = value; }, now: () => at };
+  return { db, auth, records,register, verify, event, advance: (ms) => { at += ms; }, setTime: (value) => { at = value; }, now: () => at };
 }
 
 test('signup is limited until trusted proof and deliberate free-period activation', async (t) => {
@@ -309,4 +313,17 @@ test('the same feed withholds fresh jobs until verified free access is activated
   assert.deepEqual(feed.list({ viewer: auth.session(token) }).items.map((row) => row.id), ['older']);
   auth.activateFreePeriod(token);
   assert.deepEqual(feed.list({ viewer: auth.session(token) }).items.map((row) => row.id), ['fresh', 'older']);
+});
+
+
+test('measurement records only committed new free activation and applied subscription transitions despite replay or observer failure',async t=>{
+  const f=fixture(t,{measurement:true}),{account,token}=await f.register();await f.verify(account.id);
+  f.auth.activateFreePeriod(token);f.auth.activateFreePeriod(token);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM justup_journey_events WHERE event='free_activated'").get().n,1);
+  await f.event(account.id);await f.event(account.id);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM justup_journey_events WHERE event='subscription_transition'").get().n,1);
+  const aggregate=JSON.stringify(f.records.report());assert(aggregate.includes('free_activated'));assert(!aggregate.includes(account.id));assert(!aggregate.includes('event-confirmed'));
+  f.records.observe=()=>{throw Error('private diagnostic failure');};
+  const cancelled=await f.event(account.id,{eventId:'event-cancelled-failure',snapshot:{status:'cancelled',paidThroughAt:START+7*DAY}});assert.equal(cancelled.applied,true);assert.equal(cancelled.access.kind,'cancelled');
+  await f.auth.deleteAccount(token,PASSWORD);assert.equal(f.db.prepare('SELECT count(*) n FROM justup_journey_events').get().n,0);
 });
