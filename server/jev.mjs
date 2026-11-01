@@ -127,12 +127,12 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20_000
       || !Number.isInteger(retries) || retries < 0 || retries > 1
       || !Number.isSafeInteger(windowMs) || windowMs < 60_000 || windowMs > DAY) throw new TypeError('Invalid provider bounds.');
-  db.exec(`CREATE TABLE IF NOT EXISTS demo_jev_usage (
+  db.exec(`CREATE TABLE IF NOT EXISTS justup_jev_usage (
     scope TEXT NOT NULL, scope_key TEXT NOT NULL, window_start INTEGER NOT NULL,
     calls INTEGER NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
     cost_nano INTEGER NOT NULL, ambiguous INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(scope,scope_key,window_start)) STRICT;
-    CREATE TABLE IF NOT EXISTS demo_jev_reservations (
+    CREATE TABLE IF NOT EXISTS justup_jev_reservations (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, project_id TEXT NOT NULL, window_start INTEGER NOT NULL,
     input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cost_nano INTEGER NOT NULL,
     state TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT;`);
@@ -150,8 +150,8 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
   }
   function available() { return configurationAvailable() && cumulative.status().available; }
   function cleanup() {
-    db.prepare('DELETE FROM demo_jev_usage WHERE window_start<?').run(now() - 7 * DAY);
-    db.prepare('DELETE FROM demo_jev_reservations WHERE created_at<?').run(now() - 7 * DAY);
+    db.prepare('DELETE FROM justup_jev_usage WHERE window_start<?').run(now() - 7 * DAY);
+    db.prepare('DELETE FROM justup_jev_reservations WHERE created_at<?').run(now() - 7 * DAY);
   }
   function reserve(ownerId, amount) {
     return tx(db, () => {
@@ -161,36 +161,36 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
         + amount.outputTokens * pricing.outputNanodollarsPerToken;
       if (!Number.isSafeInteger(cost)) throw new JevError('budget_exhausted');
       for (const [scope, key] of [['account', ownerId], ['project', config.projectId]]) {
-        const used = db.prepare('SELECT * FROM demo_jev_usage WHERE scope=? AND scope_key=? AND window_start=?').get(scope, key, start);
+        const used = db.prepare('SELECT * FROM justup_jev_usage WHERE scope=? AND scope_key=? AND window_start=?').get(scope, key, start);
         const limits = config.budgets[scope];
         if ((used?.calls ?? 0) + 1 > limits.calls || (used?.input_tokens ?? 0) + amount.inputTokens > limits.inputTokens
             || (used?.output_tokens ?? 0) + amount.outputTokens > limits.outputTokens
             || (used?.cost_nano ?? 0) + cost > limits.costNanodollars) throw new JevError('budget_exhausted');
       }
       for (const [scope, key] of [['account', ownerId], ['project', config.projectId]]) {
-        db.prepare(`INSERT INTO demo_jev_usage VALUES(?,?,?,?,?,?,?,0)
+        db.prepare(`INSERT INTO justup_jev_usage VALUES(?,?,?,?,?,?,?,0)
           ON CONFLICT(scope,scope_key,window_start) DO UPDATE SET calls=calls+1,
           input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens,cost_nano=cost_nano+excluded.cost_nano`)
           .run(scope, key, start, 1, amount.inputTokens, amount.outputTokens, cost);
       }
       const id = randomUUID();
-      db.prepare('INSERT INTO demo_jev_reservations VALUES(?,?,?,?,?,?,?,?,?)').run(id, ownerId, config.projectId, start, amount.inputTokens, amount.outputTokens, cost, 'reserved', now());
+      db.prepare('INSERT INTO justup_jev_reservations VALUES(?,?,?,?,?,?,?,?,?)').run(id, ownerId, config.projectId, start, amount.inputTokens, amount.outputTokens, cost, 'reserved', now());
       return id;
     });
   }
   function settle(id, usage = null) {
     return tx(db, () => {
-      const r = db.prepare('SELECT * FROM demo_jev_reservations WHERE id=? AND state=\'reserved\'').get(id);
+      const r = db.prepare('SELECT * FROM justup_jev_reservations WHERE id=? AND state=\'reserved\'').get(id);
       if (!r) return; // Deletion cannot resurrect owner-specific accounting.
       const overrun = usage && (usage.inputTokens > r.input_tokens || usage.outputTokens > r.output_tokens);
       const input = usage ? Math.max(usage.inputTokens, overrun ? r.input_tokens : 0) : r.input_tokens;
       const output = usage ? Math.max(usage.outputTokens, overrun ? r.output_tokens : 0) : r.output_tokens;
       const cost = input * pricing.inputNanodollarsPerToken + output * pricing.outputNanodollarsPerToken;
       for (const [scope, key] of [['account', r.owner_id], ['project', r.project_id]]) {
-        db.prepare(`UPDATE demo_jev_usage SET input_tokens=input_tokens+?,output_tokens=output_tokens+?,cost_nano=cost_nano+?,ambiguous=ambiguous+?
+        db.prepare(`UPDATE justup_jev_usage SET input_tokens=input_tokens+?,output_tokens=output_tokens+?,cost_nano=cost_nano+?,ambiguous=ambiguous+?
           WHERE scope=? AND scope_key=? AND window_start=?`).run(input - r.input_tokens, output - r.output_tokens, cost - r.cost_nano, usage ? 0 : 1, scope, key, r.window_start);
       }
-      db.prepare('UPDATE demo_jev_reservations SET state=? WHERE id=?').run(usage ? 'settled' : 'ambiguous', id);
+      db.prepare('UPDATE justup_jev_reservations SET state=? WHERE id=?').run(usage ? 'settled' : 'ambiguous', id);
       return Boolean(overrun);
     });
   }
@@ -269,8 +269,8 @@ export function createJevClient({ db, config = {}, fetch: fetchImpl = globalThis
     }
   }
   function deleteAccountData(ownerId) {
-    db.prepare("DELETE FROM demo_jev_usage WHERE scope='account' AND scope_key=?").run(ownerId);
-    db.prepare('DELETE FROM demo_jev_reservations WHERE owner_id=?').run(ownerId);
+    db.prepare("DELETE FROM justup_jev_usage WHERE scope='account' AND scope_key=?").run(ownerId);
+    db.prepare('DELETE FROM justup_jev_reservations WHERE owner_id=?').run(ownerId);
     // Aggregated project usage deliberately survives deletion, without identity.
   }
   return { available, classify, plan: planJevBatch, cleanup, deleteAccountData,

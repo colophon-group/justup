@@ -76,7 +76,7 @@ export function createVisitorIdentity({db,now=Date.now,config={},accessForAccoun
   }
   function admit(owner,{creating=false}={}) {
     const row=visitorRow(owner);if(!row)throw problem('unauthenticated',401);
-    if(row.submissions>=maxSubmissions || creating&&db.prepare('SELECT count(*) AS n FROM demo_searches WHERE owner_id=?').get(owner).n>=maxSearches)throw problem('task_limit',429);
+    if(row.submissions>=maxSubmissions || creating&&db.prepare('SELECT count(*) AS n FROM justup_searches WHERE owner_id=?').get(owner).n>=maxSearches)throw problem('task_limit',429);
   }
   function recordSubmission(owner) { if(db.prepare('UPDATE justup_visitors SET submissions=submissions+1 WHERE id=? AND handed_to IS NULL AND expires_at>? AND submissions<?').run(owner,now(),maxSubmissions).changes!==1)throw problem('task_limit',429); }
   function admitMatching(owner,locale) {
@@ -140,7 +140,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     if(!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0)throw problem('invalid_input');
     if(body.activeSearchId!==null&&(typeof body.activeSearchId!=='string'||body.activeSearchId.length>128))throw problem('invalid_input');
     if(!body.drafts||typeof body.drafts!=='object'||Array.isArray(body.drafts)||Object.keys(body.drafts).length>100)throw problem('invalid_input');
-    const own=new Set(db.prepare('SELECT id FROM demo_searches WHERE owner_id=?').all(owner).map(r=>r.id));
+    const own=new Set(db.prepare('SELECT id FROM justup_searches WHERE owner_id=?').all(owner).map(r=>r.id));
     if(body.activeSearchId!==null&&!own.has(body.activeSearchId))throw problem('not_found',404);
     for(const [id,draft] of Object.entries(body.drafts))if((id!=='new'&&!own.has(id))||typeof draft!=='string'||draft.length>4000||/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(draft))throw problem('invalid_input');
     const state={activeSearchId:body.activeSearchId,drafts:body.drafts};
@@ -177,7 +177,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
       // Existing account searches are appended to, never overwritten. Cancel and
       // remove old leases before moving state so late anonymous replies are inert.
       const visitorState=workspace(row.id).state, accountWorkspace=workspace(accountId),accountState=accountWorkspace.state;
-      const total=db.prepare('SELECT count(*) AS n FROM demo_searches WHERE owner_id IN (?,?)').get(row.id,accountId).n;
+      const total=db.prepare('SELECT count(*) AS n FROM justup_searches WHERE owner_id IN (?,?)').get(row.id,accountId).n;
       if(total>100)throw problem('task_limit',429);
       intent.transferOwner(row.id,accountId);
       matching?.transferOwner?.(row.id,accountId);tasks.cancelOwner(row.id);tasks.deleteOwner(row.id);

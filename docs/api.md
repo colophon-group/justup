@@ -166,7 +166,7 @@ Imported companies have `coverage.state:"imported_snapshot"`; an accepted new id
 
 ## Health and fixed build identity
 
-`GET /health` proves process readiness without secrets. `GET /version` returns the API source commit, schema version, immutable build identity, runner identity/readiness and import generation. The release report also records the frontend deployment identity and exact tested versions. A missing required dependency is an explicit capability/readiness state, not a fake successful result.
+`GET /health` proves process readiness without secrets. `GET /version` returns the API source commit, application database schema epoch `2`, immutable build identity, runner identity/readiness and import generation. The [schema guide](schema.md) defines migration and forward recovery; independent import/search/heartbeat/source/ledger format versions remain unchanged. The release report also records the frontend deployment identity and exact tested versions. A missing required dependency is an explicit capability/readiness state, not a fake successful result.
 
 ## Data flow and retention
 

@@ -69,7 +69,7 @@ test('default disabled runner schedules nothing and public reader ignores privat
   const api=createHiringWireApi(deps),wire=await createHiringWireRunner(s);
   assert.deepEqual(wire.beforeClaim(),{state:'disabled'});assert.equal(published(api).state,'unavailable');
   assert.deepEqual(Object.keys(api).sort(),['capabilities','publicRoute']);
-  assert.equal(s.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,0);
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,0);
 });
 test('enabled weekly path publishes synthetic facts once across SQLite restart and expiry',async t=>{
   const directory=mkdtempSync(join(tmpdir(),'wire-integration-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
@@ -78,7 +78,7 @@ test('enabled weekly path publishes synthetic facts once across SQLite restart a
   assert.equal(await runner.runOnce(),true);assert.equal(published(api).edition.items[0].activity.current,3);
   assert.equal(fake.reads(),1);assert.equal(fake.calls(),1);assert.equal(fake.cancels(),1);
   for(let i=0;i<20;i++)assert.equal(wire.beforeClaim().state,'published');
-  assert.equal(s.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,1);
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
   s.db.close();
   const restarted=state(t,{path}),next=await composition(restarted,fake);
   assert.equal(await next.runner.runOnce(),false);assert.equal(fake.calls(),1);
@@ -93,11 +93,11 @@ test('missing source makes zero editorial calls and dependency retries stop afte
   await runner.runOnce();assert.equal(published(api).state,'unavailable');
   assert.equal(wire.beforeClaim().state,'dependency_unavailable');
   for(let i=0;i<100;i++)wire.beforeClaim();
-  assert.equal(s.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,1);
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
   s.setNow(AT+15*60_000);await runner.runOnce();wire.beforeClaim();
   s.setNow(AT+15*60_000+2*60*60_000);await runner.runOnce();wire.beforeClaim();
   s.setNow(AT+86_400_000);for(let i=0;i<100;i++)wire.beforeClaim();
-  assert.equal(s.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,3);
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,3);
   assert.equal(fake.calls(),0);assert.equal(fake.reads(),0);
 });
 test('actual transport with missing independent proof makes zero broker or editorial calls',async t=>{
@@ -112,15 +112,15 @@ test('invalid facts and unsupported editorial output never get an automatic luck
     const {runner,wire,api}=await composition(s,fake);await runner.runOnce();
     assert.equal(wire.beforeClaim().state,'invalid_output');
     s.setNow(AT+86_400_000);for(let i=0;i<100;i++)wire.beforeClaim();
-    assert.equal(s.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,1);assert.equal(published(api).state,'unavailable');
+    assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);assert.equal(published(api).state,'unavailable');
   });
 });
 test('scheduler restart rediscovers an enqueued task if its durable reference write was interrupted',async t=>{
   const s=state(t),fake=fakes(),first=await composition(s,fake);
-  first.wire.beforeClaim();const task=s.db.prepare('SELECT id FROM demo_tasks').get().id;
+  first.wire.beforeClaim();const task=s.db.prepare('SELECT id FROM justup_tasks').get().id;
   s.db.prepare("UPDATE hiring_wire_schedule SET task_id=NULL,attempts=0,outcome='pending'").run();
   const restarted=await composition(s,fake);restarted.wire.beforeClaim();
-  assert.equal(s.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,1);
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
   assert.equal(s.db.prepare('SELECT task_id FROM hiring_wire_schedule').get().task_id,task);
   await restarted.runner.runOnce();assert.equal(fake.calls(),1);
 });
@@ -144,7 +144,7 @@ test('preempted weekly editorial awaits cleanup, publishes nothing, then resumes
     hiring_wire:wire.runTask,search_intent:()=>{assert.equal(cleaned,true);return {status:'succeeded'};}
   }});
   const pending=runner.runOnce();await active;
-  const wireId=s.db.prepare("SELECT id FROM demo_tasks WHERE kind='hiring_wire'").get().id;
+  const wireId=s.db.prepare("SELECT id FROM justup_tasks WHERE kind='hiring_wire'").get().id;
   const foreground=s.tasks.enqueue({ownerId:'account',kind:'search_intent',requestKey:'interactive',payload:{}});
   await cleanup;
   assert.equal(published(api).state,'unavailable');assert.equal(s.tasks.get('__hiring_wire__',wireId).status,'running');
@@ -154,7 +154,7 @@ test('preempted weekly editorial awaits cleanup, publishes nothing, then resumes
   assert.equal(s.db.prepare('SELECT error_code FROM hiring_wire_executions').get().error_code,'task_preempted');
   await runner.runOnce();assert.equal(s.tasks.get('account',foreground.id).status,'succeeded');
   await runner.runOnce();assert.equal(published(api).state,'published');assert.equal(fake.cancels(),2);
-  assert.equal(s.db.prepare("SELECT count(*) n FROM demo_tasks WHERE kind='hiring_wire'").get().n,1);
+  assert.equal(s.db.prepare("SELECT count(*) n FROM justup_tasks WHERE kind='hiring_wire'").get().n,1);
 });
 test('unproven native cleanup durably halts claim/recovery/scheduling across reopen and elapsed lease',async t=>{
   const directory=mkdtempSync(join(tmpdir(),'wire-halt-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
@@ -163,7 +163,7 @@ test('unproven native cleanup durably halts claim/recovery/scheduling across reo
   const {wire,api}=await composition(s,fake);
   const runner=createRunner({tasks:s.tasks,beforeClaim:wire.beforeClaim,onHalt:()=>unready++,handlers:{hiring_wire:wire.runTask}});
   t.after(()=>runner.stop());await runner.runOnce();
-  const held=s.db.prepare("SELECT id,lease_token FROM demo_tasks WHERE kind='hiring_wire'").get();
+  const held=s.db.prepare("SELECT id,lease_token FROM justup_tasks WHERE kind='hiring_wire'").get();
   assert.equal(unready,1);assert.equal(runner.ready(),false);assert.equal(s.tasks.halted(),true);
   assert.equal(published(api).state,'unavailable');assert.equal(s.tasks.get('__hiring_wire__',held.id).status,'running');
   assert.equal(s.tasks.complete(held.id,held.lease_token,{status:'succeeded'}),false);
@@ -177,6 +177,6 @@ test('unproven native cleanup durably halts claim/recovery/scheduling across reo
   assert.equal(restarted.tasks.get('__hiring_wire__',held.id).status,'running');
   assert.deepEqual(next.wire.beforeClaim(),{state:'cleanup_unproven'});
   assert.equal(await next.runner.runOnce(),false);assert.equal(fake.calls(),1);
-  assert.equal(restarted.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,2);
+  assert.equal(restarted.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,2);
   assert.equal(restarted.db.prepare('SELECT count(*) n FROM hiring_wire_schedule').get().n,1);
 });

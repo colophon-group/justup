@@ -8,7 +8,7 @@ import { createMatchingService } from './matching.mjs';
 
 const START = Date.parse('2026-10-31T16:00:00Z');
 const owner = 'owner-1';
-const viewer = { account: { id: owner }, expiresAt: new Date(START + 86_400_000).toISOString(), access: { kind: 'demo', fullAccess: true } };
+const viewer = { account: { id: owner }, expiresAt: new Date(START + 86_400_000).toISOString(), access: { kind: 'free', fullAccess: true } };
 const configuration = { schemaVersion: 1, filters: { titleAny: ['engineer'] }, residualAi: { condition: 'A documented four day week.', requirementIds: ['r1'] } };
 function makeJob(i, extra = {}) {
   const bodyText = 'The job offers a documented four day working week, with regular office hours. '.repeat(4);
@@ -65,8 +65,8 @@ test('only supplied primary candidates are evaluated and public pages preserve n
 
 test('an older accepted row waits for the newest unresolved row', async (t) => {
   const s = setup(t, { count: 3 }); const first = s.page();
-  const scan = s.db.prepare('SELECT id FROM demo_match_scans').get();
-  s.db.prepare("UPDATE demo_match_jobs SET decision='accepted' WHERE scan_id=? AND position=2").run(scan.id);
+  const scan = s.db.prepare('SELECT id FROM justup_match_scans').get();
+  s.db.prepare("UPDATE justup_match_jobs SET decision='accepted' WHERE scan_id=? AND position=2").run(scan.id);
   const waiting = s.page({ cursor: first.continuation.cursor }); assert.deepEqual(waiting.items, []); assert.equal(waiting.continuation.state, 'pending');
   await s.run();
   assert.deepEqual(s.page({ cursor: waiting.continuation.cursor }).items.map((j) => j.id), s.jobs().map((j) => j.id));
@@ -104,8 +104,8 @@ test('provider failure pauses and retains the condition, cursor, scan position a
   const s = setup(t, { count: 2, provider }); const first = s.page(); const task = await s.run();
   assert.equal(task.status, 'warning'); assert.equal(task.output.pause, 'provider_unavailable');
   const paused = s.page({ cursor: first.continuation.cursor }); assert.equal(paused.continuation.state, 'paused'); assert.deepEqual(paused.items, []);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_jobs WHERE decision IS NULL').get().n, 2);
-  assert.equal(s.db.prepare('SELECT condition FROM demo_match_scans').get().condition, configuration.residualAi.condition);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_jobs WHERE decision IS NULL').get().n, 2);
+  assert.equal(s.db.prepare('SELECT condition FROM justup_match_scans').get().condition, configuration.residualAi.condition);
   failing = false; s.advance(5001); s.page({ cursor: paused.continuation.cursor }); await s.run();
   assert.equal(s.page({ cursor: paused.continuation.cursor }).items.length, 2);
 });
@@ -130,7 +130,7 @@ test('API heartbeat readiness queues without credentials and cannot enable provi
   const task = s.tasks.claim(); assert.equal(task.kind, 'ai_match');
   const result = await api.runTask(task);
   assert.equal(result.output.pause, 'dependency_unavailable'); assert.equal(requests, 0);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_jobs WHERE decision IS NULL').get().n, 2);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_jobs WHERE decision IS NULL').get().n, 2);
   // The actual worker instance can consume the API's queued scan and the
   // keyless API can subsequently deliver its exact committed decisions.
   s.advance(5001); api.page({ ...args, cursor: initial.continuation.cursor });
@@ -156,9 +156,9 @@ test('API role prohibits execution even if a provider is accidentally injected a
   // The default keyless API provider creates and cleans its accounting schema.
   const api = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, now: s.time,
     readOnlyProvider: true, availability: () => true });
-  s.db.prepare('INSERT INTO demo_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('account', owner, START, 1, 100, 10, 4200, 0);
-  s.db.prepare('INSERT INTO demo_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('project', 'project', START, 1, 100, 10, 4200, 0);
-  s.db.prepare('INSERT INTO demo_jev_reservations VALUES(?,?,?,?,?,?,?,?,?)').run('reservation', owner, 'project', START, 100, 10, 4200, 'reserved', START);
+  s.db.prepare('INSERT INTO justup_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('account', owner, START, 1, 100, 10, 4200, 0);
+  s.db.prepare('INSERT INTO justup_jev_usage VALUES(?,?,?,?,?,?,?,?)').run('project', 'project', START, 1, 100, 10, 4200, 0);
+  s.db.prepare('INSERT INTO justup_jev_reservations VALUES(?,?,?,?,?,?,?,?,?)').run('reservation', owner, 'project', START, 100, 10, 4200, 'reserved', START);
   const guarded = createMatchingService({ db: s.db, feed: s.feed, tasks: s.tasks,ownerAuthority:s.authority,revisionIsCurrent:()=>true, now: s.time,
     readOnlyProvider: true, availability: () => true,
     provider: { available: () => true, classify: async () => { executed++; return { decisions: [] }; } } });
@@ -166,9 +166,9 @@ test('API role prohibits execution even if a provider is accidentally injected a
   const task = s.tasks.claim(), result = await guarded.runTask(task);
   assert.equal(result.output.pause, 'dependency_unavailable'); assert.equal(executed, 0);
   s.db.exec('BEGIN IMMEDIATE'); api.deleteAccountData(owner); s.db.exec('COMMIT');
-  assert.equal(s.db.prepare("SELECT count(*) AS n FROM demo_jev_usage WHERE scope='account'").get().n, 0);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_jev_reservations').get().n, 0);
-  assert.equal(s.db.prepare("SELECT calls FROM demo_jev_usage WHERE scope='project'").get().calls, 1);
+  assert.equal(s.db.prepare("SELECT count(*) AS n FROM justup_jev_usage WHERE scope='account'").get().n, 0);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_jev_reservations').get().n, 0);
+  assert.equal(s.db.prepare("SELECT calls FROM justup_jev_usage WHERE scope='project'").get().calls, 1);
 });
 
 test('cursors bind owner, revision, condition, access, import generation and ten-minute expiry', (t) => {
@@ -220,16 +220,16 @@ test('concurrent page requests share one pending task and a canceled lease canno
   const first = s.page(); s.page(); s.page({ cursor: first.continuation.cursor }); assert.equal(s.tasksMap.size, 1);
   const task = s.tasks.claim(), promise = s.service.runTask(task);
   s.service.deleteSearchData(owner, 'search-1'); finish(); const result = await promise;
-  assert.equal(result.committed, undefined); assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_cache').get().n, 0);
+  assert.equal(result.committed, undefined); assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_cache').get().n, 0);
   assert.equal(s.tasksMap.size, 0); assert.throws(() => s.page({ cursor: first.continuation.cursor }), { code: 'stale_cursor' });
 });
 
 test('search/account cleanup removes private scans, cursors, cache links, decisions and tasks', async (t) => {
   const s = setup(t, { count: 2 }); s.page(); await s.run(); s.page({ searchId: 'search-2' });
   s.service.deleteSearchData(owner, 'search-1');
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_cache').get().n, 0);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_cache').get().n, 0);
   s.service.deleteAccountData(owner);
-  for (const table of ['demo_match_scans', 'demo_match_jobs', 'demo_match_cursors', 'demo_match_cache', 'demo_match_cache_links'])
+  for (const table of ['justup_match_scans', 'justup_match_jobs', 'justup_match_cursors', 'justup_match_cache', 'justup_match_cache_links'])
     assert.equal(s.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 0);
   assert.equal(s.tasksMap.size, 0);
 });
@@ -238,7 +238,7 @@ test('malformed provider result remains pending and exposes only safe provider s
   const s = setup(t, { count: 2, provider: { available: () => true, classify: async () => ({ decisions: [{ id: 'unexpected', decision: 'accepted' }] }) } });
   const first = s.page(); await s.run(); const end = s.page({ cursor: first.continuation.cursor });
   assert.equal(end.ai.status, 'provider_unavailable'); assert.deepEqual(end.items, []);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_match_cache').get().n, 0);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_cache').get().n, 0);
 });
 
 test('fake 5/12/24 candidate matrix measures scan progress and buffer starvation without model claims', async (t) => {

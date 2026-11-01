@@ -105,25 +105,25 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
   if (!db || !feed?.companies || !tasks?.enqueue || (beforePrivateDelete != null && typeof beforePrivateDelete !== 'function')) throw new TypeError('Invalid company service configuration.');
   const maxPerOwner = config.maxCompanyRequestsPerOwner ?? 32;
   if (!Number.isSafeInteger(maxPerOwner) || maxPerOwner < 1 || maxPerOwner > 96) throw new TypeError('Invalid company request limit.');
-  db.exec(`CREATE TABLE IF NOT EXISTS demo_company_requests (
+  db.exec(`CREATE TABLE IF NOT EXISTS justup_company_requests (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, input_text TEXT NOT NULL, domain TEXT, career_url TEXT, scope TEXT,
     fingerprint TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','candidate','clarification','unresolved','accepted')),
     candidate_json TEXT, preview_revision INTEGER NOT NULL, clarification TEXT, task_id TEXT, created_at INTEGER NOT NULL,
     accept_key TEXT, UNIQUE(owner_id,fingerprint)
   ) STRICT;
-  CREATE INDEX IF NOT EXISTS demo_company_requests_owner ON demo_company_requests(owner_id);
-  CREATE TABLE IF NOT EXISTS demo_company_request_keys (
+  CREATE INDEX IF NOT EXISTS justup_company_requests_owner ON justup_company_requests(owner_id);
+  CREATE TABLE IF NOT EXISTS justup_company_request_keys (
     owner_id TEXT NOT NULL, request_key TEXT NOT NULL, input_json TEXT NOT NULL, request_id TEXT NOT NULL,
     PRIMARY KEY(owner_id,request_key)
   ) STRICT;
-  CREATE TABLE IF NOT EXISTS demo_company_evidence (
+  CREATE TABLE IF NOT EXISTS justup_company_evidence (
     request_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,preview_revision INTEGER NOT NULL,provenance_json TEXT NOT NULL
   ) STRICT;
-  CREATE TABLE IF NOT EXISTS demo_company_request_tasks (
+  CREATE TABLE IF NOT EXISTS justup_company_request_tasks (
     owner_id TEXT NOT NULL,request_id TEXT NOT NULL,task_id TEXT NOT NULL,PRIMARY KEY(owner_id,request_id,task_id)
   ) STRICT;
-  INSERT OR IGNORE INTO demo_company_request_tasks SELECT owner_id,id,task_id FROM demo_company_requests WHERE task_id IS NOT NULL;`);
-  const row = (ownerId, id) => db.prepare('SELECT * FROM demo_company_requests WHERE owner_id=? AND id=?').get(ownerId, id);
+  INSERT OR IGNORE INTO justup_company_request_tasks SELECT owner_id,id,task_id FROM justup_company_requests WHERE task_id IS NOT NULL;`);
+  const row = (ownerId, id) => db.prepare('SELECT * FROM justup_company_requests WHERE owner_id=? AND id=?').get(ownerId, id);
   function view(found) {
     return { id: found.id, input: found.input_text, scope: found.scope, status: found.status,
       companyId:found.candidate_json?JSON.parse(found.candidate_json).companyId??null:null,
@@ -139,7 +139,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     return { status, body: { request: view(found), ...(status === 202 && task ? { task: tasks.publicView(task, taskResult(task, { accountId: found.owner_id })) } : {}) } };
   }
   function insertKey(ownerId, requestKey, json, id) {
-    db.prepare('INSERT INTO demo_company_request_keys VALUES (?,?,?,?)').run(ownerId, requestKey, json, id);
+    db.prepare('INSERT INTO justup_company_request_keys VALUES (?,?,?,?)').run(ownerId, requestKey, json, id);
   }
   const admitted=(owner,locale)=>typeof ownerAuthority!=='function'?true:ownerAuthority(owner,{locale});
   const taskAdmitted=task=>{const current=admitted(task.ownerId,task.payload.presentationLocale);return current&&(!current.processingPolicy||current.processingPolicy.key===task.payload.policyKey);};
@@ -148,32 +148,32 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     if(!current)throw problem('policy_unavailable',503);
     const policyPayload={...(locale?{presentationLocale:locale}:{}),...(current.processingPolicy?{policyKey:current.processingPolicy.key}:{})};
     const input = normalizedInput(body), json = JSON.stringify(input);
-    const key = db.prepare('SELECT * FROM demo_company_request_keys WHERE owner_id=? AND request_key=?').get(ownerId, body.requestKey);
+    const key = db.prepare('SELECT * FROM justup_company_request_keys WHERE owner_id=? AND request_key=?').get(ownerId, body.requestKey);
     if (key) {
       if (key.input_json !== json) throw problem('idempotency_conflict', 409, 'This request key was already used.');
       const found = row(ownerId, key.request_id);
       if (!found) throw problem('not_found', 404, 'Not found.');
       return result(found, found.status === 'pending' ? 202 : 201);
     }
-    if (db.prepare('SELECT count(*) AS n FROM demo_company_request_keys WHERE owner_id=?').get(ownerId).n >= maxPerOwner * 4) {
+    if (db.prepare('SELECT count(*) AS n FROM justup_company_request_keys WHERE owner_id=?').get(ownerId).n >= maxPerOwner * 4) {
       throw Object.assign(problem('task_limit', 429, 'The request limit has been reached.'), { retryAfter: 60 });
     }
     const fingerprint = createHash('sha256').update(JSON.stringify({ ...input, input: fold(input.input) })).digest('hex');
-    const duplicate = db.prepare('SELECT * FROM demo_company_requests WHERE owner_id=? AND fingerprint=?').get(ownerId, fingerprint);
+    const duplicate = db.prepare('SELECT * FROM justup_company_requests WHERE owner_id=? AND fingerprint=?').get(ownerId, fingerprint);
     if (duplicate) {
       if(duplicate.status==='unresolved'){
         const retry=tasks.enqueue({ownerId,kind:'company_resolution',requestKey:body.requestKey,payload:{requestId:duplicate.id,...policyPayload}});
         try{transaction(db,()=>{
-          db.prepare("UPDATE demo_company_requests SET status='pending',candidate_json=NULL,clarification=NULL,task_id=? WHERE id=? AND owner_id=? AND status='unresolved'").run(retry.id,duplicate.id,ownerId);
+          db.prepare("UPDATE justup_company_requests SET status='pending',candidate_json=NULL,clarification=NULL,task_id=? WHERE id=? AND owner_id=? AND status='unresolved'").run(retry.id,duplicate.id,ownerId);
           insertKey(ownerId,body.requestKey,json,duplicate.id);
-          db.prepare('INSERT INTO demo_company_request_tasks VALUES(?,?,?)').run(ownerId,duplicate.id,retry.id);
+          db.prepare('INSERT INTO justup_company_request_tasks VALUES(?,?,?)').run(ownerId,duplicate.id,retry.id);
         });}catch(error){tasks.delete(ownerId,retry.id);throw error;}
         return result(row(ownerId,duplicate.id),202);
       }
       insertKey(ownerId, body.requestKey, json, duplicate.id);
       return result(duplicate, duplicate.status === 'pending' ? 202 : 201);
     }
-    if (db.prepare('SELECT count(*) AS n FROM demo_company_requests WHERE owner_id=?').get(ownerId).n >= maxPerOwner) {
+    if (db.prepare('SELECT count(*) AS n FROM justup_company_requests WHERE owner_id=?').get(ownerId).n >= maxPerOwner) {
       throw Object.assign(problem('task_limit', 429, 'The request limit has been reached.'), { retryAfter: 60 });
     }
     const companies = feed.companies({ q: input.input, limit: 50 }).items;
@@ -192,11 +192,11 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     try {
       if (!known) task = tasks.enqueue({ ownerId, kind: 'company_resolution', requestKey: body.requestKey, payload: { requestId: id,...policyPayload } });
       transaction(db, () => {
-        db.prepare(`INSERT INTO demo_company_requests (id,owner_id,input_text,domain,career_url,scope,fingerprint,status,candidate_json,preview_revision,clarification,task_id,created_at)
+        db.prepare(`INSERT INTO justup_company_requests (id,owner_id,input_text,domain,career_url,scope,fingerprint,status,candidate_json,preview_revision,clarification,task_id,created_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, ownerId, input.input, input.domain, input.careerUrl, input.scope, fingerprint,
           known ? 'candidate' : 'pending', known ? JSON.stringify(known) : null, known ? 1 : 0, null, task?.id ?? null, now());
         insertKey(ownerId, body.requestKey, json, id);
-        if(task)db.prepare('INSERT INTO demo_company_request_tasks VALUES(?,?,?)').run(ownerId,id,task.id);
+        if(task)db.prepare('INSERT INTO justup_company_request_tasks VALUES(?,?,?)').run(ownerId,id,task.id);
       });
     } catch (error) { if (task) tasks.delete(ownerId, task.id); throw error; }
     return result(row(ownerId, id), known ? 201 : 202);
@@ -217,17 +217,17 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
         // its catalogue identity once. Existing explicit follow choices win.
         if(!candidate.companyId&&feed.publishCompany){
           candidate.companyId=feed.publishCompany(candidate);
-          db.prepare('UPDATE demo_company_requests SET candidate_json=? WHERE owner_id=? AND id=?').run(JSON.stringify(candidate),ownerId,id);
+          db.prepare('UPDATE justup_company_requests SET candidate_json=? WHERE owner_id=? AND id=?').run(JSON.stringify(candidate),ownerId,id);
           readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId,locale);
           return result(row(ownerId,id));
         }
         return result(found);
       }
-      const used = db.prepare('SELECT id FROM demo_company_requests WHERE owner_id=? AND accept_key=?').get(ownerId, idempotencyKey);
+      const used = db.prepare('SELECT id FROM justup_company_requests WHERE owner_id=? AND accept_key=?').get(ownerId, idempotencyKey);
       if (used) throw problem('idempotency_conflict', 409, 'This request key was already used.');
       if(feed.publishCompany)candidate.companyId=feed.publishCompany(candidate);
       if(readingPreferences&&!candidate.companyId)throw problem('dependency_unavailable',503);
-      db.prepare("UPDATE demo_company_requests SET status='accepted',accept_key=?,candidate_json=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
+      db.prepare("UPDATE justup_company_requests SET status='accepted',accept_key=?,candidate_json=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
         .run(idempotencyKey,JSON.stringify(candidate),ownerId,id,body.previewRevision);
       if(candidate.companyId)readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId,locale);
       return result(row(ownerId, id));
@@ -236,24 +236,24 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
   function deleteRecord(ownerId, id) {
     const found = row(ownerId, id);
     if (!found) return false;
-    for(const {task_id} of db.prepare('SELECT task_id FROM demo_company_request_tasks WHERE owner_id=? AND request_id=?').all(ownerId,id)){tasks.cancel(ownerId,task_id);tasks.delete(ownerId,task_id);}
+    for(const {task_id} of db.prepare('SELECT task_id FROM justup_company_request_tasks WHERE owner_id=? AND request_id=?').all(ownerId,id)){tasks.cancel(ownerId,task_id);tasks.delete(ownerId,task_id);}
     if(found.task_id)tasks.delete(ownerId,found.task_id);
-    db.prepare('DELETE FROM demo_company_request_tasks WHERE owner_id=? AND request_id=?').run(ownerId,id);
-    db.prepare('DELETE FROM demo_company_request_keys WHERE owner_id=? AND request_id=?').run(ownerId, id);
-    db.prepare('DELETE FROM demo_company_evidence WHERE owner_id=? AND request_id=?').run(ownerId, id);
-    db.prepare('DELETE FROM demo_company_requests WHERE owner_id=? AND id=?').run(ownerId, id);
+    db.prepare('DELETE FROM justup_company_request_tasks WHERE owner_id=? AND request_id=?').run(ownerId,id);
+    db.prepare('DELETE FROM justup_company_request_keys WHERE owner_id=? AND request_id=?').run(ownerId, id);
+    db.prepare('DELETE FROM justup_company_evidence WHERE owner_id=? AND request_id=?').run(ownerId, id);
+    db.prepare('DELETE FROM justup_company_requests WHERE owner_id=? AND id=?').run(ownerId, id);
     return true;
   }
   function deleteAccountData(ownerId) {
-    for (const found of db.prepare('SELECT id FROM demo_company_requests WHERE owner_id=?').all(ownerId)) deleteRecord(ownerId, found.id);
-    db.prepare('DELETE FROM demo_company_request_keys WHERE owner_id=?').run(ownerId);
+    for (const found of db.prepare('SELECT id FROM justup_company_requests WHERE owner_id=?').all(ownerId)) deleteRecord(ownerId, found.id);
+    db.prepare('DELETE FROM justup_company_request_keys WHERE owner_id=?').run(ownerId);
   }
   async function route(ctx) {
     if (ctx.path !== '/company-requests' && !/^\/company-requests\/[^/]+(?:\/accept)?$/u.test(ctx.path)) return null;
     const ownerId = requireOwner(ctx);
     if(ctx.method!=='GET'&&ctx.method!=='DELETE'&&!admitted(ownerId,ctx.interfaceLocale))throw problem('policy_unavailable',503);
     if (ctx.path === '/company-requests') {
-      if (ctx.method === 'GET') return { status: 200, body: { items: db.prepare('SELECT * FROM demo_company_requests WHERE owner_id=? ORDER BY created_at DESC,id').all(ownerId).map(view) } };
+      if (ctx.method === 'GET') return { status: 200, body: { items: db.prepare('SELECT * FROM justup_company_requests WHERE owner_id=? ORDER BY created_at DESC,id').all(ownerId).map(view) } };
       if (ctx.method === 'POST') return create(ownerId, ctx.body,ctx.interfaceLocale);
       return null;
     }
@@ -307,9 +307,9 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
         if (!live(task, signal)) return { status: 'failed', output: null, errorCode: 'preview_conflict' };
         const current = row(task.ownerId, found.id);
         if (!current || current.task_id !== task.id || current.status !== 'pending') return { status: 'failed', output: null, errorCode: 'preview_conflict' };
-        db.prepare('UPDATE demo_company_requests SET status=?,candidate_json=?,preview_revision=preview_revision+1,clarification=? WHERE owner_id=? AND id=? AND task_id=? AND status=\'pending\'')
+        db.prepare('UPDATE justup_company_requests SET status=?,candidate_json=?,preview_revision=preview_revision+1,clarification=? WHERE owner_id=? AND id=? AND task_id=? AND status=\'pending\'')
           .run(resolution.status, resolution.candidate ? JSON.stringify(resolution.candidate) : null, resolution.clarification, task.ownerId, found.id, task.id);
-        if(resolution.provenance?.length)db.prepare('INSERT OR REPLACE INTO demo_company_evidence VALUES(?,?,?,?)').run(found.id,task.ownerId,current.preview_revision+1,JSON.stringify(resolution.provenance));
+        if(resolution.provenance?.length)db.prepare('INSERT OR REPLACE INTO justup_company_evidence VALUES(?,?,?,?)').run(found.id,task.ownerId,current.preview_revision+1,JSON.stringify(resolution.provenance));
         const outcome = { status: failure ? 'failed' : resolution.status === 'candidate' ? 'succeeded' : 'warning',
           output: failure ? null : { requestId: found.id, previewRevision: current.preview_revision + 1 }, ...(failure ? { errorCode: failure } : {}) };
         if (!tasks.complete(task.id, task.leaseToken, outcome)) throw problem('preview_conflict', 409);

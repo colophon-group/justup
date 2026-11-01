@@ -41,13 +41,13 @@ test('assembled core/auth/matching API consumes heartbeat, exposes real services
   try{({createConfiguredApplication}=await import('./main.mjs'));({createAuth}=await import('./auth.mjs'));await import('./matching.mjs');}
   catch(error){if(error.code==='ERR_MODULE_NOT_FOUND'){t.skip('Core/auth/matching dependency PRs must be assembled for this cross-module contract.');return;}throw error;}
   const f=fixture(t);f.write();const origin='http://127.0.0.1:18787',password='Synthetic-password-123!';
-  const demo=await createConfiguredApplication({config:{...f.config,dbPath:':memory:',servicesEnabled:true,allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,privacyUrl:origin+'/privacy.html',usageUrl:origin+'/usage.html',policyVersion:'fixture',inviteCode:'fixture-invite',jev:{token:'must-never-enter-api-response'}},now:()=>AT,authFactory:createAuth});
-  t.after(()=>demo.close());await new Promise(resolve=>demo.server.listen(0,'127.0.0.1',resolve));const endpoint=`http://127.0.0.1:${demo.server.address().port}/api/v1`;
-  const account=await demo.auth.register({username:'fixtureuser',password,inviteCode:'fixture-invite'}),headers={cookie:`justup_session=${account.token}`};
+  const application=await createConfiguredApplication({config:{...f.config,dbPath:':memory:',servicesEnabled:true,allowedOrigin:origin,allowInsecureLocalhost:true,policiesReviewed:true,privacyUrl:origin+'/privacy.html',usageUrl:origin+'/usage.html',policyVersion:'fixture',inviteCode:'fixture-invite',jev:{token:'must-never-enter-api-response'}},now:()=>AT,authFactory:createAuth});
+  t.after(()=>application.close());await new Promise(resolve=>application.server.listen(0,'127.0.0.1',resolve));const endpoint=`http://127.0.0.1:${application.server.address().port}/api/v1`;
+  const account=await application.auth.register({username:'fixtureuser',password,inviteCode:'fixture-invite'}),headers={cookie:`justup_session=${account.token}`};
   // Cookie name is part of the core boundary, not a provider/session substitute.
-  const coreSession=await demo.auth.session(account.token);assert.ok(coreSession.account.id);
+  const coreSession=await application.auth.session(account.token);assert.ok(coreSession.account.id);
   const call=(path,options={})=>fetch(endpoint+path,{...options,headers:{...headers,...options.headers}});
-  const publicCounts=()=>['justup_visitors','justup_workspaces','demo_tasks'].map(table=>demo.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n);
+  const publicCounts=()=>['justup_visitors','justup_workspaces','justup_tasks'].map(table=>application.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n);
   const beforePublic=publicCounts();
   const publicWire=await fetch(`${endpoint}/hiring-wire`);assert.equal(publicWire.status,200);assert.deepEqual(await publicWire.json(),{state:'unavailable',edition:null});
   assert.deepEqual(publicCounts(),beforePublic);assert.equal(publicWire.headers.getSetCookie().some(cookie=>cookie.includes('justup_visitor=')),false);
@@ -58,7 +58,7 @@ test('assembled core/auth/matching API consumes heartbeat, exposes real services
   assert.equal((await call('/health')).status,503);
   const mutationHeaders={origin,'content-type':'application/json','x-csrf-token':session.csrfToken};
   assert.equal((await call('/searches',{method:'POST',headers:mutationHeaders,body:JSON.stringify({query:'backend',requestKey:'unavailable'})})).status,503);
-  const deleted=await call('/account',{method:'DELETE',headers:mutationHeaders,body:JSON.stringify({password})});assert.equal(deleted.status,200);assert.equal(demo.auth.session(account.token),null);
+  const deleted=await call('/account',{method:'DELETE',headers:mutationHeaders,body:JSON.stringify({password})});assert.equal(deleted.status,200);assert.equal(application.auth.session(account.token),null);
 });
 
 test('composed public reads allocate no visitors and localized first-search retries retain one policy-bound owner',async t=>{
@@ -73,7 +73,7 @@ test('composed public reads allocate no visitors and localized first-search retr
   await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));
   const endpoint=`http://127.0.0.1:${app.server.address().port}/api/v1`;
   const companyId=app.feed.publishCompany({name:'Example',domain:'example.org',websiteUrl:'https://example.org/',evidenceUrls:[]});
-  const counts=()=>['justup_visitors','demo_searches','demo_tasks'].map(table=>app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n);
+  const counts=()=>['justup_visitors','justup_searches','justup_tasks'].map(table=>app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n);
   for(const path of ['/hiring-wire','/companies?limit=1',`/companies/${companyId}/report`]){
     const response=await fetch(endpoint+path);assert.equal(response.status,200);await response.json();
     assert.equal(response.headers.get('set-cookie'),null);assert.deepEqual(counts(),[0,0,0]);
@@ -98,5 +98,5 @@ test('composed public reads allocate no visitors and localized first-search retr
   const intent=app.services.find(service=>typeof service.runTask==='function'&&typeof service.snapshot==='function');
   const claimed=app.tasks.claim({workerId:'fixture',kinds:['search_intent']});
   assert.equal((await intent.runTask(claimed)).errorCode,'processing_unavailable');
-  assert.equal(app.store.db.prepare('SELECT accepted_json FROM demo_searches').get().accepted_json,null);
+  assert.equal(app.store.db.prepare('SELECT accepted_json FROM justup_searches').get().accepted_json,null);
 });
