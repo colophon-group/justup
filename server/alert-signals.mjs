@@ -1,5 +1,5 @@
-// Read-only, private aggregate for a future operator-only alert endpoint.
-// This module does not publish a metric or send an alert until the API wires it.
+// Read-only private aggregate for the fixed host-local alert-signals CLI.
+// The CLI is source-only; no collector or Grafana alert is active yet.
 
 export function readForegroundTaskAge({ db, now = Date.now } = {}) {
   if (!db || typeof db.prepare !== 'function' || typeof now !== 'function') {
