@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_BODY = 1024 ** 2
+FIRST_RELEASE_CAPABILITIES = ('search', 'aiMatching', 'companyRequests', 'hiringWire',
+                              'sse', 'follows', 'viewed', 'preferences', 'hiddenMatchCounts')
 
 
 class FixedOriginRedirect(HTTPRedirectHandler):
@@ -52,22 +54,27 @@ def verify(base_url, manifest, mode, runner_identity=None, import_generation=Non
     if origin.scheme != 'https' and not (mode == 'process' and origin.scheme == 'http' and origin.hostname in {'127.0.0.1', 'localhost'}):
         raise ValueError('The shared preview requires HTTPS.')
     expected = {'sourceCommit': manifest['sourceCommit'], 'buildIdentity': manifest['buildIdentity'], 'schemaVersion': manifest['schemaVersion']}
-    health, _ = fetch(base_url + '/api/v1/health')
+    def private_api(path):
+        value, headers = fetch(base_url + path)
+        control = {part.strip().lower() for part in headers.get('cache-control', '').split(',')}
+        if not {'private', 'no-store'} <= control or 'noindex' not in headers.get('x-robots-tag', '').lower():
+            raise ValueError('API response is cached or does not exclude indexing.')
+        return value
+
+    health = private_api('/api/v1/health')
     if health.get('ready') is not True:
         raise ValueError('API process is not ready.')
-    version, _ = fetch(base_url + '/api/v1/version')
+    version = private_api('/api/v1/version')
     if any(version.get(key) != value for key, value in expected.items()):
         raise ValueError('Deployed API source, schema or build identity differs.')
-    session, headers = fetch(base_url + '/api/v1/session')
-    if 'no-store' not in headers.get('cache-control', '') or session.get('user') is not None:
-        raise ValueError('Guest session is cached or discloses a user.')
+    session = private_api('/api/v1/session')
+    if session.get('user') is not None:
+        raise ValueError('Guest session discloses a user.')
     access = session.get('access', {})
     if access.get('kind') != 'guest' or access.get('fullAccess') is not False or access.get('billingEnabled') is not False:
         raise ValueError('Guest access or disabled billing contract differs.')
     caps = session.get('capabilities', {})
-    if any(caps.get(key) is not False for key in ('sse', 'follows', 'viewed', 'preferences', 'hiddenMatchCounts')):
-        raise ValueError('An unavailable demo capability was not reported as disabled.')
-    checks = ['process_ready', 'exact_api_identity', 'uncached_guest_session', 'guest_access', 'disabled_capabilities']
+    checks = ['process_ready', 'exact_api_identity', 'private_noindex_api', 'uncached_guest_session', 'guest_access']
     frontend_identity = None
     if mode == 'preview':
         if not runner_identity or version.get('runner', {}).get('ready') is not True or version.get('runner', {}).get('identity') != runner_identity:
@@ -82,28 +89,29 @@ def verify(base_url, manifest, mode, runner_identity=None, import_generation=Non
             if url.scheme != 'https' or url.netloc != origin.netloc or url.username or url.password:
                 raise ValueError('Policy page does not belong to the approved HTTPS preview origin.')
             fetch(policies[key], False)
-        if any(caps.get(key) is not True for key in ('search', 'companyRequests')):
-            raise ValueError('Required live demo capabilities are unavailable.')
-        fields = ('sourceSha', 'treeSha', 'assetsSha256', 'workerSha256', 'artifactSha256')
+        if any(caps.get(key) is not True for key in FIRST_RELEASE_CAPABILITIES):
+            raise ValueError('Required live product capabilities are unavailable.')
+        fields = ('sourceSha', 'treeSha', 'assetsSha256', 'workerSha256', 'artifactSha256', 'deploymentMode')
         if (not isinstance(frontend_release, dict)
                 or frontend_release.get('sourceSha') != manifest['sourceCommit']
                 or frontend_release.get('treeSha') != manifest['sourceTree']
-                or any(not re.fullmatch(r'[a-f0-9]{64}', frontend_release.get(key, '')) for key in fields[2:])):
+                or any(not re.fullmatch(r'[a-f0-9]{64}', frontend_release.get(key, '')) for key in fields[2:5])
+                or frontend_release.get('deploymentMode') != 'preview'):
             raise ValueError('The retained built frontend must match this exact backend candidate.')
-        deployed_frontend, _ = fetch(base_url + '/__preview/version')
+        deployed_frontend, _ = fetch(base_url + '/__release/version')
         if not isinstance(deployed_frontend, dict) or any(deployed_frontend.get(key) != frontend_release[key] for key in fields):
             raise ValueError('Deployed frontend identity differs from the retained compiled artifact.')
         frontend_identity = {key: frontend_release[key] for key in fields}
         if session.get('coverage', {}).get('stale') is not False:
             raise ValueError('Imported coverage is stale or unavailable.')
-        jobs, _ = fetch(base_url + '/api/v1/jobs?limit=12')
+        jobs = private_api('/api/v1/jobs?limit=12')
         if not jobs.get('items'):
             raise ValueError('A representative eligible guest listing is required.')
         now = timestamp(session['serverTime'])
         for item in jobs['items']:
             observed = timestamp(item['firstObserved'])
             if not now - timedelta(days=14) < observed <= now - timedelta(hours=48):
-                raise ValueError('Guest listing age falls outside the explicit demo access interval.')
+                raise ValueError('Guest listing age falls outside the product access interval.')
             if any(key in item for key in ('body', 'description', 'evidenceHash', 'internal', 'boards')):
                 raise ValueError('Public listing contains internal or full-body data.')
             source = urlsplit(item.get('sourceUrl', ''))

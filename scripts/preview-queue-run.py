@@ -15,11 +15,17 @@ import stat
 BASE = Path('/srv/justup_preview')
 CONFIG_PATH = BASE / 'queue/config/runner.json'
 LEDGER_PATH = BASE / 'queue/budget/jev.jsonl'
-EMPTY_TOOL_CATALOG_SHA256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'
 CONFIG_KEYS = {'dbPath', 'sharedState', 'runnerStatusPath',
                'model', 'jev', 'matching', 'verificationTtlMs'}
 MODEL_KEYS = {'enabled', 'isolationVerified', 'cliVersion', 'socketPath', 'attestationPath',
-              'toolCatalogSha256', 'companyResearchVerified'}
+              'taskProfiles', 'companyResearchVerified'}
+
+
+def model_contract():
+    spec = importlib.util.spec_from_file_location('preview_model_run', Path(__file__).with_name('preview-model-run.py'))
+    result = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(result)
+    return result
 
 
 def validate_configuration(config, manifest):
@@ -34,9 +40,12 @@ def validate_configuration(config, manifest):
             or ('attestationPath' in model and model['attestationPath'] != str(BASE / 'broker/isolation-reviewed.json'))):
         raise ValueError('Queue model access differs from the dedicated broker boundary.')
     if model.get('enabled') is True and (model.get('cliVersion') != manifest['codexVersion']
-            or model.get('isolationVerified') is not True or not model.get('socketPath') or not model.get('attestationPath')
-            or model.get('toolCatalogSha256') != EMPTY_TOOL_CATALOG_SHA256):
+            or model.get('isolationVerified') is not True or not model.get('socketPath') or not model.get('attestationPath')):
         raise ValueError('Enabled model access requires the pinned reviewed broker.')
+    if model.get('enabled') is True:
+        profiles = model_contract().validate_task_profiles(model.get('taskProfiles'))
+        if 'company_resolution' in profiles and model.get('companyResearchVerified') is not True:
+            raise ValueError('Company web research requires a separately qualified task profile.')
     jev = config.get('jev', {})
     if not isinstance(jev, dict):
         raise ValueError('Queue provider configuration is unavailable.')
@@ -63,9 +72,9 @@ def validate_ledger(path=LEDGER_PATH):
 
 def child_environment(manifest, host_plan):
     return {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'HOME': '/nonexistent',
-            'TMPDIR': str(BASE / 'queue/work'), 'JUSTUP_DEMO_RUNNER_CONFIG': str(CONFIG_PATH),
-            'JUSTUP_DEMO_SOURCE_COMMIT': manifest['sourceCommit'], 'JUSTUP_DEMO_BUILD_ID': manifest['buildIdentity'],
-            'JUSTUP_DEMO_HOST_PLAN_SHA256': host_plan}
+            'TMPDIR': str(BASE / 'queue/work'), 'JUSTUP_RUNNER_CONFIG': str(CONFIG_PATH),
+            'JUSTUP_SOURCE_COMMIT': manifest['sourceCommit'], 'JUSTUP_BUILD_ID': manifest['buildIdentity'],
+            'JUSTUP_HOST_PLAN_SHA256': host_plan}
 
 
 def main():
@@ -80,7 +89,7 @@ def main():
         spec.loader.exec_module(artifact)
         manifest = artifact.verify_directory(release)
         host_plan = artifact.read_host_plan(BASE)
-        required = {'runner', 'demo-runner-adapter', 'demo-composition', 'model-broker', 'model-runner',
+        required = {'runner', 'runner-adapter', 'composition', 'model-broker', 'model-runner',
                     'intent', 'companies', 'matching', 'jev', 'jev-budget'}
         if not {f'app/server/{name}.mjs' for name in required} <= manifest['files'].keys():
             raise ValueError('This release has no complete fixed queue composition.')

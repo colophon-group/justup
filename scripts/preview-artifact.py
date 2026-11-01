@@ -24,6 +24,8 @@ CODEX_ARCHIVE_INTEGRITY = 'sha512-Pm0W2PnFeTEqPx+AOIwgOVB4dBtY24cuD0tx1hjCor60Cb
 MAX_CODEX_ARCHIVE_BYTES = 192 * 1024 ** 2  # Off-host input only; bundle/host ceilings stay unchanged.
 CODEX_ENTRYPOINT = 'runtime/codex/bin/codex'
 MODEL_CATALOGUE = 'app/server/model-catalogue.json'
+WIRE_CATALOGUE = 'app/server/hiring-wire-sol-catalogue.json'
+WIRE_CATALOGUE_SHA256 = '5ed662f51bb5a9eda38e52fae474954574504286a851bfbad4a4aa6d32b4ed61'
 CODEX_FILES = {
     CODEX_ENTRYPOINT: '113aa5d5952a6fd3950a88323219747d0c91978ebee948509a540c8a460e59a3',
     'runtime/codex/codex-resources/bwrap': 'c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4',
@@ -74,11 +76,12 @@ def allowed(path):
     parts = PurePosixPath(path).parts
     if path.startswith('/') or '..' in parts or '\\' in path or PurePosixPath(path).as_posix() != path:
         return False
-    return (path in {'runtime/bin/node', 'runtime/LICENSE', MODEL_CATALOGUE, 'app/scripts/import-demo-jobs.py',
+    return (path in {'runtime/bin/node', 'runtime/LICENSE', MODEL_CATALOGUE, WIRE_CATALOGUE, 'app/scripts/import-jobs.py',
+                     'app/scripts/hiring-wire/enqueue.mjs', 'app/scripts/hiring-wire/check-snapshot.mjs',
                      'app/server/model-schemas/intent.schema.json', 'app/server/model-schemas/company.schema.json',
-                     'app/server/model-schemas/company-domain-proposal.schema.json'} or path in CODEX_FILES or
-            (path.startswith('app/server/') and not path.startswith('app/server/evals/')
-             and path.endswith('.mjs') and not path.endswith('.test.mjs')))
+                     'app/server/model-schemas/company-discovery.schema.json'} or path in CODEX_FILES or
+            (path.startswith('app/server/') and not path.startswith(('app/server/evals/', 'app/server/demo-'))
+             and path.endswith('.mjs') and not path.endswith(('.test.mjs', '-fixtures.mjs'))))
 
 
 def identity(manifest):
@@ -93,7 +96,9 @@ def validate_manifest(manifest):
     if manifest.get('schemaVersion') != 1 or manifest.get('entrypoint') != 'app/server/main.mjs':
         raise ValueError('Artifact schema or executable entrypoint differs from the preview contract.')
     files = manifest.get('files')
-    required = {'runtime/bin/node', 'runtime/LICENSE'} | {'app/server/' + name + '.mjs' for name in ('main', 'auth', 'http', 'store', 'feed', 'tasks')}
+    required = {'runtime/bin/node', 'runtime/LICENSE', 'app/scripts/import-jobs.py'} | {
+        'app/server/' + name + '.mjs' for name in
+        ('main', 'auth', 'http', 'store', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter')}
     if not isinstance(files, dict) or not required <= files.keys():
         raise ValueError('Artifact is missing required runtime/application bytes.')
     if (manifest.get('codexVersion') != CODEX_VERSION or manifest.get('codexTarget') != CODEX_TARGET
@@ -102,11 +107,14 @@ def validate_manifest(manifest):
             or any(files.get(name) != checksum for name, checksum in CODEX_FILES.items())):
         raise ValueError('Artifact does not contain the pinned native Codex distribution.')
     for module, schema in [('intent.mjs', 'intent.schema.json'), ('companies.mjs', 'company.schema.json'),
-                          ('companies.mjs', 'company-domain-proposal.schema.json')]:
+                          ('companies.mjs', 'company-discovery.schema.json')]:
         if 'app/server/' + module in files and 'app/server/model-schemas/' + schema not in files:
             raise ValueError('Runtime module is missing its immutable model schema asset.')
     if 'app/server/model-runner.mjs' in files and MODEL_CATALOGUE not in files:
         raise ValueError('Model runtime is missing its immutable model catalogue asset.')
+    if ('app/server/hiring-wire-codex.mjs' in files and files.get(WIRE_CATALOGUE) != WIRE_CATALOGUE_SHA256
+            or WIRE_CATALOGUE in files and files[WIRE_CATALOGUE] != WIRE_CATALOGUE_SHA256):
+        raise ValueError('Hiring Wire runtime is missing its pinned immutable model catalogue asset.')
     if any(not allowed(path) or not isinstance(value, str) or not SHA.fullmatch(value) for path, value in files.items()):
         raise ValueError('Artifact file inventory is unsafe or incomplete.')
     if manifest.get('nodeArchiveSha256') != NODE_ARCHIVE_SHA256 or manifest.get('buildIdentity') != identity(manifest):
@@ -224,7 +232,8 @@ def build(root, commit, node_archive, codex_archive, output):
     files['runtime/codex/LICENSE'] = git('show', f'{commit}:deploy/justup-preview/codex-LICENSE')
     if sha(files['runtime/codex/LICENSE']) != CODEX_FILES['runtime/codex/LICENSE']:
         raise ValueError('Codex license differs from the pinned official source.')
-    entries = git('ls-tree', '-r', commit, '--', 'server', 'scripts/import-demo-jobs.py').decode().splitlines()
+    entries = git('ls-tree', '-r', commit, '--', 'server', 'scripts/import-jobs.py',
+                  'scripts/hiring-wire/enqueue.mjs', 'scripts/hiring-wire/check-snapshot.mjs').decode().splitlines()
     for entry in entries:
         meta, path = entry.split('\t', 1)
         target = 'app/' + path

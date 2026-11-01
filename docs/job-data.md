@@ -22,7 +22,7 @@ The explicit operator command `scripts/import-jobs.py` copies public listing met
 4. Review the printed counts and the export's `selection` metadata. Verify sampled original source links using the intended browser environment. Transfer the export through the deployment's approved private data path and use the application store's import operation. The import command does not deploy or transfer files.
 5. For a refresh, use a new fixed snapshot time, `--previous /private/job-data/snapshot.json` and a different output filename. This performs a new bounded sample and independently checks all known IDs from the previous export. Keep the previous file until the new import is accepted; remove superseded exports under the deployment's export retention policy.
 
-No real import is run by the default test suite. Run focused deterministic checks with `python3 -m unittest discover -s scripts -p 'test_import_demo_jobs.py'`. These tests own the public-source and normalization boundary, use only synthetic documents and fake HTTP results, and take less than one second locally. API and store tests own eligibility, cursors, closure visibility and access control.
+No real import is run by the default test suite. Run focused deterministic checks with `python3 -m unittest discover -s scripts -p 'test_import_jobs.py'`. These tests own the public-source and normalization boundary, use only synthetic documents and fake HTTP results, and take less than one second locally. API and store tests own eligibility, cursors, closure visibility and access control.
 
 ## Selection and source identity
 

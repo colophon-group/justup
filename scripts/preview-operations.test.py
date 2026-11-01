@@ -37,13 +37,28 @@ def load(name):
 host, artifact, launcher, recovery, http = [load(name) for name in
     ('preview-host', 'preview-artifact', 'preview-run', 'preview-recovery', 'preview-verify')]
 queue = load('preview-queue-run')
+model = load('preview-model-run')
 CODEX_FIXTURES = {name: ('fixture native distribution ' + name).encode() for name in artifact.CODEX_FILES}
+
+
+def profiles(*, attested=False):
+    result = {kind: {'enabled': True, 'toolPolicySha256': entry['toolPolicySha256'],
+                     'modelCatalogueSha256': model.MODEL_CATALOGUE_SHA256}
+              for kind, entry in model.TASK_PROFILES.items()}
+    if attested:
+        for kind, entry in result.items():
+            entry['toolProof'] = {'kind': 'supported_static_policy', 'actualWireObserved': False,
+                                  'sourceCommit': model.CODEX_SOURCE_COMMIT,
+                                  'toolNames': list(model.TASK_PROFILES[kind]['toolNames'])}
+    return result
 
 
 def payload():
     files = {'runtime/bin/node': b'fixture runtime', 'runtime/LICENSE': b'fixture license',
+             'app/scripts/import-jobs.py': b'# canonical importer fixture\n',
              'app/server/main.mjs': b'export const ready = true;'}
-    files.update({'app/server/' + name + '.mjs': b'export {};' for name in ('auth', 'http', 'store', 'feed', 'tasks')})
+    files.update({'app/server/' + name + '.mjs': b'export {};' for name in
+                 ('auth', 'http', 'store', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter')})
     files.update(CODEX_FIXTURES)
     manifest = {'formatVersion': 2, 'sourceCommit': 'a' * 40, 'sourceTree': 'b' * 40,
                 'schemaVersion': 1, 'nodeVersion': '24.22.2', 'platform': 'linux-arm64',
@@ -80,11 +95,42 @@ class ArtifactContracts(unittest.TestCase):
     def test_backend_inventory_excludes_browser_sources_build_tools_and_dependencies(self):
         for path in ('app/web/dist/index.html', 'app/web/src/app.tsx', 'app/prototype/app.mjs',
                      'app/package.json', 'app/node_modules/react/index.js', 'app/scripts/frontend-prepare.mjs',
+                     'app/server/demo-composition.mjs', 'app/server/demo-runner-adapter.mjs',
+                     'app/server/hiring-wire-fixtures.mjs', 'app/server/hiring-wire-evals-v1.json',
+                     'app/scripts/hiring-wire/arbitrary.mjs', 'app/scripts/hiring-wire/../enqueue.mjs',
                      'app/server/evals/luna-wire-catalogue.mjs',
                      'app/server/./evals/luna-wire-catalogue.mjs', 'app/server//evals/luna-wire-catalogue.mjs',
                      'runtime/codex/bin/codex-code-mode-host', 'runtime/codex/codex-path/rg', 'runtime/codex/codex-resources/zsh/bin/zsh'):
             with self.subTest(path=path):
                 self.assertFalse(artifact.allowed(path))
+
+    def test_wire_catalogue_and_fixed_operator_scripts_are_bounded_runtime_assets(self):
+        manifest, _ = payload()
+        for name in ('app/scripts/hiring-wire/enqueue.mjs', 'app/scripts/hiring-wire/check-snapshot.mjs'):
+            self.assertTrue(artifact.allowed(name))
+        manifest['files']['app/server/hiring-wire-codex.mjs'] = artifact.sha(b'export {};')
+        for checksum in (None, 'a' * 64, artifact.WIRE_CATALOGUE_SHA256):
+            with self.subTest(checksum=checksum):
+                if checksum is not None:
+                    manifest['files'][artifact.WIRE_CATALOGUE] = checksum
+                manifest['buildIdentity'] = artifact.identity(manifest)
+                if checksum == artifact.WIRE_CATALOGUE_SHA256:
+                    artifact.validate_manifest(manifest)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'Hiring Wire'):
+                        artifact.validate_manifest(manifest)
+
+    def test_canonical_importer_and_runtime_adapter_are_required_together(self):
+        manifest, _ = payload()
+        for name in ('app/scripts/import-jobs.py', 'app/server/config.mjs', 'app/server/composition.mjs', 'app/server/runner-adapter.mjs'):
+            with self.subTest(name=name):
+                incomplete = deepcopy(manifest)
+                del incomplete['files'][name]
+                incomplete['buildIdentity'] = artifact.identity(incomplete)
+                with self.assertRaisesRegex(ValueError, 'missing required'):
+                    artifact.validate_manifest(incomplete)
+        for obsolete in ('app/scripts/import-demo-jobs.py', 'app/server/model-schemas/company-domain-proposal.schema.json'):
+            self.assertFalse(artifact.allowed(obsolete))
     def test_inventory_accepts_exact_bytes_and_rejects_changed_payload(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'candidate.tar'
@@ -175,7 +221,7 @@ class ArtifactContracts(unittest.TestCase):
             _, retained = artifact.read_bundle(bundle_path, checksum, retain_files=False)
             self.assertEqual(retained, {})
 
-    def test_company_runtime_requires_both_final_and_private_domain_schema_assets(self):
+    def test_company_runtime_requires_final_and_native_discovery_schema_assets(self):
         manifest, files = payload()
         files['app/server/companies.mjs'] = b'export {};'
         files['app/server/model-schemas/company.schema.json'] = b'{}'
@@ -183,7 +229,7 @@ class ArtifactContracts(unittest.TestCase):
         manifest['buildIdentity'] = artifact.identity(manifest)
         with self.assertRaisesRegex(ValueError, 'model schema asset'):
             artifact.validate_manifest(manifest)
-        name = 'app/server/model-schemas/company-domain-proposal.schema.json'
+        name = 'app/server/model-schemas/company-discovery.schema.json'
         manifest['files'][name] = artifact.sha(b'{}')
         manifest['buildIdentity'] = artifact.identity(manifest)
         self.assertTrue(artifact.allowed(name))
@@ -625,36 +671,106 @@ class BoundaryContracts(unittest.TestCase):
         manifest, _ = payload()
         report = {'approved': True, 'cliVersion': artifact.CODEX_VERSION, 'model': 'gpt-6-luna',
                   'executorBoundary': 'dedicated_uid_broker', 'socketPath': '/srv/justup_preview/broker/model.sock',
-                  'deniedPathsVerified': True, 'retentionVerified': True, 'toolCatalogSha256': model.EMPTY_TOOL_CATALOG_SHA256,
+                  'deniedPathsVerified': True, 'retentionVerified': True, 'companyResearchVerified': True,
+                  'taskProfiles': profiles(attested=True),
                   'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': 'f' * 64}
         model.validate_attestation(report, manifest, 'f' * 64)
         for change in ({'buildIdentity': 'e' * 64}, {'hostPlanSha256': 'e' * 64}, {'approved': 1},
                        {'cliVersion': '0.143.0'}, {'toolCatalogSha256': 'c' * 64}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 model.validate_attestation({**report, **change}, manifest, 'f' * 64)
-        with patch.dict(os.environ, {'JUSTUP_DEMO_BUILD_ID': 'untrusted', 'JUSTUP_DEMO_HOST_PLAN_SHA256': 'untrusted', 'TYPESAFE_AI_TOKEN': 'private'}):
+        with patch.dict(os.environ, {'JUSTUP_BUILD_ID': 'untrusted', 'JUSTUP_HOST_PLAN_SHA256': 'untrusted', 'TYPESAFE_AI_TOKEN': 'private'}):
             env = model.child_environment(manifest, 'f' * 64, 1234)
-        self.assertEqual(env['JUSTUP_DEMO_BUILD_ID'], manifest['buildIdentity'])
-        self.assertEqual(env['JUSTUP_DEMO_HOST_PLAN_SHA256'], 'f' * 64)
+        self.assertEqual(env['JUSTUP_BUILD_ID'], manifest['buildIdentity'])
+        self.assertEqual(env['JUSTUP_HOST_PLAN_SHA256'], 'f' * 64)
         self.assertEqual(env['LISTEN_PID'], '1234')
         self.assertNotIn('TYPESAFE_AI_TOKEN', env)
 
+    def test_task_specific_static_and_observed_proof_cannot_approve_sibling_tools(self):
+        configured = profiles()
+        self.assertEqual(model.validate_task_profiles(configured), {'search_intent', 'company_resolution'})
+        attested = profiles(attested=True)
+        self.assertEqual(model.validate_task_profiles(attested, attested=True), set(configured))
+        for kind in configured:
+            proof = attested[kind]['toolProof']
+            proof.clear()
+            proof.update({'kind': 'actual_wire', 'actualWireObserved': True,
+                          'toolNames': model.TASK_PROFILES[kind]['toolNames'],
+                          'toolCatalogSha256': model.EMPTY_TOOL_CATALOG_SHA256 if kind == 'search_intent' else 'a' * 64})
+        model.validate_task_profiles(attested, attested=True)
+        for kind, change in [('search_intent', {'toolNames': ['web.run']}),
+                             ('company_resolution', {'toolCatalogSha256': model.EMPTY_TOOL_CATALOG_SHA256}),
+                             ('company_resolution', {'actualWireObserved': False})]:
+            with self.subTest(kind=kind, change=change):
+                wrong = deepcopy(attested)
+                wrong[kind]['toolProof'].update(change)
+                with self.assertRaises(ValueError):
+                    model.validate_task_profiles(wrong, attested=True)
+        wrong = profiles()
+        wrong['search_intent']['toolPolicySha256'] = wrong['company_resolution']['toolPolicySha256']
+        with self.assertRaises(ValueError):
+            model.validate_task_profiles(wrong)
+        with self.assertRaises(ValueError):
+            model.validate_task_profiles({'future_task': configured['search_intent']})
+        with self.assertRaises(ValueError):
+            model.validate_task_profiles({})
+
     def test_api_environment_excludes_operator_credentials_and_fixes_storage(self):
         manifest, _ = payload()
-        config = {'JUSTUP_DEMO_ORIGIN': 'https://preview.example', 'JUSTUP_DEMO_CSRF_SECRET': 'a' * 32,
-                  'JUSTUP_DEMO_CURSOR_SECRET': 'b' * 32}
+        config = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
+                  'JUSTUP_CURSOR_SECRET': 'b' * 32}
         with patch.dict(os.environ, {'DOPPLER_TOKEN': 'private', 'OPENAI_API_KEY': 'private', 'DOCKER_HOST': 'private'}):
             env = launcher.child_environment(config, manifest)
         self.assertFalse({'DOPPLER_TOKEN', 'OPENAI_API_KEY', 'DOCKER_HOST'} & env.keys())
-        self.assertEqual(env['JUSTUP_DEMO_PORT'], '8787')
-        self.assertEqual(env['JUSTUP_DEMO_BUILD_ID'], manifest['buildIdentity'])
-        self.assertEqual(env['JUSTUP_DEMO_POLICIES_REVIEWED'], 'false')
-        self.assertEqual(env['JUSTUP_DEMO_SERVICES_ENABLED'], 'false')
-        self.assertEqual(env['JUSTUP_DEMO_SHARED_STATE'], 'true')
-        self.assertEqual(env['JUSTUP_DEMO_RUNNER_STATUS_PATH'], '/srv/justup_preview/state/runner-status.json')
-        self.assertTrue(env['JUSTUP_DEMO_DB_PATH'].startswith('/srv/justup_preview/'))
+        self.assertEqual(env['JUSTUP_PORT'], '8787')
+        self.assertEqual(env['JUSTUP_BUILD_ID'], manifest['buildIdentity'])
+        self.assertEqual(env['JUSTUP_POLICIES_REVIEWED'], 'false')
+        self.assertEqual(env['JUSTUP_SERVICES_ENABLED'], 'false')
+        self.assertEqual(env['JUSTUP_SHARED_STATE'], 'true')
+        self.assertEqual(env['JUSTUP_RUNNER_STATUS_PATH'], '/srv/justup_preview/state/runner-status.json')
+        self.assertTrue(env['JUSTUP_DB_PATH'].startswith('/srv/justup_preview/'))
         with self.assertRaises(ValueError):
             launcher.child_environment({**config, 'DOPPLER_TOKEN': 'private'}, manifest)
+
+    def test_admission_and_account_lifetime_are_deployment_configuration(self):
+        manifest, _ = payload()
+        config = {'JUSTUP_ORIGIN': 'https://justup.work', 'JUSTUP_CSRF_SECRET': 'a' * 32,
+                  'JUSTUP_CURSOR_SECRET': 'b' * 32}
+        default = launcher.child_environment(config, manifest)
+        self.assertEqual(default['JUSTUP_REQUIRES_INVITATION'], 'true')
+        self.assertNotIn('JUSTUP_ACCOUNT_TTL_MS', default)
+        self.assertNotIn('JUSTUP_ACCOUNT_EXPIRES_AT', default)
+        widened = {**config, 'JUSTUP_REQUIRES_INVITATION': 'false', 'JUSTUP_MAX_ACCOUNTS': 'none',
+                   'JUSTUP_SESSION_TTL_MS': '604800000', 'JUSTUP_ACCOUNT_TTL_MS': 'none'}
+        self.assertEqual(launcher.child_environment(widened, manifest)['JUSTUP_MAX_ACCOUNTS'], 'none')
+        for change in ({'JUSTUP_DEMO_ORIGIN': config['JUSTUP_ORIGIN']}, {'JUSTUP_DB_PATH': '/tmp/other.sqlite'},
+                       {'JUSTUP_REQUIRES_INVITATION': 'yes'}, {'JUSTUP_POLICIES_REVIEWED': 'yes'},
+                       {'JUSTUP_MAX_ACCOUNTS': '0'}, {'JUSTUP_SESSION_TTL_MS': 'none'},
+                       {'JUSTUP_ACCOUNT_EXPIRES_AT': '1.5'}, {'JUSTUP_ACCOUNT_TTL_MS': str(2 ** 53)}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                launcher.child_environment({**config, **change}, manifest)
+
+    def test_api_configuration_rejects_aliases_links_and_nonprivate_modes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            directory = root / 'real'
+            directory.mkdir()
+            path = directory / 'api.json'
+            path.write_text('{}')
+            path.chmod(0o600)
+            self.assertEqual(launcher.read_configuration(path), {})
+            alias = root / 'alias'
+            alias.symlink_to(directory)
+            with self.assertRaises(ValueError):
+                launcher.read_configuration(alias / path.name)
+            link = root / 'linked.json'
+            os.link(path, link)
+            with self.assertRaises(ValueError):
+                launcher.read_configuration(path)
+            link.unlink()
+            path.chmod(0o640)
+            with self.assertRaises(ValueError):
+                launcher.read_configuration(path)
 
     def test_queue_boundary_records_uninitialized_private_ledger_and_no_frontend_build(self):
         root = HERE.parent
@@ -684,7 +800,7 @@ class BoundaryContracts(unittest.TestCase):
         model = {'enabled': True, 'cliVersion': artifact.CODEX_VERSION, 'isolationVerified': True,
                  'socketPath': '/srv/justup_preview/broker/model.sock',
                  'attestationPath': '/srv/justup_preview/broker/isolation-reviewed.json',
-                 'toolCatalogSha256': queue.EMPTY_TOOL_CATALOG_SHA256}
+                 'taskProfiles': profiles(), 'companyResearchVerified': True}
         queue.validate_configuration({**config, 'model': model}, manifest)
         with self.assertRaises(ValueError):
             queue.validate_configuration({**config, 'model': {**model, 'toolCatalogSha256': 'c' * 64}}, manifest)
@@ -698,10 +814,10 @@ class BoundaryContracts(unittest.TestCase):
         with patch.dict(os.environ, {'TYPESAFE_AI_TOKEN': 'private', 'OPENAI_API_KEY': 'private', 'DOPPLER_TOKEN': 'private'}):
             env = queue.child_environment(manifest, 'f' * 64)
         self.assertFalse({'TYPESAFE_AI_TOKEN', 'OPENAI_API_KEY', 'DOPPLER_TOKEN'} & env.keys())
-        self.assertEqual(env['JUSTUP_DEMO_RUNNER_CONFIG'], str(queue.CONFIG_PATH))
-        self.assertEqual(env['JUSTUP_DEMO_SOURCE_COMMIT'], manifest['sourceCommit'])
-        self.assertEqual(env['JUSTUP_DEMO_BUILD_ID'], manifest['buildIdentity'])
-        self.assertEqual(env['JUSTUP_DEMO_HOST_PLAN_SHA256'], 'f' * 64)
+        self.assertEqual(env['JUSTUP_RUNNER_CONFIG'], str(queue.CONFIG_PATH))
+        self.assertEqual(env['JUSTUP_SOURCE_COMMIT'], manifest['sourceCommit'])
+        self.assertEqual(env['JUSTUP_BUILD_ID'], manifest['buildIdentity'])
+        self.assertEqual(env['JUSTUP_HOST_PLAN_SHA256'], 'f' * 64)
 
     def test_queue_requires_existing_private_ledger_and_never_creates_or_repairs_it(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -728,8 +844,8 @@ class BoundaryContracts(unittest.TestCase):
 
     def test_policy_gate_requires_reviewed_urls_and_version(self):
         manifest, _ = payload()
-        config = {'JUSTUP_DEMO_ORIGIN': 'https://preview.example', 'JUSTUP_DEMO_CSRF_SECRET': 'a' * 32,
-                  'JUSTUP_DEMO_CURSOR_SECRET': 'b' * 32, 'JUSTUP_DEMO_POLICIES_REVIEWED': 'true'}
+        config = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
+                  'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_POLICIES_REVIEWED': 'true'}
         with self.assertRaises(ValueError):
             launcher.child_environment(config, manifest)
 
@@ -908,7 +1024,7 @@ class HTTPVerificationContracts(unittest.TestCase):
                   '/api/v1/session': {'user': None, 'access': {'kind': 'guest', 'fullAccess': False, 'billingEnabled': False},
                                       'capabilities': {name: False for name in ('sse', 'follows', 'viewed', 'preferences', 'hiddenMatchCounts')}}}
         def fetch(url, as_json=True):
-            return deepcopy(values[url.removeprefix('http://127.0.0.1:8787')]), {'cache-control': 'private, no-store'}
+            return deepcopy(values[url.removeprefix('http://127.0.0.1:8787')]), {'cache-control': 'private, no-store', 'x-robots-tag': 'noindex, nofollow'}
         return manifest, values, fetch
 
     def test_process_evidence_is_not_shareable_and_mismatched_build_fails(self):
@@ -933,18 +1049,25 @@ class HTTPVerificationContracts(unittest.TestCase):
         values['/api/v1/version'].update({'runner': {'ready': True, 'identity': 'runner-build'}, 'importGeneration': 'import-generation'})
         values['/api/v1/session'].update({'serverTime': '2026-10-31T18:00:00Z', 'coverage': {'stale': False},
             'policies': {'reviewed': True, 'version': 'approved-v1', 'privacyUrl': 'https://preview.example/privacy', 'usageUrl': 'https://preview.example/usage'}})
-        values['/api/v1/session']['capabilities'].update({'search': True, 'companyRequests': True})
+        values['/api/v1/session']['capabilities'].update({name: True for name in http.FIRST_RELEASE_CAPABILITIES})
         values['/api/v1/jobs?limit=12'] = {'items': [{'firstObserved': '2026-10-28T18:00:00Z', 'sourceUrl': 'https://employer.example/role'}]}
         def fetch(url, as_json=True):
             path = url.removeprefix('https://preview.example')
             if not as_json:
                 return '<html>candidate</html>', {'x-robots-tag': 'noindex, nofollow'}
-            return deepcopy(values[path]), {'cache-control': 'private, no-store'}
+            return deepcopy(values[path]), {'cache-control': 'private, no-store', 'x-robots-tag': 'noindex, nofollow'}
         frontend = {'sourceSha': manifest['sourceCommit'], 'treeSha': manifest['sourceTree'],
-                    'assetsSha256': 'c' * 64, 'workerSha256': 'd' * 64, 'artifactSha256': 'e' * 64}
-        values['/__preview/version'] = dict(frontend)
+                    'assetsSha256': 'c' * 64, 'workerSha256': 'd' * 64, 'artifactSha256': 'e' * 64, 'deploymentMode': 'preview'}
         options = {'runner_identity': 'runner-build', 'import_generation': 'import-generation', 'policy_version': 'approved-v1',
                    'fetch': fetch, 'frontend_release': frontend}
+        values['/__release/version'] = dict(frontend)
+        for candidate in ({**frontend, 'deploymentMode': 'production'}, {key: value for key, value in frontend.items() if key != 'deploymentMode'}):
+            with self.subTest(mode=candidate.get('deploymentMode')), self.assertRaisesRegex(ValueError, 'built frontend'):
+                http.verify('https://preview.example', manifest, 'preview', **{**options, 'frontend_release': candidate})
+        values['/__release/version']['deploymentMode'] = 'production'
+        with self.assertRaisesRegex(ValueError, 'frontend identity differs'):
+            http.verify('https://preview.example', manifest, 'preview', **options)
+        values['/__release/version'] = dict(frontend)
         report = http.verify('https://preview.example', manifest, 'preview', **options)
         self.assertIn('fresh_guest_public_projection', report['checks'])
         self.assertFalse(report['completeReleaseGate'])
@@ -952,10 +1075,10 @@ class HTTPVerificationContracts(unittest.TestCase):
         self.assertEqual(report['frontend'], frontend)
         with self.assertRaisesRegex(ValueError, 'built frontend'):
             http.verify('https://preview.example', manifest, 'preview', **{**options, 'frontend_release': None})
-        values['/__preview/version']['artifactSha256'] = 'f' * 64
+        values['/__release/version']['artifactSha256'] = 'f' * 64
         with self.assertRaisesRegex(ValueError, 'frontend identity differs'):
             http.verify('https://preview.example', manifest, 'preview', **options)
-        values['/__preview/version'] = dict(frontend)
+        values['/__release/version'] = dict(frontend)
         for change in ({'firstObserved': '2026-10-31T17:00:00Z'}, {'description': 'must stay internal'}):
             with self.subTest(change=change):
                 original = deepcopy(values['/api/v1/jobs?limit=12']['items'][0])
@@ -963,20 +1086,26 @@ class HTTPVerificationContracts(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     http.verify('https://preview.example', manifest, 'preview', **options)
                 values['/api/v1/jobs?limit=12']['items'][0] = original
-        values['/api/v1/session']['capabilities']['search'] = False
-        with self.assertRaisesRegex(ValueError, 'unavailable'):
-            http.verify('https://preview.example', manifest, 'preview', **options)
+        for name in http.FIRST_RELEASE_CAPABILITIES:
+            values['/api/v1/session']['capabilities'][name] = False
+            with self.subTest(capability=name), self.assertRaisesRegex(ValueError, 'unavailable'):
+                http.verify('https://preview.example', manifest, 'preview', **options)
+            values['/api/v1/session']['capabilities'][name] = True
 
-    def test_cached_session_and_overclaimed_disabled_feature_fail(self):
+    def test_cacheable_or_indexable_api_fails_in_both_deployment_states(self):
         manifest, values, fetch = self.responses()
         def cached(url, as_json=True):
             value, headers = fetch(url, as_json)
             return value, {'cache-control': 'public, max-age=60'}
         with self.assertRaisesRegex(ValueError, 'cached'):
             http.verify('http://127.0.0.1:8787', manifest, 'process', fetch=cached)
+        def indexable(url, as_json=True):
+            value, headers = fetch(url, as_json)
+            return value, {'cache-control': 'private, no-store'}
+        with self.assertRaisesRegex(ValueError, 'indexing'):
+            http.verify('http://127.0.0.1:8787', manifest, 'process', fetch=indexable)
         values['/api/v1/session']['capabilities']['sse'] = True
-        with self.assertRaisesRegex(ValueError, 'unavailable'):
-            http.verify('http://127.0.0.1:8787', manifest, 'process', fetch=fetch)
+        self.assertTrue(http.verify('http://127.0.0.1:8787', manifest, 'process', fetch=fetch)['passed'])
 
 
 if __name__ == '__main__':

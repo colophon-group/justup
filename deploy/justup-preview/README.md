@@ -1,11 +1,11 @@
 ---
 summary: Review the immutable API artifact and isolated preview host boundary.
-read_when: Preparing the demo host, inspecting its systemd units or rehearsing rollback and cleanup.
+read_when: Preparing the temporary host, inspecting its systemd units or rehearsing rollback and cleanup.
 ---
 
 # Preview host files
 
-These files prepare one explicitly reviewed Linux ARM64 host. They do not provision a provider resource, start services, configure Cloudflare or supply model authentication. Disabled API, queue and model socket/service units require separately delivered configuration and actual isolation proofs. Follow the [operations guide](../../docs/demo-operations.md) before applying anything. The empty resource boundary is allocated; application/provider services and public routing remain inactive. Current storage verification and correction status are recorded in [operations issue 35](https://github.com/colophon-group/justup/issues/35#issuecomment-6547490289).
+These files prepare one explicitly reviewed Linux ARM64 host. They do not provision a provider resource, start services, configure Cloudflare or supply model authentication. Disabled API, queue and model socket/service units require separately delivered configuration and actual isolation proofs. Follow the [operations guide](../../docs/operations.md) before applying anything. The resource boundary is allocated; application/provider services and public routing remain inactive. Fresh model authentication is private to the dedicated model UID. Current reviews are tracked under the `operations` and `preview-hosting` semantic slugs; code preparation does not activate the host.
 
 `justup-preview.slice` caps the aggregate preview at half a CPU, low CPU weight, 768 MiB memory pressure/1 GiB maximum, no swap and 96 tasks. Every future runner, tunnel and maintenance process must use this same slice. A new 2 GiB regular-file loop filesystem at `/srv/justup_preview` bounds all application bytes, Node, persistent data, work, backups and diagnostics. The installer refuses existing image/mount/UID/unit paths. It never accepts a supplied device or modifies the existing Murmur volume.
 
@@ -27,4 +27,6 @@ The `scripts/preview-operations.test.mjs` wrapper registers the same Python asse
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/preview-operations.test.py
 ```
 
-The model broker uses systemd socket activation: root creates a mode-0660 socket in a root-owned mode-0750 directory, the queue is the sole client-group member and the API is excluded. The model UID has no API/state/JEV group. Its unit hides API/database/queue/host-private paths, permits writes only to bounded invocation/auth-refresh directories, and requires missing-by-default root-owned isolation review evidence. It starts no agent or auth flow during installation. Attestations must match both the current immutable build and installed host-plan identities; model/queue units expose that non-secret root receipt read-only. Target-host filesystem, network and zero-tool/retention isolation must pass before attestation or activation.
+The model broker uses systemd socket activation: root creates a mode-0660 socket in a root-owned mode-0750 directory, the queue is the sole client-group member and the API is excluded. The model UID has no API/state/JEV group. Its unit hides API/database/queue/host-private paths, permits writes only to bounded invocation/auth-refresh directories, and requires missing-by-default root-owned isolation review evidence. It starts no agent or auth flow during installation. Attestations must match both the current immutable build and installed host-plan identities; model/queue units expose that non-secret root receipt read-only. Target-host filesystem, network and task-specific tool/retention isolation must pass before attestation or activation.
+
+These unit names and paths describe the existing temporary deployment. The product uses canonical `JUSTUP_*` configuration, durable accounts by default and fixed `composition.mjs`/`runner-adapter.mjs` modules. Public registration, account caps and optional account deadlines change through explicit configuration. Frontend `deploymentMode` defaults to `preview`; production publication still requires the release gate. API responses remain private/no-store/noindex in both modes.
