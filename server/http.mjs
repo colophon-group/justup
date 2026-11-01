@@ -5,6 +5,7 @@ import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { POLICY_LOCALES,policyState,policyScopes,requestLocale,validatePolicyConfig } from './policies.mjs';
 import { problem, boundedJson } from './store.mjs';
 import { emailSessionHash } from './email-verification.mjs';
+import { createTrustedIngress } from './ingress.mjs';
 
 const DISABLED = { sse: false };
 const GUEST_ACCESS = { kind: 'guest', fullAccess: false, legacy: false, billingEnabled: false, until: null };
@@ -76,6 +77,7 @@ async function readProviderBody(req) {
   return Buffer.concat(chunks);
 }
 export function createHandler({ auth, feed, tasks, db, services = [], config = {}, policyConfig=config, now = Date.now, logger = () => {}, afterPrivateTransaction = () => {} }) {
+  const ingressAddress = createTrustedIngress(config);
   validatePolicyConfig(policyConfig);
   const origin = new URL(config.allowedOrigin ?? 'https://preview.justup.work');
   const insecure = config.allowInsecureLocalhost === true && origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);
@@ -106,11 +108,9 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
   const visitorHint = (seed,epoch) => digest(`visitor-owner:${epoch}:${seed}`);
   const csrf = (token, guestToken) => digest(token ? `session:${token}` : `guest:${guestToken}`);
   const cookie = (name, value, expiresAt) => `${name}=${value}; Path=/; HttpOnly; SameSite=Lax${insecure ? '' : '; Secure'}; Max-Age=${Math.max(0, Math.floor((expiresAt - now()) / 1000))}`;
-  function limit(req, category) {
+  function limit(address, category) {
     const at = now(), windowMs = 60_000;
-    // Use direct peer only. Reverse-proxy deployments must configure trusted
-    // ingress rate limits rather than trusting a client-controlled forwarding header.
-    const key = digest(`${category}:${req.socket.remoteAddress ?? 'unknown'}`);
+    const key = digest(`${category}:${address}`);
     if (buckets.size >= 10_000) for (const [k, v] of buckets) if (v.until <= at) buckets.delete(k);
     let bucket = buckets.get(key);
     if (!bucket || bucket.until <= at) {
@@ -150,12 +150,13 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
     };
     const finish = (status, body) => { afterPrivateTransaction(); return send(status, body); };
     try {
+      const address = ingressAddress(req);
       const url = new URL(req.url, origin.origin);
       if (!url.pathname.startsWith('/api/v1/')) throw problem('not_found', 404);
       const path = url.pathname.slice('/api/v1'.length), method = req.method;
       if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(method)) throw problem('not_found', 404);
       if(path==='/billing/stripe/webhook'){
-        category='mutation';limit(req,category);
+        category='mutation';limit(address,category);
         if(method!=='POST'||[...url.searchParams].length)throw problem('not_found',404);
         if(req.headers.origin!==undefined||(req.headersDistinct?.['stripe-signature']?.length??1)!==1)throw problem('invalid_provider_signature',400);
         if(!billing)throw problem('billing_unavailable',503);
@@ -176,7 +177,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
       const authRoute = method === 'POST' && ['/auth/register', '/auth/login'].includes(path);
       const mutation = method !== 'GET';
       category = authRoute ? 'auth' : mutation ? 'mutation' : path === '/health' || path === '/version' ? 'health' : 'read';
-      if (category !== 'health') limit(req, category);
+      if (category !== 'health') limit(address, category);
       let body;
       if (mutation) {
         if (req.headers.origin !== origin.origin) throw problem('forbidden', 403);

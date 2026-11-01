@@ -12,6 +12,7 @@ import { createTasks } from './tasks.mjs';
 import { createHandler,policyState } from './http.mjs';
 import { validatePolicyConfig,policyJson,policyScopes } from './policies.mjs';
 import { runtimeEnv, booleanEnv, integerEnv } from './config.mjs';
+import { validateTrustedIngressConfig } from './ingress.mjs';
 import { createEmailVerificationApi } from './email-verification.mjs';
 import { createStripeBillingApi,stripeBillingFromEnv } from './stripe-billing.mjs';
 
@@ -84,6 +85,7 @@ export function createDeletionBarrier({ generationPath, backupDir, dbPath, db } 
     beforePrivateDelete, afterPrivateTransaction };
 }
 export async function createApplication({ config = {}, now = Date.now, serviceFactories = [], authFactory, logger } = {}) {
+  validateTrustedIngressConfig(config);
   validatePolicyConfig(config);
   const path = config.dbPath ?? ':memory:';
   if (path !== ':memory:' && !config.sharedState) mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
@@ -179,7 +181,7 @@ export function readImportFile(path) {
   catch { throw new Error('Invalid job import file.'); }
 }
 export function configFromEnv(env = process.env) {
-  return validatePolicyConfig({
+  return validatePolicyConfig(validateTrustedIngressConfig({
     servicesEnabled: booleanEnv(env, 'SERVICES_ENABLED'), runnerStatusPath: runtimeEnv(env, 'RUNNER_STATUS_PATH'),
     dbPath: runtimeEnv(env, 'DB_PATH'), sharedState: booleanEnv(env, 'SHARED_STATE'), allowedOrigin: runtimeEnv(env, 'ORIGIN'),
     allowInsecureLocalhost: booleanEnv(env, 'ALLOW_LOCAL_HTTP'),
@@ -193,10 +195,11 @@ export function configFromEnv(env = process.env) {
     policyAssetProof: policyJson(runtimeEnv(env,'POLICY_ASSET_PROOF')),
     sourceCommit: runtimeEnv(env, 'SOURCE_COMMIT'), buildIdentity: runtimeEnv(env, 'BUILD_ID'),
     csrfSecret: runtimeEnv(env, 'CSRF_SECRET'), cursorSecret: runtimeEnv(env, 'CURSOR_SECRET'),
+    trustedIngressSecret: runtimeEnv(env, 'TRUSTED_INGRESS_SECRET'), trustedIngressRequired: booleanEnv(env, 'TRUSTED_INGRESS_REQUIRED'),
     emailVerificationEnabled:booleanEnv(env,'EMAIL_VERIFICATION_ENABLED'),
     stripeBilling:stripeBillingFromEnv(env),
     privateGenerationPath: runtimeEnv(env, 'PRIVATE_GENERATION_PATH'), backupDir: runtimeEnv(env, 'BACKUP_DIR'),
-  });
+  }));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const config = configFromEnv();
