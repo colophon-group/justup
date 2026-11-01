@@ -32,8 +32,8 @@ JSON_LIMIT = 8 * 1024 * 1024
 MAX_JOBS = 1000
 MAX_COMPANY_IDS = 100
 COMPANY_SELECTOR_LIMIT = 16 * 1024
-FEED_MANIFEST_LIMIT = 128 * 1024
-FEED_PARTS_LIMIT = 400
+FEED_MANIFEST_LIMIT = 1024 * 1024
+FEED_PARTS_LIMIT = 1001
 FEED_ROWS_LIMIT = 100_000
 FEED_PART_BYTES_LIMIT = 64 * 1024 * 1024
 FEED_BYTES_LIMIT = 512 * 1024 * 1024
@@ -124,16 +124,17 @@ def _feed_scope(scope):
 def read_feed_bundle(manifest_path):
     """Yield private batch rows only after checking each part's declared digest."""
     manifest_path = Path(manifest_path).expanduser()
-    match = re.fullmatch(r"batch-([a-f0-9]{32})-manifest\.json", manifest_path.name)
-    if not match:
+    if (".." in manifest_path.parts or manifest_path.name != "manifest.json"
+            or not re.fullmatch(r"batch-[a-f0-9]{32}", manifest_path.parent.name)):
         raise ImportFailure("Feed manifest filename is invalid.")
     directory = manifest_path.parent
-    try:
-        info = directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise ImportFailure("Feed bundle directory must be private and regular.")
-    except OSError as exc:
-        raise ImportFailure("Feed bundle directory could not be read.") from exc
+    for private_dir in (directory.parent, directory):
+        try:
+            info = private_dir.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise ImportFailure("Feed bundle directory must be private and regular.")
+        except OSError as exc:
+            raise ImportFailure("Feed bundle directory could not be read.") from exc
     manifest_bytes = _private_file(manifest_path, FEED_MANIFEST_LIMIT)
     manifest = _feed_json(manifest_bytes)
     if (not isinstance(manifest, dict) or type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] != 1
@@ -155,13 +156,13 @@ def read_feed_bundle(manifest_path):
     if to_cursor[0] > cutoff or (manifest["fromCursor"] is not None and _feed_cursor(manifest["fromCursor"]) > to_cursor):
         raise ImportFailure("Feed cursor exceeds the batch cutoff.")
     names, declared_rows = set(), 0
-    for part in manifest["parts"]:
+    for index, part in enumerate(manifest["parts"], start=1):
         if not isinstance(part, dict) or set(part) != {"file", "sha256", "rows"}:
             raise ImportFailure("Feed bundle part declaration is invalid.")
         name, digest, count = part["file"], part["sha256"], part["rows"]
-        if (not isinstance(name, str) or not re.fullmatch(r"batch-" + match[1] + r"-part-[0-9]{4}\.json", name) or name in names
+        if (not isinstance(name, str) or name != f"part-{index:04d}.json" or name in names
                 or not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest)
-                or type(count) is not int or not 1 <= count <= 250 or declared_rows + count > FEED_ROWS_LIMIT):
+                or type(count) is not int or not 1 <= count <= 100 or declared_rows + count > FEED_ROWS_LIMIT):
             raise ImportFailure("Feed bundle part declaration is invalid.")
         names.add(name)
         declared_rows += count

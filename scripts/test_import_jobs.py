@@ -45,7 +45,9 @@ def write_feed_bundle(directory, rows, *, batch_id="a" * 32, kind="snapshot", fr
                       cutoff=SNAPSHOT, complete=True, scope=None, source_count=None):
     directory = Path(directory)
     directory.mkdir(mode=0o700, exist_ok=True)
-    part_name = f"batch-{batch_id}-part-0001.json"
+    directory = directory / f"batch-{batch_id}"
+    directory.mkdir(mode=0o700)
+    part_name = "part-0001.json"
     payload = (json.dumps({"schemaVersion": 1, "rows": rows}, separators=(",", ":")) + "\n").encode()
     parts = []
     if rows:
@@ -59,7 +61,7 @@ def write_feed_bundle(directory, rows, *, batch_id="a" * 32, kind="snapshot", fr
                 "cutoffAt": cutoff, "complete": complete, "scope": scope or {"kind": "all_eligible"},
                 "windowDays": 14, "sourceScopeRowCount": len(rows) if source_count is None else source_count,
                 "rows": len(rows), "parts": parts}
-    path = directory / f"batch-{batch_id}-manifest.json"
+    path = directory / "manifest.json"
     path.write_text(json.dumps(manifest))
     path.chmod(0o600)
     return path, manifest
@@ -220,8 +222,10 @@ class PublicImportTests(unittest.TestCase):
             directory = Path(root) / "feed"
             directory.mkdir(mode=0o700)
             batch_id = "a" * 32
+            directory = directory / f"batch-{batch_id}"
+            directory.mkdir(mode=0o700)
             payload = json.dumps({"schemaVersion": 1, "rows": [{"id": "job-1"}]}, separators=(",", ":")).encode()
-            part = directory / f"batch-{batch_id}-part-0001.json"
+            part = directory / "part-0001.json"
             part.write_bytes(payload)
             part.chmod(0o600)
             manifest = {"schemaVersion": 1, "kind": "snapshot", "fromCursor": None,
@@ -229,7 +233,7 @@ class PublicImportTests(unittest.TestCase):
                         "complete": True, "scope": {"kind": "all_eligible"}, "windowDays": 14,
                         "sourceScopeRowCount": 1, "rows": 1,
                         "parts": [{"file": part.name, "sha256": IMPORT.hashlib.sha256(payload).hexdigest(), "rows": 1}]}
-            path = directory / f"batch-{batch_id}-manifest.json"
+            path = directory / "manifest.json"
             path.write_text(json.dumps(manifest))
             path.chmod(0o600)
             result, rows, digest = IMPORT.read_feed_bundle(path)
@@ -257,7 +261,9 @@ class PublicImportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root) / "feed"
             directory.mkdir(mode=0o700)
-            manifest = directory / ("batch-" + "a" * 32 + "-manifest.json")
+            directory = directory / ("batch-" + "a" * 32)
+            directory.mkdir(mode=0o700)
+            manifest = directory / "manifest.json"
             valid = b'{"schemaVersion":1,"kind":"changes","complete":true,"cutoffAt":"2026-10-31T16:00:00Z","parts":[{"file":"part-0.json","sha256":"' + b"0" * 64 + b'","rows":0}]}'
             manifest.write_bytes(valid)
             manifest.chmod(0o644)
@@ -275,6 +281,10 @@ class PublicImportTests(unittest.TestCase):
             manifest.chmod(0o600)
             with self.assertRaisesRegex(IMPORT.ImportFailure, "duplicate"):
                 IMPORT.read_feed_bundle(manifest)
+            linked = directory.parent / ("batch-" + "b" * 32)
+            linked.symlink_to(directory, target_is_directory=True)
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "directory"):
+                IMPORT.read_feed_bundle(linked / "manifest.json")
 
     def test_company_selector_requires_bounded_unique_canonical_uuids_and_exact_schema(self):
         maximum = [f"00000000-0000-4000-8000-{index:012x}" for index in range(100)]
