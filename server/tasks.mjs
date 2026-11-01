@@ -9,9 +9,10 @@ const TERMINAL = new Set(['succeeded', 'warning', 'failed', 'cancelled']);
 const KIND = /^[a-z][a-z0-9_.-]{0,63}$/;
 const LEASE_TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const WIRE_KIND = 'hiring_wire', WIRE_OWNER = '__hiring_wire__';
-export function createTasks({ db, now = Date.now, maxActiveTasks = 96, maxStoredTasks = 2048, maxPendingPerOwner = 4, maxAttempts = 3, retentionMs = 30 * DAY_MS } = {}) {
-  if (!db || ![maxActiveTasks, maxStoredTasks, maxPendingPerOwner, maxAttempts, retentionMs].every((n) => Number.isSafeInteger(n) && n > 0)
-      || maxActiveTasks > 96 || maxStoredTasks > 2048 || maxStoredTasks < maxActiveTasks || retentionMs > 30 * DAY_MS)
+const CLEANUP_KIND = 'billing_terminate';
+export function createTasks({ db, now = Date.now, maxActiveTasks = 96, maxStoredTasks = 2048, maxCleanupReceipts = 16, maxPendingPerOwner = 4, maxAttempts = 3, retentionMs = 30 * DAY_MS } = {}) {
+  if (!db || ![maxActiveTasks, maxStoredTasks, maxCleanupReceipts, maxPendingPerOwner, maxAttempts, retentionMs].every((n) => Number.isSafeInteger(n) && n > 0)
+      || maxActiveTasks > 96 || maxStoredTasks > 2048 || maxCleanupReceipts > 96 || maxStoredTasks < maxActiveTasks || retentionMs > 30 * DAY_MS)
     throw new TypeError('Invalid task configuration.');
   db.exec(`CREATE TABLE IF NOT EXISTS justup_tasks (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL, request_key TEXT NOT NULL,
@@ -48,11 +49,15 @@ export function createTasks({ db, now = Date.now, maxActiveTasks = 96, maxStored
         if (existing.payload_json !== json) throw problem('idempotency_conflict', 409, 'This request key was already used.');
         return hydrate(existing);
       }
-      db.prepare('DELETE FROM justup_tasks WHERE updated_at<=? AND status IN (\'succeeded\',\'warning\',\'failed\',\'cancelled\')').run(now() - retentionMs);
-      // Keep admitted work bounded without making retained outcomes spend the
-      // active-work allowance. Never evict a fresh receipt just to make room:
-      // its request key, task read or domain reference may still be in use.
-      if (db.prepare('SELECT count(*) AS n FROM justup_tasks').get().n >= maxStoredTasks
+      db.prepare("DELETE FROM justup_tasks WHERE updated_at<=? AND kind<>? AND status IN ('succeeded','warning','failed','cancelled')")
+        .run(now() - retentionMs, CLEANUP_KIND);
+      // Account termination has a small bounded reserve alongside ordinary
+      // receipts. Its receipt can be released only after billing has absorbed
+      // the outcome; ordinary request-key receipts are never evicted.
+      const stored = kind === CLEANUP_KIND
+        ? db.prepare('SELECT count(*) AS n FROM justup_tasks WHERE kind=?').get(CLEANUP_KIND).n
+        : db.prepare('SELECT count(*) AS n FROM justup_tasks WHERE kind<>?').get(CLEANUP_KIND).n;
+      if (stored >= (kind === CLEANUP_KIND ? maxCleanupReceipts : maxStoredTasks)
           || db.prepare("SELECT count(*) AS n FROM justup_tasks WHERE status IN ('pending','running')").get().n >= maxActiveTasks
           || db.prepare('SELECT count(*) AS n FROM justup_tasks WHERE owner_id=? AND status IN (\'pending\',\'running\')').get(ownerId).n >= maxPendingPerOwner) {
         throw Object.assign(problem('task_limit', 429, 'The task limit has been reached.'), { retryAfter: 60 });
@@ -143,7 +148,23 @@ export function createTasks({ db, now = Date.now, maxActiveTasks = 96, maxStored
   // These helpers deliberately do not open transactions: auth and feature deletion
   // compose them inside their existing transaction, making late completions inert.
   function deleteOwner(ownerId) { db.prepare('DELETE FROM justup_tasks WHERE owner_id=?').run(ownerId); }
-  function deleteTask(ownerId, id) { return db.prepare('DELETE FROM justup_tasks WHERE owner_id=? AND id=?').run(ownerId, id).changes === 1; }
+  function deleteTask(ownerId, id) { return db.prepare('DELETE FROM justup_tasks WHERE owner_id=? AND id=? AND kind<>?').run(ownerId, id, CLEANUP_KIND).changes === 1; }
+  // The billing service supplies a synchronous proof from its authoritative
+  // operation/account rows inside its private-deletion transaction. Check and
+  // release in that same transaction so backup protection covers the removal.
+  // This is an internal API; no request handler accepts a caller proof.
+  function releaseCleanupReceipt(ownerId, id, hasAbsorbedResult) {
+    if (typeof hasAbsorbedResult !== 'function') throw new TypeError('A synchronous billing proof is required.');
+    if (!db.isTransaction) throw new TypeError('A private billing transaction is required.');
+    const row = db.prepare('SELECT * FROM justup_tasks WHERE owner_id=? AND id=? AND kind=?').get(ownerId, id, CLEANUP_KIND);
+    if (!row || !TERMINAL.has(row.status)) return false;
+    const receipt = hydrate(row);
+    const proved = hasAbsorbedResult(receipt);
+    if (proved && typeof proved.then === 'function') throw new TypeError('Billing proof must be synchronous.');
+    if (proved !== true) return false;
+    return db.prepare('DELETE FROM justup_tasks WHERE owner_id=? AND id=? AND kind=? AND status=?')
+      .run(ownerId, id, CLEANUP_KIND, row.status).changes === 1;
+  }
   function cancelOwner(ownerId) {
     db.prepare("UPDATE justup_tasks SET status='cancelled',payload_json='null',output_json=NULL,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=? WHERE owner_id=? AND status IN ('pending','running')").run(now(), ownerId);
   }
@@ -160,5 +181,5 @@ export function createTasks({ db, now = Date.now, maxActiveTasks = 96, maxStored
       result: completed ? result : null,
       error: failed ? { code: SAFE_TASK_ERRORS.has(task.errorCode) ? task.errorCode : 'task_failed', message: task.errorCode==='processing_unavailable'?'Processing is paused until current policy and data protections are available.':'This task could not finish.', retryable: RETRYABLE_TASK_ERRORS.has(task.errorCode) } : null };
   }
-  return { enqueue, get, claim, heartbeat, complete, recover, hasForeground, pauseWire, halted, haltWire, cancel, cancelOwner, deleteOwner, delete: deleteTask, publicView };
+  return { enqueue, get, claim, heartbeat, complete, recover, hasForeground, pauseWire, halted, haltWire, cancel, cancelOwner, deleteOwner, delete: deleteTask, releaseCleanupReceipt, publicView };
 }
