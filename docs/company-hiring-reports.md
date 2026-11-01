@@ -17,6 +17,11 @@ The report has `companyId`, `asOf`, `provenance`, `scope`, `freshness`,
 historical observation, source generation and publication have their own explicit
 timestamps; none are replaced with the request time.
 
+`provenance.importVerifiedAt` and `importGeneration` identify the imported
+snapshot. `sampleObservedFrom`/`sampleObservedThrough` are the actual minimum and
+maximum per-record verification times among eligible sample rows (null for an
+empty sample); the final export time cannot refresh older record evidence.
+
 ## Read current structured samples
 
 `scope.kind` is `eligible_public_listing_sample`. Its `firstObservedFrom` and

@@ -60,9 +60,12 @@ test('current snapshot supports sampled roles and separate salary units without 
   assert.equal(report.reportedSalaries.unknownSampleSize, 1);
   assert.deepEqual(report.reportedSalaries.groups.map(value => [value.currency, value.period, value.min, value.max]), [['EUR', 'hour', 10, null], ['USD', 'month', 5, 8], ['USD', 'year', 100, 200]]);
   assert.equal(report.scope.completeCompanyCoverage, false);
+  assert.equal(report.provenance.importVerifiedAt, iso(AT));
+  assert.equal(report.provenance.sampleObservedFrom, iso(AT));
   for (const forbidden of ['hidden-latest', 'Restricted title', 'secret-role', 'PRIVATE', 'bodyText', 'positionsTotal', 'headquarters']) assert.equal(JSON.stringify(report).includes(forbidden), false);
   f.setNow(AT + DAY_MS);
   assert.equal(f.reports.report('company-1').hiringRoles.state, 'unavailable');
+  assert.equal(f.reports.report('company-1').provenance.sampleObservedThrough, null);
 });
 
 test('published frozen history stays attributable after 24 hours and closures do not rewrite historical activity', async t => {

@@ -110,8 +110,11 @@ export function createCompanyReports({ db, feed, now = Date.now } = {}) {
   function report(id) {
     const company = feed.company(id), at = now();
     const coverage = feed.coverage(), jobs = feed.eligibleJobs().filter(job => job.companyId === company.id), recorded = history(company.id, at);
+    const observations = jobs.map(job => Date.parse(job.verifiedAt));
     return { companyId: company.id, asOf: iso(at),
-      provenance: { source: 'jobseek_public', listingVerifiedAt: coverage.verifiedAt, importGeneration: feed.generation(), history: recorded.provenance },
+      provenance: { source: 'jobseek_public', importVerifiedAt: coverage.verifiedAt, importGeneration: feed.generation(),
+        sampleObservedFrom: observations.length ? iso(Math.min(...observations)) : null,
+        sampleObservedThrough: observations.length ? iso(Math.max(...observations)) : null, history: recorded.provenance },
       scope: { kind: 'eligible_public_listing_sample', firstObservedFrom: iso(at - 14 * DAY_MS), firstObservedThrough: iso(at - 2 * DAY_MS), completeCompanyCoverage: false },
       freshness: { listings: coverage.stale ? 'unavailable' : 'fresh', history: recorded.freshness },
       monitoringSince: recorded.monitoringSince, hiringHistory: recorded.hiringHistory,
