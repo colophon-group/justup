@@ -5,7 +5,7 @@ read_when: Reviewing policy activation, wiring session language metadata or diag
 
 # Configure policy and processing admission
 
-All five interface policy pairs remain unapproved `product-draft-5` drafts. Keep `JUSTUP_POLICIES_REVIEWED=false`. Neither a configuration example nor passing tests constitutes operator review or authorizes activation.
+All five public policy pairs are approved at source version `2026-11-01`. Keep `JUSTUP_POLICIES_REVIEWED=false` until each deployed pair matches the recorded byte hashes and the separate processing prerequisites pass. The server still defaults to unreviewed `product-draft-5` metadata; source approval alone does not authorize activation.
 
 ## Bind approval to the served language
 
@@ -19,7 +19,7 @@ The API accepts trusted operator configuration, without a settings or consent AP
 
 For draft metadata, a locale without an entry resolves to its canonical URLs and `product-draft-5`, with `reviewed:false`. An explicit locale entry takes precedence over legacy English values, including an unreviewed entry. Each approved locale retains its own exact URLs/version; there is no inferred translation equivalence.
 
-Verify static policy bytes before enabling processing: run `scripts/preview-verify.py` with `--mode policies`, the candidate backend `--manifest`, retained frontend `--frontend-release`, fixed `--base-url`, operator-reviewed `--policy-asset-proof` and a new `--report` path. This mode reads only the exact policy pages and works while review flags are off. It compares served bytes with both the retained asset inventory and the supplied reviewed hashes, and checks HTML language, policy kind and version. Missing pages, a single-page-app fallback, swapped pages, stale versions or a changed candidate fail. The report repeats the supplied proof; it never manufactures approval from the observed pages. Installing a proof or passing this byte check does not approve draft notices.
+Verify static policy bytes before enabling processing: run `scripts/preview-verify.py` with `--mode policies`, the candidate backend `--manifest`, retained frontend `--frontend-release`, fixed `--base-url`, operator-reviewed `--policy-asset-proof` and a new `--report` path. This mode reads only the exact policy pages and works while review flags are off. It compares served bytes with both the retained asset inventory and the supplied reviewed hashes, and checks HTML language, policy kind and version. Missing pages, a single-page-app fallback, swapped pages, stale versions or a changed candidate fail. The report repeats the supplied proof; it never manufactures approval from the observed pages. Installing a proof or passing this byte check does not activate unverified providers or private processing by itself.
 
 After explicit operator review, full `--mode preview` requires the same proof and retained frontend identity. It requests all five locale sessions with `Accept-Language`, checks each approved locale/fallback against the verified page language, URLs and version, and requires every proof locale to be admitted. Legacy English approval still needs exact served-page verification for release. A policy hash, artifact, origin, candidate source or version change requires a new reviewed binding. No verifier command changes flags, supplies credentials, starts providers or activates users.
 
