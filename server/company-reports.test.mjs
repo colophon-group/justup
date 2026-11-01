@@ -75,6 +75,50 @@ test('current snapshot supports sampled roles and separate salary units without 
   assert.equal(f.reports.report('company-1').provenance.sampleObservedThrough, null);
 });
 
+test('crossed one-sided salary observations keep their counts without a reversed band or lost role/source evidence', async t => {
+  const f = fixture(t, [
+    job('lower-only', 3, { occupation: { id: '23', name: 'Developer' }, salary: { min: 100, max: null, currency: 'USD', period: 'year' } }),
+    job('upper-only', 4, { salary: { min: null, max: 50, currency: 'USD', period: 'year' } }),
+  ]);
+  await publish(f, snapshotV2());
+  const report = f.reports.report('company-1');
+  const salary = report.reportedSalaries;
+  assert.equal(salary.groups.some(group => group.min !== null && group.max !== null && group.min > group.max), false);
+  assert.deepEqual(salary, { state: 'available', sampleSize: 2, reportedSampleSize: 2, groupedSampleSize: 2,
+    incompleteSampleSize: 0, unknownSampleSize: 0,
+    groups: [{ currency: 'USD', period: 'year', sampleSize: 2, min: null, max: null }] });
+  assert.deepEqual(report.hiringRoles, { state: 'available', sampleSize: 2, labelledSampleSize: 1, unknownSampleSize: 1,
+    items: [{ id: '23', name: 'Developer', count: 1 }] });
+  assert.equal(report.sourceChecks.state, 'available');
+  assert.equal(report.sourceChecks.items[0].publicLink.url, 'https://careers.example.com/team/jobs');
+  assert.equal(report.hiringHistory.state, 'available');
+  assert.deepEqual(report.hiringHistory.points.map(point => point.newListings), [1, 2]);
+});
+
+test('salary grouping retains ordered ranges, individual one-sided bounds and exact unit/missingness counts', t => {
+  const f = fixture(t, [
+    job('range-one', 3, { salary: { min: 100, max: 200, currency: 'USD', period: 'year' } }),
+    job('range-two', 3, { salary: { min: 90, max: 300, currency: 'USD', period: 'year' } }),
+    job('lower-only', 3, { salary: { min: 10, max: null, currency: 'EUR', period: 'hour' } }),
+    job('upper-only', 3, { salary: { min: null, max: 50, currency: 'USD', period: 'hour' } }),
+    job('month', 3, { salary: { min: 5, max: 8, currency: 'USD', period: 'month' } }),
+    job('missing-currency', 3, { salary: { min: 1, max: 2, currency: null, period: 'year' } }),
+    job('missing-period', 3, { salary: { min: 1, max: 2, currency: 'USD', period: null } }),
+    job('reversed', 3, { salary: { min: 200, max: 100, currency: 'USD', period: 'year' } }),
+    job('no-bounds', 3, { salary: { min: null, max: null, currency: 'USD', period: 'year' } }),
+    job('no-salary'),
+  ]);
+  assert.deepEqual(f.reports.report('company-1').reportedSalaries, {
+    state: 'available', sampleSize: 10, reportedSampleSize: 8, groupedSampleSize: 5, incompleteSampleSize: 3, unknownSampleSize: 2,
+    groups: [
+      { currency: 'EUR', period: 'hour', sampleSize: 1, min: 10, max: null },
+      { currency: 'USD', period: 'hour', sampleSize: 1, min: null, max: 50 },
+      { currency: 'USD', period: 'month', sampleSize: 1, min: 5, max: 8 },
+      { currency: 'USD', period: 'year', sampleSize: 2, min: 90, max: 300 },
+    ],
+  });
+});
+
 test('published frozen history stays attributable after 24 hours and closures do not rewrite historical activity', async t => {
   const f = fixture(t); await publish(f);
   const report = f.reports.report('company-1');

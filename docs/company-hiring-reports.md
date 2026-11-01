@@ -42,10 +42,21 @@ guess from titles. Older imports without occupation labels remain unlabelled.
 `groupedSampleSize`, `incompleteSampleSize`, `unknownSampleSize` and
 `groups:[{currency,period,sampleSize,min,max}]`. A group retains the lowest reported
 lower bound and highest reported upper bound within that exact currency/period;
-either bound can be null. Missing currency/period and reversed numeric ranges
-are counted as incomplete and omitted from numeric groups. Values are not
-converted, annualized, averaged or presented as employee pay. A salary or role
-that belongs only to a withheld recent listing never enters these samples.
+either bound can be null. If these aggregate endpoints cross, both are null:
+the group's numeric bounds are unavailable, while its currency, period and
+sample count remain attributable. For example, separate USD/year statements
+`{min:100,max:null}` and `{min:null,max:50}` produce a group with `sampleSize:2`
+and `min:null,max:null`, never a reversed or swapped band or zero pay.
+
+`reportedSampleSize` counts listings with at least one numeric endpoint.
+`groupedSampleSize` counts those with currency, period and individually ordered
+or one-sided bounds, including observations in a group whose aggregate bounds
+are unavailable. Missing currency/period and individually reversed ranges are
+omitted from groups and counted in `incompleteSampleSize` (reported minus
+grouped). `unknownSampleSize` counts listings with no numeric salary endpoint
+(sample minus reported). Values are not converted, annualized, averaged or
+presented as employee pay. A salary or role that belongs only to a withheld
+recent listing never enters these samples.
 
 The browser and public HTML share one validated report read for source links and
 structured samples. Fresh, nonempty role and salary sections show the public
