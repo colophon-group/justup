@@ -605,3 +605,32 @@ test('billing completion hooks preserve the Wire pre-claim fence and survive a r
   const runner=createRunner({tasks:f.app.tasks,handlers:{billing_terminate:f.queue.runTask},...hooks});assert.equal(await runner.runOnce(),true);assert.deepEqual(events,['wire','wire','records','billing']);
   assert.ok(f.app.tasks.get(f.owner.account.id,op.task_id));f.api.cleanup();assert.equal(f.app.tasks.get(f.owner.account.id,op.task_id),null);
 });
+
+
+for(const observed of [false,true])test(`restore after successful termination ${observed?'observation':'completion before observation'} releases known receipt but requires fresh provider proof`,async t=>{
+  const f=await fixture(t);f.start();await f.work();await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const original=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();assert.equal(await f.realRunner({observe:observed}).runOnce(),true);
+  assert.ok(f.app.tasks.get(f.owner.account.id,original.task_id));f.app.auth.invalidateAllSessions();
+  const signed=await f.app.auth.login({username:'person',password:PASSWORD});f.owner.token=signed.token;f.advance(5001);f.api.refreshAvailability();
+  f.queue.reconcileCompletedTasks();f.api.cleanup();
+  assert.equal(f.app.tasks.get(f.owner.account.id,original.task_id),null);
+  const invalidated=f.app.store.db.prepare('SELECT termination_revision,termination_verified_at FROM justup_billing_accounts').get();assert.deepEqual({...invalidated},{termination_revision:null,termination_verified_at:null});
+  assert.equal(f.api.handleBilling(f.ctx(undefined,'/account/billing','GET')).body.billing.termination.status,'pending');assert.ok(f.app.auth.session(f.owner.token));
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const retry=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();assert.equal(retry.id,original.id);assert.equal(retry.created_at,original.created_at);assert.notEqual(retry.task_id,original.task_id);assert.ok(retry.task_id);
+  assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,null);
+  const reads=f.state.calls.length;assert.equal(await f.realRunner().runOnce(),true);assert.ok(f.state.calls.length>reads);assert.equal(f.app.store.db.prepare('SELECT termination_verified_at FROM justup_billing_accounts').get().termination_verified_at,f.now());
+  assert.deepEqual(await f.app.auth.deleteAccount(f.owner.token,PASSWORD),{deleted:true});f.app.afterPrivateTransaction();
+});
+
+
+test('an unexpected canonical task kind cannot erase its unknown output through final deletion',async t=>{
+  const f=await fixture(t);f.start();await f.work();await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const op=f.app.store.db.prepare("SELECT * FROM justup_billing_operations WHERE kind='terminate'").get();assert.equal(await f.realRunner().runOnce(),true);
+  f.app.store.db.prepare('UPDATE justup_tasks SET kind=?,output_json=? WHERE id=?').run('synthetic_unexpected',JSON.stringify({unknownMutation:'canonical-task-only'}),op.task_id);
+  f.queue.reconcileCompletedTasks();f.api.cleanup();
+  await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  assert.deepEqual(f.app.tasks.get(f.owner.account.id,op.task_id).output,{unknownMutation:'canonical-task-only'});assert.ok(f.app.auth.session(f.owner.token));
+  f.advance(5001);await assert.rejects(f.app.auth.deleteAccount(f.owner.token,PASSWORD),{code:'billing_termination_pending'});
+  const unchanged=f.app.store.db.prepare('SELECT task_id,attempt FROM justup_billing_operations WHERE id=?').get(op.id);assert.equal(unchanged.task_id,op.task_id);assert.equal(unchanged.attempt,op.attempt);
+});
