@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import stat
 
 BASE = Path('/srv/justup_preview')
@@ -20,6 +21,70 @@ TASK_PROFILES = {
     'search_intent': {'toolPolicySha256': 'f9fbda3d5135a678ecfb68f59bf64a52854da040629ea3ce9116ec429b3dedc1', 'toolNames': []},
     'company_resolution': {'toolPolicySha256': 'a073f7fab18af21ef90c16bce81a687159da19cda045b2a6f1d19069e45ea559', 'toolNames': ['web.run']},
 }
+WIRE_CATALOGUE_SHA256 = '5ed662f51bb5a9eda38e52fae474954574504286a851bfbad4a4aa6d32b4ed61'
+WIRE_DYNAMIC_TOOLS_SHA256 = 'f3deb93a0fb67d8bb2861a7d0938e678384b1144964ed3bcd6bcf6cba59f3b56'
+WIRE_DESCRIPTOR = {'profile': 'hiring_wire', 'model': 'gpt-6.1-sol', 'promptVersion': 'hiring-wire-editorial-v1',
+                   'toolVersion': 'hiring-wire-tools-v1', 'toolSchemaSha256': 'e411813b3c2b73b84fb7871550d22c8c37f28cb4eaa8903c3696f5df08f9b0f4',
+                   'maxMs': 90_000, 'maxToolCalls': 12, 'maxOutputBytes': 65_536, 'maxInputBytes': 262_144}
+WIRE_TOOLS = ['preview_selection', 'read_facts', 'read_prior_editions', 'read_selection_script', 'replace_selection_script']
+WIRE_MODULES = {'app/server/' + name + '.mjs' for name in (
+    'hiring-wire', 'hiring-wire-facts', 'hiring-wire-editorial', 'hiring-wire-codex',
+    'hiring-wire-codex-policy', 'hiring-wire-codex-broker', 'hiring-wire-integration', 'source-coverage')}
+
+
+def validate_wire_inventory(manifest):
+    files = manifest.get('files', {})
+    if (not isinstance(files, dict) or not WIRE_MODULES <= files.keys()
+            or files.get('app/server/hiring-wire-sol-catalogue.json') != WIRE_CATALOGUE_SHA256):
+        raise ValueError('Hiring Wire requires the complete fixed runtime in this exact artifact.')
+
+
+def validate_wire_configuration(config, *, private, model_uid=None):
+    if config == {'enabled': False} and type(config.get('enabled')) is bool:
+        return False
+    proof = BASE / ('model/config' if private else 'broker') / 'hiring-wire-reviewed.json'
+    if (not isinstance(config, dict) or set(config) != {'enabled', 'attestationPath', 'providerCatalogueSha256', 'modelUid', 'socketPath'}
+            or config.get('enabled') is not True or config.get('attestationPath') != str(proof)
+            or config.get('socketPath') != str(BASE / 'broker/model.sock')
+            or not isinstance(config.get('providerCatalogueSha256'), str)
+            or not re.fullmatch(r'[a-f0-9]{64}', config['providerCatalogueSha256'])
+            or type(config.get('modelUid')) is not int or config['modelUid'] < 1 or config['modelUid'] != model_uid):
+        raise ValueError('Hiring Wire configuration differs from the fixed private broker boundary.')
+    return True
+
+
+def validate_wire_attestation(report, config, manifest, host_plan):
+    """Match the same immutable descriptor and independent proof as the Node policy."""
+    expected = {'version': 1, 'approved': True, 'profile': 'hiring_wire', 'model': 'gpt-6.1-sol',
+                'cliVersion': manifest['codexVersion'], 'cliSource': CODEX_SOURCE_COMMIT, 'nodeVersion': manifest['nodeVersion'],
+                'policyVersion': 'hiring-wire-codex-v1', 'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': host_plan,
+                'socketPath': config['socketPath'], 'descriptor': WIRE_DESCRIPTOR,
+                'modelCatalogueSha256': WIRE_CATALOGUE_SHA256, 'dynamicToolsSha256': WIRE_DYNAMIC_TOOLS_SHA256,
+                'providerCatalogue': {'verified': True, 'transport': 'responses_lite', 'sha256': config['providerCatalogueSha256'],
+                                      'toolSchemaSha256': WIRE_DESCRIPTOR['toolSchemaSha256'], 'stockTools': 0, 'tools': WIRE_TOOLS},
+                'executorBoundary': 'dedicated_uid_broker', 'modelUid': config['modelUid'], 'fd': 3,
+                'deniedPathsVerified': True, 'retentionVerified': True, 'qualityVerified': True, 'sharedSlotVerified': True}
+    if (not isinstance(report, dict)
+            or json.dumps(report, sort_keys=True, separators=(',', ':'), allow_nan=False)
+            != json.dumps(expected, sort_keys=True, separators=(',', ':'), allow_nan=False)):
+        raise ValueError('Hiring Wire evidence differs from the exact artifact and private executor.')
+
+
+def read_wire_attestation(path):
+    path = Path(path)
+    if path.resolve(strict=True) != path:
+        raise ValueError('Hiring Wire proof must use its canonical immutable path.')
+    meta = path.lstat()
+    if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0 or meta.st_nlink != 1
+            or meta.st_mode & 0o222 or not 1 <= meta.st_size <= 16_384):
+        raise ValueError('Hiring Wire proof must be root-owned, immutable and bounded.')
+    for parent in path.parents:
+        meta = parent.lstat()
+        if not stat.S_ISDIR(meta.st_mode) or meta.st_uid != 0 or meta.st_mode & 0o022:
+            raise ValueError('Hiring Wire proof ancestors must be root-owned and protected.')
+    return json.loads(path.read_text())
+
+
 def validate_task_profiles(profiles, *, attested=False):
     """Pin each task's policy separately; an empty-tool proof cannot approve web."""
     if not isinstance(profiles, dict) or not profiles or set(profiles) - TASK_PROFILES.keys():
@@ -62,8 +127,11 @@ def validate_configuration(config, release, manifest):
                 'protectedAuthHome': str(BASE / 'model/credentials'),
                 'invocationRoot': str(BASE / 'model/invocations'),
                 'taskCwd': str(BASE / 'model/task-cwd')}
-    if not isinstance(config, dict) or config != expected or config.get('enabled') is not True:
+    if (not isinstance(config, dict) or {key: value for key, value in config.items() if key != 'hiringWire'} != expected
+            or config.get('enabled') is not True):
         raise ValueError('Broker configuration differs from the fixed native executable and private paths.')
+    if 'hiringWire' in config and validate_wire_configuration(config['hiringWire'], private=True, model_uid=os.getuid()):
+        validate_wire_inventory(manifest)
     return config
 
 
@@ -110,6 +178,9 @@ def main():
                 raise ValueError('Broker configuration and isolation evidence must be root-owned and read-only.')
         configured = validate_configuration(json.loads(config.read_text()), release, manifest)
         validate_attestation(json.loads(reviewed.read_text()), manifest, host_plan)
+        if configured.get('hiringWire', {}).get('enabled') is True:
+            validate_wire_attestation(read_wire_attestation(configured['hiringWire']['attestationPath']),
+                                      configured['hiringWire'], manifest, host_plan)
         executable = Path(configured['codexPath'])
         if executable.resolve(strict=True) != executable or executable.stat().st_uid != 0 or executable.stat().st_mode & 0o022:
             raise ValueError('Broker native executable must remain immutable and root-owned.')
