@@ -83,3 +83,24 @@ test('older record observations cannot reopen closed jobs or undo newer evidence
   store.importSnapshot(snapshot([],{verifiedAt:iso(later+3000),observations:[{id:'job-1',active:false,observedAt:iso(later)}]}));
   assert.equal(store.db.prepare('SELECT active FROM demo_jobs').get().active,1);
 });
+
+test('closure knowledge survives bounded evidence eviction before a stale job returns', (t) => {
+  const store=openStore();t.after(()=>store.close());store.importSnapshot(snapshot());
+  store.importSnapshot(snapshot([],{verifiedAt:iso(AT+1000),observations:[{id:'job-1',active:false,observedAt:iso(AT+1000)}]}));
+  store.db.exec('DELETE FROM demo_jobs');
+  store.importSnapshot(snapshot([fixture()],{verifiedAt:iso(AT+2000)}));
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM demo_jobs').get().n,0);
+  const fresh=fixture();fresh.evidence.metadataFetchedAt=iso(AT+3000);
+  store.importSnapshot(snapshot([fresh],{verifiedAt:iso(AT+3000)}));
+  assert.equal(store.db.prepare('SELECT active FROM demo_jobs').get().active,1);
+});
+
+test('identity-only schema reopens with source observations preserved by additive migration', (t) => {
+  const dir=mkdtempSync(join(tmpdir(),'justup-source-migrate-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const path=join(dir,'store.sqlite');let store=openStore(path);store.importSnapshot(snapshot());
+  for(const column of ['verified_at','active','reserved'])store.db.exec(`ALTER TABLE job_source_identities DROP COLUMN ${column}`);
+  store.close();store=openStore(path);t.after(()=>store.close());
+  const identity=store.db.prepare('SELECT * FROM job_source_identities').get();
+  assert.equal(identity.verified_at,AT);assert.equal(identity.active,1);assert.equal(identity.reserved,0);
+  assert.equal(identity.company_id,'co-1');assert.equal(identity.first_seen_at,AT-3*DAY_MS);
+});

@@ -123,12 +123,22 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     CREATE INDEX IF NOT EXISTS demo_jobs_order ON demo_jobs(first_seen_at DESC, id);
     CREATE INDEX IF NOT EXISTS demo_jobs_company ON demo_jobs(company_id);
     CREATE TABLE IF NOT EXISTS job_source_identities (
-      id TEXT PRIMARY KEY, company_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL
+      id TEXT PRIMARY KEY, company_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,
+      verified_at INTEGER NOT NULL, active INTEGER NOT NULL CHECK(active IN (0,1)),
+      reserved INTEGER NOT NULL CHECK(reserved IN (0,1))
     ) STRICT;
-    INSERT OR IGNORE INTO job_source_identities(id,company_id,first_seen_at)
-      SELECT id,company_id,first_seen_at FROM demo_jobs;
     PRAGMA user_version = 1;
   `);
+  // Retain source lifecycle independently from bounded bodies/metadata, including
+  // when reopening a database with the earlier identity-only additive schema.
+  const identityColumns = new Set(db.prepare('PRAGMA table_info(job_source_identities)').all().map((column) => column.name));
+  for (const [name, definition] of [['verified_at','INTEGER NOT NULL DEFAULT 0'],['active','INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1))'],['reserved','INTEGER NOT NULL DEFAULT 1 CHECK(reserved IN (0,1))']]) {
+    if (!identityColumns.has(name)) db.exec(`ALTER TABLE job_source_identities ADD COLUMN ${name} ${definition}`);
+  }
+  db.exec(`INSERT OR IGNORE INTO job_source_identities(id,company_id,first_seen_at,verified_at,active,reserved)
+    SELECT id,company_id,first_seen_at,verified_at,active,reserved FROM demo_jobs;
+    UPDATE job_source_identities SET (verified_at,active,reserved)=(SELECT verified_at,active,reserved FROM demo_jobs WHERE id=job_source_identities.id)
+      WHERE verified_at=0 AND EXISTS(SELECT 1 FROM demo_jobs WHERE id=job_source_identities.id);`);
   function generation() {
     return db.prepare('SELECT * FROM demo_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   }
@@ -153,8 +163,9 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     return transaction(db, () => {
       if ((generation()?.verified_at ?? -1) > verifiedAt) throw problem('stale_import', 409, 'A newer import is already present.');
       const existing = db.prepare('SELECT company_id,first_seen_at FROM job_source_identities WHERE id = ?');
-      const rememberIdentity = db.prepare('INSERT OR IGNORE INTO job_source_identities(id,company_id,first_seen_at) VALUES(?,?,?)');
-      const priorEvidence = db.prepare('SELECT verified_at,active,reserved FROM demo_jobs WHERE id=?');
+      const rememberIdentity = db.prepare(`INSERT INTO job_source_identities(id,company_id,first_seen_at,verified_at,active,reserved) VALUES(?,?,?,?,1,0)
+        ON CONFLICT(id) DO UPDATE SET verified_at=excluded.verified_at,active=1,reserved=0`);
+      const priorEvidence = db.prepare('SELECT verified_at,active,reserved FROM job_source_identities WHERE id=?');
       const insert = db.prepare(`INSERT INTO demo_jobs (id, company_id, first_seen_at, active, reserved, verified_at, closed_observed_at, evidence_hash, data_json, body_text)
         VALUES (?, ?, ?, 1, 0, ?, NULL, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET
         company_id=excluded.company_id,active=1,reserved=0,verified_at=excluded.verified_at,closed_observed_at=NULL,
@@ -166,13 +177,17 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
         // A later export may carry older per-record observations. It must not
         // reopen a closure, undo a reservation or replace newer source content.
         if (prior && (observedAt < prior.verified_at || observedAt === prior.verified_at && (!prior.active || prior.reserved))) continue;
-        rememberIdentity.run(job.id,job.companyId,first);
+        rememberIdentity.run(job.id,job.companyId,first,observedAt);
         insert.run(job.id, job.companyId, first, observedAt, textHash, boundedJson(job, 16_384), bodyText);
       }
       const close = db.prepare(`UPDATE demo_jobs SET active=?,reserved=?,verified_at=?,closed_observed_at=? WHERE id=?`);
+      const rememberObservation = db.prepare('UPDATE job_source_identities SET active=?,reserved=?,verified_at=? WHERE id=?');
       for (const o of observations) {
         const prior = priorEvidence.get(o.id);
-        if (prior && o.observedAt >= prior.verified_at) close.run(o.active ? 1 : 0, o.reserved ? 1 : 0, o.observedAt, o.active ? null : o.observedAt, o.id);
+        if (prior && o.observedAt >= prior.verified_at) {
+          close.run(o.active ? 1 : 0, o.reserved ? 1 : 0, o.observedAt, o.active ? null : o.observedAt, o.id);
+          rememberObservation.run(o.active ? 1 : 0,o.reserved ? 1 : 0,o.observedAt,o.id);
+        }
       }
       db.prepare('INSERT INTO demo_imports VALUES (?, ?, ?, ?, ?, ?)').run(generationId, snapshotAt, verifiedAt, selection, jobs.length, snapshot.unknownIds?.length ?? 0);
       // Old import metadata is not needed for cursor validity or public evidence.

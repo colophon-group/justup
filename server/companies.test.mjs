@@ -115,7 +115,7 @@ test('browser input/scope-only website submissions reach one grounded decision w
       assert.deepEqual(input,{input:raw,scope:'European roles',domain:null,careerUrl:null});
       return resolveCompanyIdentity(input,{
         fetchPage:async url=>{const text='<title>Cloud Collective</title><h1>Cloud Collective</h1>Official company website.';return {url,finalUrl:url,status:200,text,bytes:Buffer.byteLength(text),sha256:createHash('sha256').update(text).digest('hex')};},
-        executeStage:async({stage})=>{inferences++;assert.equal(stage,'grounded_decision');const result=candidate();result.data.candidate.name='Cloud Collective';result.data.candidate.evidenceUrls=['https://newcompany.com/'];return {data:result.data,usage:{inputTokens:100,cachedInputTokens:0,outputTokens:50,reasoningOutputTokens:0}};}
+        executeStage:async({stage})=>{inferences++;assert.equal(stage,'grounded_decision');const result=candidate();result.data.candidate.name='Cloud Collective';result.data.candidate.evidenceUrls=['https://newcompany.com/'];return {data:result.data,usage:{inputTokens:100,cachedInputTokens:0,outputTokens:50,reasoningOutputTokens:0},toolCalls:0};}
       }).then(({data,evidenceVerified,evidenceProvenance})=>({data,evidenceVerified,evidenceProvenance}));
     }}});
     const created=await f.create({input:raw,scope:'European roles',requestKey:'ui-shaped'}),task=f.claim(created.body.task.id),outcome=await f.service.runTask(task);
