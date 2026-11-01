@@ -47,6 +47,8 @@ test('one challenge survives exact retry, queue payload stays private, proof req
 test('original session, attempt budget, expiry and restore prevent proof replay',async t=>{
   const f=await fixture(t),owner=await f.account();await f.start(owner);await f.deliver();
   const other=await f.app.auth.login({username:'person',password:PASSWORD});
+  const otherState=await f.api.handleVerification(f.ctx(other,undefined,'/account/verification','GET'));
+  assert.equal(otherState.body.verification.challengeLocale,null);assert.equal(otherState.body.verification.challengeId,null);
   await assert.rejects(f.confirm(other),{code:'verification_invalid'});
   const wrong=f.sent[0].code==='00000000'?'11111111':'00000000';
   for(let n=0;n<5;n++)await assert.rejects(f.confirm(owner,f.sent[0],wrong),{code:'verification_invalid'});
@@ -127,4 +129,32 @@ test('recipient scrub rotates the real deletion generation and removes retained 
   assert.notEqual(readFileSync(generationPath,'utf8'),before);assert.deepEqual(readdirSync(backupDir),[]);
   assert.equal(f.app.store.db.prepare('SELECT email FROM justup_email_challenges').get().email,null);
   await f.confirm(owner);assert.equal(f.app.auth.session(owner.token).access.kind,'ready');
+});
+test('HTTP exposes original challenge locale after language changes without bypassing its current policy',async t=>{
+  const origin='https://preview.justup.work',f=await fixture(t,{storage:{
+    policyLocales:{de:{privacyUrl:`${origin}/privacy.de.html`,usageUrl:`${origin}/usage.de.html`,version:'test-v1',reviewed:true}},
+    policyAssetProof:{origin,sourceCommit:'a'.repeat(40),assetsSha256:'d'.repeat(64),locales:{de:{version:'test-v1',privacySha256:'e'.repeat(64),usageSha256:'f'.repeat(64)}}},
+  }}),owner=await f.account();
+  const initial=await f.api.handleVerification(f.ctx(owner,undefined,'/account/verification','GET'));
+  assert.equal(initial.body.verification.challengeLocale,null);
+  await f.start(owner);await f.deliver();
+  await new Promise(resolve=>f.app.server.listen(0,'127.0.0.1',resolve));
+  const base=`http://127.0.0.1:${f.app.server.address().port}/api/v1`,cookie=`__Host-justup_session=${owner.token}`;
+  const session=await(await fetch(`${base}/session`,{headers:{Cookie:cookie,'X-Justup-Locale':'de'}})).json();
+  assert.equal(session.policies.locale,'de');assert.equal(session.policies.reviewed,true);
+  const headers={Cookie:cookie,Origin:origin,'Content-Type':'application/json','X-CSRF-Token':session.csrfToken,'X-Justup-Locale':'de'};
+  const response=await fetch(`${base}/account/verification`,{headers});assert.equal(response.status,200);
+  const {verification}=await response.json();assert.equal(verification.state,'sent');assert.equal(verification.challengeLocale,'en');
+  const body=JSON.stringify({challengeId:verification.challengeId,code:f.sent[0].code});
+  const mismatch=await fetch(`${base}/account/verification/confirm`,{method:'POST',headers,body});
+  assert.equal(mismatch.status,503);assert.equal((await mismatch.json()).error.code,'policy_unavailable');
+  assert.equal(f.app.store.db.prepare('SELECT attempts FROM justup_email_challenges').get().attempts,0);
+  f.config.policyLocales.en={privacyUrl:`${origin}/privacy.html`,usageUrl:`${origin}/usage.html`,version:'test-v1',reviewed:false};f.api.refreshAvailability();
+  const revoked=await fetch(`${base}/account/verification/confirm`,{method:'POST',headers:{...headers,'X-Justup-Locale':verification.challengeLocale},body});
+  assert.equal(revoked.status,503);assert.equal((await revoked.json()).error.code,'policy_unavailable');
+  assert.equal(f.app.auth.session(owner.token).access.kind,'limited');
+  f.config.policyLocales.en.reviewed=true;f.api.refreshAvailability();
+  const confirmed=await fetch(`${base}/account/verification/confirm`,{method:'POST',headers:{...headers,'X-Justup-Locale':verification.challengeLocale},body});
+  assert.equal(confirmed.status,200);const completed=(await confirmed.json()).verification;
+  assert.equal(completed.state,'verified');assert.equal(completed.challengeLocale,null);assert.equal(completed.challengeId,null);
 });

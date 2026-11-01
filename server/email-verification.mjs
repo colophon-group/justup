@@ -59,10 +59,10 @@ export function createEmailVerificationApi({db,tasks,config={},now=Date.now,getA
     return current;
   }
   function state(owner,sessionHash) {
-    if(db.prepare('SELECT 1 FROM access_identities WHERE account_id=?').get(owner))return {state:'verified',challengeId:null,expiresAt:null,retryAfterMs:null};
+    if(db.prepare('SELECT 1 FROM access_identities WHERE account_id=?').get(owner))return {state:'verified',challengeId:null,challengeLocale:null,expiresAt:null,retryAfterMs:null};
     const row=rowFor(owner);
-    if(usableRow(db,row,now)&&row.session_hash===sessionHash)return {state:row.status==='queued'?'pending':row.status,challengeId:row.id,expiresAt:new Date(row.expires_at).toISOString(),retryAfterMs:Math.max(0,row.created_at+COOLDOWN-now())};
-    return {state:enabled()?'unverified':'unavailable',challengeId:null,expiresAt:null,retryAfterMs:null};
+    if(usableRow(db,row,now)&&row.session_hash===sessionHash)return {state:row.status==='queued'?'pending':row.status,challengeId:row.id,challengeLocale:row.locale,expiresAt:new Date(row.expires_at).toISOString(),retryAfterMs:Math.max(0,row.created_at+COOLDOWN-now())};
+    return {state:enabled()?'unverified':'unavailable',challengeId:null,challengeLocale:null,expiresAt:null,retryAfterMs:null};
   }
   function cleanup() {
     const rows=db.prepare('SELECT * FROM justup_email_challenges').all();
