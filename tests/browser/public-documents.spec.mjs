@@ -72,6 +72,20 @@ test('company report dates hydrate consistently across browser time zones', asyn
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeEnabled();
   expect(errors).toEqual([]);
 });
+
+test('sample reports retain source occupation labels and stay readable in five locales on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  for (const locale of ['en', 'de', 'fr', 'it', 'es']) {
+    await page.goto(`${locale === 'en' ? '' : '/' + locale}/companies/library`);
+    await expect(page.locator('.sample-roles li').first()).toContainText('Software developers');
+    await expect(page.locator('.sample-roles li').last()).toContainText('Archivists & curators');
+    await expect(page.locator('.sample-salaries li')).toHaveCount(3);
+    await expect(page.locator('[data-currency="USD"][data-period="month"]')).toContainText('USD');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  expect(errors).toEqual([]);
+});
 test('client company refetch cannot restore unsafe metadata or unsupported legacy career links', async ({ page }) => {
   const privateRequests = [];
   await page.route(/https?:\/\/(?:127\.0\.0\.1:5432|192\.168\.0\.1|internal\.lan)/, route => { privateRequests.push(route.request().url()); return route.abort(); });

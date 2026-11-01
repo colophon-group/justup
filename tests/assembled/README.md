@@ -29,3 +29,10 @@ These journeys do not intercept or fabricate API responses. They run the built f
 `assembled-company-sources.spec.mjs` publishes a frozen synthetic v2 coverage snapshot through the real Wire service and SQLite, then checks approved links and missing check dates in public HTML and client navigation. Deleting that published evidence removes the source list while preserving company identity. It does not intercept API responses or qualify real source coverage.
 
 Local synthetic admission configuration enables the test languages and binds the built draft notice bytes. It neither approves real notices nor activates a deployment. This proves the application boundary with deterministic model output; it does not qualify a provider's language quality, matching quality, latency or cost. The Wire and import schemas remain version 1; the application database contract is version 2.
+
+The company-sample journey imports structured rows through the actual store and
+checks public HTML, hydration and client navigation against the same HTTP report.
+Its optional injected business clock defaults to `Date.now`; API, initial import
+and synthetic runner heartbeat use that clock. Advancing it and refreshing the
+synthetic heartbeat proves that stale source evidence removes numerical samples
+without inventing zeros or replacing company identity.

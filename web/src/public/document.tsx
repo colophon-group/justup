@@ -7,7 +7,7 @@ import { App } from '../app/App.tsx';
 import { InterfacePresentation } from './InterfacePresentation.tsx';
 import { ErrorBoundary } from '../app/ErrorBoundary.tsx';
 import { readRoute, explicitRouteLocale, type Route } from '../app/useRoute.ts';
-import { decodeCompany, decodeCompanySourceReport, decodeCompanyCataloguePage, record } from '../api/decode.ts';
+import { decodeCompany, decodeCompanyReport, decodeCompanyCataloguePage, record } from '../api/decode.ts';
 import type { PublicBootstrap } from './bootstrap.ts';
 // @ts-expect-error Private dependency-free edge helper is covered by deployment contracts.
 import { trustedIngressHeaders } from '../../../deploy/frontend/worker.mjs';
@@ -121,7 +121,7 @@ export async function renderPublicDocument(request: Request, env: Record<string,
         // Optional report evidence cannot suppress the independently valid company identity.
         try {
           const report = await publicJSON(new URL(`/api/v1/companies/${encodeURIComponent(route.id)}/report`, origin), fetchUpstream, ingress);
-          if (report.status === 200) initial.companySourceReport = decodeCompanySourceReport(report.value, company.id);
+          if (report.status === 200) initial.companyReport = decodeCompanyReport(report.value, company.id);
         } catch { /* The browser can retry this public evidence separately. */ }
 
       }

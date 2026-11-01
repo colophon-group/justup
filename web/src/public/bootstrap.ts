@@ -1,4 +1,4 @@
-import type { Company, CompanySourceReport, Coverage } from '../api/types.ts';
+import type { Company, CompanyReport, Coverage } from '../api/types.ts';
 import type { InterfaceLocale } from '../i18n/locales.ts';
 import type { Route } from '../app/useRoute.ts';
 export interface PublicBootstrap {
@@ -9,6 +9,6 @@ export interface PublicBootstrap {
   coverage?: Coverage;
   catalogue?: { query: string; nextCursor: string | null; cursor: string | null };
   company?: Company;
-  companySourceReport?: CompanySourceReport;
+  companyReport?: CompanyReport;
   outcome: 'ready' | 'not-found' | 'unavailable';
 }

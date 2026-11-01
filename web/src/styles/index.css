@@ -193,6 +193,27 @@ form label { display: block; font-size: 12px; font-weight: 600; line-height: 1.5
 .report-facts { font-size: 12px; line-height: 1.7; margin-block: 30px; }
 #company-page section { margin-block: 30px; }
 #company-page section > h2 { font: 900 34px/1.05 var(--display); }
+.company-samples { margin-block: 32px; }
+.sample-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; margin-bottom: 18px; font-size: 12px; line-height: 1.6; }
+.sample-heading p { flex-basis: 100%; margin: 0; font-size: 11px; }
+.sample-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr)); gap: 18px; align-items: start; }
+#company-page .report-sample { min-width: 0; margin: 0; padding: 24px; border: 1px solid var(--ink); background: var(--cream); }
+#company-page .report-sample > h2 { margin: 0 0 16px; }
+.sample-coverage, .sample-excluded { margin: 0 0 16px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.sample-excluded { margin-top: -8px; }
+.sample-roles, .sample-salaries { list-style: none; margin: 0; padding: 0; }
+.sample-roles li + li { margin-top: 20px; }
+.sample-role-label { display: flex; justify-content: space-between; gap: 18px; font-size: 12px; line-height: 1.6; }
+.sample-role-label span { min-width: 0; overflow-wrap: anywhere; }
+.sample-role-label b { font-variant-numeric: tabular-nums; }
+.sample-role-track { display: block; height: 5px; margin-top: 8px; background: rgb(17 16 14 / .1); }
+.sample-role-track > span { display: block; height: 100%; background: var(--ink); }
+.sample-salaries li { padding-block: 15px; border-bottom: 1px solid var(--rule); }
+.sample-salaries li:first-child { padding-top: 0; }
+.sample-salaries li:last-child { border-bottom: 0; }
+.sample-salaries strong { display: block; font-size: clamp(15px, 2vw, 20px); line-height: 1.55; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.sample-salaries li > span { display: block; margin-top: 4px; font-size: 10px; line-height: 1.7; }
+.sample-method { margin: 10px 0 0; color: var(--muted); font-size: 10px; line-height: 1.8; }
 .hiring-history { display: flex; align-items: end; gap: 12px; height: 230px; padding: 20px 0 0; list-style: none; }
 .hiring-history li { display: flex; flex-direction: column; justify-content: end; align-items: center; flex: 1; height: 100%; gap: 8px; font-size: 12px; }
 .history-bar { display: block; min-height: 2px; width: 100%; background: var(--ink); }
