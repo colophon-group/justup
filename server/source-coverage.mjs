@@ -1,9 +1,11 @@
-// Read one protected Jobseek coverage export for a fixed Hiring Wire period.
+// Read one root-owned Jobseek coverage export for a fixed Hiring Wire period.
 // Inject it only from trusted runner composition, never from a request.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { isAbsolute, join, parse, resolve, sep } from 'node:path';
+
+const REAL_FILESYSTEM = Object.freeze({ lstat, open });
 
 export const SOURCE_COVERAGE_VERSION = 'jobseek-coverage-v1';
 // Current fail-closed caps; measure real exports before considering a higher bound.
@@ -34,23 +36,21 @@ function periodDate(periodEnd) {
 }
 
 function protectedMetadata(stat, kind) {
-  const uid = process.getuid?.();
   const wrongType = kind === 'file' ? !stat.isFile() : !stat.isDirectory();
   const unsafeMode = (stat.mode & 0o022) !== 0 || (stat.mode & 0o007) !== 0;
   const unsafeFile = kind === 'file' && (
     stat.nlink !== 1 || stat.size < 1 || stat.size > SOURCE_COVERAGE_LIMITS.artifactBytes
     || (stat.mode & 0o111) !== 0
   );
-  if (wrongType || unsafeMode || unsafeFile || (stat.uid !== 0 && stat.uid !== uid)) throw failure();
+  if (wrongType || unsafeMode || unsafeFile || stat.uid !== 0) throw failure();
 }
 
-async function protectedDirectory(directory) {
+async function protectedDirectory(directory, filesystem) {
   const parts = directory.slice(parse(directory).root.length).split(sep).filter(Boolean);
   let current = parse(directory).root;
   async function checkAncestor(path) {
-    const stat = await lstat(path);
-    const uid = process.getuid?.();
-    if (!stat.isDirectory() || (stat.mode & 0o022) !== 0 || (stat.uid !== 0 && stat.uid !== uid)) {
+    const stat = await filesystem.lstat(path);
+    if (!stat.isDirectory() || (stat.mode & 0o022) !== 0 || stat.uid !== 0) {
       throw failure();
     }
   }
@@ -59,7 +59,7 @@ async function protectedDirectory(directory) {
     current = join(current, part);
     await checkAncestor(current);
   }
-  protectedMetadata(await lstat(directory), 'directory');
+  protectedMetadata(await filesystem.lstat(directory), 'directory');
 }
 
 function decodeSnapshot(envelope, periodEnd) {
@@ -94,7 +94,7 @@ function decodeSnapshot(envelope, periodEnd) {
   return snapshot;
 }
 
-export function createSourceCoverageReader({ directory } = {}) {
+function createReader({ directory } = {}, filesystem) {
   if (typeof directory !== 'string' || !isAbsolute(directory) || resolve(directory) !== directory) {
     throw failure('invalid_input');
   }
@@ -105,9 +105,9 @@ export function createSourceCoverageReader({ directory } = {}) {
       const date = periodDate(periodEnd);
       if (signal?.aborted) throw failure('task_timeout');
       try {
-        await protectedDirectory(directory);
+        await protectedDirectory(directory, filesystem);
         const path = join(directory, `${date}.json`);
-        const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const handle = await filesystem.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
           protectedMetadata(await handle.stat(), 'file');
           const chunks = [];
@@ -133,4 +133,13 @@ export function createSourceCoverageReader({ directory } = {}) {
       }
     }
   });
+}
+
+export function createSourceCoverageReader(options) {
+  return createReader(options, REAL_FILESYSTEM);
+}
+
+// Test seam: production always binds the real filesystem above.
+export function createSourceCoverageReaderWithFilesystemForTest(options, filesystem) {
+  return createReader(options, filesystem);
 }
