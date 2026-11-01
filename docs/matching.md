@@ -124,7 +124,7 @@ No active ledger or real key is initialized by this change. The operator must:
 1. Verify the recorded human authorization in
    [`jev-evaluation-budget`](https://github.com/colophon-group/justup/issues/49) and complete
    the queue/API/model identity and logging review in the
-   [operations guide](demo-operations.md).
+   [operations guide](operations.md).
    Confirm actual account input pricing, free output and the supported per-request
    input maximum privately. Do not publish account balances or key values.
 2. Create a dedicated queue-owned mode-0700 directory outside the preview database
