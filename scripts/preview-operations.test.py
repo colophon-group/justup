@@ -347,7 +347,7 @@ class ArtifactContracts(unittest.TestCase):
 
 class OperatorUpgradeContracts(unittest.TestCase):
     @contextmanager
-    def installation(self):
+    def installation(self, *, add_feed=False):
         with tempfile.TemporaryDirectory() as temp, ExitStack() as patches:
             root = Path(temp).resolve()
             old_source, new_source, base, units, proc = [root / name for name in ('old', 'new', 'mount', 'units', 'proc')]
@@ -357,17 +357,22 @@ class OperatorUpgradeContracts(unittest.TestCase):
                 if not path.name.endswith('.test.py'):
                     shutil.copyfile(path, old_source / 'scripts' / path.name)
             shutil.copytree(old_source, new_source)
-            artifact_source = new_source / 'scripts/preview-artifact.py'
-            artifact_source.write_text(artifact_source.read_text() + '\n# fixture revised operator bytes\n')
+            if not add_feed:
+                artifact_source = new_source / 'scripts/preview-artifact.py'
+                artifact_source.write_text(artifact_source.read_text() + '\n# fixture revised operator bytes\n')
             base.mkdir()
             units.mkdir()
             proc.mkdir()
             ops = base / 'ops'
             ops.mkdir()
             for path in (old_source / 'scripts').iterdir():
+                if add_feed and path.name == 'preview-feed.py':
+                    continue
                 shutil.copyfile(path, ops / path.name)
                 (ops / path.name).chmod(0o555)
             for name in host.UNITS:
+                if add_feed and name in host.FEED_UNITS:
+                    continue
                 shutil.copyfile(old_source / 'deploy/justup-preview' / name, units / name)
             # Synthetic state is outside the update's only writable destinations.
             state = {}
@@ -387,6 +392,12 @@ class OperatorUpgradeContracts(unittest.TestCase):
             for key, value in [('BASE', base), ('IMAGE', image), ('UNIT_ROOT', units), ('PROC_ROOT', proc), ('OPERATOR_UID', os.getuid())]:
                 patches.enter_context(patch.object(host, key, value))
             old_plan = host.plan(old_source, 'a' * 64)
+            if add_feed:
+                for name in host.FEED_ADDITIONS:
+                    old_plan['files'].pop(name)
+                body = {key: value for key, value in old_plan.items() if key != 'planSha256'}
+                old_plan['planSha256'] = hashlib.sha256(json.dumps(body, sort_keys=True,
+                                              separators=(',', ':')).encode()).hexdigest()
             new_plan = host.plan(new_source, 'a' * 64)
             previous = root / 'previous-plan.json'
             previous.write_text(json.dumps(old_plan))
@@ -550,6 +561,93 @@ class OperatorUpgradeContracts(unittest.TestCase):
                     self.upgrade(fixture)
             self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
             self.assertEqual(host.digest(fixture.base / 'ops/preview-artifact.py'), fixture.before['files']['scripts/preview-artifact.py'])
+            self.assert_private_state_unchanged(fixture)
+
+    def test_feed_upgrade_publishes_only_after_exact_unit_and_probe_proof(self):
+        with self.installation(add_feed=True) as fixture:
+            def prove():
+                self.assertFalse(fixture.marker.exists())
+                self.assertEqual(host.digest(fixture.base / 'ops/preview-feed.py'),
+                                 fixture.after['files']['scripts/preview-feed.py'])
+                for name in host.FEED_UNITS:
+                    self.assertEqual(host.digest(fixture.units / name),
+                                     fixture.after['files'][f'deploy/justup-preview/{name}'])
+            with patch.object(host, 'qualify_feed_units', side_effect=prove) as proof:
+                result = host.upgrade_feed(fixture.new, fixture.previous,
+                                           fixture.before['planSha256'], fixture.after['planSha256'], 'a' * 64)
+            proof.assert_called_once_with()
+            self.assertTrue(result['feedUnitsInstalled'])
+            self.assertFalse(result['activated'])
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.after['planSha256'])
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+            self.assert_private_state_unchanged(fixture)
+
+    def test_feed_addition_cannot_enter_scripts_only_upgrade_or_replace_an_existing_unit(self):
+        with self.installation(add_feed=True) as fixture:
+            with self.assertRaisesRegex(ValueError, 'inventory paths'):
+                self.upgrade(fixture)
+            target = fixture.units / host.FEED_UNITS[0]
+            target.write_text('unreviewed existing unit')
+            with self.assertRaisesRegex(ValueError, 'already exists'):
+                host.upgrade_feed(fixture.new, fixture.previous,
+                                  fixture.before['planSha256'], fixture.after['planSha256'], 'a' * 64)
+            self.assertEqual(target.read_text(), 'unreviewed existing unit')
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+
+    def test_feed_upgrade_rejects_any_other_inventory_or_unit_change(self):
+        for changed in ('old-script', 'old-unit', 'extra-file', 'resource'):
+            with self.subTest(changed=changed), self.installation(add_feed=True) as fixture:
+                installed_sha = json.loads(fixture.marker.read_text())['planSha256']
+                if changed == 'old-script':
+                    target = fixture.new / 'scripts/preview-artifact.py'
+                    target.write_text(target.read_text() + '\n# unrelated update\n')
+                elif changed == 'old-unit':
+                    target = fixture.new / 'deploy/justup-preview/justup-preview-api.service'
+                    target.write_text(target.read_text() + '\n# unrelated update\n')
+                elif changed == 'extra-file':
+                    (fixture.new / 'scripts/preview-extra.py').write_text('unrelated script\n')
+                else:
+                    # A legitimate plan hash with a changed allocation must
+                    # still fail the explicit feed-only transition.
+                    fixture.before['imageBytes'] += 1
+                    body = {key: value for key, value in fixture.before.items() if key != 'planSha256'}
+                    fixture.before['planSha256'] = hashlib.sha256(json.dumps(body, sort_keys=True,
+                                                       separators=(',', ':')).encode()).hexdigest()
+                    fixture.previous.write_text(json.dumps(fixture.before))
+                current = host.plan(fixture.new, 'a' * 64)
+                with self.assertRaises(ValueError):
+                    host.upgrade_feed(fixture.new, fixture.previous, fixture.before['planSha256'],
+                                      current['planSha256'], 'a' * 64)
+                self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], installed_sha)
+                self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+                self.assert_private_state_unchanged(fixture)
+
+    def test_feed_probe_failure_rolls_back_exact_units_and_old_receipt(self):
+        with self.installation(add_feed=True) as fixture:
+            with patch.object(host, 'qualify_feed_units', side_effect=ValueError('synthetic probe failed')):
+                with self.assertRaisesRegex(ValueError, 'synthetic probe failed'):
+                    host.upgrade_feed(fixture.new, fixture.previous,
+                                      fixture.before['planSha256'], fixture.after['planSha256'], 'a' * 64)
+            self.assertEqual(json.loads(fixture.marker.read_text())['planSha256'], fixture.before['planSha256'])
+            self.assertFalse((fixture.base / 'ops/preview-feed.py').exists())
+            self.assertFalse(any((fixture.units / name).exists() for name in host.FEED_UNITS))
+            self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
+            self.assert_private_state_unchanged(fixture)
+
+    def test_feed_crash_after_unit_install_leaves_pending_receipt_withdrawn(self):
+        class Crash(BaseException):
+            pass
+        with self.installation(add_feed=True) as fixture:
+            with patch.object(host, 'qualify_feed_units', side_effect=Crash()):
+                with self.assertRaises(Crash):
+                    host.upgrade_feed(fixture.new, fixture.previous,
+                                      fixture.before['planSha256'], fixture.after['planSha256'], 'a' * 64)
+            self.assertFalse(fixture.marker.exists())
+            self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
+            self.assertTrue(all((fixture.units / name).exists() for name in host.FEED_UNITS))
+            with self.assertRaisesRegex(ValueError, 'adoption is blocked'):
+                artifact.read_host_plan(fixture.base)
             self.assert_private_state_unchanged(fixture)
 
 
