@@ -95,3 +95,10 @@ test('cleanup uncertainty keeps this runner unavailable when persisting the halt
   await assert.rejects(runner.runOnce(),/Storage unavailable/);
   assert.equal(halts,1);assert.equal(runner.ready(),false);assert.equal(await runner.runOnce(),false);assert.equal(q.claims,1);
 });
+test('cleanup halt callback observes the durable guard before publishing readiness',async t=>{
+  const db=new DatabaseSync(':memory:');t.after(()=>db.close());const tasks=createTasks({db,now:()=>1000});let publishedReady;
+  tasks.enqueue({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'week',payload:{}});
+  const runner=createRunner({tasks,onHalt:()=>{publishedReady=!tasks.halted();},handlers:{hiring_wire:()=>{throw Object.assign(Error('Unproven cleanup.'),{code:'cleanup_unproven'});}}});
+  t.after(()=>runner.stop());await runner.runOnce();
+  assert.equal(tasks.halted(),true);assert.equal(runner.ready(),false);assert.equal(publishedReady,false);
+});

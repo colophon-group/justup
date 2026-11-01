@@ -39,8 +39,8 @@ export function createRunner({tasks,handlers,workerId=`runner-${randomUUID()}`,l
             // Keep this process closed even if the durable guard write fails.
             // The private task identity, rather than a live lease, seals it.
             cleanupHalted=true;
-            try{onHalt();}catch{}
-            if(!tasks.haltWire?.(task.id,task.leaseToken))throw error;
+            try{if(!tasks.haltWire?.(task.id,task.leaseToken))throw error;}
+            finally{try{onHalt();}catch{}}
             // Retain ownership while this process is alive. The durable guard
             // also prevents recovery after restart, independently of lease TTL.
             haltHeartbeat=heartbeat;heartbeat=null;
