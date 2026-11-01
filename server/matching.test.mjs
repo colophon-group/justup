@@ -254,3 +254,9 @@ test('fake 5/12/24 candidate matrix measures scan progress and buffer starvation
   assert.deepEqual(report.map((r) => [r.providerCalls, r.workCycles, r.emptyAfterWork]), [[24, 6, 5], [10, 3, 2], [5, 2, 1]]);
   t.diagnostic(`Fake deterministic scan measurements: ${JSON.stringify(report)}; no real-provider quality, latency or cost measured.`);
 });
+
+test('matching accepts the numeric session deadline returned by authentication and rejects expiry', (t) => {
+  const s = setup(t);
+  assert.doesNotThrow(()=>s.page({viewer:{...viewer,expiresAt:START+1000}}));
+  assert.throws(()=>s.page({viewer:{...viewer,expiresAt:START}}),{code:'unauthenticated'});
+});

@@ -1,5 +1,5 @@
-// Compose the isolated demo API. Direct execution requires explicit demo storage
-// and build configuration; import createDemo to add reviewed feature services.
+// Compose the Justup API. Direct execution requires explicit isolated storage
+// and build configuration; import createApplication to add reviewed feature services.
 import { createServer } from 'node:http';
 import { mkdirSync, chmodSync, readFileSync, statSync, lstatSync, readdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, unlinkSync, accessSync, fstatSync, realpathSync, constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -9,6 +9,7 @@ import { openStore } from './store.mjs';
 import { createFeed } from './feed.mjs';
 import { createTasks } from './tasks.mjs';
 import { createHandler } from './http.mjs';
+import { runtimeEnv, booleanEnv, integerEnv } from './config.mjs';
 
 // Hold a durable pending marker across the SQL transaction. Backup/restore must
 // reject any pending marker, including one retained after a process crash.
@@ -78,7 +79,7 @@ export function createDeletionBarrier({ generationPath, backupDir, dbPath, db } 
   return { ready: () => { try { validate(); absentPending(); return !ownedMarker; } catch { return false; } },
     beforePrivateDelete, afterPrivateTransaction };
 }
-export async function createDemo({ config = {}, now = Date.now, serviceFactories = [], authFactory, logger } = {}) {
+export async function createApplication({ config = {}, now = Date.now, serviceFactories = [], authFactory, logger } = {}) {
   const path = config.dbPath ?? ':memory:';
   if (path !== ':memory:' && !config.sharedState) mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
   const store = openStore(path, { sharedState: config.sharedState === true });
@@ -127,15 +128,15 @@ export async function createDemo({ config = {}, now = Date.now, serviceFactories
   } catch (error) { store.close(); throw error; }
 }
 // The executable has one reviewed adapter, never an environment-selected module.
-export async function createConfiguredDemo({ config = {}, ...options } = {}) {
-  if (!config.servicesEnabled) return createDemo({ ...options, config });
+export async function createConfiguredApplication({ config = {}, ...options } = {}) {
+  if (!config.servicesEnabled) return createApplication({ ...options, config });
   const configured = { ...config, runnerStatusPath: config.runnerStatusPath ?? resolve(dirname(config.dbPath), 'runner-status.json') };
-  const { createApiServices, createApiReadiness } = await import('./demo-composition.mjs');
-  return createDemo({ ...options, config: { ...configured, readiness: createApiReadiness({ config: configured, now: options.now ?? Date.now }) },
+  const { createApiServices, createApiReadiness } = await import('./composition.mjs');
+  return createApplication({ ...options, config: { ...configured, readiness: createApiReadiness({ config: configured, now: options.now ?? Date.now }) },
     serviceFactories: [createApiServices] });
 }
 export async function prepareRestoredDatabase({ dbPath, authFactory } = {}) {
-  if (typeof dbPath !== 'string' || dbPath === ':memory:' || !lstatSync(dbPath).isFile() || lstatSync(dbPath).isSymbolicLink()) throw new Error('Use an existing restored demo database file.');
+  if (typeof dbPath !== 'string' || dbPath === ':memory:' || !lstatSync(dbPath).isFile() || lstatSync(dbPath).isSymbolicLink()) throw new Error('Use an existing restored application database file.');
   const store = openStore(dbPath);
   try {
     const createAuth = authFactory ?? (await import('./auth.mjs')).createAuth;
@@ -150,41 +151,44 @@ export async function prepareRestoredDatabase({ dbPath, authFactory } = {}) {
   } finally { store.close(); }
 }
 export function readImportFile(path) {
-  if (statSync(path).size > 64 * 1024 * 1024) throw new Error('Demo import exceeds the 64 MiB limit.');
+  if (statSync(path).size > 64 * 1024 * 1024) throw new Error('Job import exceeds the 64 MiB limit.');
   try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path))); }
-  catch { throw new Error('Invalid demo import file.'); }
+  catch { throw new Error('Invalid job import file.'); }
 }
 export function configFromEnv(env = process.env) {
   return {
-    servicesEnabled: env.JUSTUP_DEMO_SERVICES_ENABLED === 'true', runnerStatusPath: env.JUSTUP_DEMO_RUNNER_STATUS_PATH,
-    dbPath: env.JUSTUP_DEMO_DB_PATH, sharedState: env.JUSTUP_DEMO_SHARED_STATE === 'true', allowedOrigin: env.JUSTUP_DEMO_ORIGIN,
-    allowInsecureLocalhost: env.JUSTUP_DEMO_ALLOW_LOCAL_HTTP === 'true',
-    inviteCode: env.JUSTUP_DEMO_INVITE_CODE, privacyUrl: env.JUSTUP_DEMO_PRIVACY_URL,
-    usageUrl: env.JUSTUP_DEMO_USAGE_URL, policyVersion: env.JUSTUP_DEMO_POLICY_VERSION,
-    policiesReviewed: env.JUSTUP_DEMO_POLICIES_REVIEWED === 'true',
-    sourceCommit: env.JUSTUP_DEMO_SOURCE_COMMIT, buildIdentity: env.JUSTUP_DEMO_BUILD_ID,
-    csrfSecret: env.JUSTUP_DEMO_CSRF_SECRET, cursorSecret: env.JUSTUP_DEMO_CURSOR_SECRET,
-    privateGenerationPath: env.JUSTUP_DEMO_PRIVATE_GENERATION_PATH, backupDir: env.JUSTUP_DEMO_BACKUP_DIR,
+    servicesEnabled: booleanEnv(env, 'SERVICES_ENABLED'), runnerStatusPath: runtimeEnv(env, 'RUNNER_STATUS_PATH'),
+    dbPath: runtimeEnv(env, 'DB_PATH'), sharedState: booleanEnv(env, 'SHARED_STATE'), allowedOrigin: runtimeEnv(env, 'ORIGIN'),
+    allowInsecureLocalhost: booleanEnv(env, 'ALLOW_LOCAL_HTTP'),
+    requiresInvitation: booleanEnv(env, 'REQUIRES_INVITATION', true), inviteCode: runtimeEnv(env, 'INVITE_CODE'),
+    maxAccounts: integerEnv(env, 'MAX_ACCOUNTS', { nullable: true }),
+    sessionTtlMs: integerEnv(env, 'SESSION_TTL_MS'), accountTtlMs: integerEnv(env, 'ACCOUNT_TTL_MS', { nullable: true }),
+    accountExpiresAt: integerEnv(env, 'ACCOUNT_EXPIRES_AT', { nullable: true }),
+    privacyUrl: runtimeEnv(env, 'PRIVACY_URL'), usageUrl: runtimeEnv(env, 'USAGE_URL'), policyVersion: runtimeEnv(env, 'POLICY_VERSION'),
+    policiesReviewed: booleanEnv(env, 'POLICIES_REVIEWED'),
+    sourceCommit: runtimeEnv(env, 'SOURCE_COMMIT'), buildIdentity: runtimeEnv(env, 'BUILD_ID'),
+    csrfSecret: runtimeEnv(env, 'CSRF_SECRET'), cursorSecret: runtimeEnv(env, 'CURSOR_SECRET'),
+    privateGenerationPath: runtimeEnv(env, 'PRIVATE_GENERATION_PATH'), backupDir: runtimeEnv(env, 'BACKUP_DIR'),
   };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const config = configFromEnv();
   process.umask(config.sharedState ? 0o007 : 0o077);
   const args = process.argv.slice(2);
-  if (!config.dbPath || (!config.allowedOrigin && args.length === 0)) throw new Error('Set explicit JUSTUP_DEMO_DB_PATH and JUSTUP_DEMO_ORIGIN.');
+  if (!config.dbPath || (!config.allowedOrigin && args.length === 0)) throw new Error('Set explicit JUSTUP_DB_PATH and JUSTUP_ORIGIN.');
   if (args[0] === '--prepare-restored-db' && args.length === 2) {
     const restored = resolve(args[1]);
-    if (restored === resolve(config.dbPath) || !lstatSync(restored).isFile() || lstatSync(restored).isSymbolicLink()) throw new Error('Use a separate restored demo database file.');
+    if (restored === resolve(config.dbPath) || !lstatSync(restored).isFile() || lstatSync(restored).isSymbolicLink()) throw new Error('Use a separate restored application database file.');
     console.log(JSON.stringify(await prepareRestoredDatabase({ dbPath: restored })));
   } else if (args[0] === '--import' && args.length === 2) {
     const store = openStore(config.dbPath, { sharedState: config.sharedState });
     try { console.log(JSON.stringify(store.importSnapshot(readImportFile(args[1])))); }
     finally { store.close(); }
   } else if (args.length === 0) {
-    const demo = await createConfiguredDemo({ config, logger: (event) => console.log(JSON.stringify(event)) });
-    const port = Number(process.env.JUSTUP_DEMO_PORT ?? 8787);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid demo port.');
-    demo.server.listen(port, '127.0.0.1');
-    for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { demo.close().then(() => process.exit(0)); });
+    const application = await createConfiguredApplication({ config, logger: (event) => console.log(JSON.stringify(event)) });
+    const port = Number(runtimeEnv(process.env, 'PORT') ?? 8787);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid application port.');
+    application.server.listen(port, '127.0.0.1');
+    for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { application.close().then(() => process.exit(0)); });
   } else throw new Error('Usage: node server/main.mjs [--import /private/snapshot.json | --prepare-restored-db /private/restored.sqlite]');
 }
