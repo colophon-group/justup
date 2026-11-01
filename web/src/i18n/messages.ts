@@ -1376,12 +1376,6 @@ export const messages = {
     "Lingua del browser",
     "Idioma del navegador"
   ],
-  "Interface: {language}": [
-    "Oberfläche: {language}",
-    "Interface : {language}",
-    "Interfaccia: {language}",
-    "Interfaz: {language}"
-  ],
   "CONNECTING": [
     "VERBINDEN",
     "CONNEXION",
