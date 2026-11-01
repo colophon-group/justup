@@ -55,7 +55,7 @@ async function setup(t,{model,companyModel,provider,residual=false,visitor:visit
 
 test('visitor submits, edits and retries its own search with filtered exact hidden count',async t=>{
   const s=await setup(t),a=s.client(),b=s.client();const session=await a.session();await b.session();
-  assert.equal(session.body.user,null);assert.equal(session.body.access.fullAccess,false);assert.equal(session.body.capabilities.visitorSearch,true);assert.equal(session.body.visitor,null);assert.equal(a.jar.has('__Host-justup_visitor'),false);
+  assert.equal(session.body.user,null);assert.equal(session.body.access.fullAccess,false);assert.equal(session.body.capabilities.visitorSearch,true);assert.equal(session.body.visitor,null);assert.match(a.jar.get('__Host-justup_visitor'),/^[A-Za-z0-9_-]{43}$/);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
   const id=await s.create(a),current=await a.session(),token=a.jar.get('__Host-justup_visitor');assert(token);assert(!JSON.stringify(current.body).includes(token));assert.deepEqual(Object.keys(current.body.visitor),['expiresAt']);
   const page=await s.results(a,id);assert.deepEqual(page.body.items.map(j=>j.id),['visible-accepted','visible-rejected']);assert.deepEqual(page.body.hiddenMatches,{status:'exact',count:2});
   assert.equal(JSON.stringify(page.body).includes('hidden-'),false);assert.equal(page.res.headers.get('x-robots-tag'),'noindex');
@@ -192,12 +192,80 @@ test('a full recovery stash rejects the whole handoff and preserves both owners 
 
 test('discarding more than the durable visitor cap worth of session cookies allocates nothing and a protected first search still works',async t=>{
   const s=await setup(t,{runtime:{rateLimits:{read:1000}}});
-  for(let i=0;i<205;i++){const read=await s.client().session();assert.equal(read.status,200);assert.equal(read.body.visitor,null);assert.equal(read.res.headers.getSetCookie().some(c=>c.startsWith('__Host-justup_visitor=')),false);}
+  for(let i=0;i<205;i++){const read=await s.client().session();assert.equal(read.status,200);assert.equal(read.body.visitor,null);assert.equal(read.res.headers.getSetCookie().some(c=>c.startsWith('__Host-justup_visitor=')),true);}
   assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
   const c=s.client();await c.session();
   for(const [headers,body] of [[{Origin:'https://elsewhere.example'},{query:'Engineer',requestKey:'invalid'}],[{'X-CSRF-Token':'x'.repeat(43)},{query:'Engineer',requestKey:'invalid'}],[{},{query:'',requestKey:'invalid'}]]){assert.notEqual((await c.request('/visitor/searches',{method:'POST',body,headers})).status,202);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);}
   const created=await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'first'}});assert.equal(created.status,202);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);
   const cookie=created.res.headers.getSetCookie().find(c=>c.startsWith('__Host-justup_visitor='));for(const flag of ['HttpOnly','Secure','SameSite=Lax','Path=/'])assert(cookie.includes(flag));
+});
+
+test('losing the entire first search response reuses the prior stateless ownership cookie and one owner, search, task and inference',async t=>{
+  const s=await setup(t),c=s.client(),session=await c.session();assert.equal(session.body.visitor,null);
+  const previous=c.snapshot(),pendingCookie=c.jar.get('__Host-justup_visitor');assert(pendingCookie);assert.equal(JSON.stringify(session.body).includes(pendingCookie),false);
+  const body={query:'Engineer',requestKey:'lost-first-response'},first=await c.request('/visitor/searches',{method:'POST',body});assert.equal(first.status,202);
+  // Both headers and body disappeared: only cookies/CSRF established before the
+  // POST survive. Repeated retries must not require its Set-Cookie response.
+  for(let i=0;i<3;i++){c.restore(previous);const retry=await c.request('/visitor/searches',{method:'POST',body});assert.equal(retry.status,202);assert.equal(retry.body.search.id,first.body.search.id);assert.equal(retry.body.task.id,first.body.task.id);assert.equal(c.jar.get('__Host-justup_visitor'),pendingCookie);}
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_searches').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,1);
+  await s.work('search_intent');c.restore(previous);const done=await c.request('/visitor/searches',{method:'POST',body});assert.equal(done.body.search.id,first.body.search.id);assert.equal(done.body.task.id,first.body.task.id);assert.equal(done.body.task.status,'succeeded');assert.equal(s.modelCalls(),1);
+  // A valid-format attacker-chosen cookie has no authority to choose a stored
+  // principal. New ownership is derived from its own prior CSRF cookie instead.
+  const other=s.client();await other.session();other.jar.set('__Host-justup_visitor','x'.repeat(43));const created=await other.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'chosen-token'}});assert.equal(created.status,202);assert.notEqual(other.jar.get('__Host-justup_visitor'),'x'.repeat(43));assert.notEqual(created.body.search.id,first.body.search.id);
+  // A spent sign-in receipt cannot be reused as a new owner. A fresh session
+  // supplies a new stateless binding without changing the transferred data.
+  await c.login('one');c.restore(previous);assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'spent'}})).status,401);
+  assert.equal((await c.session()).body.visitor,null);assert.notEqual(c.jar.get('__Host-justup_visitor'),pendingCookie);assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'fresh-after-spent'}})).status,202);
+});
+
+test('deleting the last search reclaims an empty visitor so discarded cookies cannot fill the retained-principal cap',async t=>{
+  const s=await setup(t,{visitor:{maxVisitors:2}}),c=s.client();
+  for(let i=0;i<2;i++){
+    await c.session();const created=await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:`cycle-${i}`}});assert.equal(created.status,202);
+    if(i)await s.work('search_intent');
+    assert.equal((await c.request(`/visitor/searches/${created.body.search.id}`,{method:'DELETE',body:{}})).status,200);
+    for(const table of ['justup_visitors','demo_tasks','demo_searches'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+    c.jar.delete('__Host-justup_visitor');
+  }
+  await c.session();assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'third-owner'}})).status,202);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);
+});
+
+test('last-search deletion preserves every nonempty draft, recovered record, viewed record and other owned work',async t=>{
+  for(const kind of ['draft','recovery','viewed','other-task','other-table'])await t.test(kind,async t=>{
+    const s=await setup(t,{visitor:{maxVisitors:2}}),c=s.client();await c.session();const id=await s.create(c),db=s.app.store.db,owner=db.prepare('SELECT owner_id FROM demo_searches WHERE id=?').get(id).owner_id;
+    if(kind==='draft')assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{new:'Keep this unsent draft'}}})).status,200);
+    if(kind==='recovery')db.prepare('INSERT INTO justup_recovered_drafts VALUES(?,?,?,?)').run('retained',owner,'Keep this recovered draft',START);
+    if(kind==='viewed')assert.equal((await c.request('/visitor/viewed',{method:'POST',body:{jobId:'visible-accepted'}})).status,200);
+    const otherTask=kind==='other-task'?s.app.tasks.enqueue({ownerId:owner,kind:'company_resolution',requestKey:'other-work',payload:{requestId:'retained'}}):null;
+    if(kind==='other-table'){db.exec('CREATE TABLE other_owned_state(account_id TEXT NOT NULL,amount INTEGER NOT NULL)');db.prepare('INSERT INTO other_owned_state VALUES(?,123)').run(owner);}
+    assert.equal((await c.request(`/visitor/searches/${id}`,{method:'DELETE',body:{}})).status,200);assert(s.identity.principal(owner));
+    const workspace=(await c.request('/visitor/workspace')).body;
+    if(kind==='draft')assert.equal(workspace.state.drafts.new,'Keep this unsent draft');
+    if(kind==='recovery')assert.equal(workspace.recoveredDrafts[0].text,'Keep this recovered draft');
+    if(kind==='viewed')assert.equal(workspace.viewed[0].jobId,'visible-accepted');
+    if(otherTask)assert.equal(s.app.tasks.get(owner,otherTask.id).status,'pending');
+    if(kind==='other-table')assert.equal(db.prepare('SELECT amount FROM other_owned_state WHERE account_id=?').get(owner).amount,123);
+  });
+});
+
+test('a draft saved while last-search deletion awaits completion prevents empty-owner reclamation',async t=>{
+  const s=await setup(t,{visitor:{maxVisitors:2}}),c=s.client();await c.session();const id=await s.create(c),owner=s.app.store.db.prepare('SELECT owner_id FROM demo_searches WHERE id=?').get(id).owner_id;
+  const original=s.intent.route;let release,deleted;const afterDelete=new Promise(resolve=>deleted=resolve),hold=new Promise(resolve=>release=resolve);
+  s.intent.route=async ctx=>{const result=await original(ctx);if(ctx.method==='DELETE'){deleted();await hold;}return result;};
+  const removing=c.request(`/visitor/searches/${id}`,{method:'DELETE',body:{}});await afterDelete;
+  assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'A concurrent draft'}}})).status,200);release();assert.equal((await removing).status,200);
+  assert(s.identity.principal(owner));assert.equal((await c.request('/visitor/workspace')).body.state.drafts.new,'A concurrent draft');
+});
+
+test('empty-owner reclamation respects a newly pending deletion barrier and never clears the foreign marker',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'justup-visitor-empty-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),generationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(generationPath,'00000000-0000-4000-8000-000000000000\n');
+  const s=await setup(t,{runtime:{dbPath:join(dir,'state.sqlite'),privateGenerationPath:generationPath,backupDir}}),c=s.client();await c.session();const id=await s.create(c),owner=s.app.store.db.prepare('SELECT owner_id FROM demo_searches WHERE id=?').get(id).owner_id;
+  const original=s.intent.route;let release,deleted;const afterDelete=new Promise(resolve=>deleted=resolve),hold=new Promise(resolve=>release=resolve);
+  s.intent.route=async ctx=>{const result=await original(ctx);if(ctx.method==='DELETE'){deleted();await hold;}return result;};
+  const removing=c.request(`/visitor/searches/${id}`,{method:'DELETE',body:{}});await afterDelete;writeFileSync(generationPath+'.pending','foreign retained marker');release();assert.equal((await removing).status,500);
+  assert(s.identity.principal(owner,{allowUnavailable:true}));assert.equal(visitorPrivateGeneration(s.config),null);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);
+  unlinkSync(generationPath+'.pending');assert.equal((await c.request('/visitor/session',{method:'DELETE',body:{}})).status,200);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
 });
 
 test('current policy closure revokes existing visitor reads, query writes and queued interpretation/classification while cleanup stays available',async t=>{
