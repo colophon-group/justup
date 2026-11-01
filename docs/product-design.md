@@ -211,7 +211,7 @@ Say when a listing was checked. Do not promise that an external vacancy is guara
 
 ### Company browser and visible coverage
 
-Provide a small, searchable catalogue of discovered companies. Omit company locations from profiles, catalogue rows and discovery confirmations: this metadata is unavailable. Job locations remain visible, and globe highlights describe hiring locations rather than company headquarters. Show company name, brand assets, a concise description, website, and relevant available metadata. Keep coverage visible alongside that identity: monitored career-page links and regions, monitoring status, last successful check when available, without position totals. JEV may still be evaluating candidates, so a total would imply knowledge we do not have. Publish a requested company as soon as the requester accepts the discovery result; crawler setup must not hold up that publication. A company remains in the catalogue when it has no fresh positions; the catalogue does not expose archived postings.
+Provide a small, searchable catalogue of discovered companies. Omit company locations from profiles, catalogue rows and discovery confirmations: this metadata is unavailable. Job locations remain visible. Show company name, brand assets, a concise description, website, and relevant available metadata. Keep coverage visible alongside that identity: monitored career-page links and regions, monitoring status, last successful check when available, without position totals. JEV may still be evaluating candidates, so a total would imply knowledge we do not have. Publish a requested company as soon as the requester accepts the discovery result; crawler setup must not hold up that publication. A company remains in the catalogue when it has no fresh positions; the catalogue does not expose archived postings.
 
 Use clear statuses such as “Monitoring setup pending,” “Setting up monitoring,” “Monitoring,” and “Collection interrupted.” When only some regions or career pages are covered, show that scope. Until collection has been verified, show that positions are not available yet rather than claiming zero vacancies. A successful check with no fresh positions is different from an interrupted collection or a company we do not yet monitor. The catalogue overview shows the actively monitored count, without totals for companies being added or needing attention. Report catalogued and actively monitored company counts separately; pending requests without discovered identities do not inflate either count.
 
@@ -219,15 +219,13 @@ Users can open a company's eligible positions in the existing search workspace. 
 
 Company search and job-search empty states should provide a “Request a company” action when coverage is missing. A search yielding no matches must not imply the company has no vacancies when we do not monitor it or collection is interrupted. The directory and coverage status are public, including for visitors whose latest job results are hidden.
 
-### Company profiles and hiring footprint
+### Company profiles and source evidence
 
-Company profiles link to the main search for their positions; do not repeat a “Latest from…” job list inside the profile. A stylized interactive globe provides visual character with the brand palette, without a legend or explanatory note. Use plain product language such as “Being added” and “First seen on Justup”; implementation terms such as backend, crawler and configuration belong in technical documentation. This does not change technical terms in actual job titles or the user’s own search text.
+Company profiles link to the main search for their positions; do not repeat a “Latest from…” job list inside the profile. Use plain product language such as “Being added” and “First seen on Justup”; implementation terms such as backend, crawler and configuration belong in technical documentation. This does not change technical terms in actual job titles or the user’s own search text.
 
 Keep company-profile source information compact beneath the company name: last check and a link to each tracked career page. Do not show a status table, scope table, or repeated position counts in that area. Companies with no career pages added yet show “Not checked yet” without invented links.
 
-Keep the globe circular, using an orthographic projection in a square rendering area. Do not separate the description with a horizontal rule. Display tracked career-page addresses as the link text; the design must not depend on human-readable board labels being available.
-
-Company globes must support worldwide hiring. Start over each company’s hiring countries, with a neutral orientation for unknown footprints. Scrolling over the sphere rotates it; there is no zoom or automatic spin. Dragging and keyboard arrows offer additional control, with Home restoring the initial orientation. Preserve normal page scrolling outside the sphere and vertical touch scrolling. Unknown hiring footprints remain neutral until evidence is available.
+Display tracked career-page addresses as the link text; the design must not depend on human-readable board labels being available.
 
 ### Followed companies
 
@@ -342,7 +340,7 @@ The strip moves continuously at a calm, constant speed in a fixed-height area. N
 
 The free period begins when a verified account activates full search access, with no payment card required. Show the end date clearly. Full access ending does not delete tabs or force the user through onboarding again.
 
-Existing Jobseek users receive one calendar month free instead of the ordinary week. Verify eligibility through account ownership, such as the same verified email; do not copy old preferences into the new profile without a choice. Offer an account-recovery path when identities differ. Define eligibility cutoff and prior-redemption handling before launch. Do not start a person's welcome month before they activate the new service.
+Verified former Jobseek account owners receive one calendar month free instead of the ordinary week. Require authoritative proof of that ownership; a matching name or unverified email is insufficient. Do not copy old preferences into the new profile without a choice. Offer an account-recovery path when identities differ and define the eligibility cutoff before launch. Erase all free-period redemption evidence when an account is deleted; a person who verifies again may qualify again. Do not start a person's welcome month before they activate the new service.
 
 ### Paid access
 

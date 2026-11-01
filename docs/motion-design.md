@@ -101,10 +101,6 @@ The company catalogue uses the same individual-row cadence and viewport gate as 
 
 For clickable rows, the surface highlight, arrow motion and focus outline provide interaction feedback. Do not additionally underline row logos, titles or arrows on hover. Keep ordinary standalone text links identifiable.
 
-## Company globe
-
-The globe responds directly to wheel, drag and keyboard input, without a reveal sequence, automatic spin or inertial tail. Scrolling over the sphere rotates longitude; its scale remains fixed. Wheel input outside the sphere scrolls the page normally. Horizontal touch dragging rotates while vertical touch gestures scroll the page. Arrow keys rotate and Home restores the initial view. Rendering uses a single animation-frame update per frame, with no movement while idle.
-
 The first-search screen has no result reveal or live insertion until submission. Deleting the last search invalidates queued or pending results before showing that screen; a late response must not repopulate it. Example buttons prefill the input without starting a search.
 
 ## Hiring Wire
