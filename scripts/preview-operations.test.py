@@ -186,6 +186,18 @@ class ArtifactContracts(unittest.TestCase):
             with self.subTest(missing=name), self.assertRaisesRegex(ValueError, 'Email verification'):
                 artifact.validate_manifest(partial)
 
+    def test_billing_artifact_graph_cannot_omit_a_fixed_provider_module(self):
+        manifest, _ = payload()
+        manifest['files'].update({name: 'b' * 64 for name in artifact.BILLING_MODULES | artifact.EMAIL_MODULES})
+        manifest['buildIdentity'] = artifact.identity(manifest)
+        artifact.validate_manifest(manifest)
+        for name in artifact.BILLING_MODULES:
+            partial = deepcopy(manifest)
+            del partial['files'][name]
+            partial['buildIdentity'] = artifact.identity(partial)
+            with self.subTest(missing=name), self.assertRaises(ValueError):
+                artifact.validate_manifest(partial)
+
     def test_inventory_accepts_exact_bytes_and_rejects_changed_payload(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'candidate.tar'

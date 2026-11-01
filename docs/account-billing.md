@@ -113,6 +113,8 @@ idempotency key only within a conservative 23-hour window. Passing a checkout
 expiry cannot settle unknown ownership. An unresolved outcome outside that
 window remains operator-reconciliation pending. No hidden deletion outbox or
 redemption tombstone is created.
+The termination operation then reports `billing_operator_reconciliation_required`
+with `retryable:false`; ordinary retry cannot manufacture the missing evidence.
 
 Only fresh termination proof allows the existing atomic local deletion to erase
 all owned billing, ordinary/welcome redemption, identity and private application
