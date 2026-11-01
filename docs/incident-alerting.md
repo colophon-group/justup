@@ -40,6 +40,8 @@ These are proposed starting thresholds, not active rules. Measure the actual pre
 
 Start with one public-route and one non-mutating API check, each from two locations every five minutes. This projects `2 endpoints × 2 locations × 12 runs/hour × 24 hours × 30 days = 34,560` executions per 30-day month. Check the account's *current* allowance and Jobseek usage before enabling them; adjust scope if headroom is insufficient. Any paid overflow requires a separate approved resource request. Grafana's [HTTP check documentation](https://grafana.com/docs/grafana-cloud/observe-and-act/testing/synthetic-monitoring/create-checks/checks/http/) defines frequency, locations and status/body validation. Keep the Justup integration and rules separate from Jobseek's disabled paging route.
 
+After the first two checks are qualified and headroom is confirmed, add a non-mutating `GET /api/v1/jobs` read-path check if needed to separate a functioning health endpoint from a broken customer job list. Do not create synthetic searches that enqueue work or spend model allowance.
+
 ## Mac watcher
 
 `scripts/justup-incident-watch.py` is a one-shot watcher intended for a 120-second LaunchAgent interval. It uses a service account token with only `grafana-irm-app.alert-groups:read`, reads the [IRM alert-group list API](https://grafana.com/docs/grafana-cloud/observe-and-act/respond-to-incidents/reference/oncall-api/alertgroups/) with the exact Justup integration ID and `severity:critical` filter, and accepts only `new` or `acknowledged` groups. It never sends alert titles, payloads, logs or credentials to Codex. It sends one fixed prompt with a validated group ID to a dedicated chat.
