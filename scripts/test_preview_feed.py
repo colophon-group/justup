@@ -1,13 +1,16 @@
 """Bounded local transport, replay and exact-import acknowledgement contracts."""
 from __future__ import annotations
 
+from contextlib import closing
 import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -132,6 +135,75 @@ class ImportSequenceTests(unittest.TestCase):
                                 dict(os.environ), root, 10, demote=lambda: None)
             self.assertEqual(FEED.run_as_api([os.sys.executable, '-c', 'print("{\\\"ok\\\":true}")'],
                                              dict(os.environ), root, 10, demote=lambda: None), {'ok': True})
+
+    def test_child_that_closes_stdout_still_has_a_safe_bounded_deadline(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(FEED.FeedStageError, '^Feed import timed out; the batch remains staged\\.$'):
+                FEED.run_as_api([os.sys.executable, '-c', 'import os,time; os.close(1); time.sleep(30)'],
+                                dict(os.environ), root, 0.1, demote=lambda: None)
+
+    def test_only_the_latest_committed_database_digest_confirms_import(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(FEED, 'BASE', Path(root)):
+            state = Path(root) / 'state'
+            state.mkdir()
+            path = state / 'preview.sqlite'
+            self.assertFalse(FEED.latest_import_matches(SHA))
+            with closing(sqlite3.connect(path)) as database, database:
+                database.execute('CREATE TABLE justup_imports (selection_json TEXT)')
+                database.execute('INSERT INTO justup_imports VALUES (?)', (json.dumps({'feed': {'manifestSha256': SHA}}),))
+            self.assertTrue(FEED.latest_import_matches(SHA))
+            with closing(sqlite3.connect(path)) as database, database:
+                database.execute('INSERT INTO justup_imports VALUES (?)', (json.dumps({'feed': {'manifestSha256': 'b' * 64}}),))
+                self.assertFalse(FEED.latest_import_matches('b' * 64))
+            self.assertFalse(FEED.latest_import_matches(SHA))
+            self.assertTrue(FEED.latest_import_matches('b' * 64))
+            for malformed in ('[]', '{"feed":[]}', 'not-json'):
+                with self.subTest(selection=malformed), closing(sqlite3.connect(path)) as database, database:
+                    database.execute('INSERT INTO justup_imports VALUES (?)', (malformed,))
+                self.assertFalse(FEED.latest_import_matches(SHA))
+            with patch.object(FEED.sqlite3, 'connect', side_effect=sqlite3.OperationalError('Synthetic unavailable database.')):
+                self.assertFalse(FEED.latest_import_matches(SHA))
+
+    def test_partial_receipt_waits_for_durable_latest_and_replays_bound_candidate(self):
+        with tempfile.TemporaryDirectory() as root:
+            inbox = Path(root) / 'inbox'
+            inbox.mkdir(mode=0o700)
+            directory = inbox / f'batch-{BATCH_ID}'
+            directory.mkdir(mode=0o700)
+            manifest = directory / 'manifest.json'
+            receipts = Path(root) / 'receipts'
+            receipts.mkdir(mode=0o700)
+            candidate = directory / 'candidate.json'
+            payload = {'stageVersion': 1, 'candidate': {'selection': {'feed': {
+                'manifestSha256': SHA, 'limit': 500, 'complete': False}}}}
+            owner = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+            original_checked = FEED.checked_file
+            original_sync = FEED.fsync_dir
+
+            def adapter(*_args):
+                candidate.write_text(json.dumps(payload))
+                candidate.chmod(0o600)
+                return {'manifestSha256': SHA, 'importable': False}
+
+            def fail_inbox_sync(path):
+                if path == inbox:
+                    raise OSError('Synthetic directory sync failure.')
+                return original_sync(path)
+
+            args = (directory, manifest, {'complete': False}, SHA, Path(root) / 'release',
+                    {'buildIdentity': SHA}, inbox, 500)
+            with patch.object(FEED, 'RECEIPTS', receipts), \
+                    patch.object(FEED.pwd, 'getpwnam', return_value=owner), \
+                    patch.object(FEED, 'checked_file', side_effect=lambda path, _owner: original_checked(path, owner.pw_uid)), \
+                    patch.object(FEED, 'run_as_api', side_effect=adapter) as child:
+                with patch.object(FEED, 'fsync_dir', side_effect=fail_inbox_sync), self.assertRaises(OSError):
+                    FEED.consume_batch(*args)
+                self.assertIsNone(FEED.root_receipt(BATCH_ID, SHA))
+                self.assertEqual(json.loads((inbox / 'latest.json').read_text()), payload)
+                self.assertEqual(FEED.consume_batch(*args)['status'], 'staged_for_catchup')
+                self.assertEqual(child.call_count, 1)
+                self.assertEqual(FEED.root_receipt(BATCH_ID, SHA), {'schemaVersion': 1, 'manifestSha256': SHA})
+                self.assertEqual((inbox / 'latest.json').stat().st_mode & 0o777, 0o600)
 
     def test_wrong_independent_digest_blocks_import_authorization(self):
         with patch.object(FEED, 'batch_files', return_value=(Path('/safe'), Path('/safe/manifest.json'), {}, SHA)), \

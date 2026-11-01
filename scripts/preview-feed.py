@@ -556,7 +556,10 @@ def run_as_api(argv, environment, cwd, timeout, demote=None):
             output.extend(block)
             if len(output) > 8192:
                 raise FeedStageError('Feed import output exceeded its receipt limit.')
-        code = child.wait(timeout=max(0.1, deadline - time.monotonic()))
+        try:
+            code = child.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as exc:
+            raise FeedStageError('Feed import timed out; the batch remains staged.') from exc
     except BaseException:
         if child.poll() is None:
             try:
@@ -572,7 +575,7 @@ def run_as_api(argv, environment, cwd, timeout, demote=None):
         raise FeedStageError('Feed import did not complete; the batch remains staged.')
     try:
         return json.loads(bytes(output).decode('utf-8'), object_pairs_hook=unique_object)
-    except (UnicodeError, ValueError) as exc:
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise FeedStageError('Feed import returned an invalid receipt.') from exc
 
 
@@ -580,17 +583,20 @@ def latest_import_matches(digest):
     path = BASE / 'state/preview.sqlite'
     if not path.is_file() or path.is_symlink():
         return False
-    database = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+    database = None
     try:
+        database = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
         row = database.execute('SELECT selection_json FROM justup_imports ORDER BY rowid DESC LIMIT 1').fetchone()
         if row is None:
             return False
         selection = json.loads(row[0])
-        return selection.get('feed', {}).get('manifestSha256') == digest
-    except (sqlite3.Error, ValueError, TypeError):
+        feed = selection.get('feed') if isinstance(selection, dict) else None
+        return isinstance(feed, dict) and feed.get('manifestSha256') == digest
+    except (sqlite3.Error, ValueError, TypeError, RecursionError):
         return False
     finally:
-        database.close()
+        if database is not None:
+            database.close()
 
 
 def promote_candidate(candidate, latest):
