@@ -40,8 +40,14 @@ Wire attempt is bounded; queued interactive work must be preferred at admission.
 
 The broker reuses its private auth handling: create a mode-0700 invocation, copy
 only validated subscription `auth.json` into a new home, preserve only validated
-refresh state, and delete the complete invocation in `finally`. Startup scratch
-recovery removes abandoned owned invocations. The transport never reads auth.
+refresh state, and remove the invocation only after native cleanup is proved.
+Broker startup fails closed on any nonempty invocation root, including owned
+`task-*` directories; it never infers idle state or deletes private recovery
+evidence. This startup rule also applies to Luna. Reviewed recovery must stop the
+broker/runner, prove all native descendants gone, handle private refresh state and
+remove retained files within the approved retention boundary before restart.
+Keep these bytes private during review and clean them promptly after proof; do
+not copy them into logs, a worktree or a review artifact. The transport never reads auth.
 Pinned app-server has no `--ignore-user-config` option, so a fresh auth-only home
 and the existing immutable empty working directory are required. No operator
 should copy authentication into another workspace. CLI children receive only

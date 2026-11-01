@@ -194,9 +194,9 @@ export async function fetchCompanyEvidence(url,{signal,resolveAddresses=addresse
 function protectedDirectory(path,{root=false,immutable=false}={}){if(!isAbsolute(path)||realpathSync(path)!==path)throw problem('dependency_unavailable');const s=lstatSync(path);if(!s.isDirectory()||s.uid!==(root?0:process.getuid())||(s.mode&(immutable?0o222:0o077))!==0)throw problem('dependency_unavailable');}
 export function recoverBrokerScratch(invocationRoot){
   protectedDirectory(invocationRoot);
-  const paths=readdirSync(invocationRoot).map(name=>({name,path:join(invocationRoot,name)}));
-  for(const {name,path} of paths){const meta=lstatSync(path);if(!/^task-[A-Za-z0-9]+$/.test(name)||!meta.isDirectory()||meta.isSymbolicLink()||meta.uid!==process.getuid())throw problem('dependency_unavailable');}
-  for(const {path} of paths)rmSync(path,{recursive:true,force:true,maxRetries:1});
+  // Directory ownership and a stopped parent cannot prove native descendants
+  // are gone. Preserve all retained private evidence for reviewed recovery.
+  if(readdirSync(invocationRoot).length)throw problem('dependency_unavailable');
 }
 function subscriptionAuth(bytes){
   if(bytes.length>65_536)throw problem('dependency_unavailable');let auth;try{auth=JSON.parse(bytes);}catch{throw problem('dependency_unavailable');}
