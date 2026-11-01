@@ -31,9 +31,10 @@ IMAGE = Path('/var/lib/justup-preview.disk')
 SLICE = 'justup-preview.slice'
 UNITS = ('justup-preview.slice', 'srv-justup_preview.mount', 'justup-preview-api.service',
          'justup-preview-guard.service', 'justup-preview-guard.timer',
-         'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-runner.service')
+         'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-runner.service',
+         'justup-preview-feed.socket', 'justup-preview-feed@.service')
 STOP_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service',
-              'justup-preview-model.socket', 'justup-preview-model.service')
+              'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-feed.socket')
 ROOT_FLOOR = 8 * GIB
 DISK_LIMIT = 2 * GIB
 USER = 'justup-preview-api'

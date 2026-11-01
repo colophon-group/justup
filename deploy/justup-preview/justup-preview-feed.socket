@@ -1,0 +1,16 @@
+# The SSH identity may connect only to this stream; parsing runs in the slice.
+[Unit]
+Description=Justup private job feed intake
+Requires=srv-justup_preview.mount
+After=srv-justup_preview.mount
+
+[Socket]
+ListenStream=/run/justup-preview-feed.sock
+SocketUser=justup-deploy
+SocketMode=0600
+Accept=yes
+MaxConnections=1
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
