@@ -874,7 +874,8 @@ class BoundaryContracts(unittest.TestCase):
         config = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
                   'runnerStatusPath': '/srv/justup_preview/state/runner-status.json',
                   'jev': {'enabled': True, 'cumulativeBudget': {'path': str(queue.LEDGER_PATH),
-                           'excludedDirectories': ['/srv/justup_preview/state', '/srv/justup_preview/state/backups']}}}
+                           'excludedDirectories': ['/srv/justup_preview/state', '/srv/justup_preview/state/backups'],
+                           'approval': {'resourceId': queue.BUDGET_RESOURCE, 'resourceSlug': 'jev-evaluation-budget'}}}}
         self.assertIs(queue.validate_configuration(config, manifest), config)
         model = {'enabled': True, 'cliVersion': artifact.CODEX_VERSION, 'isolationVerified': True,
                  'socketPath': '/srv/justup_preview/broker/model.sock',
@@ -920,6 +921,38 @@ class BoundaryContracts(unittest.TestCase):
             link.symlink_to(ledger)
             with self.assertRaises(ValueError):
                 queue.validate_ledger(link)
+
+    def test_budget_identity_defaults_canonical_and_requires_explicit_exact_legacy_selection(self):
+        canonical = {'approval': {'resourceId': queue.BUDGET_RESOURCE, 'resourceSlug': 'jev-evaluation-budget'}}
+        self.assertEqual(queue.budget_identity(canonical), canonical['approval'])
+        legacy = {'identityProfile': 'legacy-demo-v1',
+                  'approval': {'resourceId': queue.BUDGET_RESOURCE, 'resourceSlug': 'demo-jev-evaluation-budget'}}
+        self.assertEqual(queue.budget_identity(legacy), legacy['approval'])
+        for config in ({'approval': legacy['approval']}, {**legacy, 'identityProfile': 'canonical-v1'},
+                       {**canonical, 'identityProfile': 'legacy-demo-v1'}, {**canonical, 'identityProfile': None},
+                       {**canonical, 'identityProfile': 'legacy'}, {**canonical, 'resetLedger': True},
+                       {'approval': {**canonical['approval'], 'resourceId': 'https://other.example/approval'}}):
+            with self.subTest(config=config), self.assertRaises(ValueError):
+                queue.budget_identity(config)
+
+    def test_selected_budget_header_check_preserves_existing_canonical_and_legacy_ledger_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            root.chmod(0o700)
+            ledger = root / 'jev.jsonl'
+            for profile, slug in queue.BUDGET_IDENTITIES.items():
+                header = {'schemaVersion': 1, 'kind': 'approval', 'resourceId': queue.BUDGET_RESOURCE, 'resourceSlug': slug,
+                          'ledgerId': 'fixture-identity', 'approvalId': 'fixture-human-record', 'capNanodollars': 500000000}
+                original = (json.dumps(header, separators=(',', ':')) + '\n{"kind":"reserve","reservedNanodollars":2688000}\n').encode()
+                ledger.write_bytes(original)
+                ledger.chmod(0o600)
+                identity = queue.budget_identity({'identityProfile': profile, 'approval': header})
+                queue.validate_ledger(ledger, expected_identity=identity)
+                self.assertEqual(ledger.read_bytes(), original)
+                wrong = {**identity, 'resourceSlug': 'jev-evaluation-budget' if profile == 'legacy-demo-v1' else 'demo-jev-evaluation-budget'}
+                with self.assertRaisesRegex(ValueError, 'selected exact budget identity'):
+                    queue.validate_ledger(ledger, expected_identity=wrong)
+                self.assertEqual(ledger.read_bytes(), original)
 
     def test_policy_gate_requires_reviewed_urls_and_version(self):
         manifest, _ = payload()

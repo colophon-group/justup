@@ -20,6 +20,20 @@ CONFIG_KEYS = {'dbPath', 'sharedState', 'runnerStatusPath',
                'model', 'jev', 'matching', 'verificationTtlMs', 'hiringWire'}
 MODEL_KEYS = {'enabled', 'isolationVerified', 'cliVersion', 'socketPath', 'attestationPath',
               'taskProfiles', 'companyResearchVerified'}
+BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49'
+BUDGET_IDENTITIES = {'canonical-v1': 'jev-evaluation-budget', 'legacy-demo-v1': 'demo-jev-evaluation-budget'}
+
+
+def budget_identity(budget):
+    if (not isinstance(budget, dict) or set(budget) - {'path', 'excludedDirectories', 'approval', 'identityProfile'}
+            or not isinstance(budget.get('identityProfile', 'canonical-v1'), str)
+            or budget.get('identityProfile', 'canonical-v1') not in BUDGET_IDENTITIES):
+        raise ValueError('Cumulative budget identity profile differs from the reviewed configuration.')
+    selected = {'resourceId': BUDGET_RESOURCE, 'resourceSlug': BUDGET_IDENTITIES[budget.get('identityProfile', 'canonical-v1')]}
+    approval = budget.get('approval')
+    if not isinstance(approval, dict) or any(approval.get(key) != value for key, value in selected.items()):
+        raise ValueError('Cumulative budget approval differs from its selected exact identity.')
+    return selected
 
 
 def model_contract():
@@ -61,10 +75,11 @@ def validate_configuration(config, manifest):
         if (not isinstance(budget, dict) or budget.get('path') != str(LEDGER_PATH)
                 or budget.get('excludedDirectories') != [str(BASE / 'state'), str(BASE / 'state/backups')]):
             raise ValueError('Cumulative ledger must stay outside the database and backups.')
+        budget_identity(budget)
     return config
 
 
-def validate_ledger(path=LEDGER_PATH):
+def validate_ledger(path=LEDGER_PATH, expected_identity=None):
     path = Path(path)
     parent = path.parent
     if parent.resolve(strict=True) != parent or path.resolve(strict=True) != path:
@@ -75,6 +90,19 @@ def validate_ledger(path=LEDGER_PATH):
                 or not (stat.S_ISDIR(meta.st_mode) if directory else stat.S_ISREG(meta.st_mode))
                 or (not directory and (meta.st_nlink != 1 or not 1 <= meta.st_size <= 4 * 1024 ** 2))):
             raise ValueError('Ledger storage must already be private and queue-owned.')
+    if expected_identity is not None:
+        original = path.lstat()
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+            opened = os.fstat(stream.fileno())
+            if (opened.st_dev, opened.st_ino, opened.st_size) != (original.st_dev, original.st_ino, original.st_size):
+                raise ValueError('Ledger identity changed before its read-only header check.')
+            first = stream.readline(4097)
+        if len(first) > 4096 or not first.endswith(b'\n'):
+            raise ValueError('Ledger approval header must be bounded and complete.')
+        header = json.loads(first)
+        if (not isinstance(header, dict) or type(header.get('schemaVersion')) is not int or header['schemaVersion'] != 1
+                or header.get('kind') != 'approval' or any(header.get(key) != value for key, value in expected_identity.items())):
+            raise ValueError('Ledger approval header differs from the selected exact budget identity.')
 
 
 def child_environment(manifest, host_plan):
@@ -107,7 +135,7 @@ def main():
             raise ValueError('Queue configuration must be a protected root-owned file.')
         config = validate_configuration(json.loads(CONFIG_PATH.read_text()), manifest)
         if config.get('jev', {}).get('enabled') is True:
-            validate_ledger()
+            validate_ledger(expected_identity=budget_identity(config['jev']['cumulativeBudget']))
         node = str(release / 'runtime/bin/node')
         os.execve(node, [node, str(release / 'app/server/runner.mjs')], child_environment(manifest, host_plan))
     except (ValueError, OSError, KeyError, json.JSONDecodeError):
