@@ -12,9 +12,10 @@ matching. Neither provider failure nor insufficient evidence removes a requireme
 or substitutes unprocessed jobs. `feed.publicJob` supplies the final public
 projection; raw bodies, evidence hashes, scan counts and task output stay private.
 
-The default provider is disabled. Existing-key use is authorized in
-[resource issue 49](https://github.com/colophon-group/justup/issues/49), with the
-initial Justup cumulative guard still mandatory. Isolation review, confirmed
+The default provider is disabled. Existing-key use follows the recorded
+`jev-evaluation-budget` authorization, with the initial Justup cumulative guard
+still mandatory. Follow [operations](operations.md) for protected configuration
+and [release verification](development-process.md) before activation. Isolation review, confirmed
 account pricing, protected key delivery, ledger initialization and a completed
 real benchmark remain pending. No
 real provider request or infrastructure allocation is part of the test suite.
@@ -88,8 +89,10 @@ execution is available:
   no greater than 500,000,000 nanodollars ($0.50). The protected operator steps
   below are required; an agent-authored flag or template is not approval.
 
-Use protected runtime delivery described in [secrets](secrets.md). Do not reuse
-Jobseek production, legacy, dormant, administration or quarantine credentials.
+Use protected queue-only delivery described in [secrets](secrets.md). Only the
+existing shared key explicitly authorized by `jev-evaluation-budget` may be used;
+do not load Jobseek runtime configurations or unrelated legacy, dormant,
+administration or quarantine credentials.
 Never put a key in a browser, fixture, command argument, issue or log.
 
 Every attempt reserves daily call/token/cost capacity and then durably reserves
@@ -118,38 +121,49 @@ The runtime never creates, truncates, resets, refunds or restores that ledger.
 
 No active ledger or real key is initialized by this change. The operator must:
 
-1. Verify the recorded human authorization in issue 49 and complete the queue/API/model
-   identity and logging review in [operations issue 35](https://github.com/colophon-group/justup/issues/35).
+1. Verify the recorded human authorization in
+   `jev-evaluation-budget` and complete
+   the queue/API/model identity and logging review in the
+   [operations guide](operations.md).
    Confirm actual account input pricing, free output and the supported per-request
    input maximum privately. Do not publish account balances or key values.
 2. Create a dedicated queue-owned mode-0700 directory outside the preview database
    directory and backups, such as `/srv/justup_preview/queue`. The API and isolated
    model identities must have no access. Use canonical absolute paths without
    symlinks. Root creates this directory; the runtime does not create it.
-3. Under a protected operator action, prepare a new mode-0600 regular ledger file
+3. For a genuinely new ledger, use a separate protected operator action to
+   exclusively create a mode-0600 regular file with no symlink following,
+   then fsync the header and its directory. The file must be
    owned by the queue UID, with one compact UTF-8 JSON header plus a final newline.
    Its fields are the pure `unapprovedJevBudgetTemplate()` result in
    `server/jev-budget.mjs`, with the actual human `approvalId`, actual confirmed
    pricing version/values and approved cap filled only after the technical review. The
-   template itself has null approval/pricing and is unusable. Keep its unique
-   `ledgerId`; no runtime or unapproved initializer creates an approved ledger.
-   `approvalId` accepts an issue-49 approval comment URL, `operator-user-turn:UUID`
+   template itself has null approval/pricing and is unusable. New headers use
+   `JEV_BUDGET_SLUG` (`jev-evaluation-budget`) and retain the existing version-1
+   field set. Keep the unique `ledgerId`; no runtime or unapproved initializer
+   creates an approved ledger. Never create a replacement to replenish an
+   existing allowance. `approvalId` accepts an approval comment URL on the fixed
+   `JEV_BUDGET_RESOURCE`, `operator-user-turn:UUID`
    or `operator-approval:UUID` referencing the protected operator's verified human
    authorization record. These syntactic bindings do not verify or grant approval
    themselves. Do not publish private chat contents or account billing state.
 4. Supply protected queue-only configuration:
 
    ```js
-   cumulativeBudget: {
+   import { JEV_BUDGET_RESOURCE, JEV_BUDGET_SLUG, JEV_BUDGET_IDENTITY_PROFILE,
+     JEV_CUMULATIVE_CAP_NANO } from './server/jev-budget.mjs';
+
+   const cumulativeBudget = {
      path: '/srv/justup_preview/queue/budget-ledger.jsonl',
      excludedDirectories: [previewDataDirectory, previewBackupDirectory],
+     identityProfile: JEV_BUDGET_IDENTITY_PROFILE, // canonical-v1; also the default
      approval: {
        approved: false, // remains false until the protected human-approved step
-       resourceId: 'https://github.com/colophon-group/justup/issues/49',
-       resourceSlug: 'demo-jev-evaluation-budget',
-       approvalId: null, ledgerId: null, capNanodollars: 500000000
+       resourceId: JEV_BUDGET_RESOURCE,
+       resourceSlug: JEV_BUDGET_SLUG,
+       approvalId: null, ledgerId: null, capNanodollars: JEV_CUMULATIVE_CAP_NANO
      }
-   }
+   };
    ```
 
    The approved configuration and header must match exactly, including the
@@ -158,6 +172,7 @@ No active ledger or real key is initialized by this change. The operator must:
    been verified for the actual account. A different actual rate needs a reviewed
    transport/pricing update before activation. Do not give this configuration,
    ledger path or the JEV key to the API or model process.
+   The profile is configuration only; it is not a new on-disk header field.
 5. Exclude the ledger from preview SQLite backups, restores and deletion/retention
    jobs. Preserve it across restarts and account deletion. A missing file,
    mismatched approval/price/cap, unsafe permissions/ownership, symlink, hard link,
@@ -173,6 +188,32 @@ No active ledger or real key is initialized by this change. The operator must:
    disposing of the ledger during teardown. The key may serve Jobseek too: do not
    revoke it without the owning operator's coordinated approval. Any increased
    Justup allowance requires new explicit approval.
+
+### Bind an existing historical ledger
+
+An existing version-1 ledger whose header contains `resourceSlug:
+'demo-jev-evaluation-budget'` retains that exact field value. The slug is part of
+the hashed approval history; renaming it would invalidate the first reservation's
+hash link. Preserve every existing byte, including the header, ledger UUID,
+human approval, cap, model, pricing and all reservations. Do not initialize,
+rewrite, truncate, replace or refund it when updating the product identity.
+
+Before upgrading a consumer of this historical format, the protected operator
+must review that the header belongs to the known approved `jev-evaluation-budget`
+resource and supply `identityProfile: JEV_BUDGET_LEGACY_IDENTITY_PROFILE`
+(`legacy-v1`) with `approval.resourceSlug: JEV_BUDGET_LEGACY_SLUG`. These
+constants are exported by `server/jev-budget.mjs`. Keep the fixed
+`JEV_BUDGET_RESOURCE` and every approval, model and pricing value matched exactly
+to that header. This explicit binding permits continued append-only reservations
+under the original cap; the profile and approval syntax grant no human approval.
+
+The default `canonical-v1` profile accepts only `jev-evaluation-budget` headers.
+The explicit `legacy-v1` profile accepts only the known historical slug.
+Unknown profiles, resources or slugs and mixed canonical/historical configuration
+and headers fail closed. The runtime never infers a profile from a file or
+migrates a header. The historical format remains supported while an authorized
+ledger needs its approval and spend history retained; its name is persisted
+accounting metadata, not a separate product or renewed budget.
 
 At the unverified catalog rate of 42 nanodollars/token, each full reservation is
 2,688,000 nanodollars ($0.002688); a $0.50 cap admits at most 186 attempts, including

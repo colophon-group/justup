@@ -11,14 +11,14 @@ const metadataKeys=new Set(['x-codex-installation-id','session_id','thread_id','
 const turnKeys=new Set(['installation_id','session_id','thread_id','agent_name','turn_id','window_id','window_number','context_window_id','request_kind','compaction','turn_started_at_unix_ms','history_ingest_requested','analytics_enabled','forked_from_thread_id','forked_from_ordinal_exclusive','parent_thread_id','parent_turn_id','root_turn_id','subagent_kind','thread_source','turn_trigger','sandbox','sandbox_mode','auto_review_enabled','node_repl_auto_review_required','node_repl_disabled','workspaces','tool_namespaces_info','model','reasoning_effort','codex_version','user_input_requested_during_turn','workspace_kind']);
 function known(value,keys){if(!object(value)||Object.keys(value).some(key=>!keys.has(key)))throw invalid();}
 
-export function inspectWireCatalogue(body,{transport='responses_lite',model='gpt-6-luna'}={}) {
+function analyseWireCatalogue(body,{transport='responses_lite',model='gpt-6-luna'}={}) {
   if(!['responses','responses_lite'].includes(transport))throw invalid();
   known(body,topKeys);
   if(body.model!==model||!Array.isArray(body.input)||body.input.length>128||Buffer.byteLength(JSON.stringify(body))>4_194_304)throw invalid();
   if(body.access_programs!=null)throw invalid();
-  const roots=[],schemaHashes=[];
+  const roots=[],schemaHashes=[],toolNames=[],metadataToolNames=[];
   let toolCount=0,namespaceCount=0,additionalToolsItems=0,additionalToolsCount=0,topLevelToolsCount=0,metadataToolCount=0;
-  function specs(values,depth=0){
+  function specs(values,depth=0,namespace=''){
     if(!Array.isArray(values)||values.length>512||depth>8)throw invalid();
     for(const spec of values){
       if(!object(spec)||typeof spec.type!=='string'||++toolCount>1024)throw invalid();
@@ -26,8 +26,11 @@ export function inspectWireCatalogue(body,{transport='responses_lite',model='gpt
       if(spec.type==='namespace'){
         known(spec,new Set(['type','name','description','tools']));
         if(typeof spec.name!=='string'||!spec.name||spec.name.length>256)throw invalid();
-        namespaceCount++;specs(spec.tools,depth+1);
-      }else if(!['function','custom','web_search','web_search_preview','image_generation','code_interpreter','file_search','computer_use_preview','computer'].includes(spec.type))throw invalid();
+        namespaceCount++;specs(spec.tools,depth+1,namespace?`${namespace}.${spec.name}`:spec.name);
+      }else {
+        toolNames.push(namespace?`${namespace}.${spec.name??spec.type}`:spec.name??spec.type);
+        if(!['function','custom','web_search','web_search_preview','image_generation','code_interpreter','file_search','computer_use_preview','computer'].includes(spec.type))throw invalid();
+      }
     }
   }
   if(Object.hasOwn(body,'tools')){
@@ -68,15 +71,32 @@ export function inspectWireCatalogue(body,{transport='responses_lite',model='gpt
           known(namespace,new Set(['name','functions']));
           if(typeof namespace.name!=='string'||!namespace.name||!object(namespace.functions))throw invalid();
           metadataToolCount+=Object.keys(namespace.functions).length;
+          metadataToolNames.push(...Object.keys(namespace.functions).map(name=>`${namespace.name}.${name}`));
         }
       }
     }
   }
-  return {transport,topLevelToolsCount,additionalToolsItems,additionalToolsCount,namespaceCount,toolCount,metadataToolCount,toolCatalogSha256:hash(roots),schemaHashes};
+  return {result:{transport,topLevelToolsCount,additionalToolsItems,additionalToolsCount,namespaceCount,toolCount,metadataToolCount,toolCatalogSha256:hash(roots),schemaHashes},toolNames,metadataToolNames};
 }
+
+export function inspectWireCatalogue(body,options){return analyseWireCatalogue(body,options).result;}
 
 export function assertEmptyWireCatalogue(body,options){
   const result=inspectWireCatalogue(body,options);
   if(result.toolCount!==0||result.metadataToolCount!==0)throw Object.assign(invalid(),{counts:result});
+  return result;
+}
+
+// This checks the entire observed offer, not a model self-report or used count.
+// The native namespace selects the pinned executor; a top-level function called
+// web/run, hosted web_search, extra nested namespace or extra utility fails.
+export function assertTaskWireCatalogue(body,{kind,...options}={}){
+  const {result,toolNames,metadataToolNames}=analyseWireCatalogue(body,options);
+  if(kind==='search_intent')return assertEmptyWireCatalogue(body,options);
+  if(kind!=='company_resolution'||result.transport!=='responses_lite'||result.topLevelToolsCount!==0||result.additionalToolsCount!==1||result.namespaceCount!==1||result.toolCount!==2||JSON.stringify(toolNames)!=='["web.run"]'||metadataToolNames.some(name=>name!=='web.run')||result.metadataToolCount>1)throw Object.assign(invalid(),{counts:result});
+  const namespace=body.input[0].tools[0],tool=namespace.tools[0];
+  known(namespace,new Set(['type','name','description','tools']));
+  known(tool,new Set(['type','name','description','strict','parameters','output_schema','defer_loading']));
+  if(namespace.type!=='namespace'||namespace.name!=='web'||tool.type!=='function'||tool.name!=='run'||!object(tool.parameters)||tool.defer_loading===true)throw invalid();
   return result;
 }
