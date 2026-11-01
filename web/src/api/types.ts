@@ -116,13 +116,44 @@ export interface Company {
   lastSuccessfulCheckAt?: string;
   monitoringSince?: string;
   hiringHistory?: { date: string; count: number }[];
-  hiringRoles?: { name: string; count?: number }[];
-  reportedSalaries?: { role?: string; text: string }[];
 }
-// Narrow public projection of the report; unknown analytic sections stay out of hydration.
-export interface CompanySourceReport {
+// Public report projection. Historical analytics and private source identities stay out of hydration.
+export type CompanyRoleSample = { state: "unavailable" } | {
+  state: "available";
+  sampleSize: number;
+  labelledSampleSize: number;
+  unknownSampleSize: number;
+  items: { id: string; name: string; count: number }[];
+};
+export type CompanySalarySample = { state: "unavailable" } | {
+  state: "available";
+  sampleSize: number;
+  reportedSampleSize: number;
+  groupedSampleSize: number;
+  incompleteSampleSize: number;
+  unknownSampleSize: number;
+  groups: { currency: string; period: string; sampleSize: number; min: number | null; max: number | null }[];
+};
+export interface CompanyReport {
   companyId: string;
   asOf: string;
+  // These five current-sample fields are projected atomically; source-only reports omit all five.
+  provenance?: {
+    source: "jobseek_public";
+    importVerifiedAt: string | null;
+    importGeneration: string | null;
+    sampleObservedFrom: string | null;
+    sampleObservedThrough: string | null;
+  };
+  scope?: {
+    kind: "eligible_public_listing_sample";
+    firstObservedFrom: string;
+    firstObservedThrough: string;
+    completeCompanyCoverage: false;
+  };
+  freshness?: { listings: "fresh" | "unavailable" };
+  hiringRoles?: CompanyRoleSample;
+  reportedSalaries?: CompanySalarySample;
   sourceChecks: {
     state: "available" | "partial" | "unavailable";
     items: {

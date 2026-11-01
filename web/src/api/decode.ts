@@ -4,7 +4,7 @@ import { parseInterfaceLocale } from "../i18n/locales.ts";
 import type {
   Company,
   CompanyCataloguePage,
-  CompanySourceReport,
+  CompanyReport,
   CompanyRequest,
   CompanyRequestPrefill,
   Coverage,
@@ -176,14 +176,14 @@ export function decodeCoverage(value: unknown): Coverage {
   };
 }
 // Career links need explicit report approval; syntactically safe legacy URLs are insufficient.
-export function decodeCompanySourceReport(value: unknown, expectedCompanyId: string): CompanySourceReport {
+export function decodeCompanyReport(value: unknown, expectedCompanyId: string): CompanyReport {
   const o = record(value, "company report");
   const companyId = text(o.companyId, "company report identity");
   if (companyId !== expectedCompanyId) fail("company report identity");
   const asOf = date(o.asOf), checks = record(o.sourceChecks, "source checks");
   if (!["available", "partial", "unavailable"].includes(String(checks.state))) fail("source check state");
   const entries: unknown[] = Array.isArray(checks.items) && checks.items.length <= 2000 ? checks.items : fail("source checks");
-  const items: CompanySourceReport["sourceChecks"]["items"] = entries.map(value => {
+  const items: CompanyReport["sourceChecks"]["items"] = entries.map(value => {
     const item = record(value, "source check");
     const trackedSince = date(item.trackedSince);
     const lastVerifiedAt = item.lastVerifiedAt === null ? null : date(item.lastVerifiedAt);
@@ -194,12 +194,85 @@ export function decodeCompanySourceReport(value: unknown, expectedCompanyId: str
     if (!url || url !== link.url || url.length > 2048 || /[^\u0021-\u007e]|%/u.test(url) || new URL(url).search || new URL(url).hash
       || link.status !== "approved" || !["employer-careers", "ats-careers", "reviewed-redirect"].includes(String(link.provenance))
       || Date.parse(approvedAt) > Date.parse(asOf)) return fail("approved career link");
-    return { publicLink: { url, status: "approved", provenance: link.provenance as NonNullable<CompanySourceReport["sourceChecks"]["items"][number]["publicLink"]>["provenance"], approvedAt }, trackedSince, lastVerifiedAt };
+    return { publicLink: { url, status: "approved", provenance: link.provenance as NonNullable<CompanyReport["sourceChecks"]["items"][number]["publicLink"]>["provenance"], approvedAt }, trackedSince, lastVerifiedAt };
   });
   const linked = items.filter(item => item.publicLink !== null).length;
   const state = linked === 0 ? "unavailable" : linked === items.length ? "available" : "partial";
   if (checks.state !== state) fail("source check state");
-  return { companyId, asOf, sourceChecks: { state, items } };
+  return { companyId, asOf, sourceChecks: { state, items }, ...decodeCompanySamples(o, asOf) };
+}
+// The store retains at most 1,000 jobs across imports (server/store.mjs),
+// independently of the historical source-check contract's 2,000 scopes.
+const COMPANY_SAMPLE_LIMIT = 1000;
+function sampleCount(value: unknown, label: string): number {
+  const result = count(value, label);
+  return result <= COMPANY_SAMPLE_LIMIT ? result : fail(label);
+}
+function reportText(value: unknown, label: string, max: number): string {
+  const result = text(value, label);
+  return result.trim() === result && result.length > 0 && result.length <= max
+    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(result) ? result : fail(label);
+}
+function reportAmount(value: unknown): number | null {
+  return value === null ? null : typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fail("reported salary bound");
+}
+function decodeCompanySamples(o: Record<string, unknown>, asOf: string): Pick<CompanyReport, "provenance" | "scope" | "freshness" | "hiringRoles" | "reportedSalaries"> {
+  const keys = ["provenance", "scope", "freshness", "hiringRoles", "reportedSalaries"] as const;
+  if (keys.every(key => o[key] === undefined)) return {};
+  if (keys.some(key => o[key] === undefined)) fail("company sample evidence");
+  const provenance = record(o.provenance, "company sample provenance"), scope = record(o.scope, "company sample scope");
+  const freshness = record(o.freshness, "company sample freshness");
+  if (provenance.source !== "jobseek_public" || scope.kind !== "eligible_public_listing_sample" || scope.completeCompanyCoverage !== false
+      || !["fresh", "unavailable"].includes(String(freshness.listings))) fail("company sample evidence");
+  const importVerifiedAt = provenance.importVerifiedAt === null ? null : date(provenance.importVerifiedAt);
+  const importGeneration = provenance.importGeneration === null ? null : reportText(provenance.importGeneration, "company sample generation", 128);
+  const sampleObservedFrom = provenance.sampleObservedFrom === null ? null : date(provenance.sampleObservedFrom);
+  const sampleObservedThrough = provenance.sampleObservedThrough === null ? null : date(provenance.sampleObservedThrough);
+  const firstObservedFrom = date(scope.firstObservedFrom), firstObservedThrough = date(scope.firstObservedThrough);
+  const at = Date.parse(asOf), day = 86_400_000;
+  if (Date.parse(firstObservedFrom) !== at - 14 * day || Date.parse(firstObservedThrough) !== at - 2 * day
+      || (sampleObservedFrom === null) !== (sampleObservedThrough === null)
+      || (sampleObservedFrom && sampleObservedThrough && Date.parse(sampleObservedFrom) > Date.parse(sampleObservedThrough))) fail("company sample timestamps");
+  const roles = record(o.hiringRoles, "company role sample"), salaries = record(o.reportedSalaries, "company salary sample");
+  const common = {
+    provenance: { source: "jobseek_public" as const, importVerifiedAt, importGeneration, sampleObservedFrom, sampleObservedThrough },
+    scope: { kind: "eligible_public_listing_sample" as const, firstObservedFrom, firstObservedThrough, completeCompanyCoverage: false as const },
+  };
+  if (freshness.listings === "unavailable") {
+    if (roles.state !== "unavailable" || salaries.state !== "unavailable") fail("company sample freshness");
+    // Unavailable evidence can never supply a numeric claim, even if a response contains stale numbers.
+    return { ...common, freshness: { listings: "unavailable" }, hiringRoles: { state: "unavailable" }, reportedSalaries: { state: "unavailable" } };
+  }
+  if (roles.state !== "available" || salaries.state !== "available" || !importGeneration || !importVerifiedAt
+      || Date.parse(importVerifiedAt) > at || (sampleObservedThrough && Date.parse(sampleObservedThrough) > Date.parse(importVerifiedAt))) fail("company sample freshness");
+  const sampleSize = sampleCount(roles.sampleSize, "company sample size");
+  const labelledSampleSize = sampleCount(roles.labelledSampleSize, "labelled role sample"), unknownRoleSampleSize = sampleCount(roles.unknownSampleSize, "unlabelled role sample");
+  if (labelledSampleSize + unknownRoleSampleSize !== sampleSize || sampleCount(salaries.sampleSize, "salary sample size") !== sampleSize
+      || (sampleSize === 0) !== (sampleObservedFrom === null)) fail("company sample denominator");
+  const roleEntries: unknown[] = Array.isArray(roles.items) && roles.items.length <= sampleSize ? roles.items : fail("company role sample");
+  const roleIds = new Set<string>();
+  const items = roleEntries.map(value => {
+    const item = record(value, "company role sample"), id = reportText(item.id, "occupation identity", 100);
+    const name = reportText(item.name, "occupation name", 200), count = sampleCount(item.count, "occupation sample count");
+    if (!count || roleIds.has(id)) fail("company role sample");
+    roleIds.add(id); return { id, name, count };
+  });
+  if (items.reduce((sum, item) => sum + item.count, 0) !== labelledSampleSize) fail("company role sample denominator");
+  const reportedSampleSize = sampleCount(salaries.reportedSampleSize, "reported salary sample"), groupedSampleSize = sampleCount(salaries.groupedSampleSize, "grouped salary sample");
+  const incompleteSampleSize = sampleCount(salaries.incompleteSampleSize, "incomplete salary sample"), unknownSampleSize = sampleCount(salaries.unknownSampleSize, "unreported salary sample");
+  if (reportedSampleSize + unknownSampleSize !== sampleSize || groupedSampleSize + incompleteSampleSize !== reportedSampleSize) fail("company salary sample denominator");
+  const salaryEntries: unknown[] = Array.isArray(salaries.groups) && salaries.groups.length <= groupedSampleSize ? salaries.groups : fail("company salary groups");
+  const units = new Set<string>();
+  const groups = salaryEntries.map(value => {
+    const item = record(value, "company salary group"), currency = reportText(item.currency, "salary currency", 10), period = reportText(item.period, "salary period", 30);
+    const sampleSize = sampleCount(item.sampleSize, "salary group sample"), min = reportAmount(item.min), max = reportAmount(item.max), unit = JSON.stringify([currency, period]);
+    if (!sampleSize || units.has(unit) || min === null && max === null || min !== null && max !== null && min > max) fail("company salary group");
+    units.add(unit); return { currency, period, sampleSize, min, max };
+  });
+  if (groups.reduce((sum, item) => sum + item.sampleSize, 0) !== groupedSampleSize) fail("company salary group denominator");
+  return { ...common, freshness: { listings: "fresh" },
+    hiringRoles: { state: "available", sampleSize, labelledSampleSize, unknownSampleSize: unknownRoleSampleSize, items },
+    reportedSalaries: { state: "available", sampleSize, reportedSampleSize, groupedSampleSize, incompleteSampleSize, unknownSampleSize, groups } };
 }
 export function decodeCompany(value: unknown): Company {
   const o = record(value, "company");
@@ -213,7 +286,7 @@ export function decodeCompany(value: unknown): Company {
     ...(websiteUrl ? { websiteUrl } : {}),
     ...(o.logoUrl == null ? {} : { logoUrl: safePublicCompanyURL(o.logoUrl) }),
     ...(o.coverage == null ? {} : { coverage: decodeCoverage(o.coverage) }),
-    // Raw legacy sources never establish approved career-page links. Only the later
+    // Raw legacy sources never establish approved career-page links. Only the approved
     // report sourceChecks contract may supply those; do not retain them in hydration data.
     ...(Array.isArray(o.evidenceUrls) ? { evidenceUrls: o.evidenceUrls.map(safePublicCompanyURL).filter((url): url is string => url !== null) } : {}),
     ...optionalText(o, "lastSuccessfulCheckAt"),
@@ -233,38 +306,7 @@ export function decodeCompany(value: unknown): Company {
             "hiring history",
           ),
         }),
-    ...(o.hiringRoles == null
-      ? {}
-      : {
-          hiringRoles: list(
-            o.hiringRoles,
-            (v) => {
-              const role = record(v, "hiring role");
-              return {
-                name: text(role.name, "role name"),
-                ...(role.count == null
-                  ? {}
-                  : { count: count(role.count, "role count") }),
-              };
-            },
-            "hiring roles",
-          ),
-        }),
-    ...(o.reportedSalaries == null
-      ? {}
-      : {
-          reportedSalaries: list(
-            o.reportedSalaries,
-            (v) => {
-              const salary = record(v, "salary report");
-              return {
-                text: text(salary.text, "salary report"),
-                ...optionalText(salary, "role"),
-              };
-            },
-            "salary reports",
-          ),
-        }),
+
   };
 }
 // Optional compiler hints cannot invalidate an otherwise usable warning.
