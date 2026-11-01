@@ -1898,11 +1898,11 @@ export const messages = {
     "Ultimi 14 giorni. Sempre.",
     "Últimos 14 días. Siempre."
   ],
-  "Each job shows when we first found it. Only jobs first observed in the last 14 days appear. Source coverage and verification are shown below.": [
-    "Jede Stelle zeigt, wann wir sie erstmals gefunden haben. Nur Stellen aus den letzten 14 Tagen erscheinen. Quellenabdeckung und Prüfung stehen unten.",
-    "Chaque offre indique sa première détection. Seules celles repérées dans les 14 derniers jours apparaissent. Couverture et vérification des sources figurent ci-dessous.",
-    "Ogni offerta mostra quando l’abbiamo trovata. Appaiono solo quelle rilevate negli ultimi 14 giorni. Copertura e verifica delle fonti sono indicate sotto.",
-    "Cada oferta muestra cuándo la encontramos. Solo aparecen las vistas por primera vez en los últimos 14 días. La cobertura y verificación de fuentes figuran abajo."
+  "Each job shows when we first found it. Only jobs first observed in the last 14 days appear.": [
+    "Jede Stelle zeigt, wann wir sie erstmals gefunden haben. Nur Stellen aus den letzten 14 Tagen erscheinen.",
+    "Chaque offre indique sa première détection. Seules celles repérées dans les 14 derniers jours apparaissent.",
+    "Ogni offerta mostra quando l’abbiamo trovata. Appaiono solo quelle rilevate negli ultimi 14 giorni.",
+    "Cada oferta muestra cuándo la encontramos. Solo aparecen las vistas por primera vez en los últimos 14 días."
   ],
   "See what’s included.": [
     "Sieh, was enthalten ist.",

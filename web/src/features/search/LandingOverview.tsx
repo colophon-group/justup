@@ -7,7 +7,7 @@ const features = [
   ],
   [
     "Last 14 days. Always.",
-    "Each job shows when we first found it. Only jobs first observed in the last 14 days appear. Source coverage and verification are shown below.",
+    "Each job shows when we first found it. Only jobs first observed in the last 14 days appear.",
   ],
   [
     "See what’s included.",
