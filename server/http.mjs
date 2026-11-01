@@ -15,7 +15,7 @@ const SAFE_ERRORS = new Map([
   ['policy_unavailable', 'Processing is unavailable until policies are approved for this language.'],
   ['deletion_unavailable', 'Account access is temporarily unavailable.'],
   ['forbidden', 'This request is not allowed.'], ['invalid_json', 'Send a bounded JSON object.'],
-  ['access_denied','Current premium access is required for company priority.'],
+  ['access_denied','Active free or paid access is required for company priority.'],
   ['identity_unverified','Verify your account to activate the free period.'], ['free_period_unavailable','The free period is unavailable.'],
   ['verification_unavailable','Account verification is temporarily unavailable.'],
   ['verification_invalid','That verification code is invalid or no longer available.'],

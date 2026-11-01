@@ -1,4 +1,4 @@
-// Shared setup, current-entitlement priority and protected operator boundaries.
+// Shared setup, acceptance-time priority and protected operator boundaries.
 // Real SQLite and local files only; no provider, host or crawler execution.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,10 +17,10 @@ import {companySetupCommand} from '../scripts/company-requests/setup.mjs';
 import {createHandler} from './http.mjs';
 
 const AT=Date.parse('2026-11-01T12:00:00Z');
-function fixture(t,{path=':memory:'}={}) {
-  const store=openStore(path);let clock=AT;t.after(()=>store.close());const db=store.db;
+function fixture(t,{path=':memory:',at=AT}={}) {
+  const store=openStore(path);let clock=at;const db=store.db;t.after(()=>{if(db.isOpen)store.close();});
   db.exec("CREATE TABLE auth_accounts(id TEXT PRIMARY KEY,account_expires_at INTEGER) STRICT; INSERT INTO auth_accounts VALUES('alice',NULL),('bob',NULL);");
-  createEntitlements({db,now:()=>clock});const access=createAccessReader({db,now:()=>clock});
+  const entitlements=createEntitlements({db,now:()=>clock}),access=createAccessReader({db,now:()=>clock});
   let policy=true;
   const authority=(id,{allowUnavailable=false,locale}={})=>{const current=access(id);return current&&(allowUnavailable||policy&&locale==='fr')?{account:{id},access:current}:null;};
   const feed=createFeed({db,now:()=>clock}),tasks=createTasks({db,now:()=>clock}),reading=createReadingPreferencesService({db,feed,ownerAuthority:authority,now:()=>clock});
@@ -28,17 +28,97 @@ function fixture(t,{path=':memory:'}={}) {
   const progress=createCompanyProgress({db,now:()=>clock,canonicalCompanyId:feed.canonicalCompanyId,accessForAccount:access});
   const id=feed.publishCompany({name:'Shared Company',domain:'shared.example.org',websiteUrl:'https://shared.example.org/',evidenceUrls:['https://shared.example.org/about']});
   const otherId=feed.publishCompany({name:'Other Company',domain:'other.example.org',websiteUrl:'https://other.example.org/',evidenceUrls:['https://other.example.org/about']});
-  const ctx=(method,path,body,owner='alice',extra={})=>({method,path,url:new URL(`https://preview.example/api/v1${path}`),body,accountId:owner,viewer:{account:{id:owner},access:{premium:true}},interfaceLocale:'fr',...extra});
+  const ctx=(method,path,body,owner='alice',extra={})=>({method,path,url:new URL(`https://preview.example/api/v1${path}`),body,accountId:owner,viewer:{account:{id:owner},access:{fullAccess:false,premium:true}},interfaceLocale:'fr',...extra});
   const priority=(key='priority',owner='alice',companyId=id)=>companies.route(ctx('POST',`/account/companies/${companyId}/priority`,{requestKey:key},owner));
   function paid(owner,until=clock+60_000) {db.prepare("INSERT INTO access_subscriptions VALUES(?,?,1,'active','monthly',?,0) ON CONFLICT(subscription_hash) DO UPDATE SET paid_through_at=excluded.paid_through_at,status='active'").run(`subscription-${owner}`,owner,until);}
-  async function accept(owner='bob') {
-    const request=(await companies.route(ctx('POST','/company-requests',{input:'Shared Company',requestKey:`ordinary-${owner}`},owner))).body.request;
-    return (await companies.route(ctx('POST',`/company-requests/${request.id}/accept`,{candidateId:request.candidate.id,previewRevision:request.previewRevision},owner,{idempotencyKey:`accept-${owner}`}))).body.request;
+  function free(owner,kind='standard') {
+    db.prepare('INSERT INTO access_identities VALUES(?,?,?,?)').run(owner,`synthetic-subject-${owner}`,kind==='legacy'?`synthetic-legacy-${owner}`:null,clock);
+    return entitlements.activateFreePeriod(owner);
   }
-  return {store,db,feed,tasks,reading,companies,progress,id,otherId,ctx,priority,paid,accept,advance:ms=>clock+=ms,pause:()=>policy=false};
+  async function accept(owner='bob',{name='Shared Company',key=`ordinary-${owner}`}={}) {
+    const request=(await companies.route(ctx('POST','/company-requests',{input:name,requestKey:key},owner))).body.request;
+    return (await companies.route(ctx('POST',`/company-requests/${request.id}/accept`,{candidateId:request.candidate.id,previewRevision:request.previewRevision},owner,{idempotencyKey:`accept-${key}`}))).body.request;
+  }
+  return {store,db,feed,tasks,reading,companies,progress,id,otherId,ctx,priority,paid,free,access,accept,now:()=>clock,advance:ms=>clock+=ms,pause:()=>policy=false};
 }
 
-test('free acceptance and paid known-company priority share setup while current entitlement governs private and aggregate priority',async t=>{
+for(const grant of ['standard','legacy','paid'])test(`requests accepted during ${grant} access retain priority after expiry while new ordinary requests remain standard`,async t=>{
+  const f=fixture(t,{at:Date.parse('2027-01-31T12:00:00Z')});
+  if(grant==='paid'){f.paid('alice');f.paid('bob');}else{f.free('alice',grant);f.free('bob',grant);}
+  assert.equal(f.access('alice').fullAccess,true);assert.equal(f.access('alice').premium,grant==='paid');
+  assert.equal(f.access('alice').legacy,grant==='legacy');
+  if(grant==='legacy')assert.equal(f.access('alice').until,'2027-02-28T12:00:00.000Z');
+  const accepted=await f.accept(),priority=(await f.priority()).body.request;
+  assert.equal(accepted.setup.priority,'premium');
+  assert.equal(priority.status,'accepted');assert.equal(priority.setup.priority,'premium');assert.equal(priority.taskId,null);
+  assert.equal(f.progress.pending().items[0].priority,'premium');
+  assert.equal(f.db.prepare('SELECT count(*) n FROM justup_company_setups').get().n,1);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_subscriptions').get().n,grant==='paid'?2:0);
+  assert.equal((await f.priority()).body.request.id,priority.id);
+  const running=f.progress.update({companyId:f.id,expectedRevision:1,state:'in_progress',reason:'source_validation_pending'});
+  f.advance(Date.parse(f.access('alice').until)-f.now());
+  assert.equal(f.access('alice').fullAccess,false);
+  assert.equal((await f.priority()).body.request.setup.priority,'premium');
+  assert.equal((await f.accept()).setup.priority,'premium');
+  await assert.rejects(f.priority('after-expiry'),{code:'access_denied',status:403});
+  const ordinary=await f.accept('alice',{name:'Other Company',key:'after-expiry'});
+  assert.equal(ordinary.setup.priority,'standard');
+  assert.equal(f.progress.pending().items.find(item=>item.companyId===f.id).priority,'premium');
+  assert.deepEqual(f.feed.companySetup(f.id),running);
+  f.companies.deleteAccountData('alice');
+  assert.equal(f.progress.pending().items[0].priority,'premium');
+  assert.equal((await f.companies.route(f.ctx('GET','/company-requests',undefined,'bob'))).body.items[0].id,accepted.id);
+  assert.deepEqual(f.feed.companySetup(f.id),running);
+});
+
+for(const grant of ['standard','legacy','paid'])test(`ordinary accepted requests stay standard when ${grant} access begins until an explicit priority action upgrades them`,async t=>{
+  const f=fixture(t),ordinary=await f.accept();
+  assert.equal(ordinary.setup.priority,'standard');
+  if(grant==='paid')f.paid('bob');else f.free('bob',grant);
+  assert.equal((await f.accept()).setup.priority,'standard');
+  assert.equal(f.progress.pending().items[0].priority,'standard');
+  f.reading.route(f.ctx('PATCH',`/follows/${f.id}`,{followed:false,expectedRevision:1},'bob'));
+  const running=f.progress.update({companyId:f.id,expectedRevision:1,state:'in_progress',reason:'source_validation_pending'});
+  const upgraded=(await f.priority('explicit-upgrade','bob')).body.request;
+  assert.equal(upgraded.id,ordinary.id);assert.equal(upgraded.setup.priority,'premium');
+  assert.equal(f.progress.pending().items[0].priority,'premium');
+  assert.deepEqual(f.reading.follows('bob').items,[]);assert.deepEqual(f.feed.companySetup(f.id),running);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM justup_company_requests WHERE owner_id='bob'").get().n,1);
+});
+
+test('priority is captured at acceptance rather than candidate creation',async t=>{
+  const f=fixture(t);f.free('alice');
+  const preview=(await f.companies.route(f.ctx('POST','/company-requests',{input:'Shared Company',requestKey:'before-expiry'}))).body.request;
+  f.advance(7*86_400_000);
+  const accepted=(await f.companies.route(f.ctx('POST',`/company-requests/${preview.id}/accept`,{candidateId:preview.candidate.id,previewRevision:1},'alice',{idempotencyKey:'after-expiry'}))).body.request;
+  assert.equal(accepted.setup.priority,'standard');assert.equal(f.progress.pending().items[0].priority,'standard');
+});
+
+test('older accepted rows default to standard without inferring grants from current paid access',async t=>{
+  const f=fixture(t),accepted=await f.accept();f.paid('bob');
+  f.db.exec('ALTER TABLE justup_company_requests DROP COLUMN acceptance_priority');
+  assert.equal(f.progress.pending().items[0].priority,'standard'); // Read-only handoff may precede feature initialization.
+  for(let i=0;i<2;i++)createCompanyService({db:f.db,feed:f.feed,tasks:f.tasks});
+  assert.equal((await f.accept()).setup.priority,'standard');
+  assert.equal(f.db.prepare('SELECT acceptance_priority FROM justup_company_requests WHERE id=?').get(accepted.id).acceptance_priority,'standard');
+  assert.equal(f.db.prepare('PRAGMA user_version').get().user_version,2);
+  assert.throws(()=>f.db.prepare('UPDATE justup_company_requests SET acceptance_priority=? WHERE id=?').run('paid',accepted.id));
+});
+
+test('stored grants survive reopening storage after access expiry',async t=>{
+  const directory=realpathSync(mkdtempSync(join(tmpdir(),'company-grant-')));t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  const path=join(directory,'application.sqlite'),f=fixture(t,{path});f.free('bob','legacy');
+  const accepted=await f.accept();f.store.close();
+  const store=openStore(path);t.after(()=>store.close());const db=store.db,now=()=>AT+31*86_400_000;
+  const access=createAccessReader({db,now}),feed=createFeed({db,now}),tasks=createTasks({db,now});
+  const companies=createCompanyService({db,feed,tasks,now}),progress=createCompanyProgress({db,now,accessForAccount:access});
+  assert.equal(access('bob').fullAccess,false);
+  assert.equal((await companies.route(f.ctx('GET','/company-requests',undefined,'bob'))).body.items[0].setup.priority,'premium');
+  assert.equal(progress.pending().items[0].priority,'premium');
+  assert.equal(db.prepare('SELECT acceptance_priority FROM justup_company_requests WHERE id=?').get(accepted.id).acceptance_priority,'premium');
+});
+
+test('limited ordinary acceptance and paid known-company priority share progress without exposing private grants publicly',async t=>{
   const f=fixture(t),free=await f.accept();
   assert.equal(free.setup.state,'queued');assert.equal(free.setup.priority,'standard');assert.equal(free.setup.revision,1);
   await assert.rejects(f.priority(),{code:'access_denied',status:403}); // Copied viewer premium does not grant access.
@@ -53,8 +133,8 @@ test('free acceptance and paid known-company priority share setup while current 
   for(const forbidden of ['alice','bob','premium','scope','requester'])assert.equal(JSON.stringify(publicCompany).includes(forbidden),false);
   assert.equal(publicCompany.coverage.state,'requested');
   f.advance(60_001);
-  assert.equal((await f.companies.route(f.ctx('GET','/company-requests',undefined,'alice'))).body.items[0].setup.priority,'standard');
-  assert.equal(f.progress.pending().items[0].priority,'standard');await assert.rejects(f.priority(),{code:'access_denied'});
+  assert.equal((await f.companies.route(f.ctx('GET','/company-requests',undefined,'alice'))).body.items[0].setup.priority,'premium');
+  assert.equal(f.progress.pending().items[0].priority,'premium');assert.equal((await f.priority()).body.request.id,paid.id);
   assert.equal(f.feed.company(f.otherId).setup.state,'blocked');assert.equal(f.feed.company(f.otherId).setup.updatedAt,null);
 });
 
@@ -97,7 +177,7 @@ test('removing one requester drops its current priority while preserving shared 
   assert.equal(f.feed.company(f.id).setup.state,'in_progress');assert.equal(f.progress.pending().items.length,1);
 });
 
-test('operator handoff bounds scopes and rows and orders current premium groups before earlier free requests',async t=>{
+test('operator handoff bounds scopes and rows and preserves accepted premium ordering through access expiry',async t=>{
   const f=fixture(t),other=(await f.companies.route(f.ctx('POST','/company-requests',{input:'Other Company',requestKey:'other'},'bob'))).body.request;
   await f.companies.route(f.ctx('POST',`/company-requests/${other.id}/accept`,{candidateId:other.candidate.id,previewRevision:1},'bob',{idempotencyKey:'other-accept'}));
   f.advance(1);f.paid('alice');await f.priority();
@@ -109,7 +189,7 @@ test('operator handoff bounds scopes and rows and orders current premium groups 
   assert.equal(first.truncated,true);assert.equal(first.items[0].companyId,f.id);assert.equal(first.items[0].requestedScopeCount,12);assert.equal(first.items[0].requestedScopes.length,8);
   f.progress.update({companyId:f.id,expectedRevision:1,state:'in_progress',reason:'source_validation_pending'});
   assert.throws(()=>f.feed.companies({cursor:publicCursor}),{code:'stale_cursor'});
-  f.advance(60_001);assert.equal(f.progress.pending({limit:1}).items[0].companyId,f.otherId);
+  f.advance(60_001);assert.equal(f.progress.pending({limit:1}).items[0].companyId,f.id);
   assert.throws(()=>f.progress.pending({limit:51}),{code:'invalid_limit'});
 });
 
@@ -146,7 +226,7 @@ test('operator CLI reads bounded private handoff and CAS progress only from prot
   assert.equal(f.db.prepare('PRAGMA user_version').get().user_version,2);
 });
 
-test('known-company priority HTTP enforces session, Origin, CSRF, current premium and exact locale policy',async t=>{
+for(const grant of ['standard','legacy','paid'])test(`known-company priority HTTP admits active ${grant} access and enforces session, Origin, CSRF and exact locale policy`,async t=>{
   const f=fixture(t),origin='https://preview.example',token='a'.repeat(43);
   const config={allowedOrigin:origin,sourceCommit:'a'.repeat(40),csrfSecret:'x'.repeat(32),policiesReviewed:true,
     policyLocales:{fr:{privacyUrl:origin+'/privacy.fr.html',usageUrl:origin+'/usage.fr.html',version:'reviewed-fr',reviewed:true}},
@@ -157,13 +237,15 @@ test('known-company priority HTTP enforces session, Origin, CSRF, current premiu
   const base=`http://127.0.0.1:${server.address().port}/api/v1`,cookie=`__Host-justup_session=${token}`;
   const session=await (await fetch(base+'/session',{headers:{Cookie:cookie,'X-Justup-Locale':'fr'}})).json();
   const headers={Cookie:cookie,Origin:origin,'X-CSRF-Token':session.csrfToken,'Content-Type':'application/json','X-Justup-Locale':'fr'};
-  const post=extra=>fetch(`${base}/account/companies/${f.id}/priority`,{method:'POST',headers:{...headers,...extra},body:JSON.stringify({requestKey:'http-priority'})});
+  const post=(extra,key='http-priority')=>fetch(`${base}/account/companies/${f.id}/priority`,{method:'POST',headers:{...headers,...extra},body:JSON.stringify({requestKey:key})});
   assert.equal((await post({Cookie:''})).status,401);
   assert.equal((await post({Origin:'https://other.example'})).status,403);
   assert.equal((await post({'X-CSRF-Token':'b'.repeat(43)})).status,403);
   const free=await post();assert.equal(free.status,403);assert.equal((await free.json()).error.code,'access_denied');
-  f.paid('alice');assert.equal((await post({'X-Justup-Locale':'en'})).status,503);
+  if(grant==='paid')f.paid('alice');else f.free('alice',grant);
+  assert.equal((await post({'X-Justup-Locale':'en'})).status,503);
   const accepted=await post();assert.equal(accepted.status,200);const request=(await accepted.json()).request;assert.equal(request.setup.priority,'premium');
   assert.equal((await post()).status,200);assert.equal(f.db.prepare('SELECT count(*) n FROM justup_company_requests').get().n,1);
-  f.advance(60_001);assert.equal((await post()).status,403);
+  f.advance(grant==='paid'?60_001:(grant==='legacy'?30:7)*86_400_000);
+  assert.equal((await post()).status,200);assert.equal((await post({},'after-expiry')).status,403);
 });

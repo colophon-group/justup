@@ -73,7 +73,7 @@ test('composed draft, retry, sign-in, language/follow, live-policy and deletion 
   assert.equal(f.count('justup_visitors'),0);assert.equal(f.count('justup_workspaces'),0);assert.deepEqual(f.privateCounts(),[0,0,0]);
 });
 
-test('composed known-company priority and private catalogue use current entitlement and measure setup revisions without inference',async t=>{
+test('composed known-company priority stores its access grant and measures setup revisions without inference',async t=>{
   const f=await fixture(t),a=f.client(),b=f.client();await a.call('/session');await b.call('/session');
   const account=(await a.call('/auth/register','POST',{username:'priority-owner',password:'Synthetic priority account password'})).body.user;
   await b.call('/auth/register','POST',{username:'other-owner',password:'Synthetic other account password'});
@@ -91,5 +91,8 @@ test('composed known-company priority and private catalogue use current entitlem
   const publicCompany=(await a.call(`/companies/${target}`)).body;assert.equal(publicCompany.setup.state,'in_progress');for(const word of ['priority','premium','scope',account.id])assert.equal(JSON.stringify(publicCompany).includes(word),false);
   f.policy.reviewed=false;const before=f.privateCounts();await a.call('/company-requests');await a.call('/account/companies?view=requested');await a.call(`/companies/${target}/report`);assert.deepEqual(f.privateCounts(),before);
   f.policy.reviewed=true;f.db.prepare("UPDATE access_subscriptions SET status='ended',paid_through_at=NULL WHERE account_id=?").run(account.id);
-  assert.equal((await a.call(path,'POST',{requestKey:'expired'})).status,403);assert.equal((await a.call('/company-requests')).body.items[0].setup.priority,'standard');assert.equal(f.count('justup_tasks'),0);assert.equal(f.modelCalls(),0);
+  assert.equal((await a.call(path,'POST',{requestKey:'expired'})).status,403);
+  assert.equal((await a.call(path,'POST',{requestKey:'known'})).body.request.id,priority.body.request.id);
+  assert.equal((await a.call('/company-requests')).body.items[0].setup.priority,'premium');assert.equal(progress.pending().items[0].priority,'premium');
+  assert.equal(progress.snapshot(target).state,'in_progress');assert.equal(f.count('justup_tasks'),0);assert.equal(f.modelCalls(),0);
 });
