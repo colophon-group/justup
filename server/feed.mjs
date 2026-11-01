@@ -25,10 +25,22 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   const setup=createCompanyProgress({db,canonicalCompanyId:canonicalId,now});
   const latest = () => db.prepare('SELECT * FROM justup_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   const access = (viewer) => viewer?.account?.id && viewer.access?.fullAccess === true ? 'account' : 'guest';
+  function verifiedImportTime(row) {
+    if (!row) return null;
+    let selection;
+    try { selection = JSON.parse(row.selection_json); } catch { return null; }
+    if (selection?.source !== 'jobseek_feed_v1') return row.verified_at;
+    const full = selection.feed?.fullSnapshotAt;
+    if (typeof full !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(full)) return null;
+    const parsed = Date.parse(full);
+    if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== full || parsed > row.verified_at) return null;
+    return parsed;
+  }
   function coverageAt(at) {
     const row = latest();
-    const stale = !row || at - row.verified_at >= verificationTtlMs;
-    return { kind: 'imported_snapshot', verifiedAt: row ? new Date(row.verified_at).toISOString() : null,
+    const verifiedAt = verifiedImportTime(row);
+    const stale = verifiedAt == null || verifiedAt > at || at - verifiedAt >= verificationTtlMs;
+    return { kind: 'imported_snapshot', verifiedAt: verifiedAt == null ? null : new Date(verifiedAt).toISOString(),
       stale, ...(stale ? { state: 'import_unavailable', description: 'Imported listings need verification.' } : {}) };
   }
   const coverage = () => coverageAt(now());

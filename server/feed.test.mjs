@@ -7,13 +7,13 @@ const viewer = { account: { id: 'account-a' }, access: { fullAccess: true } };
 function setup(t, options = {}) {
   const s = openStore(); t.after(() => s.close()); let at = AT;
   const feed = createFeed({ db: s.db, now: () => at, cursorSecret: 'x'.repeat(32), ...options });
-  function add(rows, observedAt = AT) {
+  function add(rows, observedAt = AT, selection = {}) {
     s.importSnapshot({ schemaVersion: 1, snapshotAt: iso(observedAt), verifiedAt: iso(observedAt), jobs: rows.map(([id, age]) => ({
       id, companyId: 'company', companyName: 'Example', companySlug: 'example', title: `Role ${id}`, sourceUrl: `https://example.org/${id}`,
       active: true, reserved: false, hasContent: true, firstObserved: iso(AT - age * DAY_MS), lastObserved: null,
       locales: ['en'], locations: [{ name: null, workplace: null }], employmentTypes: [], seniority: null, salary: null, bodyText: null,
       evidence: { source: 'jobseek_public', metadataFetchedAt: iso(observedAt), bodyFetchedAt: null, bodyUrl: null, bodySha256: null, textSha256: null, bodyBytes: 0, normalizationVersion: 1, truncated: false },
-    })), observations: [], unknownIds: [] });
+    })), observations: [], unknownIds: [], selection });
   }
   return { s, feed, add, advance: (ms) => { at += ms; } };
 }
@@ -45,6 +45,31 @@ test('missing evidence pauses the feed while a fresh eligible zero completes', (
   assert.equal(completed.continuation.state, 'exhausted');
   assert.equal(completed.continuation.retryAfterMs, null);
   assert.equal(completed.coverage.stale, false);
+});
+test('change-only imports cannot extend the freshness of the last full source snapshot', (t) => {
+  const { feed, add, advance } = setup(t);
+  const selection = { source: 'jobseek_feed_v1', feed: { fullSnapshotAt: iso(AT) } };
+  add([['retained', 3]], AT, selection);
+  advance(23 * 60 * 60_000);
+  add([], AT + 23 * 60 * 60_000, selection);
+  assert.equal(feed.coverage().stale, false);
+  assert.equal(feed.coverage().verifiedAt, iso(AT));
+  assert.deepEqual(feed.list().items.map(job => job.id), ['retained']);
+  advance(60 * 60_000);
+  const paused = feed.list();
+  assert.equal(paused.coverage.stale, true);
+  assert.equal(paused.coverage.verifiedAt, iso(AT));
+  assert.deepEqual(paused.items, []);
+  assert.deepEqual(paused.continuation, { cursor: null, state: 'paused', retryAfterMs: 5000 });
+});
+test('missing, malformed or future full snapshot evidence fails closed', (t) => {
+  const { feed, add } = setup(t);
+  for (const fullSnapshotAt of [undefined, 'invalid', iso(AT + 60_000)]) {
+    add([], AT, { source: 'jobseek_feed_v1', feed: { fullSnapshotAt } });
+    assert.equal(feed.coverage().stale, true);
+    assert.equal(feed.coverage().verifiedAt, null);
+    assert.equal(feed.list().continuation.state, 'paused');
+  }
 });
 test('stale evidence pauses after cursor validation and a refreshed import recovers without exposing old rows', (t) => {
   const ttl = 5 * 60_000, { feed, add, advance, s } = setup(t, { verificationTtlMs: ttl });
