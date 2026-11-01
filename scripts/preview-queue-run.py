@@ -17,7 +17,7 @@ BASE = Path('/srv/justup_preview')
 CONFIG_PATH = BASE / 'queue/config/runner.json'
 LEDGER_PATH = BASE / 'queue/budget/jev.jsonl'
 CONFIG_KEYS = {'dbPath', 'sharedState', 'runnerStatusPath',
-               'model', 'jev', 'matching', 'verificationTtlMs', 'hiringWire', 'sourceCoverage'}
+               'model', 'jev', 'matching', 'verificationTtlMs', 'hiringWire', 'sourceCoverage', 'emailVerification'}
 MODEL_KEYS = {'enabled', 'isolationVerified', 'cliVersion', 'socketPath', 'attestationPath',
               'taskProfiles', 'companyResearchVerified'}
 BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49'
@@ -49,6 +49,20 @@ def validate_configuration(config, manifest):
             or config.get('sharedState') is not True
             or config.get('runnerStatusPath') != str(BASE / 'state/runner-status.json')):
         raise ValueError('Queue configuration differs from the fixed candidate and state boundary.')
+    if 'emailVerification' in config:
+        email = config['emailVerification']
+        if not isinstance(email, dict) or (email != {'enabled': False} and (
+                set(email) != {'enabled', 'apiKey', 'verificationKey', 'maxDaily', 'maxMonthly'}
+                or email.get('enabled') is not True
+                or not isinstance(email.get('apiKey'), str) or not 8 <= len(email['apiKey']) <= 512
+                or any(ord(char) < 33 or ord(char) > 126 for char in email['apiKey'])
+                or not isinstance(email.get('verificationKey'), str) or not 32 <= len(email['verificationKey'].encode()) <= 512
+                or any(ord(char) < 32 or ord(char) > 126 for char in email['verificationKey'])
+                or type(email.get('maxDaily')) is not int or not 1 <= email['maxDaily'] <= 10
+                or type(email.get('maxMonthly')) is not int or not 1 <= email['maxMonthly'] <= 100)):
+            raise ValueError('Email verification requires exact bounded queue-only configuration.')
+        if email.get('enabled') is True and not {'app/server/email-verification.mjs', 'app/server/account-provider-clients.mjs'} <= manifest.get('files', {}).keys():
+            raise ValueError('Email verification requires its fixed runtime graph.')
     if 'sourceCoverage' in config:
         source = config['sourceCoverage']
         if (not isinstance(source, dict) or set(source) != {'directory', 'sourceVersion'}

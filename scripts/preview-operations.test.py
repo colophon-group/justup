@@ -173,6 +173,19 @@ class ArtifactContracts(unittest.TestCase):
                     artifact.validate_manifest(incomplete)
         for obsolete in ('app/scripts/import-demo-jobs.py', 'app/server/model-schemas/company-domain-proposal.schema.json'):
             self.assertFalse(artifact.allowed(obsolete))
+
+    def test_email_artifact_graph_cannot_omit_a_fixed_provider_module(self):
+        manifest, _ = payload()
+        manifest['files'].update({name: 'b' * 64 for name in artifact.EMAIL_MODULES})
+        manifest['buildIdentity'] = artifact.identity(manifest)
+        artifact.validate_manifest(manifest)
+        for name in artifact.EMAIL_MODULES:
+            partial = deepcopy(manifest)
+            del partial['files'][name]
+            partial['buildIdentity'] = artifact.identity(partial)
+            with self.subTest(missing=name), self.assertRaisesRegex(ValueError, 'Email verification'):
+                artifact.validate_manifest(partial)
+
     def test_inventory_accepts_exact_bytes_and_rejects_changed_payload(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'candidate.tar'
@@ -535,6 +548,46 @@ class BoundaryContracts(unittest.TestCase):
         owner = patch.object(host, 'OPERATOR_UID', os.getuid())
         owner.start()
         self.addCleanup(owner.stop)
+
+    def test_email_provider_configuration_matches_actual_node_and_stays_queue_only(self):
+        manifest, _ = payload()
+        manifest['files'].update({name: 'b' * 64 for name in artifact.EMAIL_MODULES})
+        base = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
+                'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
+        enabled = {'enabled': True, 'apiKey': 'synthetic_key', 'verificationKey': 'v' * 32,
+                   'maxDaily': 10, 'maxMonthly': 100}
+        admitted = [{}, {'emailVerification': {'enabled': False}}, {'emailVerification': enabled}]
+        rejected = [{'emailVerification': value} for value in (
+            {'enabled': True}, {'enabled': False, 'apiKey': 'forbidden'},
+            {**enabled, 'maxDaily': 11}, {**enabled, 'maxMonthly': 101},
+            {**enabled, 'maxDaily': True}, {**enabled, 'verificationKey': 'é' * 32},
+            {**enabled, 'apiKey': 'key\nvalue'}, {**enabled, 'host': 'caller.example'})]
+        for extra in admitted:
+            queue.validate_configuration({**base, **extra}, manifest)
+        for extra in rejected:
+            with self.assertRaises(ValueError):
+                queue.validate_configuration({**base, **extra}, manifest)
+        api = {'JUSTUP_ORIGIN': 'https://preview.example', 'JUSTUP_CSRF_SECRET': 'a' * 32,
+               'JUSTUP_CURSOR_SECRET': 'b' * 32, 'JUSTUP_EMAIL_VERIFICATION_ENABLED': 'true'}
+        self.assertEqual(launcher.child_environment(api, manifest)['JUSTUP_EMAIL_VERIFICATION_ENABLED'], 'true')
+        for key in ('RESEND_API_KEY', 'JUSTUP_RESEND_API_KEY', 'JUSTUP_EMAIL_VERIFICATION_KEY', 'STRIPE_SANDBOX_SECRET_KEY'):
+            with self.assertRaises(ValueError):
+                launcher.child_environment({**api, key: 'synthetic_secret'}, manifest)
+        script = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const input=JSON.parse(readFileSync(0,'utf8'));
+const {bindRunnerConfig}=await import(input.adapter);
+for(const extra of input.admitted)bindRunnerConfig({...input.base,...extra},input.environment);
+for(const extra of input.rejected)assert.throws(()=>bindRunnerConfig({...input.base,...extra},input.environment));
+"""
+        result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
+                                input=json.dumps({'base': base, 'admitted': admitted, 'rejected': rejected,
+                                                  'environment': queue.child_environment(manifest, 'f' * 64),
+                                                  'adapter': (HERE.parent / 'server/runner-adapter.mjs').resolve().as_uri()}),
+                                capture_output=True, timeout=15,
+                                env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_exact_size_sparse_image_is_rejected_before_mount_or_reserve_checks(self):
         with tempfile.TemporaryDirectory() as temp:

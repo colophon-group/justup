@@ -32,6 +32,7 @@ WIRE_CATALOGUE_SHA256 = '5ed662f51bb5a9eda38e52fae474954574504286a851bfbad4a4aa6
 WIRE_MODULES = {'app/server/' + name + '.mjs' for name in (
     'hiring-wire', 'hiring-wire-facts', 'hiring-wire-editorial', 'hiring-wire-codex',
     'hiring-wire-codex-policy', 'hiring-wire-codex-broker', 'hiring-wire-integration', 'source-coverage')}
+EMAIL_MODULES = {'app/server/email-verification.mjs', 'app/server/account-provider-clients.mjs'}
 CODEX_FILES = {
     CODEX_ENTRYPOINT: '113aa5d5952a6fd3950a88323219747d0c91978ebee948509a540c8a460e59a3',
     'runtime/codex/codex-resources/bwrap': 'c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4',
@@ -145,6 +146,8 @@ def validate_manifest(manifest):
         required.add('app/server/schema.mjs')
     if not isinstance(files, dict) or not required <= files.keys():
         raise ValueError('Artifact is missing required runtime/application bytes.')
+    if EMAIL_MODULES & files.keys() and not EMAIL_MODULES <= files.keys():
+        raise ValueError('Email verification requires its complete fixed runtime graph.')
     if (manifest.get('codexVersion') != CODEX_VERSION or manifest.get('codexTarget') != CODEX_TARGET
             or manifest.get('codexArchiveSha256') != CODEX_ARCHIVE_SHA256
             or manifest.get('codexEntrypoint') != CODEX_ENTRYPOINT
