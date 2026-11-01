@@ -7,7 +7,7 @@ read_when: Designing search, accounts, company coverage or release scope.
 
 Brand: **Justup**. Intended domain: `justup.work`.
 
-This guide defines the product behavior and accepted first-release scope, with open decisions called out explicitly. The current [web application](../web/README.md) uses React, strict TypeScript and a Vite build against a same-origin API. It uses real responses rather than fictional listings or accounts, and shows unavailable states for missing services. The integrated service and preview deployment have not yet been verified. The release target below describes required behavior, not a claim that each feature already works.
+This guide defines the product behavior and accepted first-release scope, with open decisions called out explicitly. The current [web application](../web/README.md) uses React, strict TypeScript and a Vite build against a same-origin API. The interface consumes validated API responses and shows unavailable states for missing services. The integrated service and preview deployment have not yet been verified. The release target below describes required behavior, not a claim that each feature already works.
 
 The [backend design for user-facing features](backend-design.md) defines the application boundaries, Luna interpretation and company discovery, AI filtering, weekly Hiring Wire editions, and tuning collections.
 
@@ -134,7 +134,7 @@ Keep cards ordered by first-observed publication time, even if JEV decisions arr
 
 Scrolling into older matches is a continuous job-by-job stream. Background pages refill a small ordered matching buffer; they are not shown as UI pages. Each job's reveal deliberately paces consumption, including when the next match is already ready. The current list uses a 450 ms ink reveal cadence. When the buffer is empty and candidates or JEV decisions remain, show “Looking for more matches…”; an empty filtered page does not establish that the search has ended. Show “No more matches in the last 14 days” only after all remaining evaluations and buffered reveals have completed, then prompt for company requests. See the [infinite-scroll specification](motion-design.md#infinite-scroll-the-reveal-is-the-pacing-mechanism).
 
-The connection must enforce the same account access rules as ordinary result retrieval. It cannot reveal latest postings to visitors who are not entitled to see them. When a posting becomes eligible for a visitor's preview after the latest-results cutoff, it can then appear. Expired or closed postings must disappear, and changes to access must take effect during the connection.
+The connection must enforce the same account access rules as ordinary result retrieval. It cannot reveal latest postings to visitors who are not entitled to see them. When a posting becomes eligible for a visitor's limited results after the latest-results cutoff, it can then appear. Expired or closed postings must disappear, and changes to access must take effect during the connection.
 
 On disconnection, show that live updates are interrupted and reconnect. Resume missed events or refresh the authoritative result state, deduplicate by posting identity, and reconcile closures and expirations. Streaming is a delivery mechanism; it does not replace durable search and viewed-position state. Updates while the website is closed would require a separate notification feature.
 

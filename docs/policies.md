@@ -44,7 +44,7 @@ Accounts are durable by default: `accountTtlMs` and `accountExpiresAt` default t
 
 Sessions use `sessionTtlMs`, a configurable fixed lifetime with a seven-day default, bounded by any stored account deadline. `/session.expiresAt` reports the separate session deadline and is `null` for guests. Guest request-protection cookies last one hour. Verify and disclose the actual session lifetime before activation. Local matching/diagnostics have seven-day limits, and recovery permits at most two SQLite backups with a seven-day usable age.
 
-Read back these values from the selected deployment before approval. They are not subscription rules. A temporary deadline must be disclosed explicitly; an account must not silently change from durable to expiring. A changed configuration requires matching disclosure review and cannot inherit approval from a notice for different settings. Record audience, fixed deployment expiry and independent teardown in the deployment evidence; do not express them as a disposable product architecture.
+Read back these values from the selected deployment before approval. They are not subscription rules. A temporary deadline must be disclosed explicitly; an account must not silently change from durable to expiring. A changed configuration requires matching disclosure review and cannot inherit approval from a notice for different settings. Record audience, fixed deployment expiry and independent teardown in the deployment evidence, keeping those controls separate from durable product data and behavior.
 
 ## Verify each enabled model profile
 
@@ -60,7 +60,7 @@ Every enabled profile needs its own exact pinned model/CLI/configuration identit
 
 Results are newest first, limited to the last 14 days by original source first-observed time. The current imported snapshot is not continuous monitoring. Visitors have a 48-hour delay; stale or missing source evidence pauses results instead of proving zero matches. Search warnings require explicit partial-criteria confirmation, and failed interpretation preserves the accepted revision. Company identity confirmation does not onboard collection or guarantee completion.
 
-Billing, trials, legacy entitlements, SSE, followed/viewed writes, posting-language preferences, request priority and Hiring Wire are not currently available. Hiring Wire is a first-release requirement; its absence is a readiness gap, not a preview exemption. Its weekly hiring changes must come from verified source history, with model inputs and provider handling inventoried if generation uses a model. Do not treat a deployment limitation as completion of the product requirements. Company reports must not infer headquarters or hiring performance from unavailable data. Outside employer/source pages apply their own terms and privacy handling.
+Billing, trials, legacy entitlements, SSE, followed/viewed writes, posting-language preferences, request priority and Hiring Wire are not currently available. Hiring Wire is a first-release requirement; its absence remains a product-readiness gap. Its weekly hiring changes must come from verified source history, with model inputs and provider handling inventoried if generation uses a model. Do not treat a deployment limitation as completion of the product requirements. Company reports must not infer headquarters or hiring performance from unavailable data. Outside employer/source pages apply their own terms and privacy handling.
 
 ## Test public delivery and activation gates
 
