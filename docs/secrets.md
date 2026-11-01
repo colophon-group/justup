@@ -1,30 +1,26 @@
 ---
-summary: Current credential stores, local setup and safe service access.
-read_when: Setting up local credentials or changing how a service uses them.
+summary: Find Justup credential stores and keep runtime, deployment and administration access separate.
+read_when: Setting up local development or changing how a Justup service receives credentials.
 ---
 
 # Secrets and contributor setup
 
-Doppler is the credential manager for this project. Git tracks project names, configuration selection and instructions, while Doppler holds secret values. The checked-in `doppler.yaml` preselects `justup-runtime/dev` for local setup and contains no token.
+Doppler stores Justup credentials; Git stores configuration names and instructions only. The checked-in `doppler.yaml` selects `justup-runtime/dev` for local setup and contains no token. A credential's presence does not authorize provider use, spending or deployment. Keep account identifiers, token lifetimes and setup receipts in protected operator notes.
 
-## Current stores
+## Credential stores
 
-| Project | Current use | Configurations |
-| --- | --- | --- |
-| `justup-runtime` | Justup service credentials. `dev` currently contains the domain-scoped Resend sending key and Justup OpenAI consumption key; staging and production are not populated | `dev`, `stg`, `prd`; personal development configurations may exist |
-| `justup-deploy` | `dev_murmur` holds the installed SSH key pair for a dedicated, restricted Justup account on the existing host; only a forced `id` probe is allowed | Empty `dev`, `dev_personal`, `stg`, `prd`; isolated `dev_murmur` branch |
-| `justup-admin` | Justup provider administration and recovery credentials; no Justup-specific Hetzner host administrator key exists | `admin` |
-| `hetzner-infrastructure` | Shared Hetzner `Default` project API access across Jobseek and Justup; never load into an app or deployment job | `prd_inventory` (Read), `prd_admin` (Read & Write); default roots are empty |
-| `jobseek-credential-archive` | Non-operational Jobseek snapshots, including quarantined credentials; never load into a Justup consumer | `admin`, `hosts`, `deploy`, `dormant` roots and their branches |
-| `jobseek-runtime` | Jobseek crawler and worker runtime | Per-service `prd_*`, `legacy_crawler` |
-| `jobseek-web-runtime` | Jobseek web runtime | Vercel `dev_*`, `stg_*`, `prd_*`, `legacy_web` |
-| `jobseek-ci-runtime` | Jobseek crawler, web support, observability, canary and TLS automation | Service-specific production configurations |
+| Project | Use |
+| --- | --- |
+| `justup-runtime` | Separate application consumption credentials for development, staging and production. Staging and production are not yet populated. |
+| `justup-deploy` | Restricted deployment identity for the existing host. Its `dev_murmur` configuration holds the installed key; the account currently permits only a forced identity probe, not deployment. |
+| `justup-admin` | Provider administration and recovery, separate from application and deployment consumers. |
+| `hetzner-infrastructure` | Shared Hetzner project inventory and administration access. These project-wide tokens never belong in Justup application or deployment environments. |
+| `jobseek-credential-archive` | Non-operational Jobseek snapshots. Never load them into a Justup consumer. |
+| `jobseek-runtime`, `jobseek-web-runtime`, `jobseek-ci-runtime` | Existing protected Jobseek production consumers. Keep them isolated from Justup. |
 
-Each service and environment uses its own configuration. The archive is non-operational: never load, sync or reuse its credentials, especially `admin_quarantine`; revoke or rotate the underlying provider credentials as needed. Do not add cross-project references from runtime or deployment configurations into administration or archive storage.
+A specifically approved shared provider key still needs Justup-only delivery and its own spending guard. Jobseek crawler deployment and data-safety gates remain in force.
 
-Jobseek production consumers retain their original protected configuration. A value present in Doppler does not authorize a consumer cutover or establish that the provider credential is valid. Follow the service's deployment and recovery runbook before changing a consumer; the crawler's deployment gates continue to apply.
-
-## Local setup
+## Local development
 
 Install the [Doppler CLI](https://docs.doppler.com/docs/install-cli), then run from the repository root:
 
@@ -33,31 +29,23 @@ doppler login --scope .
 doppler setup
 ```
 
-Check the selected project and configuration before running a command. A local `.env.local` can contain production access; never copy it into this repository or treat it as a development fixture.
+Check the selected project and configuration before each command. Pass an explicit project/configuration and an allowlist of required keys to a service. Use `--no-fallback` unless that service intentionally uses Doppler's encrypted fallback cache; revoking a token does not erase cached provider credentials. Never copy a local `.env.local` into the repository or treat it as a test fixture.
 
-For a service that uses Doppler, pass the explicit project/configuration and an allowlist of only the required keys. Use `--no-fallback` unless the service intentionally uses Doppler's encrypted fallback cache. Revoking a Doppler token does not erase cached provider credentials; rotate the provider credential if a cache may remain. On macOS, the CLI stores login credentials in the system Keychain.
+Never inject secrets into frontend bundles, browsers, `NEXT_PUBLIC_*` or `VITE_*` values. Public configuration is separate from credentials. Do not print secrets in commands, logs, chat, issues, commits or screenshots.
 
-Never inject secret values into a frontend bundle, browser, `NEXT_PUBLIC_*` or `VITE_*` variables. Public configuration is distinct from a credential.
+## Service and host access
 
-## Access and operation
+Give each consumer a separate scoped, read-only service token for its configuration. Store it in that consumer's protected environment, not in Git, shell profiles or command arguments. The API receives runtime access; a deployment job receives deployment access. No routine process receives administration or archive access.
 
-Use a separate read-only service token (a scoped machine credential) for each consumer and configuration. Keep it in that consumer's protected secret settings, never in Git, chat, command arguments or shared shell profiles. A server receives runtime access; a deployment job receives deployment access. No routine process should receive administration or archive access.
+The shared Hetzner project contains the former Murmur host and Jobseek servers. Its Cloud API tokens apply to the whole project and offer only Read or Read & Write permissions, so they cannot serve as a host-scoped Justup deployment credential. The existing host `deploy` account has Docker and Jobseek privileges; do not use it for Justup. The separate `justup-deploy` account is password-locked and has no Docker or sudo access. Its installed SSH key currently permits only a forced read-only identity probe. The `credential-role-boundaries` issue tracks the reviewed exact-command deployment gate.
 
-Root SSH keys, database-owner credentials, provider management tokens and certificate signing keys belong in administration when established. Routine deployment must use a dedicated restricted identity. Do not run coding agents with an administrator configuration injected into their environment.
+Root SSH keys, database-owner credentials, provider management tokens and signing keys belong in administration when established. Do not inject an administrator configuration into coding agents or CI. Some administration keys can act across a shared provider team; a Doppler config does not narrow the provider's own permission scope. Confirm the exact sandbox, domain, zone or project before an approved administrative call.
 
-The existing Hetzner `Default` project contains the former Murmur host and Jobseek servers. [Hetzner Cloud API tokens](https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/) apply to the whole project, with only Read and Read & Write permissions; a token for that project cannot be scoped to Justup's host. A dedicated Read token and a dedicated Read & Write token are in Doppler `hetzner-infrastructure`, separate from Justup configurations. Use `prd_inventory` for read-only provider checks and `prd_admin` only for bounded provider changes after confirming the target project and server. No Hetzner Cloud token is stored in `justup-runtime`, `justup-deploy` or `justup-admin`. The shared admin token must not be injected into app or CI runtime. The existing host `deploy` account belongs to the Docker group and has Jobseek-specific sudo permissions; do not use it for Justup.
-
-The separate `justup-deploy` account is password-locked, has no Docker or sudo access, and cannot read the protected Jobseek environment file. Its home and SSH key path are root-owned and non-writable by the account. `HETZNER_DEPLOY_SSH_PRIVATE_KEY` and `HETZNER_DEPLOY_SSH_PUBLIC_KEY` in `justup-deploy/dev_murmur` match the installed key (fingerprint `SHA256:JAG5beyYfR+gNTwr4su5r0nen5TjRGob3YTmlbUU5PU`). SSH currently forces `/usr/bin/id` for a read-only identity probe; it cannot deploy. The `credential-role-boundaries` issue records the live checks and tracks the reviewed exact-command release gate. Keep the key out of application runtime and CI until that gate exists; do not make the account's home or key path writable.
-
-Some administration keys in `justup-admin/admin` can act across a shared provider team or organization. The Doppler config limits where agents obtain them; it does not narrow the provider's own permission scope. Confirm the target project, sandbox, domain or zone before an administrative API call. Keep consumption keys in `justup-runtime` and use provider APIs for administration where they offer the required scope.
-
-The current Doppler plan does not provide per-person project/environment permissions. Owners and admins, including an agent using their CLI login, can access all projects. Give contributors only the development access they need; do not grant owner/admin access as a shortcut.
-
-Third-party syncs require an explicit service/environment allowlist. Review destination keys before enabling a sync so it cannot replace production settings unexpectedly.
+The current Doppler plan does not provide per-person project/environment permissions. Owners and admins, including an agent using their CLI login, can access all projects. Do not grant owner/admin access as a development shortcut. Review third-party sync destinations and exact key allowlists before enabling them. Follow the [operations guide](operations.md) before changing a live consumer or its recovery path.
 
 ## References
 
 - [Doppler service tokens](https://docs.doppler.com/docs/service-tokens)
 - [Project permissions](https://docs.doppler.com/docs/project-permissions)
 - [CLI scopes and service-token precedence](https://docs.doppler.com/docs/secrets-setup-guide)
-- [macOS Keychain integration](https://docs.doppler.com/docs/multiple-workplaces)
+- [Hetzner Cloud API tokens](https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/)

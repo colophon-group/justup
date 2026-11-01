@@ -5,7 +5,7 @@ read_when: Changing verification, packaging, runtime startup or recovery.
 
 # Repository scripts
 
-`ci.py` reads the pull-request event and changed paths, checks the work-based branch name, verifies the quality checklist and local guide links, then runs the suites selected by its reviewed `IMPACT` map. Checklist explanations may link an issue. Its `selftest` command checks naming, selection and checklist rules.
+`ci.py` reads the pull-request event and changed paths, checks the work-based branch name and quality checklist, and verifies local guide links and each root guide's summary and guidebook entry. It then runs the suites selected by its reviewed `IMPACT` map. Checklist explanations may link an issue. Its `selftest` command checks naming, selection, checklist and guidebook rules.
 
 The full runtime lane covers strict TypeScript checking, a Vite production build, pure web contracts (`test:web`), deployment contracts (`test:deployment`), server contracts (`test:server`), offline Python contracts (`test:python`), and Playwright browser journeys (`test:browser`). CI pins Node 24.22.2 for the backend built-in SQLite module. Web changes select typecheck, build, web, deployment and browser; server changes select server, deployment and Python; offline Python changes select Python and deployment; deployment changes select build, deployment, server, Python and browser. Shared configuration, dependency and CI-tooling changes run all suites. Unknown paths also run all suites. Guide-only changes run policy and local-link checks. Each selected suite must be registered and pass; missing results fail the check. `python3 scripts/ci.py selftest` covers representative selection and main-release-blocking rules.
 
