@@ -687,6 +687,7 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
         qualified = True
         return {'previousPlanSha256': previous_sha, 'planSha256': expected, 'operatorFiles': len(new_scripts),
                 'feedUnitsInstalled': add_feed,
+                'feedInboxPrepared': add_feed,
                 'privateStateTouched': False, 'activated': False}
     except Exception:
         if not withdrawn and history_created:
