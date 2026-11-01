@@ -5,7 +5,7 @@ read_when: Choosing runtime placement, reviewing isolation or preparing an envir
 
 # Justup deployment
 
-Justup uses one product API, durable SQLite store, shared background runner and private model broker. Cloudflare delivers the compiled frontend and forwards same-origin API requests to the application on existing Hetzner capacity. A restricted preview runs the same product with its own data, credentials and temporary routing. Invitation, noindex, schedule, provider and resource settings may change through reviewed configuration; account identity and product state remain durable.
+The deployment design uses one product API, durable SQLite store, shared background runner and private model broker. Cloudflare delivers the compiled frontend and forwards same-origin API requests to the application on existing Hetzner capacity. A restricted preview will run the same product with its own data, credentials and temporary routing once the release gate passes. Invitation, noindex, schedule, provider and resource settings may change through reviewed configuration; account identity and product state remain durable.
 
 This guide owns placement and environment boundaries. Use [operations](operations.md) for host commands, exact resource controls, configuration delivery and recovery; [frontend delivery](frontend-delivery.md) for retained assets, routing and deployed byte checks; and the [development and release guide](development-process.md) for release candidates, required evidence and promotion.
 
