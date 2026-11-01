@@ -9,13 +9,13 @@ The explicit operator command `scripts/import-jobs.py` copies allowlisted listin
 
 ## Import a private feed batch
 
-The crawler-side exporter writes a versioned manifest and ordered data parts to a private directory. Transfer one immutable batch through the approved private path before running this command. The directory and files must be owned by the importing user and inaccessible to other users; symlinks and altered part digests are rejected. The importer reads only the fields and body evidence in that batch. It does not need the old Jobseek website, public search key or asset host.
+The crawler-side exporter writes a versioned manifest and ordered data parts under one private batch directory. Transfer that immutable directory through the approved private path before running this command. The parent, batch directory and files must be owned by the importing user and inaccessible to other users; symlinks and altered part digests are rejected. The importer reads only the fields and body evidence in that batch. It does not need the old Jobseek website, public search key or asset host.
 
 1. Supply the exact manifest, an existing private output directory outside Git, and the previous accepted export if this is a change batch. Keep the previous export until the next batch is accepted.
 
    ```sh
    python3 scripts/import-jobs.py \
-     --feed-manifest /private/feed/batch-<id>-manifest.json \
+     --feed-manifest /private/feed/batch-<id>/manifest.json \
      --previous /private/job-data/previous.json \
      --max-jobs 500 \
      --output /private/job-data/next.json
@@ -25,7 +25,7 @@ The crawler-side exporter writes a versioned manifest and ordered data parts to 
 2. Read the count receipt. `sourceScopeRowCount` is the source's count for its declared 14-day active scope; `limitedCoverage` is true for a company-only scope, a selected subset, or an unfinished change page. The importer never presents that subset as complete coverage. Verify sampled employer links and source counts; keep missing or unavailable descriptions out of AI matching.
 3. When `importable` is true, transfer the 0600 JSON export to the protected application data path and run the application store import. Only after that succeeds may the crawler exporter acknowledge the manifest digest from the receipt. When `importable` is false, the output is a non-importable staging file for a partial change page. Keep it durably, acknowledge that staged page, then use it as `--previous` with the next cursor-linked batch. A partial page cannot make the live application claim a fresh complete import.
 
-The producer reports closures and reservations as explicit rows. Missing rows are unknown, never inferred closures. Unchanged jobs keep their own previous observation time through change batches; the application's import verification time is the source cutoff, so replaying an old batch cannot make it fresh again. A full verified snapshot must run within the 24-hour freshness window to refresh unchanged jobs. Source and application capacity are bounded: at most 1,000 retained listings and 48 MiB of normalized body text. A wider product catalogue needs a reviewed capacity change and a verified import path, not a silent higher limit.
+The producer reports closures and reservations as explicit rows. Missing rows are unknown, never inferred closures. Unchanged jobs keep their own previous observation time through change batches; application coverage is bounded by the last full source snapshot, so replaying a change page cannot make the feed fresh again. A full verified snapshot must run within the 24-hour freshness window to refresh unchanged jobs. Source and application capacity are bounded: at most 1,000 retained listings and 48 MiB of normalized body text. A wider product catalogue needs a reviewed capacity change and a verified import path, not a silent higher limit.
 
 ## Import from the public source
 
