@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { openStore } from './store.mjs';
 import { tmpdir } from 'node:os';
 import { createApplication, createDeletionBarrier, prepareRestoredDatabase, readImportFile, configFromEnv } from './main.mjs';
+import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 
 test('feature deletion and tasks compose synchronously inside the auth transaction', async (t) => {
   let cleanup;
@@ -144,7 +145,8 @@ test('crash-retained and replaced pending markers are never cleared by a differe
   reopened.db.exec('BEGIN IMMEDIATE'); assert.throws(() => next.beforePrivateDelete(), /pending/); reopened.db.exec('ROLLBACK');
   next.afterPrivateTransaction(); assert.equal(readFileSync(pendingPath, 'utf8'), foreign);
   const application = await createApplication({ config: { dbPath, privateGenerationPath: generationPath, backupDir, allowedOrigin: 'https://preview.example',
-    policiesReviewed: true, privacyUrl: 'https://preview.example/privacy.html', usageUrl: 'https://preview.example/usage.html', policyVersion: 'synthetic', inviteCode: 'synthetic' },
+    sourceCommit:'a'.repeat(40),policiesReviewed: true, privacyUrl: 'https://preview.example/privacy.html', usageUrl: 'https://preview.example/usage.html', policyVersion: 'synthetic',
+    policyAssetProof:syntheticPolicyProof({origin:'https://preview.example',sourceCommit:'a'.repeat(40),version:'synthetic'}),inviteCode: 'synthetic' },
     authFactory: () => ({ cleanup: () => ({}), session: () => null }) });
   await new Promise((r) => application.server.listen(0, '127.0.0.1', r));
   try {
