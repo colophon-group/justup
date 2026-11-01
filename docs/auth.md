@@ -5,7 +5,7 @@ read_when: Wiring authentication, changing deployment admission policy or prepar
 
 # Accounts and sessions
 
-Justup implements local username/password accounts in [`server/auth.mjs`](../server/auth.mjs), using Node 24 built-in crypto and SQLite. Accounts are durable by default. Sign-out and session expiry revoke authentication without deleting the account, its saved searches or its company requests. The current runtime grants authenticated accounts full job access and reports `billingEnabled:false`; it does not implement payment, a free period, external identity, password recovery or legacy eligibility. Those are launch requirements tracked by [account-access](https://github.com/colophon-group/justup/issues/29), not capabilities implied by registration.
+Justup implements local username/password accounts in [`server/auth.mjs`](../server/auth.mjs), using Node 24 built-in crypto and SQLite. Accounts are durable by default. Sign-out and session expiry revoke authentication without deleting the account, its saved searches or its company requests. The current runtime grants authenticated accounts full job access and reports `billingEnabled:false`; it does not implement payment, a free period, external identity, password recovery or legacy eligibility. Those are launch requirements tracked by `account-access` and the [release criteria](development-process.md); registration does not imply those capabilities.
 
 ## Configure admission and lifetime
 

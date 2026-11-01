@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "purpose": "Provider-free compiler held-out contracts; these outputs do not measure Luna quality.",
   "liveGate": {
     "minimumCases": 20,
@@ -140,6 +140,13 @@
     "cliVersion": "0.159.2",
     "model": "gpt-6-luna",
     "reasoningEffort": "low",
-    "nativeTools": 0
+    "nativeTools": 0,
+    "taskProfile": "search_intent",
+    "webSearch": "disabled"
+  },
+  "evaluationStatus": {
+    "liveQuality": "not_run",
+    "currentCandidateActualWireObserved": false,
+    "historicalWireEvidence": "empty complete-tool custom-provider Darwin capture only; not current-candidate or default-provider qualification"
   }
 }

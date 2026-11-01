@@ -1,9 +1,9 @@
 ---
-summary: Small repository-owned checks used by Justup pull-request CI.
-read_when: Changing test selection or the pull-request quality gate.
+summary: Repository-owned CI, immutable deployment and offline ingestion tools.
+read_when: Changing verification, packaging, runtime startup or recovery.
 ---
 
-# CI scripts
+# Repository scripts
 
 `ci.py` reads the pull-request event and changed paths, checks the work-based branch name, verifies the quality checklist and local guide links, then runs the full runtime lane when application, test, deployment or CI tooling files change. Checklist explanations may link an issue. The script also has a `selftest` command for its naming, selection and checklist rules.
 
@@ -13,6 +13,8 @@ The full runtime lane uses `npm run test:full`: strict TypeScript checking, a Vi
 
 The required GitHub check is `CI / decision`. It reports which suites ran and why. A path it does not recognize requires a registered `test:full` suite or an update to the reviewed impact rules. Runtime changes to `main` fail until the release preview gate exists; application changes target `dev`.
 
-`test-deployment.mjs` recursively discovers `deploy/**/*.test.mjs` plus `scripts/preview-*.test.mjs`. `test-python.py` discovers `scripts/test_*.py`, reports an absent offline suite explicitly, and rejects an importer implementation without its `test_import_demo_jobs.py` contracts. CI logs each runner duration and its exact selected files or unavailable reason. This first small application runs every available suite for broad changes rather than maintaining speculative dependency groups; unknown paths use that same full lane. A backend preview implementation without its own registered Node/Python contracts fails instead of passing on frontend tests alone. Backend owners must provide and execute any nonstandard preview checks before calling them registered.
+`test-deployment.mjs` recursively discovers `deploy/**/*.test.mjs` plus `scripts/preview-*.test.mjs`. `test-python.py` discovers `scripts/test_*.py`, reports an absent offline suite explicitly, and rejects an importer implementation without its `test_import_jobs.py` contracts. CI logs each runner duration and its exact selected files or unavailable reason. This first small application runs every available suite for broad changes rather than maintaining speculative dependency groups; unknown paths use that same full lane. A backend preview implementation without its own registered Node/Python contracts fails instead of passing on frontend tests alone. Backend owners must provide and execute any nonstandard preview checks before calling them registered.
 
 `test-web.mjs` recursively runs pure `web/src/**/*.test.ts` contracts with Node 24 type stripping, paired with the required strict TypeScript check. Playwright serves `web/dist` through Vite preview with existing-server reuse disabled, so source or a stale server cannot satisfy built-application verification. No source files or test fixtures are deployed.
+
+The backend deployment tools retain their `preview-*` filenames because they operate the reviewed temporary host. They launch the same product runtime with `JUSTUP_*` configuration; no legacy environment aliases are accepted. `preview-artifact.py` packages canonical runtime adapters and `import-jobs.py`, immutable task schemas/catalogues and the pinned native runtimes. See [operations](../docs/operations.md) before host changes or recovery. The offline deployment wrapper checks inventory, scoped configuration, task-specific model proof, preview identity, resource boundaries and deletion-safe restore using fake/local inputs.

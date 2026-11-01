@@ -1,107 +1,66 @@
 ---
-summary: Place Justup on existing capacity and define the isolated preview, release and resource gates.
-read_when: Allocating backend capacity, preparing a preview or planning a production release.
+summary: Deploy the same Justup product through a restricted preview and verified wider release.
+read_when: Reviewing runtime placement, changing deployment settings or preparing release and recovery evidence.
 ---
 
-# Deployment plan: Cloudflare and existing Hetzner capacity
+# Justup deployment plan
 
-Status: accepted starting deployment plan
+The application has one API, durable SQLite store, leased background queue and private model broker. Cloudflare delivers the compiled frontend and forwards same-origin API requests to Hetzner. Preview is an isolated deployment of this product. Invitations, temporary origins, resource/provider ceilings, disabled production schedules and noindex are deployment settings. Accepted first-release features must work before first invited activation; widening access does not replace the runtime, database or account system.
 
-Date: 31 October 2026
+Use the [development process](development-process.md) for protected `dev` integration, frozen release candidates, exact-source checks and explicit production promotion. [Operations](operations.md) owns host preparation, credentials, configuration, import, backup, restore and rollback. [Frontend delivery](frontend-delivery.md) owns immutable frontend bytes, runtime routing, `deploymentMode` and deployed browser evidence. [Backend design](backend-design.md) defines accepted product behavior.
 
-This plan implements the [user-facing backend design](backend-design.md). It prioritizes low incremental cost and a small operational surface while demand is being validated. Existing infrastructure is a capacity and cost input; the new application's behavior follows the Justup design. Crawler deployment and operation are outside this plan.
+## Runtime placement and identities
 
-The public repository is [colophon-group/justup](https://github.com/colophon-group/justup), and the product domain is `justup.work`. The current browser interface has no live API, runner or complete release preview yet. Follow the [development and release guide](https://github.com/colophon-group/justup/blob/main/docs/development-process.md) for the authoritative contribution, release and resource-approval rules.
-
-This is the full product deployment plan. The temporary [demo-release](https://github.com/colophon-group/justup/issues/26) has a narrower allocation on an existing ARM host, isolated preview state and no billing, production mail or crawler writes. Its current host observations, provisional ceilings and load evidence belong in [demo-preview-hosting](https://github.com/colophon-group/justup/issues/27). They do not reserve the capacity described below or authorize a production launch.
-
-## 1. Deployment split
-
-Use Cloudflare for frontend delivery and public caching. Keep the application backend, authoritative product state, search coordination and Codex execution on Hetzner. Start in one region using existing capacity.
-
-| Feature | Initial placement |
+| Component | Current boundary |
 | --- | --- |
-| Landing page, workspace UI, JavaScript, CSS and fonts | Cloudflare static assets and CDN. |
-| Public company pages and published Hiring Wire | Cloudflare delivery/cache, backed by Hetzner data. Public pages need crawlable content. If server rendering is required, start with the Hetzner application; Workers rendering remains an option. |
-| Accounts, access, subscriptions, saved searches, follows, viewed state and billing callbacks | Hetzner API and PostgreSQL. Keep authoritative application state together. |
-| Search compilation, normalization, primary filtering, candidate evaluation scheduling and continuations | Hetzner, beside the relevant data and durable evaluation state. |
-| Luna search planning and company previews; weekly Sol Hiring Wire session | Bounded Codex execution on an existing Hetzner host, with durable task workspaces and versioned tools. |
-| Live SSE results | Hetzner API, streamed through Cloudflare. |
-| Logos, edition artifacts and evaluation exports | Existing storage initially; R2 is an optional object-storage destination when useful. |
-| System One inference | Provider chosen through the evaluation collection. Hetzner owns orchestration; the model can run through an external inference provider. |
+| Frontend | React/TypeScript/Vite builds off-host from an exact committed snapshot and lockfile. Retain compiled assets and worker bytes; no frontend compiler, source or npm install belongs on the application host. |
+| API | Node 24.22.2 built-in HTTP/crypto/SQLite, loopback port 8787, dedicated unprivileged API UID. It owns sessions and access-filtered HTTP/SSE state, and receives no model or JEV credentials. |
+| Product state | Durable SQLite account, search, request, task and edition state. API/queue share only the explicit state group. Account expiry is optional new-account configuration; sessions expire separately. A new PostgreSQL service is not required by the implemented runtime. |
+| Queue | One fixed `runner-adapter.mjs` and `composition.mjs`, durable leases and safe retries. Interactive work has priority over weekly editorial tasks; scheduled work enters this queue rather than another persistent agent service. |
+| Models | Separate model UID and root-created Unix socket; queue is the sole client. Subscription auth is private to that UID. Fresh per-invocation homes, fixed task policies and bounded native tools require candidate-specific qualification. |
+| Job transfer | Canonical `scripts/import-jobs.py` reads only approved public Jobseek fields; its completed snapshots import through the same application store. Refresh, source history and stale/closure behavior must be verified before scheduling. |
+| Recovery/accounting | Live deletion generation remains outside snapshots. Private deletion purges/invalidate backups. Restores invalidate all sessions and prepare a separate database. The cumulative provider ledger and crash locks stay outside database backups and are never reset by restore. |
 
-Workers can support lightweight APIs, webhooks, token verification and streaming. D1, Durable Objects, Queues and Workflows are available capabilities. Keeping the application backend together on Hetzner currently gives the simplest data access and task execution. Add an edge capability when a measured product need justifies it.
+The immutable backend artifact contains runtime modules, canonical importer, exact required schemas/catalogues, pinned Node/Codex native bytes and complete hashes. Build once off-host from an exact Git commit/tree. Source, build, frontend artifact, deployed mode, runner heartbeat, schema and import generation must agree. A changed source or artifact needs new proof. A backend process check cannot establish that the full product is ready.
 
-## 2. Existing capacity
+## Current restricted allocation
 
-Use existing Hetzner capacity before proposing another rental:
+The existing reviewed former Murmur Linux ARM64 host and Cloudflare Free allowance are the only accepted deployment allocation. Application services and public routing are off. Model subscription auth exists in its dedicated private home; a code update must preserve it and the existing data/identity boundary. Host identities and proofs stay in protected operator records.
 
-- The PostgreSQL host is the initial candidate for the application API and a separate application database.
-- The operator has confirmed that the existing 4 GB ARM Murmur host is available for Justup. It is an alternative placement for the API and/or bounded runner.
-- Reassess the search host after the old search workload is retired or reduced. Retain data needed for the new search contract until its handoff is verified.
-- Preserve the crawler's variable CPU and memory headroom when placing latency-sensitive application work.
+The aggregate temporary controls are exactly half a CPU (`CPUQuota=50%`, `CPUWeight=10`), `MemoryHigh=768M`, `MemoryMax=1G`, no swap, 96 tasks, a physically preallocated 2 GiB filesystem and an 8 GiB root reserve. At most one model task runs. All API, queue, model, tunnel and maintenance work shares the slice. These are allocation controls, not intrinsic product limits. Preserve the production Lightpanda renderer, its port 9443, existing containers/services and `/mnt/murmur`; a Justup failure must not affect Jobseek.
 
-Inspect current memory, CPU, disk, retained volume contents and backups before assigning service limits. Treat live inventory and provider quotes as dated operational evidence, not reserved capacity or enduring prices. Record that evidence in the relevant work or resource issue.
+Systemd derives hierarchical slice paths. For `justup-preview.slice`, the aggregate parent is under `justup.slice`; read the live `ControlGroup` or resolve `/proc/self/cgroup`. Do not assume a root-level `/justup-preview.slice`. Kernel values, allocated blocks, namespaces, networking and credential denial must be proved on the actual candidate/host; unit syntax and local fakes do not establish isolation.
 
-## 3. Product deployment allocation
+The current installation accepts only the reviewed scripts-only `upgrade-ops` transition with unchanged units, paths, UIDs, native pins and resource plan. Bind both complete plans and old installed hashes. Preserve the image, database, deletion generation, auth, ledger, immutable releases, old receipt and private update history. A failed or interrupted update blocks runtime adoption until reconciled. Changed hashes never authorize adoption of a historical installed plan or staged artifact. No reinstall, data reset, edited receipt, cap increase or forced mount cleanup is an upgrade mechanism.
 
-Start without another VM rental. Place the API and application database on the existing PostgreSQL host, with separate application credentials and bounded process resources. The bounded runner can share existing capacity, prioritizing interactive Luna tasks over weekly editorial work. Keep agent workspaces on the host executing the task and include them in backup planning.
+## Deployment configuration and production transition
 
-The available 4 GB ARM Murmur host is an existing option for the API and/or runner when separating them from PostgreSQL is useful. Check selected binaries/images for ARM compatibility and measure its actual operating headroom before assigning resource limits.
+The runtime uses `JUSTUP_*` configuration. `JUSTUP_REQUIRES_INVITATION` defaults true and can become false after reviewed admission/security verification. `JUSTUP_MAX_ACCOUNTS` defaults to 30; positive integers or `none` explicitly select the ceiling. Accounts are durable by default. Optional `JUSTUP_ACCOUNT_TTL_MS` or `JUSTUP_ACCOUNT_EXPIRES_AT` are recorded only when a new account is created; changing deployment settings never rewrites existing lifetime. `JUSTUP_SESSION_TTL_MS` is independent and defaults to seven days.
 
-Keep search execution beside its data. The current search index remains an occupied resource until the retained data and new search requirements establish its replacement or reduction. Application architecture does not depend on retaining the old search implementation.
+Frontend runtime configuration defaults to `deploymentMode:preview`, with noindex. Production publication is an explicit release action and binds `deploymentMode:production` into its identity; mode is not approval and cannot bypass the release gate. Same frontend assets can use approved runtime routing without rebuilding different bytes. API responses remain private/no-store/noindex in either mode. `/__release/version` is the identity endpoint; obsolete preview aliases are absent.
 
-Sharing the application and database host couples their maintenance and failure domain. Accept that tradeoff initially, with separate service limits and working database backups. Prefer the already available ARM host for later separation before renting another machine.
+Keep preview payment capture, production mail and production schedules disabled. Verify free-period/subscription transitions, replay safety, entitlement changes and failure behavior in safe test mode before activation. Review the exact policies for the actual recipients/retention before enabling registration; `product-draft-4` remains unreviewed. Enabling a schedule or provider must be a bounded configuration transition with current qualification, never implicit startup work.
 
-## 4. Cloudflare serving and SSE
+The same state and recovery interfaces continue through wider release. A capacity or unit migration needs a concrete reviewed plan that preserves durable identities and deletion/accounting barriers. It does not justify replacing the product implementation or discarding invited users.
 
-Cloudflare static asset hosting provides free asset requests and storage. Use ordinary CDN/proxy routing or a thin frontend Worker for requests to the Hetzner API. Choose the routing mechanism during implementation, keeping one authoritative API and a straightforward browser authentication path.
+## Ongoing operation and first-release gates
 
-If a frontend Worker forwards SSE, return the origin response body as a stream. The origin sends headers promptly, uses `Content-Type: text/event-stream` and private/no-store cache behavior, and flushes heartbeats approximately every 15–30 seconds. Disable response buffering along the path. Keep matching work separate from the connection handler.
+A recurring job feed must preserve posting identity and first observation, refresh known IDs, mark closures/staleness honestly and retain attributable source history. The current importer exposes fixed-snapshot and `--previous` inputs; one initial import is not ongoing operation. Qualify the authoritative read-only producer, transfer cadence, generation/replay behavior and monitoring. The `source-coverage-history` producer must prove scope/revision and uninterrupted intervals before comparative Hiring Wire publication. A current snapshot or recent successful check cannot prove fourteen days of continuity.
 
-Workers HTTP streams have no fixed wall-time limit while the client remains connected; CPU limits still apply. Streams can disconnect during runtime updates and network changes. Use one stream per workspace, clean up disconnected clients, bound per-client buffering, and reconcile authoritative state after reconnecting. The backend's revision, access and expiry rules apply throughout.
+Hiring Wire uses the existing queue, an idempotent completed-week period and one ephemeral Sol session with its fixed read/fact tools. Persist the underlying snapshot, aggregates, selections and execution policy with each edition. Qualify the actual source adapter and provider protocol, replay and interrupted coverage before activating its weekly schedule. Shell helpers, another permanent service or fabricated aggregate fixtures do not establish publication readiness.
 
-SSE forwarding needs no Durable Object. Continuously active Durable Objects have their own duration billing, so add one only for a concrete coordination requirement. Cache public catalogue and Wire responses explicitly; Cloudflare's CDN does not cache HTML or JSON by default. Keep personalized search and account responses private.
+Operations needs reviewed backup cadence/recovery objectives, successful restore and rollback rehearsal, freshness/queue/task/provider/resource/backup-age observations, numeric alert thresholds and a response owner. Existing metadata logs and the resource guard provide part of this evidence; missing alert delivery or instrumentation remains a launch gap. Restrict preview work to its existing ceilings; approve new resources before allocation.
 
-## 5. Cost baseline and rental fallback
+The first invited candidate must pass all accepted journeys: visitor/search/sign-in, editable saved searches and honest model warnings, residual matching, durable account/follow/viewed state, entitlement transitions, resumable live SSE results, company discovery/request/coverage progression, attributable company hiring reports, persisted posting-language preferences, fresh source-attributed jobs, factual weekly Hiring Wire, reviewed policies and deletion-safe recovery. A missing accepted feature blocks activation and cannot become a preview exception by wording alone.
 
-The initial target is **€0 additional VM rental** by reusing existing hosts. Existing infrastructure bills continue. Model execution/inference, domain, email/authentication services, payment fees, storage growth and backup costs remain separate budget lines.
+## Exact-artifact release
 
-Start with static frontend delivery and ordinary proxying. Add paid Workers, R2 or another managed capability only for a concrete need within approved resource scope. Check current request, CPU, storage and operation pricing against the expected workload; include preview resources and model evaluations in the budget.
+Build and retain compatible frontend/API/runner bytes once from a frozen candidate. Record candidate SHA, current `main` base OID, tree, immutable frontend URL/deployment identity, artifact digests, explicit mode, schema/import generation and runner identity. Deploy to isolated state and nonproduction credentials. Verify process readiness, full product capabilities, safe entitlement/provider failures, resource/load/latency/cost observations, backup/restore and real browser journeys through the fixed HTTPS route. Preview remains protected and non-indexed.
 
-Additional VM rental is a fallback after existing capacity is assessed. Compare compatible ARM and x86 options in the required region, using a current project API quote that includes IPv4, storage, backups and tax as applicable. Record the quote, alternatives and spending ceiling in the resource request rather than embedding an expiring price table in this guide.
+Local unit/contract tests and `preview-verify.py` are bounded evidence. The verifier always reports `completeReleaseGate:false` and `shareable:false`; the full trusted deployed `Preview / verified` gate and release-owner review remain required. Stop on a hold, missing result, identity mismatch, failed cleanup or unqualified dependency. Rerun affected evidence after any candidate/base/artifact/policy change.
 
-## 6. What triggers a change
+Release requires the current protected checks and exact reviewed head/base. The merged `main` tree must equal the tested candidate before tagging. Production is an explicit action with retained identical artifact bytes and approved runtime configuration, followed by smoke checks and a defined observation window. Automatic production builds on every push are incompatible with this release contract. Retain the prior deployable artifact and compatible deletion-safe recovery path; do not restore old sessions or overwrite the current deletion generation during rollback.
 
-Measure search latency, interactive task wait time, candidate yield, ready-result buffer starvation, memory pressure and cost per useful search. Control speculative candidate work and reuse classification decisions before adding machines. Data/index size can drive resource needs even with few users.
+## Resource authorization
 
-Move the API or runner to the available ARM host when shared-host contention or maintenance coupling becomes material. Propose additional capacity only when measured needs exceed existing resources. A single-region application is the starting point; broader geographic deployment follows demonstrated user demand.
-
-Workers AI can be benchmarked against JEV or other System One providers using the saved evaluation collection. Compare quality, measured batching throughput and cost per accepted result. Frontend hosting does not determine the inference provider.
-
-## 7. Preview and release
-
-Ordinary work integrates through `work/<semantic-slug>` PRs into protected `dev`. That branch is not a production deployment source. A frozen `release/vX.Y.Z` candidate targets `main`; urgent `hotfix/<semantic-slug>` changes follow the development guide and return to `dev` afterward.
-
-The full-suite and `Preview / verified` release gate are not implemented yet. Product runtime changes cannot enter `main` before the real gate exists and passes. Backend implementation must also register its focused checks, impact rules and full-suite participation alongside the existing `CI / decision` selection path.
-
-The preview must deploy compatible versions of all three runtime components: the Cloudflare frontend, Hetzner API and Hetzner runner. Use an isolated database, task state and execution namespace, preview-only credentials and protected, non-indexable URLs. Existing hosts may support these isolated processes when their measured resources and approved scope allow it; isolation does not require a new VM. Preview cannot run production schedules, send real user communications, change live billing or process production user data.
-
-Build the three artifacts once. Record the exact candidate SHA, current `main` base OID, candidate tree hash, immutable frontend deployment URL and ID, API/runner artifact digests and deployed readiness/identity results. Run the full required suites and a small Playwright journey set against that fixed compatible preview. Include ordinary and failure paths for search interpretation and repair, AI availability and scrolling, access changes, SSE recovery, company requests, runner retries and sandbox billing. Use deterministic provider fixtures plus bounded real-provider checks where required, with defined quality, latency and cost thresholds.
-
-Release is an explicit action using the retained verified bytes. Reverify when the candidate or `main` base changes, and require the merged `main` tree to match the tested candidate before tagging and deployment. Use runtime configuration or stable relative routes so preview-specific origins and credentials are not embedded in frontend assets. If Cloudflare Pages is selected, disable automatic production builds and Direct Upload the retained frontend bytes as a new production deployment; a preview deployment cannot itself be promoted or used as a production rollback target.
-
-Retain sanitized reports and failure traces. Keep a successful preview available for release-owner review, then clean it up after the decision; failed and cancelled runs also capture diagnostics and clean up. Enforce independent expiry for abandoned previews. Keep prior deployable artifacts and a rehearsed database recovery path. After production deployment, verify artifact identity, run smoke checks and observe predefined error, latency, queue and critical-result thresholds before declaring the release successful.
-
-## 8. Resource approval
-
-This accepted architecture and access to credentials do not authorize provisioning a new external service or infrastructure spend. Open a separate blocked `resource-request` issue describing purpose, alternatives, environment, data/access scope, owner, estimated cost, spending ceiling and cleanup. An authorized human must explicitly approve the scope and ceiling in that issue before provisioning; increases require renewed approval. Link its status from the implementation issue and PR. Planning and code preparation can proceed while approval is pending.
-
-## References
-
-- [Backend design](backend-design.md) and [product design](product-design.md).
-- [Development and release guide](https://github.com/colophon-group/justup/blob/main/docs/development-process.md).
-- [Cloudflare static asset billing](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/), [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) and [Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
-- [Cloudflare Streams](https://developers.cloudflare.com/workers/runtime-apis/streams/), [origin connection limits](https://developers.cloudflare.com/fundamentals/reference/connection-limits/) and [default cache behavior](https://developers.cloudflare.com/cache/concepts/default-cache-behavior/).
-- [R2 pricing](https://developers.cloudflare.com/r2/pricing/), [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/) and [Workers AI pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/).
-- [Hetzner Cloud API](https://docs.hetzner.cloud/reference/cloud) for project-specific inventory, prices and location availability; [backup scope](https://docs.hetzner.com/cloud/servers/backups-snapshots/overview/).
+Use existing approved capacity before proposing another rental. This architecture, a passing test or available credentials does not authorize a new external service, paid tier or spend. A separate blocked resource request must record purpose, alternatives, owner, environment, data/access scope, current estimate, spending ceiling and cleanup. A human must approve that concrete scope and ceiling before provisioning; changed scope/cost requires renewed approval. Keep quotes and live inventory in the dated resource evidence, not an expiring price table in this guide.
