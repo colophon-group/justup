@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+import test_import_jobs as IMPORT_FIXTURES
 
 SPEC = importlib.util.spec_from_file_location('preview_feed', Path(__file__).with_name('preview-feed.py'))
 FEED = importlib.util.module_from_spec(SPEC)
@@ -287,6 +292,133 @@ class ImportSequenceTests(unittest.TestCase):
             with self.assertRaises(FEED.FeedStageError):
                 FEED.consume_batch(*args[:-1], max_jobs=500)
         self.assertEqual(args[-1], ['validated'])
+
+
+class ComposedImportTests(unittest.TestCase):
+    def test_actual_adapter_and_database_import_recover_partial_and_committed_batches(self):
+        root = Path(__file__).resolve().parents[1]
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'The composed import contract requires the pinned Node runtime.')
+        self.assertEqual(subprocess.check_output([node, '--version'], text=True).strip(), 'v24.22.2')
+        # The real CLIs use their wall clock. Freeze one synthetic source time
+        # safely behind it; all later page times stay in the same short window.
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        iso = lambda value: value.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        snapshot_at = iso(now - timedelta(minutes=6))
+        partial_at = iso(now - timedelta(minutes=4))
+        complete_at = iso(now - timedelta(minutes=2))
+        posting_times = {'firstSeenAt': iso(now - timedelta(days=2)),
+                         'lastSeenAt': iso(now - timedelta(minutes=8)),
+                         'updatedAt': iso(now - timedelta(minutes=8))}
+        third_id = '33333333-3333-4333-8333-333333333333'
+        scope = {'kind': 'company_ids', 'requestedCount': 1,
+                 'requestedSetSha256': hashlib.sha256(IMPORT_FIXTURES.COMPANY_A.encode()).hexdigest()}
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            inbox = base / 'state/feed-inbox'
+            inbox.mkdir(parents=True, mode=0o700)
+            receipts = base / 'receipts'
+            receipts.mkdir(mode=0o700)
+            release = base / 'release'
+            app = release / 'app'
+            (app / 'scripts').mkdir(parents=True)
+            shutil.copy2(root / 'scripts/import-jobs.py', app / 'scripts/import-jobs.py')
+            shutil.copytree(root / 'server', app / 'server')
+            (release / 'runtime/bin').mkdir(parents=True)
+            (release / 'runtime/bin/node').symlink_to(Path(node).resolve())
+            runtime_bytes = hashlib.sha256()
+            for path in sorted(app.rglob('*')):
+                if path.is_file():
+                    runtime_bytes.update(str(path.relative_to(app)).encode() + b'\0' + path.read_bytes())
+            build = runtime_bytes.hexdigest()
+            release_manifest = {'buildIdentity': build, 'entrypoint': 'app/server/main.mjs'}
+            owner = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+            original_checked, original_run = FEED.checked_file, FEED.run_as_api
+            events = []
+
+            def run(argv, environment, cwd, timeout):
+                events.append('adapter' if '--feed-manifest' in argv else 'node')
+                if argv[0] == '/usr/bin/python3':
+                    # Use the test runner's supported Python off-host; macOS's
+                    # system Python predates the production Linux baseline.
+                    argv = [os.sys.executable, *argv[1:]]
+                return original_run(argv, environment, cwd, min(timeout, 10), demote=lambda: None)
+
+            def stage(rows, **options):
+                source, _ = IMPORT_FIXTURES.write_feed_bundle(base / 'source', rows, scope=scope, **options)
+                wire = io.BytesIO()
+                FEED.send(source, wire)
+                staged = FEED.receive(io.BytesIO(wire.getvalue()), inbox, owner.pw_uid)
+                self.assertFalse(staged['acknowledgeable'])
+                directory = inbox / source.parent.name
+                manifest = json.loads((directory / 'manifest.json').read_text())
+                digest = hashlib.sha256(source.read_bytes()).hexdigest()
+                self.assertEqual(staged['manifestSha256'], digest)
+                FEED.require_source_digest(digest, digest)
+                return directory, directory / 'manifest.json', manifest, digest
+
+            def consume(batch, manifest=release_manifest):
+                return FEED.consume_batch(*batch, release, manifest, inbox, 10)
+
+            def imports():
+                with closing(sqlite3.connect(base / 'state/preview.sqlite')) as database:
+                    return database.execute('SELECT count(*) FROM justup_imports').fetchone()[0]
+
+            with patch.object(FEED, 'BASE', base), patch.object(FEED, 'RECEIPTS', receipts), \
+                    patch.object(FEED.pwd, 'getpwnam', return_value=owner), \
+                    patch.object(FEED, 'checked_file', side_effect=lambda path, _owner: original_checked(path, owner.pw_uid)), \
+                    patch.object(FEED, 'run_as_api', side_effect=run), \
+                    patch.object(FEED, 'node_import_environment', return_value={
+                        'PATH': str(Path(node).parent) + ':/usr/bin:/bin', 'TZ': 'UTC',
+                        'JUSTUP_DB_PATH': str(base / 'state/preview.sqlite')}):
+                initial = stage([IMPORT_FIXTURES.feed_posting(**posting_times),
+                                 IMPORT_FIXTURES.feed_posting(IMPORT_FIXTURES.JOB_B, **posting_times)],
+                                batch_id='a' * 32, cutoff=snapshot_at, source_count=3)
+                self.assertEqual(consume(initial)['status'], 'imported')
+                self.assertEqual(imports(), 1)
+                self.assertEqual(FEED.root_receipt('a' * 32, initial[3]), {'schemaVersion': 1, 'manifestSha256': initial[3]})
+                self.assertTrue(FEED.latest_import_matches(initial[3]))
+                partial = stage([
+                    IMPORT_FIXTURES.feed_posting(**{**posting_times, 'active': False,
+                        'updatedAt': iso(now - timedelta(minutes=5))}),
+                    IMPORT_FIXTURES.feed_posting(third_id, **{**posting_times,
+                        'updatedAt': iso(now - timedelta(minutes=5)), 'body': None, 'bodyStatus': 'missing'})],
+                    batch_id='b' * 32, kind='changes', from_cursor=initial[2]['toCursor'],
+                    cutoff=partial_at, complete=False, source_count=3)
+                with patch.object(FEED, 'promote_candidate', side_effect=OSError('Synthetic staging interruption.')), self.assertRaises(OSError):
+                    consume(partial)
+                self.assertEqual(imports(), 1)
+                self.assertIsNone(FEED.root_receipt('b' * 32, partial[3]))
+                with self.assertRaises(FEED.FeedStageError):
+                    consume(partial, {**release_manifest, 'buildIdentity': 'b' * 64})
+                self.assertEqual(consume(partial)['status'], 'staged_for_catchup')
+                self.assertEqual(events, ['adapter', 'node', 'adapter'])
+                self.assertEqual(FEED.candidate_marker('b' * 32)['buildIdentity'], build)
+                self.assertEqual(FEED.candidate_marker('b' * 32)['manifestSha256'], partial[3])
+                self.assertEqual(FEED.root_receipt('b' * 32, partial[3]), {'schemaVersion': 1, 'manifestSha256': partial[3]})
+                complete = stage([], batch_id='c' * 32, kind='changes',
+                                 from_cursor=partial[2]['toCursor'], cutoff=complete_at, source_count=3)
+                with patch.object(FEED, 'promote_candidate', side_effect=OSError('Synthetic post-commit interruption.')), self.assertRaises(OSError):
+                    consume(complete)
+                self.assertEqual(imports(), 2)
+                self.assertTrue(FEED.latest_import_matches(complete[3]))
+                self.assertIsNone(FEED.root_receipt('c' * 32, complete[3]))
+                self.assertEqual(consume(complete)['status'], 'imported')
+                self.assertEqual(imports(), 2)
+                self.assertEqual(events, ['adapter', 'node', 'adapter', 'adapter', 'node'])
+                self.assertEqual(FEED.root_receipt('c' * 32, complete[3]), {'schemaVersion': 1, 'manifestSha256': complete[3]})
+                with self.assertRaises(FEED.FeedStageError):
+                    FEED.require_source_digest(complete[3], '0' * 64)
+                with closing(sqlite3.connect(base / 'state/preview.sqlite')) as database:
+                    states = dict(database.execute('SELECT id,active FROM justup_jobs'))
+                    self.assertEqual(states, {IMPORT_FIXTURES.JOB_A: 0, IMPORT_FIXTURES.JOB_B: 1, third_id: 1})
+                    kept = database.execute('SELECT body_text FROM justup_jobs WHERE id=?', (IMPORT_FIXTURES.JOB_B,)).fetchone()[0]
+                    missing = database.execute('SELECT body_text FROM justup_jobs WHERE id=?', (third_id,)).fetchone()[0]
+                    self.assertIn('Verifiable public role details.', kept)
+                    self.assertIsNone(missing)
+                latest = json.loads((inbox / 'latest.json').read_text())
+                self.assertEqual(latest['selection']['feed']['manifestSha256'], complete[3])
+                self.assertTrue(latest['selection']['limitedCoverage'])
 
 
 if __name__ == '__main__':
