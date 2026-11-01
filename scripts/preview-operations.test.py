@@ -689,48 +689,56 @@ class BoundaryContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             model.validate_attestation({'approved': True}, manifest, 'f' * 64)
 
-    def test_wire_configuration_is_off_without_proof_and_pins_existing_private_boundary(self):
-        self.assertFalse(model.validate_wire_configuration({'enabled': False}, private=True))
-        config = {'enabled': True, 'attestationPath': '/srv/justup_preview/model/config/hiring-wire-reviewed.json',
-                  'socketPath': '/srv/justup_preview/broker/model.sock', 'providerCatalogueSha256': 'a' * 64, 'modelUid': 1234}
-        self.assertTrue(model.validate_wire_configuration(config, private=True, model_uid=1234))
-        for change in ({'attestationPath': '/srv/justup_preview/broker/hiring-wire-reviewed.json'},
-                       {'socketPath': '/tmp/other.sock'}, {'providerCatalogueSha256': ''}, {'modelUid': 1},
-                       {'buildIdentity': 'b' * 64}, {'enabled': 1}):
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                model.validate_wire_configuration({**config, **change}, private=True, model_uid=1234)
-        with self.assertRaises(ValueError):
-            model.validate_wire_configuration({'enabled': False, 'providerCatalogueSha256': 'a' * 64}, private=True)
-        config['attestationPath'] = '/srv/justup_preview/broker/hiring-wire-reviewed.json'
-        queue_config = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
-                        'runnerStatusPath': '/srv/justup_preview/state/runner-status.json', 'hiringWire': config}
+    def test_admitted_launcher_json_matches_actual_node_runner_and_broker_key_boundaries(self):
         manifest, _ = payload()
-        with patch.object(queue.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1234)):
-            with self.assertRaisesRegex(ValueError, 'exact artifact'):
-                queue.validate_configuration(queue_config, manifest)
-            manifest['files'].update({'app/server/hiring-wire-sol-catalogue.json': model.WIRE_CATALOGUE_SHA256,
-                                      'app/server/hiring-wire-codex-broker.mjs': 'b' * 64})
-            queue.validate_configuration(queue_config, manifest)
-        queue_config['hiringWire'] = {'enabled': False}
-        with patch.object(queue.pwd, 'getpwnam', side_effect=AssertionError('disabled Wire must not inspect a UID')):
-            queue.validate_configuration(queue_config, manifest)
-
-    def test_wire_deployment_proof_cannot_reuse_luna_or_another_build_uid_or_catalogue(self):
-        manifest, _ = payload()
-        config = {'socketPath': '/srv/justup_preview/broker/model.sock', 'providerCatalogueSha256': 'a' * 64, 'modelUid': 1234}
-        report = {'version': 1, 'approved': True, 'profile': 'hiring_wire', 'model': 'gpt-6.1-sol',
-                  'cliVersion': manifest['codexVersion'], 'cliSource': model.CODEX_SOURCE_COMMIT, 'nodeVersion': manifest['nodeVersion'],
-                  'policyVersion': 'hiring-wire-codex-v1', 'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': 'f' * 64,
-                  'socketPath': config['socketPath'], 'modelUid': 1234, 'fd': 3, 'modelCatalogueSha256': model.WIRE_CATALOGUE_SHA256,
-                  'executorBoundary': 'dedicated_uid_broker', 'deniedPathsVerified': True, 'retentionVerified': True,
-                  'qualityVerified': True, 'sharedSlotVerified': True, 'descriptor': {'fixture': 'runtime validates exact descriptor'},
-                  'dynamicToolsSha256': 'b' * 64, 'providerCatalogue': {'verified': True, 'sha256': 'a' * 64}}
-        model.validate_wire_attestation(report, config, manifest, 'f' * 64)
-        for change in ({'profile': 'search_intent'}, {'model': 'gpt-6-luna'}, {'buildIdentity': 'e' * 64},
-                       {'hostPlanSha256': 'e' * 64}, {'modelUid': 1}, {'fd': 4}, {'qualityVerified': False},
-                       {'sharedSlotVerified': False}, {'providerCatalogue': {'verified': True, 'sha256': 'c' * 64}}):
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                model.validate_wire_attestation({**report, **change}, config, manifest, 'f' * 64)
+        release = Path('/srv/justup_preview/releases') / manifest['buildIdentity']
+        broker = {'enabled': True, 'cliVersion': artifact.CODEX_VERSION,
+                  'codexPath': str(release / artifact.CODEX_ENTRYPOINT),
+                  'protectedAuthHome': '/srv/justup_preview/model/credentials',
+                  'invocationRoot': '/srv/justup_preview/model/invocations',
+                  'taskCwd': '/srv/justup_preview/model/task-cwd'}
+        runner = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
+                  'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
+        model.validate_configuration(broker, release, manifest)
+        queue.validate_configuration(runner, manifest)
+        unsupported = [{'hiringWire': {'enabled': False}},
+                       {'sourceCoverage': {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}}]
+        for extra in unsupported:
+            with self.subTest(extra=extra):
+                with self.assertRaises(ValueError):
+                    model.validate_configuration({**broker, **extra}, release, manifest)
+                with self.assertRaises(ValueError):
+                    queue.validate_configuration({**runner, **extra}, manifest)
+        script = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const { bindRunnerConfig } = await import(input.adapterUrl);
+const bound = bindRunnerConfig(input.runner, input.environment);
+assert.equal(bound.sourceCommit, input.environment.JUSTUP_SOURCE_COMMIT);
+assert.equal(bound.buildIdentity, input.environment.JUSTUP_BUILD_ID);
+assert.equal(bound.hostPlanSha256, input.environment.JUSTUP_HOST_PLAN_SHA256);
+const source = readFileSync(new URL(input.brokerUrl), 'utf8');
+// Evaluate the actual executable's key guard without starting its fd/auth boundary.
+const guard = source.match(/Object\.keys\(supplied\)\.some\(key=>!\[[^\]]*\]\.includes\(key\)\)/)?.[0];
+assert.ok(guard, 'The broker key boundary must remain independently testable.');
+assert.equal(runInNewContext(guard, { supplied: input.broker }), false);
+for (const extra of input.unsupported) {
+  assert.throws(() => bindRunnerConfig({ ...input.runner, ...extra }, input.environment));
+  assert.equal(runInNewContext(guard, { supplied: { ...input.broker, ...extra } }), true);
+}
+process.stdout.write('actual_node_configuration_boundaries_match\n');
+"""
+        result = subprocess.run(['node', '--input-type=module', '-e', script], text=True,
+                                input=json.dumps({'runner': runner, 'broker': broker, 'unsupported': unsupported,
+                                                  'environment': queue.child_environment(manifest, 'f' * 64),
+                                                  'adapterUrl': (HERE.parent / 'server/runner-adapter.mjs').resolve().as_uri(),
+                                                  'brokerUrl': (HERE.parent / 'server/model-broker.mjs').resolve().as_uri()}),
+                                capture_output=True, timeout=15,
+                                env={'PATH': os.environ.get('PATH', ''), 'LANG': 'C.UTF-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('actual_node_configuration_boundaries_match', result.stdout)
 
     def test_stale_model_attestation_and_inherited_identity_cannot_match_current_release(self):
         model = load('preview-model-run')
@@ -954,21 +962,6 @@ class BoundaryContracts(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'selected exact budget identity'):
                     queue.validate_ledger(ledger, expected_identity=wrong)
                 self.assertEqual(ledger.read_bytes(), original)
-
-    def test_queue_source_coverage_is_optional_exact_and_kept_outside_shared_state(self):
-        manifest, _ = payload()
-        config = {'dbPath': '/srv/justup_preview/state/preview.sqlite', 'sharedState': True,
-                  'runnerStatusPath': '/srv/justup_preview/state/runner-status.json'}
-        self.assertIs(queue.validate_configuration(config, manifest), config)
-        source = {'directory': '/unprovisioned/source-input', 'sourceVersion': 'jobseek-coverage-v1'}
-        with patch.object(Path, 'read_text', side_effect=AssertionError('configuration validation must not read source data')):
-            queue.validate_configuration({**config, 'sourceCoverage': source}, manifest)
-        for change in ({'directory': 'relative/source'}, {'directory': '/source/../other'}, {'directory': '/source//input'},
-                       {'directory': '/srv/justup_preview/state'}, {'directory': '/srv/justup_preview/state/backups'},
-                       {'directory': '/srv/justup_preview/state/history'}, {'sourceVersion': 'unreviewed'},
-                       {'enabled': True}, {'model': {}}):
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                queue.validate_configuration({**config, 'sourceCoverage': {**source, **change}}, manifest)
 
     def test_policy_gate_requires_reviewed_urls_and_version(self):
         manifest, _ = payload()
