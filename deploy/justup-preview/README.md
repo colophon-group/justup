@@ -5,6 +5,8 @@ read_when: Preparing the temporary host, inspecting its systemd units or rehears
 
 # Preview host files
 
+`preview-failure-drill.py` prepares bounded, read-only before/after evidence for one reviewed API, runner or model crash or safety stop. It cannot inject a failure or activate a service. Follow the [preview drill procedure](../../docs/operations.md#preview-crash-and-safety-stop-drills) only after any host mutation hold and release prerequisites are cleared; local tests do not establish deployed recovery.
+
 These files prepare one explicitly reviewed Linux ARM64 host. They do not provision a provider resource, start services, configure Cloudflare or supply model authentication. Disabled API, queue and model socket/service units require separately delivered configuration and actual isolation proofs. Follow the [operations guide](../../docs/operations.md) before applying anything. The resource boundary is allocated; application/provider services and public routing remain inactive. Fresh model authentication is private to the dedicated model UID. Current reviews are tracked under the `operations` and `preview-hosting` semantic slugs; code preparation does not activate the host.
 
 `justup-preview.slice` caps the aggregate preview at half a CPU, low CPU weight, 768 MiB memory pressure/1 GiB maximum, no swap and 96 tasks. Every future runner, tunnel and maintenance process must use this same slice. A new 2 GiB regular-file loop filesystem at `/srv/justup_preview` bounds all application bytes, Node, persistent data, work, backups and diagnostics. The installer refuses existing image/mount/UID/unit paths. It never accepts a supplied device or modifies the existing Murmur volume.
