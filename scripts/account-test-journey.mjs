@@ -27,7 +27,12 @@ function validatePacket(packet) {
   const origin = new URL(packet.origin);
   requireProof(origin.origin === packet.origin && (origin.protocol === 'https:'
     || origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)), 'invalid_packet');
-  return endpoint(packet.apiBase);
+  const base = endpoint(packet.apiBase), target = new URL(base);
+  // The operator packet cannot authorize a second destination. Imported
+  // synthetic fixtures may use only a loopback API for their local transport.
+  requireProof(target.origin === origin.origin || packet.mode === 'synthetic'
+    && ['localhost', '127.0.0.1', '[::1]'].includes(target.hostname), 'invalid_packet');
+  return base;
 }
 
 export async function runAccountTestJourney({ packet, readCode, saveRecovery, clearRecovery,

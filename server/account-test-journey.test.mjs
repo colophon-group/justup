@@ -100,6 +100,46 @@ test('unconfirmed cleanup retains protected recovery data and cannot return a su
   assert.equal(f.app.store.db.prepare('SELECT count(*) n FROM auth_registration_acceptance').get().n, 0);
 });
 
+test('a mismatched operator HTTPS origin is rejected before network, recovery or mailbox side effects', async () => {
+  const approved = { apiBase: 'https://approved.example/api/v1', origin: 'https://approved.example',
+    sourceCommit: 'a'.repeat(40), buildIdentity: 'b'.repeat(64), policyVersion: '2026-11-01.1',
+    locale: 'en', recipient: 'authorized@example.org', mode: 'operator-mailbox' };
+  for (const patch of [
+    { apiBase: 'https://different.example/api/v1' },
+    { apiBase: 'https://approved.example.evil.example/api/v1' },
+    { apiBase: 'https://approved.example:444/api/v1' },
+    { apiBase: 'http://127.0.0.1:1234/api/v1' },
+    { apiBase: 'https://different.example/api/v1', mode: 'synthetic' },
+  ]) {
+    const calls = { network: 0, recovery: 0, clear: 0, mailbox: 0, queue: 0 };
+    await assert.rejects(runAccountTestJourney({ packet: { ...approved, ...patch },
+      fetchImpl: async () => { calls.network++; throw Error('Network must not run.'); },
+      saveRecovery: () => { calls.recovery++; }, clearRecovery: () => { calls.clear++; },
+      readCode: async () => { calls.mailbox++; return '12345678'; },
+      pumpQueue: () => { calls.queue++; },
+    }), { code: 'invalid_packet' });
+    assert.deepEqual(calls, { network: 0, recovery: 0, clear: 0, mailbox: 0, queue: 0 });
+  }
+});
+
+test('a same-origin operator packet reaches only its approved HTTPS API before candidate admission', async () => {
+  const origin = 'https://approved.example', calls = [];
+  const packet = { apiBase: origin + '/api/v1', origin, sourceCommit: 'a'.repeat(40), buildIdentity: 'b'.repeat(64),
+    policyVersion: '2026-11-01.1', locale: 'en', recipient: 'authorized@example.org', mode: 'operator-mailbox' };
+  let recovery = 0, mailbox = 0;
+  await assert.rejects(runAccountTestJourney({ packet,
+    fetchImpl: async url => {
+      calls.push(url);
+      return new Response(JSON.stringify({ sourceCommit: 'e'.repeat(40), buildIdentity: packet.buildIdentity, schemaVersion: 2 }),
+        { headers: { 'Cache-Control': 'private, no-store' } });
+    },
+    saveRecovery: () => { recovery++; }, clearRecovery: () => {},
+    readCode: async () => { mailbox++; return '12345678'; },
+  }), { code: 'candidate_changed' });
+  assert.deepEqual(calls, [origin + '/api/v1/version']);
+  assert.equal(recovery, 0); assert.equal(mailbox, 0);
+});
+
 test('operator entrypoint rejects public packet files and synthetic mode before any HTTP mutation', t => {
   const root = mkdtempSync(join(tmpdir(), 'justup-mailbox-entry-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

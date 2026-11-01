@@ -80,8 +80,8 @@ that version and exact deployed proof; this helper has no policy-version default
 and cannot approve or update runtime proof.
 
 Before the operator entrypoint is run, review one concrete private test packet
-under `account-provider-resources` (#79). The release owner supplies the exact
-recipient authorization and nonsecret provider facts; a coding agent does not
+under the provider-approval work item `account-provider-resources`. The release
+owner supplies the exact recipient authorization and nonsecret provider facts; a coding agent does not
 read provider keys or perform setup to fill this packet. Required facts are:
 
 1. Exact compatible frontend/API/queue source and build identities, isolated test
@@ -151,9 +151,10 @@ password-confirmed deletion path before another run; do not infer deletion from
 session expiry or remove the recovery file early. Account deletion does not
 recall a delivered message or establish deletion of Resend's provider copy.
 
-Keep #29 and #79 open until real-adapter/mailbox and the separate actual Stripe
-sandbox journeys are evidenced. For Stripe, first review actual nonsecret
-sandbox identity, restricted test runtime scope, approved test offer and portal
+Keep `account-access` (durable account access) and `account-provider-resources`
+(identity/email and billing qualification) open until real-adapter/mailbox and
+the separate actual Stripe sandbox journeys are evidenced. For Stripe, first
+review actual nonsecret sandbox identity, restricted test runtime scope, approved test offer and portal
 configuration IDs, webhook route/secret delivery, fixed account/API version and
 zero-spend scope. Through the existing [billing routes](account-billing.md),
 complete one hosted **test-mode** checkout using provider test payment details,
