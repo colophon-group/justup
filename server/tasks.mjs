@@ -49,7 +49,8 @@ export function createTasks({ db, now = Date.now, maxActiveTasks = 96, maxStored
         if (existing.payload_json !== json) throw problem('idempotency_conflict', 409, 'This request key was already used.');
         return hydrate(existing);
       }
-      db.prepare('DELETE FROM justup_tasks WHERE updated_at<=? AND status IN (\'succeeded\',\'warning\',\'failed\',\'cancelled\')').run(now() - retentionMs);
+      db.prepare("DELETE FROM justup_tasks WHERE updated_at<=? AND kind<>? AND status IN ('succeeded','warning','failed','cancelled')")
+        .run(now() - retentionMs, CLEANUP_KIND);
       // Account termination has a small bounded reserve alongside ordinary
       // receipts. Its receipt can be released only after billing has absorbed
       // the outcome; ordinary request-key receipts are never evicted.
