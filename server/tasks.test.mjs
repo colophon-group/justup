@@ -97,13 +97,46 @@ test('Wire pause compares the live lease, never resurrects a task and bounds int
   const lease=tasks.claim({workerId:'worker',leaseMs:1000});advance(1001);
   assert.equal(tasks.pauseWire(cancelled.id,lease.leaseToken),false);
 });
-test('unknown cleanup halt requires the exact live system lease and keeps one durable safe reason',t=>{
+test('unknown cleanup halt accepts only a previously claimed private Wire identity and keeps one safe reason',t=>{
   const {tasks,db}=setup(t);
-  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'})),lease=tasks.claim({workerId:'worker'});
+  const foreground=tasks.enqueue(input()),foregroundLease=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.haltWire(foreground.id,foregroundLease.leaseToken),false);
+  assert.equal(tasks.complete(foreground.id,foregroundLease.leaseToken,{status:'succeeded'}),true);
+  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'}));
+  assert.equal(tasks.haltWire(wire.id,foregroundLease.leaseToken),false);
+  const lease=tasks.claim({workerId:'worker'});
   assert.equal(tasks.haltWire(wire.id,'wrong-token'),false);assert.equal(tasks.halted(),false);
   assert.equal(tasks.haltWire(wire.id,lease.leaseToken),true);assert.equal(tasks.haltWire(wire.id,lease.leaseToken),true);
   assert.equal(db.prepare('SELECT count(*) n FROM hiring_wire_cleanup_halt').get().n,1);
   assert.deepEqual({...db.prepare('SELECT reason FROM hiring_wire_cleanup_halt').get()},{reason:'cleanup_unproven'});
   assert.equal(tasks.heartbeat(wire.id,lease.leaseToken),true);
   assert.equal(tasks.complete(wire.id,lease.leaseToken,{status:'failed'}),false);
+});
+test('expired Wire ownership seals a halt before recovery, claim or availability can release the shared slot',async t=>{
+  for(const entry of ['recover','claim','halted'])await t.test(entry,t=>{
+    const {tasks,advance}=setup(t,{maxAttempts:1});
+    const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'})),lease=tasks.claim({workerId:'worker',leaseMs:1000});
+    const foreground=tasks.enqueue(input());advance(1000);
+    assert.equal(tasks[entry]({workerId:'restart'}),entry==='halted'?true:entry==='claim'?null:undefined);
+    assert.equal(tasks.halted(),true);assert.equal(tasks.claim({workerId:'restart'}),null);
+    const held=tasks.get(wire.ownerId,wire.id);
+    assert.equal(held.status,'running');assert.equal(held.leaseToken,lease.leaseToken);assert.equal(held.attempts,1);
+    assert.equal(tasks.get(foreground.ownerId,foreground.id).status,'pending');
+    advance(-1001);tasks.recover();assert.equal(tasks.halted(),true);assert.equal(tasks.claim({workerId:'clock-rollback'}),null);
+  });
+});
+test('a trusted stale cleanup report halts Wire after legacy recovery or a superseding claim',async t=>{
+  for(const superseded of [false,true])await t.test(String(superseded),t=>{
+    const {tasks,db,advance}=setup(t);
+    const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire'})),lease=tasks.claim({workerId:'old-worker',leaseMs:1000});
+    advance(1001);
+    // Represent a queue recovered by an older runtime that discarded ownership
+    // without native cleanup proof. Current recovery must never create this state.
+    db.prepare("UPDATE justup_tasks SET status='pending',lease_until=NULL,lease_token=NULL,worker_id=NULL WHERE id=?").run(wire.id);
+    if(superseded)assert.notEqual(tasks.claim({workerId:'new-worker'}).leaseToken,lease.leaseToken);
+    const status=tasks.get(wire.ownerId,wire.id).status;
+    assert.equal(tasks.haltWire(wire.id,lease.leaseToken),true);
+    tasks.enqueue(input());tasks.recover();assert.equal(tasks.claim({workerId:'restart'}),null);
+    assert.equal(tasks.halted(),true);assert.equal(tasks.get(wire.ownerId,wire.id).status,status);
+  });
 });

@@ -7,6 +7,7 @@ const SAFE_TASK_ERRORS = new Set(['processing_unavailable', 'task_failed', 'task
 const RETRYABLE_TASK_ERRORS = new Set(['dependency_unavailable', 'provider_unavailable', 'provider_down', 'task_timeout', 'timeout', 'rate_limit', 'provider_rate_limit']);
 const TERMINAL = new Set(['succeeded', 'warning', 'failed', 'cancelled']);
 const KIND = /^[a-z][a-z0-9_.-]{0,63}$/;
+const LEASE_TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const WIRE_KIND = 'hiring_wire', WIRE_OWNER = '__hiring_wire__';
 export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOwner = 4, maxAttempts = 3, retentionMs = 30 * DAY_MS } = {}) {
   if (!db || ![maxTasks, maxPendingPerOwner, maxAttempts, retentionMs].every((n) => Number.isSafeInteger(n) && n > 0)
@@ -61,7 +62,7 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
     if(halted())return;
     db.prepare(`UPDATE justup_tasks SET status=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,
       error_code=CASE WHEN attempts>=? THEN 'task_interrupted' ELSE NULL END,updated_at=?,lease_until=NULL,lease_token=NULL,worker_id=NULL
-      WHERE status='running' AND lease_until<=?`).run(maxAttempts, maxAttempts, now(), now());
+      WHERE status='running' AND kind<>'hiring_wire' AND lease_until<=?`).run(maxAttempts, maxAttempts, now(), now());
   }
   function recover() { return transaction(db, recoverWithinTransaction); }
   function claim({ workerId, kinds = null, leaseMs = 60_000 } = {}) {
@@ -97,18 +98,30 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
     return !!db.prepare("SELECT 1 FROM justup_tasks WHERE status='pending' AND kind<>'hiring_wire' LIMIT 1").get();
   }
   function halted() {
-    return !!db.prepare('SELECT 1 FROM hiring_wire_cleanup_halt WHERE id=1').get();
+    const check=()=>{
+      if(db.prepare('SELECT 1 FROM hiring_wire_cleanup_halt WHERE id=1').get())return true;
+      // A queue TTL cannot prove native cleanup. Seal the uncertainty before
+      // readiness, scheduling or recovery can admit another shared-slot task.
+      const expired=db.prepare("SELECT id FROM justup_tasks WHERE kind='hiring_wire' AND owner_id=? AND status='running' AND lease_until<=? ORDER BY created_at,id LIMIT 1")
+        .get(WIRE_OWNER,now());
+      if(!expired)return false;
+      db.prepare("INSERT INTO hiring_wire_cleanup_halt VALUES (1,?,?,'cleanup_unproven')").run(expired.id,now());
+      return true;
+    };
+    return db.isTransaction?check():transaction(db,check);
   }
   // No automatic clear operation exists. A reviewed operator recovery must
   // prove native cleanup and idle broker state before ending this durable halt.
   function haltWire(id,leaseToken) {
+    if(typeof id!=='string'||!id||id.length>128||typeof leaseToken!=='string'||!LEASE_TOKEN.test(leaseToken))return false;
     return transaction(db,()=>{
-      const existing=db.prepare('SELECT task_id FROM hiring_wire_cleanup_halt WHERE id=1').get();
-      if(existing)return existing.task_id===id;
-      const live=db.prepare("SELECT 1 FROM justup_tasks WHERE id=? AND kind='hiring_wire' AND owner_id=? AND status='running' AND lease_token=? AND lease_until>?")
-        .get(id,WIRE_OWNER,leaseToken,now());
-      if(!live)return false;
-      db.prepare("INSERT INTO hiring_wire_cleanup_halt VALUES (1,?,?,'cleanup_unproven')").run(id,now());
+      // Only the trusted runner reports cleanup uncertainty. Its old claim can
+      // have expired or been superseded; current lease CAS is not permission
+      // to ignore a potentially live native invocation from that known task.
+      const claimed=db.prepare("SELECT 1 FROM justup_tasks WHERE id=? AND kind='hiring_wire' AND owner_id=? AND attempts>0")
+        .get(id,WIRE_OWNER);
+      if(!claimed)return false;
+      db.prepare("INSERT OR IGNORE INTO hiring_wire_cleanup_halt VALUES (1,?,?,'cleanup_unproven')").run(id,now());
       return true;
     });
   }

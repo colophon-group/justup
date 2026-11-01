@@ -76,18 +76,28 @@ they do not independently qualify a deployed native runtime. No scheduler is
 activated by this PR.
 
 If the trusted transport reports `cleanup_unproven`, the runner inserts one durable
-`hiring_wire_cleanup_halt` row using its exact live system-task lease, retains the
-task as running and continues its lease heartbeat while the process remains alive.
-It marks readiness unavailable and stops all claims and weekly schedule actions.
-The guard also blocks task completion, pause and expired-lease recovery. Restart
-or elapsed lease time cannot clear it. Only the fixed safe reason, task ID and
-timestamp are retained; no protocol text or provider data enters this guard.
+`hiring_wire_cleanup_halt` row for the previously claimed private system task.
+Its lease may have expired or an older queue runtime may have recovered or replaced
+it; current lease ownership cannot suppress a trusted cleanup-failure report.
+The halt does not rewrite that task's status or lease. The runner continues its
+lease heartbeat when possible, marks readiness unavailable and stops all claims
+and weekly schedule actions. A local halt also keeps this runner unavailable if
+persisting the guard fails. Its status publisher latches unavailable readiness
+and disables every capability for both the halt callback and later heartbeats.
+
+An expired running Wire lease itself provides no native cleanup proof. Checking
+queue availability, claiming or recovering tasks atomically seals the same guard
+and retains that Wire task and lease. Generic recovery applies only to foreground
+tasks. The guard also blocks task completion and pause. Restart, elapsed lease
+time or a later clock rollback cannot clear it. Only the fixed safe reason, task
+ID and timestamp are retained; no protocol text or provider data enters this guard.
 
 There is no public or automatic clear operation. Recovery requires a reviewed
 operator procedure: stop the runner; establish broker idle state and prove that
 the native invocation and its descendants are gone and its private invocation
 storage has been cleaned; then perform one reviewed database transaction that
-marks the held task failed with `task_interrupted`, clears its lease fields and
+marks the reported task and any superseding running Wire attempt failed with
+`task_interrupted`, clears their lease fields and
 deletes the singleton guard. Restart only after that transaction commits. This
 error does not qualify for the scheduler's automatic dependency retry. A new
 edition attempt requires an explicit reviewed decision. These instructions do
@@ -104,10 +114,14 @@ fake editorial transport. It verifies enabled weekly publication, restart and
 crash-gap idempotence, default disabled behavior, zero editorial calls without
 source/qualification, bounded retries, factual/quality failure closure, private
 configuration separation, expiry/archive behavior and cleanup-gated preemption.
-It also reopens a halted SQLite database after the lease has elapsed and verifies
-that recovery, foreground claims and scheduler ticks remain blocked.
+It also advances an injected clock past the Wire lease during cleanup failure,
+reopens the SQLite database and verifies that recovery, foreground claims,
+scheduler ticks and readiness remain blocked even after clock rollback. Reopened
+expired ownership without a cleanup acknowledgement seals the same halt before
+the next weekly tick.
 Tasks and runner suites independently verify owner isolation, atomic priority,
-one global lease, cancellation and bounded pause behavior.
+one global lease, cancellation, bounded pause behavior, stale cleanup reports
+after recovery or lease replacement and local closure if guard persistence fails.
 
 These tests do not establish a live historical producer, complete source history,
 provider catalogue observation, independently reviewed Sol qualification or a
