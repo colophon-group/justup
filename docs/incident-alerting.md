@@ -72,7 +72,7 @@ Add the read-only token to macOS Keychain interactively. The final `-w` prompts 
 security add-generic-password -a justup-incident-watch -s justup-irm-alert-groups-readonly -w
 ```
 
-Restart the Codex desktop app after the CLI upgrade, verify `codex queue --help` on this laptop, and test `--resume` with a disposable idle Codex chat. Confirm the turn actually appears and completes, with the chat configured for read-only triage. Use a dedicated Justup incident chat UUID in the live config. Once the phone page and watcher are both proven, generate and review the LaunchAgent from the installed script, then bootstrap it:
+Restart the Codex desktop app after the CLI upgrade, verify `codex queue --help` on this laptop, and test `--resume` with a disposable idle Codex chat. Confirm the turn actually appears and completes. Configure the dedicated Justup incident chat with read-only permissions and verify them during the test; the fixed prompt alone is not a sandbox. Use that chat's UUID in the live config. Once the phone page and watcher are both proven, generate and review the LaunchAgent from the installed script, then bootstrap it:
 
 ```sh
 "$HOME/Library/Application Support/Justup/incident-watch.py" \
