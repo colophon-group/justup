@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "qualificationStatus": "Real multilingual model quality, latency and cost have not been measured; deterministic compiler and context contracts only.",
+  "cases": [
+    {"id":"english-language-conflict","query":"Engineer postings written in English","presentationLocale":"en","queryPostingLanguages":["en"],"options":{"followedOnly":false,"postingLanguages":["fr"]},"expectedPostingIds":[]},
+    {"id":"german-query-independent-options","query":"Ingenieurstellen mit Stellenausschreibungen auf Englisch","presentationLocale":"de","queryPostingLanguages":["en"],"options":{"followedOnly":false,"postingLanguages":["de","en","fr"]},"expectedPostingIds":["en"]},
+    {"id":"french-query-independent-options","query":"Des postes d’ingénieur rédigés en anglais","presentationLocale":"fr","queryPostingLanguages":["en"],"options":{"followedOnly":false,"postingLanguages":[]},"expectedPostingIds":["en"]},
+    {"id":"italian-query-language-conflict","query":"Posizioni di ingegnere con annunci in inglese","presentationLocale":"it","queryPostingLanguages":["en"],"options":{"followedOnly":false,"postingLanguages":["it"]},"expectedPostingIds":[]},
+    {"id":"spanish-query-followed-empty","query":"Puestos de ingeniería con anuncios en inglés","presentationLocale":"es","queryPostingLanguages":["en"],"options":{"followedOnly":true,"postingLanguages":["en"]},"expectedPostingIds":[]}
+  ]
+}

@@ -2,6 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRunner } from './runner.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { createTasks } from './tasks.mjs';
 
 function queue(kind='search_intent') {
   const record={id:'task',ownerId:'owner',kind,status:'pending',leaseToken:'lease',output:null};let claims=0,completions=0,beats=0;
@@ -29,4 +31,74 @@ test('deleting a running task prevents a late successful handler from recreating
 test('shutdown aborts active work and the polling loop exits',async()=>{
   const q=queue();let started;const ready=new Promise(resolve=>started=resolve),shutdown=new AbortController();const runner=createRunner({tasks:q.tasks,handlers:{search_intent:()=>{started();return new Promise(()=>{});}}});
   const running=runner.run({signal:shutdown.signal});await ready;shutdown.abort();await running;assert.equal(q.record.status,'failed');assert.equal(q.record.errorCode,'task_timeout');
+});
+test('fixed maintenance hook enqueues before a claim and shares foreground priority',async t=>{
+  const db=new DatabaseSync(':memory:');t.after(()=>db.close());const tasks=createTasks({db}),order=[];
+  const runner=createRunner({tasks,beforeClaim:()=>{
+    tasks.enqueue({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'week',payload:{}});
+    tasks.enqueue({ownerId:'owner',kind:'search_intent',requestKey:'search',payload:{}});
+  },handlers:{hiring_wire:()=>{order.push('wire');return {status:'succeeded'};},search_intent:()=>{order.push('search');return {status:'succeeded'};}}});
+  await runner.runOnce();await runner.runOnce();assert.deepEqual(order,['search','wire']);
+});
+test('foreground arrival aborts Wire and waits cleanup before releasing its lease',async t=>{
+  const db=new DatabaseSync(':memory:');t.after(()=>db.close());const tasks=createTasks({db});
+  const wire=tasks.enqueue({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'week',payload:{}});
+  let started,cleaning,releaseCleanup,cleaned=false,attempt=0;
+  const active=new Promise(resolve=>started=resolve),cancelling=new Promise(resolve=>cleaning=resolve);
+  const runner=createRunner({tasks,pollMs:10,handlers:{
+    hiring_wire:async(_,{signal})=>{
+      if(++attempt>1)return {status:'succeeded'};
+      started();await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));
+      assert.equal(signal.reason.code,'task_preempted');cleaning();
+      await new Promise(resolve=>releaseCleanup=resolve);cleaned=true;
+      return {status:'paused',errorCode:'task_preempted'};
+    },search_intent:()=>{assert.equal(cleaned,true);return {status:'succeeded'};}
+  }});
+  const running=runner.runOnce();await active;
+  const foreground=tasks.enqueue({ownerId:'owner',kind:'search_intent',requestKey:'search',payload:{}});
+  await cancelling;
+  assert.equal(tasks.get(wire.ownerId,wire.id).status,'running');
+  assert.equal(tasks.claim({workerId:'other'}),null);assert.equal(await runner.runOnce(),false);
+  releaseCleanup();await running;
+  assert.equal(tasks.get(wire.ownerId,wire.id).status,'pending');
+  await runner.runOnce();assert.equal(tasks.get('owner',foreground.id).status,'succeeded');
+  await runner.runOnce();assert.equal(tasks.get(wire.ownerId,wire.id).status,'succeeded');
+});
+test('preemption cannot resurrect Wire when cancellation invalidated its lease',async t=>{
+  const db=new DatabaseSync(':memory:');t.after(()=>db.close());const tasks=createTasks({db});
+  const wire=tasks.enqueue({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'week',payload:{}});
+  const runner=createRunner({tasks,pollMs:10,handlers:{hiring_wire:async(_,{signal})=>{
+    tasks.enqueue({ownerId:'owner',kind:'search_intent',requestKey:'search',payload:{}});
+    await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));
+    tasks.cancel(wire.ownerId,wire.id);return {status:'paused'};
+  }}});
+  await runner.runOnce();assert.equal(tasks.get(wire.ownerId,wire.id).status,'cancelled');
+});
+test('cleanup failure after Wire lease expiry durably closes runner admission',async t=>{
+  const db=new DatabaseSync(':memory:');t.after(()=>db.close());let at=1000,halts=0,maintenance=0;
+  const tasks=createTasks({db,now:()=>at});
+  const wire=tasks.enqueue({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'week',payload:{}});
+  const runner=createRunner({tasks,leaseMs:1000,beforeClaim:()=>maintenance++,onHalt:()=>halts++,handlers:{hiring_wire:()=>{
+    at+=1001;throw Object.assign(Error('Unproven cleanup.'),{code:'cleanup_unproven'});
+  }}});t.after(()=>runner.stop());
+  assert.equal(await runner.runOnce(),true);assert.equal(halts,1);assert.equal(tasks.halted(),true);assert.equal(runner.ready(),false);
+  const foreground=tasks.enqueue({ownerId:'owner',kind:'search_intent',requestKey:'search',payload:{}});
+  const restarted=createTasks({db,now:()=>at});restarted.recover();
+  assert.equal(restarted.claim({workerId:'restart'}),null);
+  assert.equal(restarted.get(wire.ownerId,wire.id).status,'running');assert.equal(restarted.get('owner',foreground.id).status,'pending');
+  assert.equal(await runner.runOnce(),false);assert.equal(maintenance,1);
+});
+test('cleanup uncertainty keeps this runner unavailable when persisting the halt fails',async()=>{
+  const q=queue('hiring_wire');let halts=0;
+  q.tasks.haltWire=()=>{throw Error('Storage unavailable.');};
+  const runner=createRunner({tasks:q.tasks,onHalt:()=>halts++,handlers:{hiring_wire:()=>{throw Object.assign(Error('Cleanup unproven.'),{code:'cleanup_unproven'});}}});
+  await assert.rejects(runner.runOnce(),/Storage unavailable/);
+  assert.equal(halts,1);assert.equal(runner.ready(),false);assert.equal(await runner.runOnce(),false);assert.equal(q.claims,1);
+});
+test('cleanup halt callback observes the durable guard before publishing readiness',async t=>{
+  const db=new DatabaseSync(':memory:');t.after(()=>db.close());const tasks=createTasks({db,now:()=>1000});let publishedReady;
+  tasks.enqueue({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'week',payload:{}});
+  const runner=createRunner({tasks,onHalt:()=>{publishedReady=!tasks.halted();},handlers:{hiring_wire:()=>{throw Object.assign(Error('Unproven cleanup.'),{code:'cleanup_unproven'});}}});
+  t.after(()=>runner.stop());await runner.runOnce();
+  assert.equal(tasks.halted(),true);assert.equal(runner.ready(),false);assert.equal(publishedReady,false);
 });

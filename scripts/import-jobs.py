@@ -26,17 +26,22 @@ BODY_BUDGET_LIMIT = 48 * 1024 * 1024
 EXPORT_LIMIT = 64 * 1024 * 1024
 JSON_LIMIT = 8 * 1024 * 1024
 MAX_JOBS = 1000
+MAX_COMPANY_IDS = 100
+COMPANY_SELECTOR_LIMIT = 16 * 1024
+SOURCE_COMPANY_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 SOURCE_FIELDS = (
     "id", "company_id", "company_name", "company_slug", "title", "source_url",
     "is_active", "has_content", "tdm_reserved", "first_seen_at", "last_seen_at",
     "locales", "location_direct_ids", "location_names", "location_types",
     "location_geo_types", "employment_type", "seniority_id", "seniority_name",
     "salary_min", "salary_max", "salary_currency", "salary_period",
+    "occupation_id", "occupation_name",
     "experience_min_years", "experience_max_years",
 )
 EMPLOYMENT = frozenset(("full_time", "part_time", "contract", "temporary", "volunteer", "full_or_part"))
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 LOCALE = re.compile(r"^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$")
+ATS_DOMAINS = ("greenhouse.io", "lever.co", "workdayjobs.com", "myworkdayjobs.com", "smartrecruiters.com", "ashbyhq.com", "bamboohr.com", "recruitee.com", "personio.com", "personio.de", "teamtailor.com", "icims.com", "jobvite.com", "successfactors.com", "oraclecloud.com")
 
 
 class ImportFailure(Exception):
@@ -104,6 +109,56 @@ def safe_url(value):
         return value
     except ValueError:
         return None
+
+
+def official_domain(website):
+    """Use only the explicit public company.website field, never a posting URL."""
+    if not safe_url(website) or len(website) > 2048:
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(website)
+        host = parsed.hostname.lower().rstrip(".")
+        if parsed.scheme != "https" or parsed.port not in (None, 443) or parsed.fragment or len(host) > 253:
+            return None
+    except (ValueError, AttributeError):
+        return None
+    try:
+        ipaddress.ip_address(host)
+        return None
+    except ValueError:
+        pass
+    if "." not in host or not re.fullmatch(r"[a-z0-9.-]+", host) or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split(".")):
+        return None
+    if re.search(r"(?:^|\.)(?:localhost|local|internal|home|lan|invalid|test)$", host) or re.search(r"(?:^|\.)localhost\.", host):
+        return None
+    if any(host == ats or host.endswith("." + ats) for ats in ATS_DOMAINS):
+        return None
+    return host
+
+
+def company_identities(client, jobs):
+    """At most four exact-ID public reads; missing evidence stays unbound."""
+    identities = []
+    ids = sorted({job["companyId"] for job in jobs})
+    for start in range(0, len(ids), 250):
+        batch = ids[start:start + 250]
+        try:
+            rows = documents(client.search({"collection": "company", "q": "*", "query_by": "name",
+                "filter_by": "id:=[" + ",".join("`" + value + "`" for value in batch) + "]",
+                "include_fields": "id,website", "per_page": len(batch)}), len(batch))
+        except ImportFailure:
+            continue
+        # Conflicting duplicate source identities cannot authorize an alias.
+        seen, ambiguous = {}, set()
+        for row in rows:
+            identifier = row.get("id")
+            if not isinstance(identifier, str) or identifier not in batch:
+                continue
+            if identifier in seen:
+                ambiguous.add(identifier)
+            seen[identifier] = official_domain(row.get("website"))
+        identities.extend({"companyId": identifier, "officialDomain": domain} for identifier, domain in sorted(seen.items()) if domain and identifier not in ambiguous)
+    return identities
 
 
 class VisibleText(HTMLParser):
@@ -245,6 +300,37 @@ def documents(result, limit):
     return [hit["document"] for hit in hits if isinstance(hit, dict) and isinstance(hit.get("document"), dict)]
 
 
+def selected_company_ids(values):
+    if not isinstance(values, list) or not 1 <= len(values) <= MAX_COMPANY_IDS:
+        raise ImportFailure("Company selector requires 1 to 100 unique canonical source UUIDs.")
+    if any(not isinstance(value, str) or not SOURCE_COMPANY_ID.fullmatch(value) for value in values) or len(set(values)) != len(values):
+        raise ImportFailure("Company selector requires 1 to 100 unique canonical source UUIDs.")
+    return sorted(values)
+
+
+def read_company_ids(path):
+    """Read the bounded private operator selector without accepting filter syntax."""
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ImportFailure("Company selector contains duplicate keys.")
+            result[key] = value
+        return result
+
+    try:
+        with Path(path).open("rb") as handle:
+            data = handle.read(COMPANY_SELECTOR_LIMIT + 1)
+        if len(data) > COMPANY_SELECTOR_LIMIT:
+            raise ImportFailure("Company selector exceeds the 16 KiB file limit.")
+        selector = json.loads(data.decode("utf-8"), object_pairs_hook=unique_object)
+    except (OSError, ValueError, RecursionError) as exc:
+        raise ImportFailure("Company selector could not be read as UTF-8 JSON.") from exc
+    if not isinstance(selector, dict) or set(selector) != {"schemaVersion", "companyIds"} or type(selector["schemaVersion"]) is not int or selector["schemaVersion"] != 1:
+        raise ImportFailure("Company selector must contain only schemaVersion 1 and companyIds.")
+    return selected_company_ids(selector["companyIds"])
+
+
 def normalize_job(raw, fetched_at, client, clock=None, body_budget=None):
     # Read exactly this allowlist. New public source fields cannot silently enter Justup.
     raw = {key: raw[key] for key in SOURCE_FIELDS if key in raw}
@@ -276,6 +362,9 @@ def normalize_job(raw, fetched_at, client, clock=None, body_budget=None):
     employment = list(dict.fromkeys(value for value in employment_raw if isinstance(value, str) and value in EMPLOYMENT)) if isinstance(employment_raw, list) else []
     seniority_name = text(raw.get("seniority_name"), 100)
     seniority_id = text(raw.get("seniority_id"), 100)
+    occupation_id = raw.get("occupation_id")
+    occupation_name = text(raw.get("occupation_name"), 200)
+    occupation = {"id": str(occupation_id), "name": occupation_name} if type(occupation_id) is int and 0 < occupation_id <= 2147483647 and occupation_name and not re.search(r"[\x00-\x1f\x7f]", occupation_name) else None
     salary_min, salary_max = number(raw.get("salary_min")), number(raw.get("salary_max"))
     currency, period = text(raw.get("salary_currency"), 10), text(raw.get("salary_period"), 30)
     salary = {"min": salary_min, "max": salary_max, "currency": currency or None, "period": period or None} if salary_min is not None or salary_max is not None else None
@@ -316,12 +405,12 @@ def normalize_job(raw, fetched_at, client, clock=None, body_budget=None):
         "lastObserved": source_time(raw.get("last_seen_at")), "locales": locales,
         "locations": locations, "employmentTypes": employment,
         "seniority": {"id": seniority_id or None, "name": seniority_name or None} if seniority_id or seniority_name else None,
-        "salary": salary, "experience": {"min": experience_min, "max": None if open_ended else experience_max, "openEnded": open_ended},
+        "salary": salary, "occupation": occupation, "experience": {"min": experience_min, "max": None if open_ended else experience_max, "openEnded": open_ended},
         "reserved": False, "hasContent": True, "bodyText": body_text, "evidence": evidence,
     }
 
 
-def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=None):
+def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, company_ids=None, now=None):
     if not isinstance(max_jobs, int) or not 1 <= max_jobs <= MAX_JOBS:
         raise ImportFailure("The import limit must be between 1 and 1000.")
     snapshot = utc(snapshot_at)
@@ -331,6 +420,9 @@ def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=Non
         raise ImportFailure("Snapshot time cannot be in the future.")
     cutoff = snapshot - timedelta(days=14)
     base_filter = f"is_active:=true && has_content:=true && tdm_reserved:!=true && first_seen_at:>={int(cutoff.timestamp())} && first_seen_at:<={int(snapshot.timestamp())}"
+    company_scope = None if company_ids is None else frozenset(selected_company_ids(company_ids))
+    if company_scope is not None:
+        base_filter += " && company_id:=[" + ",".join("`" + value + "`" for value in sorted(company_scope)) + "]"
     selected, seen, returned, query_count = {}, set(), 0, 0
     body_budget = {"remaining": BODY_BUDGET_LIMIT}
     common = {"collection": "job_posting", "q": "*", "query_by": "title", "include_fields": ",".join(SOURCE_FIELDS), "sort_by": "first_seen_at:desc"}
@@ -348,6 +440,8 @@ def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=Non
         returned += len(rows)
         query_count += 1
         for raw in rows:
+            if company_scope is not None and (not isinstance(raw.get("company_id"), str) or raw["company_id"] not in company_scope):
+                continue
             identifier = raw.get("id")
             if not isinstance(identifier, str) or identifier in seen:
                 continue
@@ -413,6 +507,13 @@ def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=Non
                 observations.append({"id": identifier, "active": raw.get("is_active") is not False, "reserved": raw.get("tdm_reserved") is True, "observedAt": fetched_at})
                 selected.pop(identifier, None)
             elif raw.get("is_active") is True:
+                if company_scope is not None and (not isinstance(raw.get("company_id"), str) or raw["company_id"] not in company_scope):
+                    # Keep checking prior IDs for closures, but never renew active
+                    # evidence outside the operator's current company selection.
+                    selected.pop(identifier, None)
+                    if not isinstance(raw.get("company_id"), str):
+                        unknown.add(identifier)
+                    continue
                 first = source_time(raw.get("first_seen_at"))
                 if first and utc(first) < cutoff:
                     selected.pop(identifier, None)
@@ -435,11 +536,19 @@ def import_snapshot(client, snapshot_at, *, max_jobs=500, previous=None, now=Non
         unknown.update(set(batch) - refreshed)
     # Keep the initial selection ceiling even when refreshing a previous snapshot.
     jobs = sorted(selected.values(), key=lambda item: (-utc(item["firstObserved"]).timestamp(), item["id"]))[:max_jobs]
-    return {
+    identities = company_identities(client, jobs)
+    result = {
         "schemaVersion": 1, "snapshotAt": iso(snapshot), "verifiedAt": iso(clock()),
         "selection": {"source": "jobseek_public", "cutoffAt": iso(cutoff), "rule": "reserved_age_windows_companies_diversity_then_newest", "samplingBudgets": {"guest48HoursTo14Days": guest_budget, "recentUnder48Hours": recent_budget, "companyRepresentatives": company_budget, "diversity": diversity_budget}, "limit": max_jobs, "initialReturnedDocuments": returned, "initialQueries": query_count, "knownIdsRefreshed": len(known), "bodyTextBudgetBytes": BODY_BUDGET_LIMIT, "bodyTextRetainedBytes": sum(len(job["bodyText"].encode("utf-8")) for job in jobs if job["bodyText"]), "selectedJobs": len(jobs), "selectedCompanies": len({job["companyId"] for job in jobs})},
-        "jobs": jobs, "observations": observations, "unknownIds": sorted(unknown),
+        "jobs": jobs, "observations": observations, "unknownIds": sorted(unknown), "companyIdentities": identities,
     }
+    if company_scope is not None:
+        result["selection"]["companySelection"] = {
+            "schemaVersion": 1, "requestedCount": len(company_scope),
+            "requestedSetSha256": hashlib.sha256(json.dumps(sorted(company_scope), separators=(",", ":")).encode("utf-8")).hexdigest(),
+            "missingCount": len(company_scope - {job["companyId"] for job in jobs}),
+        }
+    return result
 
 
 def export_snapshot(snapshot, output, *, checkout=None):
@@ -485,9 +594,11 @@ def main(argv=None):
     parser.add_argument("--typesense-host", required=True, help="independently approved public HTTPS Typesense host")
     parser.add_argument("--output", required=True, type=Path, help="private JSON output outside the checkout")
     parser.add_argument("--previous", type=Path, help="previous export whose known IDs must be refreshed")
+    parser.add_argument("--company-ids-file", type=Path, help="private schema-1 source-company UUID selector for operator QA; no global fallback")
     parser.add_argument("--max-jobs", default=500, type=int, help="1..1000; initial selection defaults to 500")
     args = parser.parse_args(argv)
     try:
+        company_ids = read_company_ids(args.company_ids_file) if args.company_ids_file else None
         previous = None
         if args.previous:
             previous = read_previous(args.previous)
@@ -496,9 +607,12 @@ def main(argv=None):
         checkout = Path(__file__).resolve().parents[1]
         if output == checkout or checkout in output.parents or not output.parent.is_dir():
             raise ImportFailure("Use an existing private output directory outside the Git checkout.")
-        snapshot = import_snapshot(PublicClient(args.typesense_host), args.snapshot, max_jobs=args.max_jobs, previous=previous)
+        snapshot = import_snapshot(PublicClient(args.typesense_host), args.snapshot, max_jobs=args.max_jobs, previous=previous, company_ids=company_ids)
         export_snapshot(snapshot, output)
-        print(json.dumps({"jobs": len(snapshot["jobs"]), "companies": snapshot["selection"]["selectedCompanies"], "observations": len(snapshot["observations"]), "unknownIds": len(snapshot["unknownIds"]), "snapshotAt": snapshot["snapshotAt"]}))
+        receipt = {"jobs": len(snapshot["jobs"]), "companies": snapshot["selection"]["selectedCompanies"], "observations": len(snapshot["observations"]), "unknownIds": len(snapshot["unknownIds"]), "snapshotAt": snapshot["snapshotAt"]}
+        if company_ids is not None:
+            receipt.update(companySelection=snapshot["selection"]["companySelection"], observedLocales=sorted({locale for job in snapshot["jobs"] for locale in job["locales"]}))
+        print(json.dumps(receipt))
     except (ImportFailure, OSError, ValueError) as exc:
         message = str(exc) if isinstance(exc, ImportFailure) else "Import input/output failed."
         print("Import stopped: " + message, file=sys.stderr)

@@ -4,8 +4,10 @@ import { lstatSync, chmodSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
+import { initializeCompanyIdentities,validateCompanyIdentities,recordCompanyIdentities } from './company-identities.mjs';
 
-export const SCHEMA_VERSION = 1;
+import { SCHEMA_VERSION, assertCurrentSchema } from './schema.mjs';
+export { SCHEMA_VERSION } from './schema.mjs';
 export const DAY_MS = 86_400_000;
 export const MAX_BODY_BYTES = 512 * 1024;
 export function problem(code, status = 400, message = 'Invalid request.') {
@@ -81,6 +83,7 @@ function normalizedJob(raw, snapshotAt, verifiedAt) {
       workplace: ['onsite', 'remote', 'hybrid'].includes(l.workplace) ? l.workplace : null,
       geoType: string(l.geoType, 100, true) })), employmentTypes,
     seniority: raw.seniority == null ? null : { id: string(raw.seniority.id, 100, true), name: string(raw.seniority.name, 200, true) },
+    occupation: raw.occupation == null ? null : { id: string(raw.occupation.id, 100), name: string(raw.occupation.name, 200) },
     salary: raw.salary == null ? null : { min: number(raw.salary.min), max: number(raw.salary.max), currency: string(raw.salary.currency, 10, true), period: string(raw.salary.period, 30, true) },
     experience: { min: number(raw.experience?.min), max: raw.experience?.max === 99 ? null : number(raw.experience?.max), openEnded: raw.experience?.openEnded === true || raw.experience?.max === 99 },
     evidence: { source: 'jobseek_public', metadataFetchedAt: new Date(metadataFetchedAt).toISOString(),
@@ -107,28 +110,28 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
   if (path !== ':memory:') chmodSync(path, mode);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA max_page_count = 262144;');
   if (path !== ':memory:') for (const file of [`${path}-wal`, `${path}-shm`]) if (existsSync(file)) chmodSync(file, mode);
-  const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (version > SCHEMA_VERSION) { db.close(); throw new Error('Unsupported application database schema.'); }
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS demo_imports (
+  try { assertCurrentSchema(db, { allowEmpty: true }); } catch (error) { db.close(); throw error; }
+  transaction(db, () => db.exec(`
+    CREATE TABLE IF NOT EXISTS justup_imports (
       generation TEXT PRIMARY KEY, snapshot_at INTEGER NOT NULL, verified_at INTEGER NOT NULL,
       selection_json TEXT NOT NULL, imported_count INTEGER NOT NULL, unknown_count INTEGER NOT NULL
     ) STRICT;
-    CREATE TABLE IF NOT EXISTS demo_jobs (
+    CREATE TABLE IF NOT EXISTS justup_jobs (
       id TEXT PRIMARY KEY, company_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,
       active INTEGER NOT NULL CHECK (active IN (0,1)), reserved INTEGER NOT NULL CHECK (reserved IN (0,1)),
       verified_at INTEGER NOT NULL, closed_observed_at INTEGER, evidence_hash TEXT,
       data_json TEXT NOT NULL, body_text TEXT
     ) STRICT;
-    CREATE INDEX IF NOT EXISTS demo_jobs_order ON demo_jobs(first_seen_at DESC, id);
-    CREATE INDEX IF NOT EXISTS demo_jobs_company ON demo_jobs(company_id);
+    CREATE INDEX IF NOT EXISTS justup_jobs_order ON justup_jobs(first_seen_at DESC, id);
+    CREATE INDEX IF NOT EXISTS justup_jobs_company ON justup_jobs(company_id);
     CREATE TABLE IF NOT EXISTS job_source_identities (
       id TEXT PRIMARY KEY, company_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,
       verified_at INTEGER NOT NULL, active INTEGER NOT NULL CHECK(active IN (0,1)),
       reserved INTEGER NOT NULL CHECK(reserved IN (0,1))
     ) STRICT;
-    PRAGMA user_version = 1;
-  `);
+    CREATE INDEX IF NOT EXISTS job_source_identities_company ON job_source_identities(company_id);
+    PRAGMA user_version = ${SCHEMA_VERSION};
+  `));
   // Retain source lifecycle independently from bounded bodies/metadata, including
   // when reopening a database with the earlier identity-only additive schema.
   const identityColumns = new Set(db.prepare('PRAGMA table_info(job_source_identities)').all().map((column) => column.name));
@@ -136,11 +139,12 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     if (!identityColumns.has(name)) db.exec(`ALTER TABLE job_source_identities ADD COLUMN ${name} ${definition}`);
   }
   db.exec(`INSERT OR IGNORE INTO job_source_identities(id,company_id,first_seen_at,verified_at,active,reserved)
-    SELECT id,company_id,first_seen_at,verified_at,active,reserved FROM demo_jobs;
-    UPDATE job_source_identities SET (verified_at,active,reserved)=(SELECT verified_at,active,reserved FROM demo_jobs WHERE id=job_source_identities.id)
-      WHERE verified_at=0 AND EXISTS(SELECT 1 FROM demo_jobs WHERE id=job_source_identities.id);`);
+    SELECT id,company_id,first_seen_at,verified_at,active,reserved FROM justup_jobs;
+    UPDATE job_source_identities SET (verified_at,active,reserved)=(SELECT verified_at,active,reserved FROM justup_jobs WHERE id=job_source_identities.id)
+      WHERE verified_at=0 AND EXISTS(SELECT 1 FROM justup_jobs WHERE id=job_source_identities.id);`);
+  initializeCompanyIdentities(db);
   function generation() {
-    return db.prepare('SELECT * FROM demo_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
+    return db.prepare('SELECT * FROM justup_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   }
   function importSnapshot(snapshot) {
     if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.jobs) || snapshot.jobs.length > 1000
@@ -149,6 +153,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     const snapshotAt = timestamp(snapshot.snapshotAt), verifiedAt = timestamp(snapshot.verifiedAt);
     if (verifiedAt < snapshotAt || verifiedAt > Date.now() + 60_000) throw problem('invalid_import');
     const jobs = snapshot.jobs.map((r) => normalizedJob(r, snapshotAt, verifiedAt));
+    const companyIdentities=validateCompanyIdentities(snapshot.companyIdentities);
     const ids = new Set(jobs.map((j) => j.job.id));
     if (ids.size !== jobs.length) throw problem('invalid_import');
     const observations = (snapshot.observations ?? []).map((o) => {
@@ -166,7 +171,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
       const rememberIdentity = db.prepare(`INSERT INTO job_source_identities(id,company_id,first_seen_at,verified_at,active,reserved) VALUES(?,?,?,?,1,0)
         ON CONFLICT(id) DO UPDATE SET verified_at=excluded.verified_at,active=1,reserved=0`);
       const priorEvidence = db.prepare('SELECT verified_at,active,reserved FROM job_source_identities WHERE id=?');
-      const insert = db.prepare(`INSERT INTO demo_jobs (id, company_id, first_seen_at, active, reserved, verified_at, closed_observed_at, evidence_hash, data_json, body_text)
+      const insert = db.prepare(`INSERT INTO justup_jobs (id, company_id, first_seen_at, active, reserved, verified_at, closed_observed_at, evidence_hash, data_json, body_text)
         VALUES (?, ?, ?, 1, 0, ?, NULL, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET
         company_id=excluded.company_id,active=1,reserved=0,verified_at=excluded.verified_at,closed_observed_at=NULL,
         evidence_hash=excluded.evidence_hash,data_json=excluded.data_json,body_text=excluded.body_text`);
@@ -180,7 +185,8 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
         rememberIdentity.run(job.id,job.companyId,first,observedAt);
         insert.run(job.id, job.companyId, first, observedAt, textHash, boundedJson(job, 16_384), bodyText);
       }
-      const close = db.prepare(`UPDATE demo_jobs SET active=?,reserved=?,verified_at=?,closed_observed_at=? WHERE id=?`);
+      recordCompanyIdentities(db,companyIdentities,verifiedAt);
+      const close = db.prepare(`UPDATE justup_jobs SET active=?,reserved=?,verified_at=?,closed_observed_at=? WHERE id=?`);
       const rememberObservation = db.prepare('UPDATE job_source_identities SET active=?,reserved=?,verified_at=? WHERE id=?');
       for (const o of observations) {
         const prior = priorEvidence.get(o.id);
@@ -189,11 +195,11 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
           rememberObservation.run(o.active ? 1 : 0,o.reserved ? 1 : 0,o.observedAt,o.id);
         }
       }
-      db.prepare('INSERT INTO demo_imports VALUES (?, ?, ?, ?, ?, ?)').run(generationId, snapshotAt, verifiedAt, selection, jobs.length, snapshot.unknownIds?.length ?? 0);
+      db.prepare('INSERT INTO justup_imports VALUES (?, ?, ?, ?, ?, ?)').run(generationId, snapshotAt, verifiedAt, selection, jobs.length, snapshot.unknownIds?.length ?? 0);
       // Old import metadata is not needed for cursor validity or public evidence.
-      db.prepare('DELETE FROM demo_imports WHERE rowid NOT IN (SELECT rowid FROM demo_imports ORDER BY rowid DESC LIMIT 32)').run();
-      db.prepare('DELETE FROM demo_jobs WHERE first_seen_at < ?').run(snapshotAt - 30 * DAY_MS);
-      db.prepare('DELETE FROM demo_jobs WHERE id NOT IN (SELECT id FROM demo_jobs ORDER BY first_seen_at DESC,id ASC LIMIT 1000)').run();
+      db.prepare('DELETE FROM justup_imports WHERE rowid NOT IN (SELECT rowid FROM justup_imports ORDER BY rowid DESC LIMIT 32)').run();
+      db.prepare('DELETE FROM justup_jobs WHERE first_seen_at < ?').run(snapshotAt - 30 * DAY_MS);
+      db.prepare('DELETE FROM justup_jobs WHERE id NOT IN (SELECT id FROM justup_jobs ORDER BY first_seen_at DESC,id ASC LIMIT 1000)').run();
       return { generation: generationId, imported: jobs.length, observed: observations.length, unknown: snapshot.unknownIds?.length ?? 0 };
     });
   }

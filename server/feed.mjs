@@ -1,7 +1,9 @@
 // Public projections and time/access filtering for the isolated imported feed.
 // Search implementations must use eligibleJobs, then project with publicJob.
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { DAY_MS, problem } from './store.mjs';
+import { initializeCompanyIdentities,canonicalCompanyId } from './company-identities.mjs';
+import {initializeCompanyProgress,createCompanyProgress} from './company-progress.mjs';
 
 export function publicJob(job) {
   return {
@@ -16,7 +18,12 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   if (!db || !Number.isSafeInteger(verificationTtlMs) || verificationTtlMs < 1 || verificationTtlMs > DAY_MS
       || !Number.isSafeInteger(cursorTtlMs) || cursorTtlMs < 1 || cursorTtlMs > DAY_MS
       || Buffer.byteLength(cursorSecret) < 32) throw new TypeError('Invalid feed configuration.');
-  const latest = () => db.prepare('SELECT * FROM demo_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
+  db.exec('CREATE TABLE IF NOT EXISTS justup_requested_companies(id TEXT PRIMARY KEY,domain TEXT NOT NULL UNIQUE,data_json TEXT NOT NULL) STRICT');
+  initializeCompanyIdentities(db);
+  const canonicalId=id=>canonicalCompanyId(db,id);
+  initializeCompanyProgress(db);
+  const setup=createCompanyProgress({db,canonicalCompanyId:canonicalId,now});
+  const latest = () => db.prepare('SELECT * FROM justup_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   const access = (viewer) => viewer?.account?.id && viewer.access?.fullAccess === true ? 'account' : 'guest';
   function coverageAt(at) {
     const row = latest();
@@ -25,12 +32,13 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
       stale, ...(stale ? { state: 'import_unavailable', description: 'Imported listings need verification.' } : {}) };
   }
   const coverage = () => coverageAt(now());
-  function eligibleAt(viewer, at) {
+  function eligibleAt(viewer, at, restrictedLatest=false) {
     if (coverageAt(at).stale) return [];
-    const upper = at - (access(viewer) === 'guest' ? 2 * DAY_MS : 0);
-    return db.prepare(`SELECT * FROM demo_jobs WHERE active=1 AND reserved=0 AND first_seen_at>=? AND first_seen_at<=?
-      AND verified_at>? AND verified_at<=? ORDER BY first_seen_at DESC, id ASC`).all(at - 14 * DAY_MS, upper, at - verificationTtlMs, at)
-      .map((r) => ({ ...JSON.parse(r.data_json), bodyText: r.body_text, evidenceHash: r.evidence_hash,
+    const upper = restrictedLatest?at:at - (access(viewer) === 'guest' ? 2 * DAY_MS : 0);
+    const lower=at-(restrictedLatest?2:14)*DAY_MS;
+    return db.prepare(`SELECT * FROM justup_jobs WHERE active=1 AND reserved=0 AND first_seen_at${restrictedLatest?'>':'>='}? AND first_seen_at<=?
+      AND verified_at>? AND verified_at<=? ORDER BY first_seen_at DESC, id ASC`).all(lower, upper, at - verificationTtlMs, at)
+      .map((r) => ({ ...JSON.parse(r.data_json), companyId:canonicalId(r.company_id),bodyText: r.body_text, evidenceHash: r.evidence_hash,
         verifiedAt: new Date(r.verified_at).toISOString() }));
   }
   const eligibleJobs = ({ viewer = null } = {}) => eligibleAt(viewer, now());
@@ -71,28 +79,89 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
     }, ai: { status: 'not_required' }, coverage: currentCoverage };
   }
   function companyRows() {
-    return db.prepare('SELECT company_id, data_json FROM demo_jobs ORDER BY first_seen_at DESC, id ASC').all();
+    return db.prepare('SELECT company_id, data_json FROM justup_jobs ORDER BY first_seen_at DESC, id ASC').all();
   }
-  function companyDto(job) {
-    return { id: job.companyId, name: job.companyName, slug: job.companySlug, logoUrl: null,
-      websiteUrl: null, coverage: { state: 'imported_snapshot' }, history: null,
-      evidence: [{ source: 'jobseek_public', url: typeof job.companySlug === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(job.companySlug)
+  function companyDto(job,readSetup=setup.publicSnapshot) {
+    const id=canonicalId(job.companyId),requested=db.prepare('SELECT data_json FROM justup_requested_companies WHERE id=?').get(id);
+    const known=requested?JSON.parse(requested.data_json):null;
+    return { id, name:known?.name??job.companyName, slug: job.companySlug, logoUrl: null,
+      websiteUrl:known?.websiteUrl??null, coverage: { state: 'imported_snapshot' }, setup:readSetup(id), history: null,
+      evidence: [...(known?.evidence??[]),{ source: 'jobseek_public', url: typeof job.companySlug === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(job.companySlug)
         ? `https://jseek.co/en/company/${job.companySlug}` : 'https://jseek.co/' }] };
   }
-  function companies({ q = '' } = {}) {
-    if (typeof q !== 'string' || q.length > 100) throw problem('invalid_query');
-    const needle = q.trim().toLocaleLowerCase('en');
-    const found = new Map();
+  function catalogue() {
+    const found = new Map(),readSetup=setup.publicReader();
     for (const row of companyRows()) {
       const j = JSON.parse(row.data_json);
-      if (!found.has(j.companyId) && j.companyName.toLocaleLowerCase('en').includes(needle)) found.set(j.companyId, companyDto(j));
+      const id=canonicalId(j.companyId),dto=companyDto(j,readSetup);
+      if (!found.has(id)) found.set(id,dto);
     }
-    return { items: [...found.values()].sort((a, b) => a.name.localeCompare(b.name, 'en') || a.id.localeCompare(b.id)).slice(0, 50), coverage: coverage() };
+    for(const row of db.prepare('SELECT data_json FROM justup_requested_companies').all()) {
+      const company=JSON.parse(row.data_json);
+      if(!found.has(company.id))found.set(company.id,{...company,setup:readSetup(company.id)});
+    }
+    return [...found.values()].sort((a, b) => a.name.localeCompare(b.name, 'en') || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+  function companyPage({ q = '', cursor = null, limit = 20, privateScope = null } = {}) {
+    if (typeof q !== 'string' || q.length > 100 || /[\u0000-\u001f\u007f]/u.test(q)) throw problem('invalid_query');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw problem('invalid_limit');
+    const needle = q.trim().toLocaleLowerCase('en'), all = catalogue(), at = now();
+    // Accepted public identities can change between imports. Bind the cursor to
+    // both the import and the allowlisted catalogue, never to account state.
+    const generation = createHash('sha256').update(JSON.stringify([latest()?.generation ?? null, all])).digest('hex');
+    const scope = privateScope ? 'account_companies' : 'public_companies';
+    const owner = privateScope ? sign(`account_companies:${privateScope.ownerId}`) : null;
+    const membership = privateScope ? new Set(privateScope.companyIds.map(canonicalId)) : null;
+    const membershipGeneration = membership ? createHash('sha256').update(JSON.stringify([...membership].sort())).digest('hex') : null;
+    let position = null;
+    if (cursor != null) {
+      if (typeof cursor !== 'string' || cursor.length > 2048) throw problem('invalid_cursor');
+      const [data, signature, extra] = cursor.split('.');
+      if (!data || !signature || extra) throw problem('invalid_cursor');
+      const actual = Buffer.from(signature), expected = Buffer.from(sign(data));
+      if (actual.length !== expected.length || !timingSafeEqual(expected, actual)) throw problem('invalid_cursor');
+      try { position = JSON.parse(Buffer.from(data, 'base64url').toString('utf8')); } catch { throw problem('invalid_cursor'); }
+      if (position?.v !== 1 || position.scope !== scope || typeof position.id !== 'string'
+          || typeof position.q !== 'string' || !Number.isSafeInteger(position.createdAt)) throw problem('invalid_cursor');
+      if (privateScope && (position.owner !== owner || position.view !== privateScope.view)) throw problem('invalid_cursor');
+      if (position.generation !== generation || position.q !== needle || position.membershipGeneration !== (membershipGeneration ?? undefined)
+          || at - position.createdAt >= cursorTtlMs || position.createdAt > at) throw problem('stale_cursor', 409);
+    }
+    const matching = all.filter(company => (!membership || membership.has(company.id)) && company.name.toLocaleLowerCase('en').includes(needle));
+    const start = position ? matching.findIndex(company => company.id === position.id) + 1 : 0;
+    if (position && !start) throw problem('invalid_cursor');
+    const items = matching.slice(start, start + limit), more = matching.length > start + limit;
+    return { items, coverage: coverageAt(at), nextCursor: more ? encode({ v: 1, scope,
+      ...(privateScope ? {owner,view:privateScope.view,membershipGeneration} : {}),
+      generation, q: needle, createdAt: position?.createdAt ?? at, id: items.at(-1).id }) : null };
+  }
+  const companies = ({q='',cursor=null,limit=20}={}) => companyPage({q,cursor,limit});
+  function accountCompanies({ownerId,view,companyIds,...options}) {
+    if(typeof ownerId!=='string'||!ownerId||!['followed','requested'].includes(view)||!Array.isArray(companyIds))throw problem('invalid_input');
+    return companyPage({...options,privateScope:{ownerId,view,companyIds}});
   }
   function company(id) {
-    const row = db.prepare('SELECT data_json FROM demo_jobs WHERE company_id=? ORDER BY first_seen_at DESC, id ASC LIMIT 1').get(id);
-    if (!row) throw problem('not_found', 404, 'Not found.');
-    return companyDto(JSON.parse(row.data_json));
+    id=canonicalId(id);
+    const row = db.prepare('SELECT data_json FROM justup_jobs WHERE company_id=? OR company_id IN (SELECT source_company_id FROM justup_company_aliases WHERE company_id=?) ORDER BY first_seen_at DESC, id ASC LIMIT 1').get(id,id);
+    if(row)return companyDto(JSON.parse(row.data_json));
+    const requested=db.prepare('SELECT data_json FROM justup_requested_companies WHERE id=?').get(id);
+    if(!requested)throw problem('not_found',404,'Not found.');
+    return {...JSON.parse(requested.data_json),setup:setup.publicSnapshot(id)};
   }
-  return { list, companies, company, coverage, eligibleJobs, publicJob, generation: () => latest()?.generation ?? null };
+  function publishCompany(candidate) {
+    if(candidate.companyId)return company(candidate.companyId).id;
+    // A confirmed catalogue ID establishes reuse. Names and official hosts do
+    // not bind a newly researched request to any imported source identity.
+    if(!candidate.domain)throw problem('preview_conflict',409);
+    const prior=db.prepare('SELECT id,data_json FROM justup_requested_companies WHERE domain=?').get(candidate.domain);
+    if(prior){
+      const known=JSON.parse(prior.data_json),fold=value=>value.normalize('NFKC').trim().toLocaleLowerCase('en');
+      if(fold(known.name)!==fold(candidate.name)||known.websiteUrl!==candidate.websiteUrl)throw problem('preview_conflict',409);
+      return prior.id;
+    }
+    const id=randomUUID(),value={id,name:candidate.name,slug:null,logoUrl:null,websiteUrl:candidate.websiteUrl,
+      coverage:{state:'requested'},history:null,evidence:candidate.evidenceUrls.map(url=>({source:'company_request',url}))};
+    db.prepare('INSERT INTO justup_requested_companies VALUES(?,?,?)').run(id,candidate.domain,JSON.stringify(value));return id;
+  }
+  return { list, companies, accountCompanies, company, publishCompany,companySetup:setup.snapshot,ensureCompanySetup:setup.ensure,canonicalCompanyId:canonicalId, requestedCompanies:()=>db.prepare('SELECT data_json FROM justup_requested_companies ORDER BY id').all().map(r=>JSON.parse(r.data_json)), coverage, eligibleJobs, restrictedLatestJobs:()=>eligibleAt(null,now(),true), publicJob, generation: () => latest()?.generation ?? null };
 }

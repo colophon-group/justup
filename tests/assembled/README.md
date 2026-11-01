@@ -3,9 +3,16 @@ summary: Run the local built browser/Worker against real API, auth, SQLite and m
 read_when: Verifying visitor bootstrap, lost responses, handoff, reclamation or locale propagation across the assembled boundary.
 ---
 
-The default assembled browser suite loads the checked-out `server/` source. It never substitutes a pinned older producer or skips an incompatible source. This interface branch depends on the backend bootstrap/composition changes: current-source CI must remain a draft until those changes are integrated and this default path passes.
+The default assembled browser suite loads the checked-out `server/` source. It never substitutes a pinned older producer or skips an incompatible source. The compatible backend is composed in the same source tree. CI must verify this default path before the integration can be accepted; an explicit archived API is diagnostic component evidence, never a replacement for the current-source check.
 
-For the reviewed component proof, explicitly select the immutable API input:
+Run the current-source journey after building:
+
+```sh
+JUSTUP_TEST_PORT=4202 JUSTUP_PUBLIC_TEST_PORT=4203 JUSTUP_ASSEMBLED_TEST_PORT=4204 \
+ npm run test:browser -- tests/browser/assembled-visitor-bootstrap.spec.mjs
+```
+
+For a separate component comparison, explicitly select an immutable API input:
 
 ```sh
 JUSTUP_ASSEMBLED_API_REF=253caa98777b7f29454157628fd2a6ec6e39dfad \

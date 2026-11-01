@@ -15,6 +15,8 @@ The public repository is [colophon-group/justup](https://github.com/colophon-gro
 
 This guide defines one product architecture. The `product-release-readiness` criteria require the accepted product paths before first invited activation. A restricted preview is a deployment state: invitation admission, account caps/optional new-account deadlines, bounded provider spend, schedules, temporary URL, frontend mode and isolated resources can change through reviewed configuration. They do not authorize a disposable account system or a smaller release contract. [Accounts](auth.md), [API](api.md), [job ingestion](job-data.md) and [matching](matching.md) describe implemented boundaries. Subscription transitions, continuous source refresh, resumable live delivery over SSE, attributable company hiring reports, posting-language preferences, monitored-coverage progress and factual weekly Hiring Wire remain first-release requirements until their end-to-end contracts pass. Missing report history or preference persistence is a launch gap, rather than an optional later phase. Missing source continuity suppresses unsupported editorial comparisons; a latest-success timestamp is insufficient.
 
+Current private processing uses one [account/visitor admission proof](processing-admission.md) bound to source/build, exact locale policy identity and deletion generation. The API checks current policy and maintenance before sensitive writes; queue tasks repeat that check before providers and commits. Provider outages preserve appropriate stored reads and account cleanup. The five `product-draft-5` policy pairs remain unreviewed and the global activation switch stays off.
+
 ## 1. Minimal application shape
 
 Start with one application API, one shared background runner, and a database for product state. Keep job retrieval behind a small search adapter so its storage implementation can evolve independently. Select frameworks and providers during implementation.
@@ -37,6 +39,8 @@ Persist submitted search text, canonical configuration, generated title and desc
 
 Viewed positions belong to an account and stable posting identity across searches. Record outbound actions idempotently without delaying navigation. Preserve visitor searches and viewed state through sign-in, merge them into the account, and isolate account state on shared browsers. Persist follows independently of company requests.
 
+The implemented [reading-state contract](reading-preferences.md) stores account follows and explicit unfollows, per-search followed-only and posting-language options, and a separate interface-locale override. Its supported interface set is English, German, French, Italian and Spanish; ordered browser preferences match regional tags to a supported base with English fallback. These SQLite/API paths are tested; the complete translated browser journeys and real multilingual interpretation quality still need release qualification. Account deletion removes these private records in the existing transaction and recovery boundary.
+
 Access is authoritative on the backend. Own free-period activation, legacy eligibility, paid-through dates and premium request priority here. Process billing updates idempotently. Expiry preserves searches and changes both ordinary reads and open streams. Account deletion and query-data retention apply to these records and their associated traces.
 
 ## 3. Search planning with Luna
@@ -46,6 +50,8 @@ Access is authoritative on the backend. Own free-period activation, legacy eligi
 For each submission, supply Luna with the user's complete edited query, previous submitted query, active configuration and revision, relevant profile context, and a concise capability description. Explicit text and removed requirements take precedence over profile defaults.
 
 Capabilities describe supported filters and operators, normalization rules, available posting evidence, and the AI filter's supported conditions and current availability. The current configuration includes any AI condition; Luna must preserve, change or remove it consistently with the edited text.
+
+Explicit posting-language sets and followed-company scope remain separate saved search options. Empty language selection means any; a nonempty set uses OR and excludes unknown evidence. The server intersects these options with the query-derived compiler filters before residual AI, including hidden-match evaluation. Conflicting text and selected languages produce zero matches without dropping either requirement. Options are model context, with bounded examples and full count/hash for large selections, never permission to omit a text requirement. Changing options or follows invalidates incompatible revisions, scans and queued results without another interpretation call while preserving query drafts. Presentation locale controls generated titles and reason wording only; source text and user queries are never rewritten.
 
 Account access, freshness policy and newest-first ordering remain application rules.
 
@@ -114,6 +120,8 @@ Prioritize AI work needed for visible results. Count recent hidden matches with 
 
 Use one SSE connection per open workspace, carrying search revision and event identity. Deliver only accepted, eligible results. Support authoritative refresh and deduplication on reconnect. Reconcile closures, expiration, access changes and postings crossing the preview cutoff even when no new posting arrives. A superseded revision cannot repopulate a changed or deleted search.
 
+The implemented [live-results transport](live-results.md) polls a shared SQLite change fingerprint and the canonical search snapshot with bounded connections, heartbeat, lifetime and backpressure. Deliverable prefixes and authoritative retained-ID membership have separate meanings, so newer pending AI work cannot remove older accepted rows. Cookie authority and policy/deletion protections are rechecked throughout delivery. Reconnect always obtains a fresh canonical projection; bounded opaque resume metadata carries no posting payload. Local contracts do not replace the required deployed edge and browser verification.
+
 ## 5. Companies and requests
 
 Serve the public catalogue, coverage projection and requested-company view from the companies module. Coverage information is an input to this backend. Company identity, requested coverage scope and setup progress remain separate records.
@@ -127,7 +135,11 @@ Optimize interactive resolution around the correct identity:
 
 Keep the original lookup available after rejection. Acceptance references the exact preview shown, reuses an existing company when possible, publishes the catalogue entry, attaches the requester and records the requested scope. Automatically follow a newly accepted request while preserving an explicit later unfollow.
 
-Repeated submissions and priority requests are idempotent. Distinct users share identity and setup progress. Subscription entitlement controls priority, while free requests remain accepted and visible. Show separate catalogue-publication and coverage-active milestones, with a reason and next action for blocked work. The actual configuration work is outside this design.
+The acceptance transaction publishes/reuses a canonical catalogue ID, establishes its shared setup and performs this automatic follow once. Imported IDs remain canonical; newly discovered identities share a public record by validated official domain, with requested coverage and no invented monitoring history. Exact-preview candidate IDs remain separate from catalogue IDs. Explicit unfollow survives retries and later scope requests. A published row can receive an idempotent priority action without research when the current requester has premium access. Ordinary free requests remain accepted. Each private request reports only its own requester's current priority; aggregate ordering belongs to the private operator projection.
+
+Public catalogue pages use bounded signed continuations, independent of account/private request/follow state. The private `/account/companies` catalogue returns the same canonical rows for follows or accepted requests, with owner, view, filter, membership and catalogue-bound continuations. Unconfirmed previews never become requested catalogue membership. The [company report projection](company-hiring-reports.md) combines eligible public structured role/salary samples with the existing published frozen source history. It records the actual sample window and separate observation/generation/publication timestamps, preserves unknown or interrupted counts, and exposes no underlying restricted listing identities. Only attributable source scopes supply historical monitoring-start evidence. Exact-ID public company website metadata can preserve accepted catalogue identities across a later source import. Real source-history and deployed browser qualification remain first-release requirements.
+
+Distinct users share one setup record, with safe queued/in-progress/blocked progress, fixed reason and next-action codes, and a private operator compare-and-set handoff. Public companies expose this safe progress without account identities, requested scopes or priority. The [setup checklist](../scripts/company-requests/README.md) uses current server premium access for aggregate queue ordering and retains free requests. Its local commands run no model and perform no crawler configuration. No live monitoring receipt producer is integrated; an operator boolean, imported posting, ATS URL or frozen weekly snapshot cannot make coverage active. Implementing and qualifying the approved current-source receipt producer and requester notification remains a first-release gap, alongside the actual configuration workflow.
 
 ## 6. Weekly Hiring Wire
 

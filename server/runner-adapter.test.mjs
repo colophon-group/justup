@@ -2,17 +2,23 @@
 // provider requests. Filesystem ownership checks remain in readRunnerConfig.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindRunnerConfig,runnerIdentity } from './runner-adapter.mjs';
+import { mkdtempSync,readFileSync,rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { bindRunnerConfig,runnerIdentity,createRunnerStatusPublisher } from './runner-adapter.mjs';
+import { createTasks } from './tasks.mjs';
+import { createRunner } from './runner.mjs';
 
 const env={JUSTUP_SOURCE_COMMIT:'a'.repeat(40),JUSTUP_BUILD_ID:'b'.repeat(64),JUSTUP_HOST_PLAN_SHA256:'c'.repeat(64)};
-const config=()=>({dbPath:'/preview/state/demo.sqlite',model:{enabled:false}});
+const config=()=>({dbPath:'/preview/state/application.sqlite',model:{enabled:false}});
 
 test('queue model proof and heartbeat use the exact trusted launcher identities',()=>{
   const value=bindRunnerConfig(config(),{...env,OPENAI_API_KEY:'must-not-be-copied'});
   assert.deepEqual(runnerIdentity(env),{sourceCommit:env.JUSTUP_SOURCE_COMMIT,buildIdentity:env.JUSTUP_BUILD_ID,hostPlanSha256:env.JUSTUP_HOST_PLAN_SHA256});
   assert.equal(value.sourceCommit,env.JUSTUP_SOURCE_COMMIT);assert.equal(value.buildIdentity,env.JUSTUP_BUILD_ID);
   assert.deepEqual(value.model,{enabled:false,buildIdentity:env.JUSTUP_BUILD_ID,hostPlanSha256:env.JUSTUP_HOST_PLAN_SHA256});
-  assert.equal(JSON.stringify(value).includes('must-not-be-copied'),false);assert.deepEqual(config(),{dbPath:'/preview/state/demo.sqlite',model:{enabled:false}});
+  assert.equal(JSON.stringify(value).includes('must-not-be-copied'),false);assert.deepEqual(config(),{dbPath:'/preview/state/application.sqlite',model:{enabled:false}});
 });
 
 test('missing or malformed launcher identity fails closed even with model disabled',()=>{
@@ -27,4 +33,42 @@ test('operator JSON cannot duplicate or override artifact and installed-plan ide
     assert.throws(()=>bindRunnerConfig({...config(),model:{[name]:'d'.repeat(64)}},env),/configuration is unavailable/);
   }
   for(const value of [{...config(),dbPath:'relative.sqlite'},{...config(),model:[]},{...config(),modulePath:'/arbitrary/plugin.mjs'}])assert.throws(()=>bindRunnerConfig(value,env),/configuration is unavailable/);
+});
+
+test('queue admits only fixed Wire model and pinned source configuration without identity overrides',()=>{
+  const hiringWire={enabled:true,attestationPath:'/private/wire-proof.json',providerCatalogueSha256:'d'.repeat(64),modelUid:995,socketPath:'/private/model.sock'};
+  const sourceCoverage={directory:'/private/source-history',sourceVersion:'jobseek-coverage-v1'};
+  const input={...config(),hiringWire,sourceCoverage},bound=bindRunnerConfig(input,env);
+  assert.deepEqual(bound.hiringWire,hiringWire);assert.deepEqual(bound.sourceCoverage,sourceCoverage);
+  const v2={...sourceCoverage,sourceVersion:'jobseek-coverage-v2'};
+  assert.deepEqual(bindRunnerConfig({...input,sourceCoverage:v2},env).sourceCoverage,v2);
+  assert.equal(bound.buildIdentity,env.JUSTUP_BUILD_ID);assert.equal(bound.hostPlanSha256,env.JUSTUP_HOST_PLAN_SHA256);
+  assert.deepEqual(bindRunnerConfig({...config(),hiringWire:{enabled:false}},env).hiringWire,{enabled:false});
+  for(const patch of [{hiringWire:{...hiringWire,buildIdentity:'e'.repeat(64)}},{hiringWire:{enabled:false,module:'/tmp/caller.mjs'}},
+    {sourceCoverage:{...sourceCoverage,directory:'relative'}},{sourceCoverage:{...sourceCoverage,directory:'/private/../source'}},
+    {sourceCoverage:{...sourceCoverage,sourceVersion:'caller-version'}},{sourceCoverage:{...sourceCoverage,command:'caller-command'}}]) {
+    assert.throws(()=>bindRunnerConfig({...input,...patch},env),/configuration is unavailable/);
+  }
+});
+test('actual runner status stays unavailable after cleanup halt, including guard write failure and later heartbeat',async t=>{
+  for(const persistenceFailure of [false,true])await t.test(String(persistenceFailure),async t=>{
+    const directory=mkdtempSync(join(tmpdir(),'runner-halt-status-')),path=join(directory,'runner.json'),db=new DatabaseSync(':memory:');
+    t.after(()=>{db.close();rmSync(directory,{recursive:true,force:true});});
+    let at=1000;const tasks=createTasks({db,now:()=>at});
+    const publishers={search:()=>true,companyRequests:()=>true,aiMatching:()=>true,emailVerification:()=>true,stripeBilling:()=>true};
+    const publisher=createRunnerStatusPublisher({path,identity:'runner',config:bindRunnerConfig(config(),env),tasks,capabilities:publishers,now:()=>at});
+    const status=()=>JSON.parse(readFileSync(path,'utf8'));
+    publisher.heartbeat();assert.equal(status().ready,true);assert.equal(status().capabilities.emailVerification,true);assert.equal(status().capabilities.stripeBilling,true);
+    tasks.enqueue({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'week',payload:{}});
+    if(persistenceFailure)tasks.haltWire=()=>{throw Error('Guard storage unavailable.');};
+    const runner=createRunner({tasks,onHalt:publisher.onHalt,handlers:{hiring_wire:()=>{throw Object.assign(Error('Unproven cleanup.'),{code:'cleanup_unproven'});}}});
+    t.after(()=>runner.stop());
+    if(persistenceFailure)await assert.rejects(runner.runOnce(),/Guard storage unavailable/);
+    else assert.equal(await runner.runOnce(),true);
+    assert.equal(tasks.halted(),!persistenceFailure);assert.equal(runner.ready(),false);
+    const unavailable={search:false,companyRequests:false,aiMatching:false,emailVerification:false,stripeBilling:false};
+    assert.equal(status().ready,false);assert.deepEqual(status().capabilities,unavailable);
+    at+=10_000;publisher.heartbeat();
+    assert.equal(status().updatedAt,new Date(at).toISOString());assert.equal(status().ready,false);assert.deepEqual(status().capabilities,unavailable);
+  });
 });

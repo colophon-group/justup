@@ -89,7 +89,7 @@ export function createAccessReader({ db, now = Date.now } = {}) {
   };
 }
 
-export function createEntitlements({ db, now = Date.now, identityProofVerifier = null, billingEventVerifier = null } = {}) {
+export function createEntitlements({ db, now = Date.now, identityProofVerifier = null, billingEventVerifier = null, onAccessTransition = () => {} } = {}) {
   if (!db || typeof now !== 'function' || (identityProofVerifier !== null && typeof identityProofVerifier !== 'function')
       || (billingEventVerifier !== null && typeof billingEventVerifier !== 'function')) {
     throw new TypeError('Invalid entitlement dependencies.');
@@ -180,6 +180,9 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
         }
         if (!prior.legacy_hash && legacyHash) addLegacy.run(legacyHash, proof.accountId);
       } else insertIdentity.run(proof.accountId, subjectHash, legacyHash, proof.verifiedAt);
+      // Only the trusted verifier can supply this synchronous consumption hook.
+      // Session/policy rechecks and one-time proof deletion share this commit.
+      if(proof.commit!==undefined&&(typeof proof.commit!=='function'||proof.commit()!==true))throw failure('invalid_input',400,'Invalid verified identity.');
       return { accountId: proof.accountId, legacyEligible: Boolean(identity.get(proof.accountId)?.legacy_hash) };
     });
   }
@@ -197,6 +200,7 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
       const endsAt = legacy ? calendarMonthAfter(startedAt) : startedAt + WEEK_MS;
       if (!validTime(endsAt) || endsAt <= startedAt) throw new TypeError('Invalid free-period deadline.');
       insertPeriod.run(accountId, legacy ? 'legacy' : 'standard', startedAt, endsAt);
+      try{onAccessTransition({ownerId:accountId,event:'free_activated',key:'free-period',viewer:{access:accessForAccount(accountId)},outcome:'active'});}catch{}
       return accessForAccount(accountId);
     });
   }
@@ -258,6 +262,7 @@ export function createEntitlements({ db, now = Date.now, identityProofVerifier =
       }
       updateSubscription.run(snapshot.status, snapshot.plan ?? null, snapshot.paidThroughAt ?? null, subscriptionHash);
       insertBillingEvent.run(eventHash, canonicalHash, event.accountId, subscriptionHash, reservation.version, now());
+      try{onAccessTransition({ownerId:event.accountId,event:'subscription_transition',key:eventHash,viewer:{access:accessForAccount(event.accountId)},outcome:snapshot.status});}catch{}
       return { applied: true, access: accessForAccount(event.accountId) };
     });
   }

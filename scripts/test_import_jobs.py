@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -14,6 +15,9 @@ IMPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(IMPORT)
 NOW = datetime(2026, 10, 31, 16, tzinfo=timezone.utc)
 SNAPSHOT = "2026-10-31T16:00:00Z"
+COMPANY_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+COMPANY_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+COMPANY_OTHER = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 
 def posting(identifier="job-1", **changes):
@@ -31,16 +35,19 @@ def posting(identifier="job-1", **changes):
 
 
 class FakeSource:
-    def __init__(self, initial=(), refresh=(), body=b"<p>Public role details.</p>", refresh_failure=False):
+    def __init__(self, initial=(), refresh=(), body=b"<p>Public role details.</p>", refresh_failure=False, companies=()):
         self.initial = list(initial)
         self.refresh = list(refresh)
         self.body_data = body
         self.refresh_failure = refresh_failure
+        self.companies = list(companies)
         self.searches = []
         self.body_calls = []
 
     def search(self, query):
         self.searches.append(query)
+        if query["collection"] == "company":
+            return {"hits": [{"document": row} for row in self.companies]}
         if query["filter_by"].startswith("id:=["):
             if self.refresh_failure:
                 raise IMPORT.ImportFailure("source failed with private response")
@@ -57,7 +64,215 @@ class FakeSource:
         return self.body_data
 
 
+class FakePublicHttp:
+    """Exercise PublicClient request encoding and bounds without network access."""
+
+    def __init__(self, respond):
+        self.respond = respond
+        self.searches = []
+        self.body_calls = []
+        self.client = IMPORT.PublicClient("public-search.example")
+        self.client.opener = self
+
+    def open(self, request, timeout):
+        if request.full_url == IMPORT.BOOTSTRAP_URL:
+            result = {"apiKey": "synthetic-scoped-key", "host": "public-search.example", "protocol": "https", "port": 443}
+        elif request.full_url == "https://public-search.example/multi_search":
+            query, = json.loads(request.data)["searches"]
+            self.searches.append(query)
+            result = {"results": [self.respond(query)]}
+        elif request.full_url.startswith(IMPORT.ASSET_ORIGIN + "/job/"):
+            self.body_calls.append(request.full_url.split("/job/")[1].split("/")[0])
+            return io.BytesIO(b"<p>Synthetic public description.</p>")
+        else:
+            raise AssertionError("Unexpected public client destination")
+        return io.BytesIO(json.dumps(result).encode("utf-8"))
+
+
 class PublicImportTests(unittest.TestCase):
+    def test_company_selector_requires_bounded_unique_canonical_uuids_and_exact_schema(self):
+        maximum = [f"00000000-0000-4000-8000-{index:012x}" for index in range(100)]
+        invalid = [
+            {}, {"schemaVersion": True, "companyIds": [COMPANY_A]},
+            {"schemaVersion": 2, "companyIds": [COMPANY_A]},
+            {"schemaVersion": 1, "companyIds": [COMPANY_A], "filter": "*"},
+            *({"schemaVersion": 1, "companyIds": values} for values in (
+                [], maximum + [COMPANY_A], [COMPANY_A, COMPANY_A],
+                [COMPANY_A.upper()], [" " + COMPANY_A], [COMPANY_A + "`,other`"],
+                ["company-1"], [None], [{}], COMPANY_A,
+            )),
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "selector.json"
+            for values in ([COMPANY_B, COMPANY_A], maximum):
+                path.write_text(json.dumps({"schemaVersion": 1, "companyIds": values}))
+                self.assertEqual(IMPORT.read_company_ids(path), sorted(values))
+            for value in invalid:
+                with self.subTest(value=value):
+                    path.write_text(json.dumps(value))
+                    with self.assertRaises(IMPORT.ImportFailure):
+                        IMPORT.read_company_ids(path)
+            for data in (b"{", b"\xff", b"[" * 1100, b" " * (IMPORT.COMPANY_SELECTOR_LIMIT + 1),
+                         ('{"schemaVersion":1,"companyIds":[],"companyIds":["' + COMPANY_A + '"]}').encode()):
+                path.write_bytes(data)
+                with self.assertRaises(IMPORT.ImportFailure):
+                    IMPORT.read_company_ids(path)
+            path.write_text(json.dumps({"schemaVersion": 1, "companyIds": [COMPANY_A + "`,private-value`"]}))
+            with patch.object(IMPORT, "PublicClient") as client, patch("sys.stderr", new_callable=io.StringIO) as errors:
+                self.assertEqual(IMPORT.main(["--snapshot", SNAPSHOT, "--typesense-host", "public-search.example",
+                                              "--output", str(Path(root) / "jobs.json"), "--company-ids-file", str(path)]), 1)
+                client.assert_not_called()
+                self.assertNotIn("private-value", errors.getvalue())
+
+    def test_pinned_public_http_queries_escape_exact_ids_and_reject_out_of_scope_rows_before_body_fetch(self):
+        def respond(query):
+            if query["collection"] == "company":
+                return {"hits": [{"document": {"id": COMPANY_A, "website": "https://employer.example/"}}]}
+            rows = [posting("selected", company_id=COMPANY_A), posting("foreign", company_id=COMPANY_OTHER),
+                    posting("malformed", company_id={"id": COMPANY_A})]
+            return {"hits": [{"document": row} for row in rows[:query["per_page"]]]}
+
+        source = FakePublicHttp(respond)
+        result = IMPORT.import_snapshot(source.client, SNAPSHOT, max_jobs=12, company_ids=[COMPANY_B, COMPANY_A], now=NOW)
+        self.assertEqual([job["id"] for job in result["jobs"]], ["selected"])
+        self.assertEqual(result["jobs"][0]["firstObserved"], "2026-10-28T16:00:00.000Z")
+        self.assertEqual(source.body_calls, ["selected"])
+        membership = f"company_id:=[`{COMPANY_A}`,`{COMPANY_B}`]"
+        job_queries = [query for query in source.searches if query["collection"] == "job_posting"]
+        for query in job_queries:
+            self.assertIn(" && " + membership, query["filter_by"])
+            for required in ("is_active:=true", "has_content:=true", "tdm_reserved:!=true", "first_seen_at:>=", "first_seen_at:<="):
+                self.assertIn(required, query["filter_by"])
+        lookup = source.searches[-1]
+        self.assertEqual(lookup["collection"], "company")
+        self.assertEqual(lookup["filter_by"], f"id:=[`{COMPANY_A}`]")
+        self.assertEqual(lookup["include_fields"], "id,website")
+        self.assertEqual(result["companyIdentities"], [{"companyId": COMPANY_A, "officialDomain": "employer.example"}])
+        self.assertEqual(result["selection"]["companySelection"], {
+            "schemaVersion": 1, "requestedCount": 2, "missingCount": 1,
+            "requestedSetSha256": IMPORT.hashlib.sha256(json.dumps([COMPANY_A, COMPANY_B], separators=(",", ":")).encode()).hexdigest(),
+        })
+        self.assertLess(len(json.dumps(result["selection"]).encode()), 8192)
+
+    def test_pinned_empty_source_reports_missing_companies_without_global_fallback(self):
+        source = FakePublicHttp(lambda query: {"hits": []})
+        result = IMPORT.import_snapshot(source.client, SNAPSHOT, max_jobs=8, company_ids=[COMPANY_A, COMPANY_B], now=NOW)
+        self.assertEqual(result["jobs"], [])
+        self.assertEqual(result["companyIdentities"], [])
+        self.assertEqual(result["selection"]["selectedCompanies"], 0)
+        self.assertEqual(result["selection"]["companySelection"]["missingCount"], 2)
+        self.assertTrue(source.searches)
+        self.assertTrue(all("company_id:=[" in query["filter_by"] for query in source.searches))
+        self.assertEqual(result["selection"]["initialReturnedDocuments"], 0)
+        self.assertEqual(source.body_calls, [])
+
+    def test_pinned_previous_ids_still_check_closures_and_unknowns_without_readding_foreign_active_jobs(self):
+        def respond(query):
+            rows = []
+            if query["collection"] == "company":
+                rows = [{"id": COMPANY_A, "website": "https://employer.example/"}]
+            elif query["filter_by"].startswith("id:=["):
+                rows = [posting("closed", company_id=COMPANY_OTHER, is_active=False),
+                        posting("reserved", company_id=COMPANY_OTHER, tdm_reserved=True),
+                        posting("foreign-active", company_id=COMPANY_OTHER),
+                        posting("malformed", company_id=[]), posting("selected", company_id=COMPANY_A)]
+            return {"hits": [{"document": row} for row in rows]}
+
+        previous = {"jobs": [{"id": identifier} for identifier in ("closed", "reserved", "foreign-active", "malformed", "selected", "missing")]}
+        source = FakePublicHttp(respond)
+        result = IMPORT.import_snapshot(source.client, SNAPSHOT, max_jobs=8, previous=previous, company_ids=[COMPANY_A], now=NOW)
+        self.assertEqual([job["id"] for job in result["jobs"]], ["selected"])
+        self.assertEqual([row["id"] for row in result["observations"]], ["closed", "reserved"])
+        self.assertEqual(result["unknownIds"], ["malformed", "missing"])
+        self.assertEqual(source.body_calls, ["selected"])
+        refresh, = [query for query in source.searches if query["collection"] == "job_posting" and query["filter_by"].startswith("id:=[")]
+        self.assertNotIn("company_id", refresh["filter_by"])
+        self.assertNotIn("is_active", refresh["filter_by"])
+        self.assertNotIn("first_seen_at", refresh["filter_by"])
+        self.assertIn("`foreign-active`", refresh["filter_by"])
+        failed = IMPORT.import_snapshot(FakeSource(refresh_failure=True), SNAPSHOT, max_jobs=1,
+                                        previous=previous, company_ids=[COMPANY_A], now=NOW)
+        self.assertEqual(failed["unknownIds"], sorted(job["id"] for job in previous["jobs"]))
+        self.assertEqual(failed["observations"], [])
+
+    def test_pinned_public_http_pagination_keeps_existing_document_and_job_limits(self):
+        def respond(query):
+            if query["collection"] == "company":
+                return {"hits": []}
+            page, limit = query.get("page", 1), query["per_page"]
+            if page == 1 and (query.get("group_by") or "location_types:=" in query["filter_by"] or "locales:=" in query["filter_by"] or query["q"] != "*" or query["filter_by"].count("first_seen_at:") > 2):
+                indexes = [0]
+            else:
+                indexes = range((page - 1) * limit, page * limit)
+            return {"hits": [{"document": posting(f"job-{index}", company_id=COMPANY_A if index % 2 else COMPANY_B)} for index in indexes]}
+
+        source = FakePublicHttp(respond)
+        result = IMPORT.import_snapshot(source.client, SNAPSHOT, max_jobs=800, company_ids=[COMPANY_A, COMPANY_B], now=NOW)
+        queries = [query for query in source.searches if query["collection"] == "job_posting"]
+        self.assertTrue(any(query.get("page") == 2 for query in queries))
+        self.assertTrue(all(query["per_page"] <= 250 and "company_id:=[" in query["filter_by"] for query in queries))
+        self.assertLessEqual(result["selection"]["initialReturnedDocuments"], 1000)
+        self.assertLessEqual(len(result["jobs"]), 800)
+        self.assertEqual(len({job["id"] for job in result["jobs"]}), len(result["jobs"]))
+        self.assertEqual({job["companyId"] for job in result["jobs"]}, {COMPANY_A, COMPANY_B})
+
+    def test_company_selector_cli_exports_selection_receipt_and_observed_languages(self):
+        def respond(query):
+            return {"hits": [] if query["collection"] == "company" else [{"document": posting(company_id=COMPANY_A)}]}
+
+        source = FakePublicHttp(respond)
+        original_import = IMPORT.import_snapshot
+        with tempfile.TemporaryDirectory() as root:
+            selector, output = Path(root) / "companies.json", Path(root) / "snapshot.json"
+            selector.write_text(json.dumps({"schemaVersion": 1, "companyIds": [COMPANY_A, COMPANY_B]}))
+            with patch.object(IMPORT, "PublicClient", return_value=source.client), patch.object(IMPORT, "import_snapshot", side_effect=lambda *args, **kwargs: original_import(*args, **kwargs, now=NOW)), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(IMPORT.main(["--snapshot", SNAPSHOT, "--typesense-host", "public-search.example",
+                                              "--output", str(output), "--max-jobs", "1", "--company-ids-file", str(selector)]), 0)
+            snapshot, receipt = json.loads(output.read_text()), json.loads(stdout.getvalue())
+            self.assertEqual(receipt["companySelection"], snapshot["selection"]["companySelection"])
+            self.assertEqual(receipt["companySelection"]["missingCount"], 1)
+            self.assertEqual(receipt["observedLocales"], ["de", "en"])
+            self.assertNotIn("companyIds", snapshot["selection"]["companySelection"])
+
+    def test_exact_public_company_website_supplies_domain_once_without_inferring_from_job_links(self):
+        source = FakeSource([posting("one", occupation_id=23, occupation_name="Software developer"), posting("two")],
+                            companies=[{"id": "company-1", "website": "https://Employer.Example/careers", "private_config": "omitted"}])
+        result = IMPORT.import_snapshot(source, SNAPSHOT, max_jobs=2, now=NOW)
+        self.assertNotIn("companySelection", result["selection"])
+        self.assertEqual(result["companyIdentities"], [{"companyId": "company-1", "officialDomain": "employer.example"}])
+        self.assertEqual(result["jobs"][0]["occupation"], {"id": "23", "name": "Software developer"})
+        lookup = [query for query in source.searches if query["collection"] == "company"]
+        self.assertEqual(len(lookup), 1)
+        self.assertEqual(lookup[0]["include_fields"], "id,website")
+        self.assertEqual(lookup[0]["filter_by"], "id:=[`company-1`]")
+        self.assertNotIn("private_config", json.dumps(result))
+
+    def test_missing_invalid_ats_ambiguous_and_failed_company_metadata_never_create_domain_aliases(self):
+        for website in [None, "http://employer.example/", "https://127.0.0.1/", "https://jobs.lever.co/acme", "https://private.internal/", "https://u:p@employer.example", "https://employer.example:invalid", "https://localhost.example/"]:
+            with self.subTest(website=website):
+                source = FakeSource([posting()], companies=[{"id": "company-1", "website": website}])
+                result = IMPORT.import_snapshot(source, SNAPSHOT, max_jobs=1, now=NOW)
+                self.assertEqual(result["companyIdentities"], [])
+        source = FakeSource([posting()], companies=[{"id": "company-1", "website": "https://employer.example/"}] * 2)
+        self.assertEqual(IMPORT.import_snapshot(source, SNAPSHOT, max_jobs=1, now=NOW)["companyIdentities"], [])
+        class Unavailable(FakeSource):
+            def search(self, query):
+                if query["collection"] == "company":
+                    raise IMPORT.ImportFailure("private upstream failure")
+                return super().search(query)
+        result = IMPORT.import_snapshot(Unavailable([posting()]), SNAPSHOT, max_jobs=1, now=NOW)
+        self.assertEqual(result["companyIdentities"], [])
+        self.assertEqual(len(result["jobs"]), 1)
+
+    def test_company_lookup_batches_only_deduplicated_selected_ids_within_existing_bound(self):
+        class Bounded(FakeSource):
+            def search(self, query):
+                self.searches.append(query)
+                return {"hits": []}
+        source = Bounded()
+        self.assertEqual(IMPORT.company_identities(source, [{"companyId": f"company-{i}"} for i in range(251)] * 2), [])
+        self.assertEqual([query["per_page"] for query in source.searches], [250, 1])
+
     def test_allowlist_preserves_source_identity_and_normalizes_body_without_executable_html(self):
         body = ("<head><title>Hidden metadata</title></head><script>secret()</script><div hidden><div>Nested hidden</div>Still hidden</div><p>Useful &amp; public role.</p><p>" + "Evidence " * 30 + "</p>").encode()
         source = FakeSource([posting()], body=body)
@@ -110,7 +325,7 @@ class PublicImportTests(unittest.TestCase):
             {"id": "closed", "active": False, "reserved": False, "observedAt": "2026-10-31T16:00:00.000Z"},
             {"id": "reserved", "active": True, "reserved": True, "observedAt": "2026-10-31T16:00:00.000Z"},
         ])
-        refresh = source.searches[-1]
+        refresh = [query for query in source.searches if query["collection"] == "job_posting"][-1]
         self.assertTrue(refresh["filter_by"].startswith("id:=["))
         self.assertNotIn("is_active", refresh["filter_by"])
         self.assertNotIn("first_seen_at", refresh["filter_by"])

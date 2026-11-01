@@ -23,9 +23,11 @@ BASE = Path('/srv/justup_preview')
 CONFIG_KEYS = {
     'JUSTUP_ORIGIN', 'JUSTUP_INVITE_CODE', 'JUSTUP_CSRF_SECRET', 'JUSTUP_CURSOR_SECRET',
     'JUSTUP_POLICIES_REVIEWED', 'JUSTUP_PRIVACY_URL', 'JUSTUP_USAGE_URL', 'JUSTUP_POLICY_VERSION',
+    'JUSTUP_POLICY_LOCALES', 'JUSTUP_POLICY_FALLBACKS', 'JUSTUP_POLICY_ASSET_PROOF',
     'JUSTUP_SERVICES_ENABLED',
     'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_MAX_ACCOUNTS', 'JUSTUP_SESSION_TTL_MS',
     'JUSTUP_ACCOUNT_TTL_MS', 'JUSTUP_ACCOUNT_EXPIRES_AT',
+    'JUSTUP_EMAIL_VERIFICATION_ENABLED',
 }
 CATEGORIES = {'unknown', 'auth', 'mutation', 'health', 'read'}
 ROUTES = {'session', 'auth', 'jobs', 'searches', 'tasks', 'companies', 'company-requests', 'account', 'health', 'version'}
@@ -90,11 +92,73 @@ def log_event(value, folder):
     # enforces the aggregate 128 MiB budget for all future preview components.
 
 
+def policy_configuration(config, source_commit=None):
+    """Validate the same exact locale identities accepted by the Node API."""
+    origin = config['JUSTUP_ORIGIN']
+    supported = {'en', 'de', 'fr', 'it', 'es'}
+    if 'JUSTUP_POLICY_ASSET_PROOF' in config:
+        raw = config['JUSTUP_POLICY_ASSET_PROOF']
+        try:
+            proof = json.loads(raw)
+        except (ValueError, TypeError):
+            raise ValueError('Invalid policy asset proof.') from None
+        sha = lambda value: isinstance(value, str) and re.fullmatch(r'[a-f0-9]{64}', value)
+        if (len(raw) > 8192 or not isinstance(proof, dict)
+                or set(proof) != {'origin', 'sourceCommit', 'assetsSha256', 'locales'}
+                or proof['origin'] != origin or proof['sourceCommit'] != source_commit
+                or not isinstance(proof['sourceCommit'], str) or not re.fullmatch(r'[a-f0-9]{40}', proof['sourceCommit'])
+                or not sha(proof['assetsSha256']) or not isinstance(proof['locales'], dict) or not proof['locales']):
+            raise ValueError('Invalid policy asset proof.')
+        for locale, entry in proof['locales'].items():
+            if (locale not in supported or not isinstance(entry, dict) or set(entry) != {'version', 'privacySha256', 'usageSha256'}
+                    or not isinstance(entry['version'], str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', entry['version'])
+                    or not sha(entry['privacySha256']) or not sha(entry['usageSha256'])):
+                raise ValueError('Invalid policy asset proof.')
+    maps = []
+    for key in ('JUSTUP_POLICY_LOCALES', 'JUSTUP_POLICY_FALLBACKS'):
+        raw = config.get(key, '{}')
+        if len(raw) > 8192:
+            raise ValueError('Invalid policy locale configuration.')
+        try:
+            value = json.loads(raw)
+        except (ValueError, TypeError):
+            raise ValueError('Invalid policy locale configuration.') from None
+        if not isinstance(value, dict):
+            raise ValueError('Invalid policy locale configuration.')
+        maps.append(value)
+    locales, fallbacks = maps
+    for locale, entry in locales.items():
+        if (locale not in supported or not isinstance(entry, dict)
+                or set(entry) != {'privacyUrl', 'usageUrl', 'version', 'reviewed'}
+                or type(entry['reviewed']) is not bool or not isinstance(entry['version'], str)
+                or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', entry['version'])):
+            raise ValueError('Invalid policy locale configuration.')
+        suffix = '' if locale == 'en' else '.' + locale
+        for kind in ('privacy', 'usage'):
+            if entry[kind + 'Url'] != origin + '/' + kind + suffix + '.html':
+                raise ValueError('Invalid policy locale configuration.')
+    for source, target in fallbacks.items():
+        if (source not in supported or not isinstance(target, str) or target not in supported
+                or source == target or locales.get(target, {}).get('reviewed') is not True):
+            raise ValueError('Invalid policy fallback configuration.')
+    legacy_keys = ('JUSTUP_PRIVACY_URL', 'JUSTUP_USAGE_URL', 'JUSTUP_POLICY_VERSION')
+    if (config.get('JUSTUP_POLICIES_REVIEWED') == 'true' and 'en' not in locales
+            and ('JUSTUP_POLICY_LOCALES' not in config or any(key in config for key in legacy_keys))):
+        for kind in ('PRIVACY', 'USAGE'):
+            key = 'JUSTUP_' + kind + '_URL'
+            parsed = urlsplit(config.get(key, ''))
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+                    or parsed.query or parsed.fragment or config.get(key) != origin + '/' + kind.lower() + '.html'):
+                raise ValueError('Reviewed English policy URLs must use their exact frontend HTTPS paths.')
+        if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', config.get('JUSTUP_POLICY_VERSION', '')):
+            raise ValueError('Reviewed policy version is required.')
+
+
 def child_environment(config, manifest):
     if not isinstance(config, dict) or set(config) - CONFIG_KEYS or any(not isinstance(value, str) for value in config.values()):
         raise ValueError('Only the documented API configuration keys are accepted.')
     origin = urlsplit(config.get('JUSTUP_ORIGIN', ''))
-    for key in ('JUSTUP_SERVICES_ENABLED', 'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_POLICIES_REVIEWED'):
+    for key in ('JUSTUP_SERVICES_ENABLED', 'JUSTUP_REQUIRES_INVITATION', 'JUSTUP_POLICIES_REVIEWED', 'JUSTUP_EMAIL_VERIFICATION_ENABLED'):
         if key in config and config[key] not in {'true', 'false'}:
             raise ValueError('Runtime switches must be true or false.')
     for key in ('JUSTUP_MAX_ACCOUNTS', 'JUSTUP_SESSION_TTL_MS', 'JUSTUP_ACCOUNT_TTL_MS', 'JUSTUP_ACCOUNT_EXPIRES_AT'):
@@ -110,13 +174,7 @@ def child_environment(config, manifest):
     for key in ('JUSTUP_CSRF_SECRET', 'JUSTUP_CURSOR_SECRET'):
         if len(config.get(key, '').encode()) < 32:
             raise ValueError('Stable API CSRF and cursor secrets are required.')
-    if config.get('JUSTUP_POLICIES_REVIEWED') == 'true':
-        for key in ('JUSTUP_PRIVACY_URL', 'JUSTUP_USAGE_URL'):
-            parsed = urlsplit(config.get(key, ''))
-            if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
-                raise ValueError('Reviewed policy URLs must use HTTPS.')
-        if not config.get('JUSTUP_POLICY_VERSION'):
-            raise ValueError('Reviewed policy version is required.')
+    policy_configuration(config, manifest['sourceCommit'])
     result = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'HOME': str(BASE / 'state'),
               'TMPDIR': str(BASE / 'state/work'), **config,
               'JUSTUP_PORT': '8787', 'JUSTUP_DB_PATH': str(BASE / 'state/preview.sqlite'),
@@ -149,6 +207,7 @@ def main():
         artifact = module('preview-artifact')
         artifact.read_host_plan(BASE)
         manifest = artifact.verify_directory(release)
+        artifact.check_database_schema(BASE / 'state/preview.sqlite', manifest, allow_missing=True)
         config = read_configuration(BASE / 'config/api.json')
         environment = child_environment(config, manifest)
         child = subprocess.Popen([str(release / 'runtime/bin/node'), str(release / manifest['entrypoint'])],

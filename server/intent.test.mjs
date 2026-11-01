@@ -16,7 +16,7 @@ function output(filters={},requirements,residualAi=null) {
 }
 function job(id,extra={}) { return {id,companyId:'acme',companyName:'Acme Labs',companySlug:'acme-labs',title:'Backend Engineer',bodyText:'Python services and databases.',firstObserved:`2026-10-2${id==='a'?'9':'8'}T10:00:00Z`,locations:[{name:'Zurich, Switzerland',workplace:'onsite'}],locales:['en'],employmentTypes:['full_time'],seniority:{id:'senior',name:'Senior'},...extra}; }
 function fixture(model={interpretIntent:async()=>output({titleAny:['backend']})},config={}) {
-  const db=new DatabaseSync(':memory:'),records=new Map();let seq=0,generation='g1',clock=at;
+  const db=new DatabaseSync(':memory:'),records=new Map();let seq=0,generation='g1',clock=at,currentAccess={kind:'free'};
   const tasks={
     enqueue(args){const prior=[...records.values()].find(r=>r.ownerId===args.ownerId&&r.kind===args.kind&&r.requestKey===args.requestKey);if(prior)return prior;const t={...args,id:`task-${++seq}`,status:'pending',output:null,createdAt:new Date(clock).toISOString(),updatedAt:new Date(clock).toISOString()};records.set(t.id,t);return t;},
     get(owner,id){const r=records.get(id);return r?.ownerId===owner?r:null;},
@@ -27,11 +27,11 @@ function fixture(model={interpretIntent:async()=>output({titleAny:['backend']})}
   const jobs=[job('a'),job('b',{title:'Designer',companyId:'other',companyName:'Other',companySlug:'other'})];
   const feed={eligibleJobs:({viewer})=>viewer?.account?.id?jobs:jobs.filter(j=>j.id==='b'),generation:()=>generation,coverage:()=>({verifiedAt:new Date(at).toISOString(),stale:false}),publicJob:j=>({id:j.id,title:j.title,firstObserved:j.firstObserved})};
   let deletions=0;
-  const service=createIntentService({db,feed,tasks,now:()=>clock,beforePrivateDelete:()=>{deletions++;},model,...config});
-  const ctx=(method,path,body,owner='owner')=>({method,path:path.split('?')[0],url:new URL(`https://preview.example/api/v1${path}`),body,accountId:owner,viewer:owner?{account:{id:owner},access:{kind:'demo'}}:null});
+  const service=createIntentService({db,feed,tasks,now:()=>clock,beforePrivateDelete:()=>{deletions++;},model,ownerAuthority:id=>({account:{id},access:currentAccess}),...config});
+  const ctx=(method,path,body,owner='owner')=>({method,path:path.split('?')[0],url:new URL(`https://preview.example/api/v1${path}`),body,accountId:owner,viewer:owner?{account:{id:owner},access:{kind:'free'}}:null});
   const route=(method,path,body,owner)=>service.route(ctx(method,path,body,owner));
   async function run(id) { const t=records.get(id);Object.assign(t,{status:'running',leaseToken:`lease-${id}`,leaseUntil:clock+60000});const result=await service.runTask({...t});if(!result.committed)tasks.complete(id,t.leaseToken,result);return {result,task:t,projection:service.taskResult(t,{accountId:t.ownerId})}; }
-  return {db,tasks,records,jobs,feed,service,ctx,route,run,get deletions(){return deletions;},setGeneration:v=>generation=v,setClock:v=>clock=v};
+  return {db,tasks,records,jobs,feed,service,ctx,route,run,get deletions(){return deletions;},setGeneration:v=>generation=v,setClock:v=>clock=v,setAccess:v=>currentAccess=v};
 }
 
 test('compiler normalizes dataset aliases and rejects unavailable values with exact paths',()=>{
@@ -74,9 +74,9 @@ test('warned company prefill survives explicit confirmation without creating a c
 });
 test('known imported company without eligible jobs compiles to a fresh zero result and never a missing-company hint',async t=>{
   let sent;const f=fixture({interpretIntent:async input=>{sent=input;return output({companyInclude:['known-old']});}});t.after(()=>f.db.close());
-  f.db.exec('CREATE TABLE demo_jobs(company_id TEXT,first_seen_at INTEGER,data_json TEXT)');
+  f.db.exec('CREATE TABLE justup_jobs(company_id TEXT,first_seen_at INTEGER,data_json TEXT)');
   const metadata={companyId:'known-old',companyName:'Known Old',companySlug:'known-old',locations:[{name:'Zurich, Switzerland',workplace:'onsite'}],employmentTypes:['full_time'],locales:['en'],seniority:null,id:'must-not-enter-capabilities',title:'must-not-enter-capabilities',bodyText:'must-not-enter-capabilities'};
-  f.db.prepare('INSERT INTO demo_jobs VALUES(?,?,?)').run('known-old',at-20*86400000,JSON.stringify(metadata));f.feed.eligibleJobs=()=>[];
+  f.db.prepare('INSERT INTO justup_jobs VALUES(?,?,?)').run('known-old',at-20*86400000,JSON.stringify(metadata));f.feed.eligibleJobs=()=>[];
   const caps=f.service.compilerCapabilities();assert.equal(caps.values.companies[0].id,'known-old');assert.equal(JSON.stringify(caps).includes('must-not-enter-capabilities'),false);
   const reference=output({},[{id:'company',text:'Company known-old',handling:'unsatisfied',reason:'No current jobs.',bindings:[],companyReference:{input:'known-old',scope:null}}]);assert.equal(compileIntent(reference,caps,{query:'Jobs at known-old'}).value.warnings.some(w=>w.companyRequestPrefill),false);
   const created=await f.route('POST','/searches',{query:'Jobs at known-old',requestKey:'known'}),done=await f.run(created.body.task.id);assert.equal(done.task.status,'succeeded');assert.equal(JSON.stringify(sent).includes('must-not-enter-capabilities'),false);
@@ -147,7 +147,7 @@ test('cursor binds revision, access and generation and never exposes internal bo
   const path=`/searches/${a.body.search.id}/results?revision=1&limit=1`,page=(await f.route('GET',path)).body;
   assert.equal(page.items[0].id,'a');assert.equal(page.continuation.state,'open');assert.equal(JSON.stringify(page).includes('bodyText'),false);
   const next=(await f.route('GET',`${path}&cursor=${page.continuation.cursor}`)).body;assert.equal(next.items[0].id,'b');assert.equal(next.continuation.state,'exhausted');
-  const ctx=f.ctx('GET',`${path}&cursor=${page.continuation.cursor}`);ctx.viewer.access={kind:'expired'};await assert.rejects(()=>f.service.route(ctx),{code:'stale_cursor'});
+  const ctx=f.ctx('GET',`${path}&cursor=${page.continuation.cursor}`);ctx.viewer.access={kind:'expired'};f.setAccess({kind:'expired'});await assert.rejects(()=>f.service.route(ctx),{code:'stale_cursor'});
   f.setGeneration('g2');await assert.rejects(()=>f.route('GET',`${path}&cursor=${page.continuation.cursor}`),{status:409});
 });
 test('stale or unverified source pauses before eligibility work and resumes without claiming exhaustion',async t=>{
@@ -176,13 +176,13 @@ test('injected matching owns its opaque continuation and receives only eligible 
 });
 test('account deletion composes synchronously and backup-barrier failure preserves private data',async t=>{
   const f=fixture();t.after(()=>f.db.close());const a=await f.route('POST','/searches',{query:'backend',requestKey:'one'});
-  const noDelete=createIntentService({db:f.db,feed:f.feed,tasks:f.tasks,model:{interpretIntent:async()=>output({titleAny:['backend']})}});
+  const noDelete=createIntentService({db:f.db,feed:f.feed,tasks:f.tasks,ownerAuthority:id=>({account:{id},access:{kind:'free'}}),model:{interpretIntent:async()=>output({titleAny:['backend']})}});
   await assert.rejects(()=>noDelete.route(f.ctx('DELETE',`/searches/${a.body.search.id}`)),{status:503});assert.equal(f.records.size,1);
   f.db.exec('BEGIN');f.service.deleteAccountData('owner');f.db.exec('COMMIT');assert.equal(f.records.size,0);assert.deepEqual((await f.route('GET','/searches')).body.items,[]);
 });
 test('direct deletion holds the core private transaction through the barrier and SQL commit',async t=>{
   const f=fixture();t.after(()=>f.db.close());const created=await f.route('POST','/searches',{query:'backend',requestKey:'one'});let barriers=0,released=0;
-  const service=createIntentService({db:f.db,feed:f.feed,tasks:f.tasks,beforePrivateDelete:()=>{assert.equal(f.db.isTransaction,true);barriers++;},withPrivateTransaction:fn=>{f.db.exec('BEGIN');try{const result=fn();f.db.exec('COMMIT');return result;}catch(error){f.db.exec('ROLLBACK');throw error;}finally{assert.equal(f.db.isTransaction,false);released++;}}});
+  const service=createIntentService({db:f.db,feed:f.feed,tasks:f.tasks,ownerAuthority:id=>({account:{id},access:{kind:'free'}}),beforePrivateDelete:()=>{assert.equal(f.db.isTransaction,true);barriers++;},withPrivateTransaction:fn=>{f.db.exec('BEGIN');try{const result=fn();f.db.exec('COMMIT');return result;}catch(error){f.db.exec('ROLLBACK');throw error;}finally{assert.equal(f.db.isTransaction,false);released++;}}});
   assert.equal((await service.route(f.ctx('DELETE',`/searches/${created.body.search.id}`))).status,200);assert.equal(barriers,1);assert.equal(released,1);
 });
 test('held-out compiler fixtures enforce acceptance, warning and unsafe-output rejection',()=>{
