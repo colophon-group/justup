@@ -23,7 +23,7 @@ test('API advertises queue availability and enqueues work without constructing i
   const tasks={enqueue(input){const task={...input,id:`task-${++serial}`,status:'pending',createdAt:new Date(AT).toISOString(),updatedAt:new Date(AT).toISOString()};queued.set(task.id,task);return task;},get:(owner,id)=>queued.get(id)?.ownerId===owner?queued.get(id):null,delete:(owner,id)=>queued.delete(id),complete:()=>false,publicView:task=>({id:task.id,status:task.status,result:null,error:null})};
   const feed={eligibleJobs:()=>[],publicJob:j=>j,companies:()=>({items:[]}),generation:()=>null,coverage:()=>({stale:true})};
   const config={...f.config,get model(){throw Error('API read model config');},get jev(){throw Error('API read provider key');}};
-  const services=createApiServices({db,feed,tasks,config,now:()=>AT,beforePrivateDelete:()=>{}}),intent=services[0],company=services[1];
+  const services=createApiServices({db,feed,tasks,config,accessForAccount:()=>({kind:'paid',fullAccess:true}),now:()=>AT,beforePrivateDelete:()=>{}}),intent=services[0],company=services[1];
   assert.equal(intent.capabilities().search,true);assert.equal(company.capabilities().companyRequests,true);
   const ctx={method:'POST',path:'/searches',url:new URL('https://preview.example/searches'),body:{query:'backend',requestKey:'one'},viewer:{account:{id:'owner'}},accountId:'owner'};
   const response=await intent.route(ctx);assert.equal(response.status,202);assert.equal(JSON.stringify(response).includes('provider'),false);

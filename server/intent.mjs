@@ -1,4 +1,4 @@
-// Account-owned search revisions and the evidence-backed v1 compiler. Read when
+// Server-owned search revisions and the evidence-backed v1 compiler. Read when
 // changing interpretation, proposal confirmation, primary filters or result cursors.
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -133,7 +133,7 @@ export function primaryMatches(job, {filters:f}) {
   return true;
 }
 
-export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability}={}) {
+export function createIntentService({db,feed,tasks,config={},now=Date.now,beforePrivateDelete,afterPrivateTransaction,withPrivateTransaction,model,matching,availability,ownerAuthority,visitorIdentity}={}) {
   if(!db||!feed||!tasks) throw new TypeError('Search dependencies are required.');
   db.exec(`CREATE TABLE IF NOT EXISTS demo_searches(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,accepted_json TEXT,draft_json TEXT,task_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
     CREATE INDEX IF NOT EXISTS demo_searches_owner ON demo_searches(owner_id);
@@ -141,6 +141,8 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     CREATE TABLE IF NOT EXISTS demo_search_proposals(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,expected_revision INTEGER NOT NULL,task_id TEXT NOT NULL,proposal_json TEXT NOT NULL) STRICT;
     CREATE TABLE IF NOT EXISTS demo_search_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,position INTEGER NOT NULL,created_at INTEGER NOT NULL) STRICT;
     CREATE TABLE IF NOT EXISTS demo_search_delegate_cursors(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,search_id TEXT NOT NULL,revision INTEGER NOT NULL,generation TEXT,access_hash TEXT NOT NULL,delegate_cursor TEXT,created_at INTEGER NOT NULL) STRICT;`);
+  const ownerOf=ctx=>ctx.viewer?.visitor?.id??ctx.accountId;
+  const authority=owner=>typeof ownerAuthority==='function'?ownerAuthority(owner):null;
   const row=(owner,id)=>db.prepare('SELECT * FROM demo_searches WHERE owner_id=? AND id=?').get(owner,id);
   const executionAvailable=()=>typeof model?.interpretIntent==='function'&&(typeof model.available!=='function'||model.available('search_intent'));
   const available=()=>typeof availability==='function'?availability()===true:executionAvailable();
@@ -162,7 +164,8 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
   function publicSearch(r) {
     if(!r) return null;
     const accepted=r.accepted_json?JSON.parse(r.accepted_json):{id:r.id,revision:0,query:JSON.parse(r.draft_json)?.query??'',title:'New search',description:'',configuration:null,requirements:[],warnings:[],status:'pending'};
-    return r.draft_json?{...accepted,draft:JSON.parse(r.draft_json)}:accepted;
+    const proposal=db.prepare('SELECT proposal_json FROM demo_search_proposals WHERE owner_id=? AND search_id=? AND expected_revision=? AND task_id=?').get(r.owner_id,r.id,r.revision,r.task_id);
+    return {...accepted,...(r.draft_json?{draft:JSON.parse(r.draft_json)}:{}),...(proposal?{proposal:JSON.parse(proposal.proposal_json)}:{})};
   }
   function purgeSearch(owner,id) {
     for(const s of db.prepare('SELECT task_id FROM demo_search_submissions WHERE owner_id=? AND search_id=?').all(owner,id)) tasks.delete(owner,s.task_id);
@@ -175,16 +178,16 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
   }
   function live(task) { const t=tasks.get(task.ownerId,task.id); return t?.status==='running'&&t.leaseToken===task.leaseToken&&t.leaseUntil>now(); }
   function taskResult(task,ctx) {
-    if(task.kind!=='search_intent'||task.ownerId!==ctx.accountId||!['succeeded','warning'].includes(task.status)) return undefined;
-    const r=row(ctx.accountId,task.output?.searchId);
+    if(task.kind!=='search_intent'||task.ownerId!==ownerOf(ctx)||!['succeeded','warning'].includes(task.status)) return undefined;
+    const r=row(ownerOf(ctx),task.output?.searchId);
     if(!r) return undefined;
-    if(task.status==='warning') { const p=db.prepare('SELECT proposal_json FROM demo_search_proposals WHERE id=? AND owner_id=? AND search_id=? AND expected_revision=? AND task_id=?').get(task.output?.proposalId,ctx.accountId,r.id,r.revision,task.id); return p?{proposal:JSON.parse(p.proposal_json)}:undefined; }
+    if(task.status==='warning') { const p=db.prepare('SELECT proposal_json FROM demo_search_proposals WHERE id=? AND owner_id=? AND search_id=? AND expected_revision=? AND task_id=?').get(task.output?.proposalId,ownerOf(ctx),r.id,r.revision,task.id); return p?{proposal:JSON.parse(p.proposal_json)}:undefined; }
     return r.revision===task.output?.revision&&r.accepted_json?{search:JSON.parse(r.accepted_json)}:undefined;
   }
   async function runTask(task,{signal}={}) {
     if(task.kind!=='search_intent') throw new TypeError('Wrong task kind.');
     const r=row(task.ownerId,task.payload.searchId);
-    if(!r||r.task_id!==task.id||r.revision!==task.payload.expectedRevision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
+    if(!authority(task.ownerId)||!r||r.task_id!==task.id||r.revision!==task.payload.expectedRevision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
     const source=feed.coverage();if(source.stale||!source.verifiedAt)return {status:'failed',errorCode:'dependency_unavailable'};
     if(!executionAvailable()) return {status:'failed',errorCode:'dependency_unavailable'};
     const accepted=r.accepted_json?JSON.parse(r.accepted_json):null;
@@ -192,6 +195,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     let result,previous;
     for(let attempt=0;attempt<2;attempt++) {
       if(signal?.aborted) return {status:'failed',errorCode:'task_timeout'};
+      if(!authority(task.ownerId)||!live(task))return {status:'failed',errorCode:'revision_conflict'};
       let raw;
       try {raw=await model.interpretIntent(intentModelInput({query:task.payload.query,prior:accepted,capabilities:caps,...(attempt?{repair:{diagnostics:result.diagnostics,previous}}:{})}),{signal}); }
       catch { return {status:'failed',errorCode:signal?.aborted?'task_timeout':'provider_unavailable'}; }
@@ -205,7 +209,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(signal?.aborted) return {status:'failed',errorCode:'task_timeout'};
     return tx(db,()=>{
       const current=row(task.ownerId,r.id);
-      if(!current||current.task_id!==task.id||current.revision!==r.revision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
+      if(!authority(task.ownerId)||!current||current.task_id!==task.id||current.revision!==r.revision||!live(task)) return {status:'failed',errorCode:'revision_conflict'};
       const complete=(result)=>{if(!tasks.complete(task.id,task.leaseToken,result)) throw err('revision_conflict',409,'This search changed. Reload it and try again.');return {...result,committed:true};};
       if(result.value.warnings.length) {
         const proposal={proposalId:randomUUID(),searchId:r.id,expectedRevision:r.revision,query:task.payload.query,...result.value};
@@ -219,33 +223,39 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     });
   }
   async function results(r,ctx) {
+    const current=authority(ownerOf(ctx));if(!current)throw err('unauthenticated',401);ctx={...ctx,viewer:current};
     const requested=Number(ctx.url.searchParams.get('revision'));
     if(!r.accepted_json||!ctx.url.searchParams.has('revision')||requested!==r.revision) throw err('revision_conflict',409,'This search changed. Reload it and try again.');
     const search=JSON.parse(r.accepted_json), limit=Number(ctx.url.searchParams.get('limit')??12), cursor=ctx.url.searchParams.get('cursor');
     if(!Number.isInteger(limit)||limit<1||limit>50) throw err('invalid_limit');
-    const generation=feed.generation?.()??null,accessHash=hash({accountId:ctx.accountId,access:ctx.viewer?.access??null});
+    const generation=feed.generation?.()??null,accessHash=hash({accountId:ownerOf(ctx),access:ctx.viewer?.access??null});
     const residual=Boolean(search.configuration.residualAi),coverage=feed.coverage();
     const table=residual?'demo_search_delegate_cursors':'demo_search_cursors';
     for(const name of ['demo_search_cursors','demo_search_delegate_cursors'])db.prepare(`DELETE FROM ${name} WHERE created_at<=?`).run(now()-600_000);
     let position=0,delegateCursor=null;
     if(cursor){
       if(cursor.length>128)throw err('invalid_cursor');
-      const c=db.prepare(`SELECT * FROM ${table} WHERE id=? AND owner_id=? AND search_id=?`).get(cursor,ctx.accountId,r.id);
+      const c=db.prepare(`SELECT * FROM ${table} WHERE id=? AND owner_id=? AND search_id=?`).get(cursor,ownerOf(ctx),r.id);
       if(!c||c.revision!==r.revision||c.generation!==generation||c.access_hash!==accessHash||c.created_at>now())throw err('stale_cursor',409,'This search changed. Reload it and try again.');
       if(residual)delegateCursor=c.delegate_cursor;else position=c.position;
     }
-    function continuationToken(value){const id=randomUUID();db.prepare(`INSERT INTO ${table} VALUES(?,?,?,?,?,?,?,?)`).run(id,ctx.accountId,r.id,r.revision,generation,accessHash,value,now());return id;}
-    const base={searchId:r.id,revision:r.revision,asOf:new Date(now()).toISOString(),coverage};
+    function continuationToken(value){const id=randomUUID();db.prepare(`INSERT INTO ${table} VALUES(?,?,?,?,?,?,?,?)`).run(id,ownerOf(ctx),r.id,r.revision,generation,accessHash,value,now());return id;}
+    const hiddenJobs=ctx.viewer.access?.fullAccess===true?[]:feed.restrictedLatestJobs?.().filter(j=>primaryMatches(j,search.configuration));
+    const hiddenMatches=coverage.stale||!coverage.verifiedAt||!hiddenJobs?{status:'unavailable',count:null}:residual?null:{status:'exact',count:hiddenJobs.length};
+    const base={searchId:r.id,revision:r.revision,asOf:new Date(now()).toISOString(),coverage,hiddenMatches:hiddenMatches??{status:'pending',count:null}};
     if(coverage.stale||!coverage.verifiedAt){
       const id=cursor??continuationToken(residual?delegateCursor:position);
       return {...base,items:[],continuation:{cursor:id,state:'paused',retryAfterMs:5000},ai:{status:residual?'dependency_unavailable':'not_required'},coverage:{...coverage,stale:true,state:'import_unavailable',description:'Imported listings need verification.'}};
     }
     const jobs=feed.eligibleJobs({viewer:ctx.viewer}).filter(j=>primaryMatches(j,search.configuration));
     if(residual&&matching?.page){
-      const page=await matching.page({ownerId:ctx.accountId,searchId:r.id,revision:r.revision,configuration:search.configuration,jobs,viewer:ctx.viewer,cursor:delegateCursor,limit,coverage,generation,now});
+      const page=await matching.page({ownerId:ownerOf(ctx),searchId:r.id,revision:r.revision,configuration:search.configuration,jobs,viewer:ctx.viewer,cursor:delegateCursor,limit,coverage,generation,now});
+      const currentAuthority=authority(ownerOf(ctx));
+      if(!currentAuthority||hash({accountId:ownerOf(ctx),access:currentAuthority.access??null})!==accessHash)throw err('stale_cursor',409);
       const next=page.continuation?.cursor;
       if(next!=null&&(typeof next!=='string'||next.length>2048))throw err('invalid_output',503,'Matching is temporarily unavailable.');
-      return {...base,...page,continuation:{...page.continuation,cursor:next==null?null:continuationToken(next)}};
+      const confirmed=hiddenJobs?matching.hiddenCount?.({ownerId:ownerOf(ctx),searchId:r.id,revision:r.revision,configuration:search.configuration,jobs:hiddenJobs,viewer:ctx.viewer,coverage,generation}):null;
+      return {...base,...page,hiddenMatches:confirmed??{status:'unavailable',count:null},continuation:{...page.continuation,cursor:next==null?null:continuationToken(next)}};
     }
     if(residual){
       const id=cursor??continuationToken(delegateCursor);
@@ -257,14 +267,14 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
 
   async function route(ctx) {
     if(!/^\/searches(?:\/|$)/.test(ctx.path)) return null;
-    if(!ctx.accountId||!ctx.viewer) throw err('unauthenticated',401,'Sign in to continue.');
-    const id=ctx.path.split('/')[2],r=id?row(ctx.accountId,id):null;
+    if(!ownerOf(ctx)||!ctx.viewer||!authority(ownerOf(ctx))) throw err('unauthenticated',401,'Sign in to continue.');
+    const id=ctx.path.split('/')[2],r=id?row(ownerOf(ctx),id):null;
     if(id&&!r) throw err('not_found',404,'Not found.');
-    if(ctx.method==='GET'&&ctx.path==='/searches') return {status:200,body:{items:db.prepare('SELECT * FROM demo_searches WHERE owner_id=? ORDER BY created_at,id').all(ctx.accountId).map(publicSearch)}};
+    if(ctx.method==='GET'&&ctx.path==='/searches') return {status:200,body:{items:db.prepare('SELECT * FROM demo_searches WHERE owner_id=? ORDER BY created_at,id').all(ownerOf(ctx)).map(publicSearch)}};
     if(ctx.method==='GET'&&ctx.path===`/searches/${id}/results`) return {status:200,body:await results(r,ctx)};
     if(ctx.method==='DELETE'&&ctx.path===`/searches/${id}`) {
       if(typeof beforePrivateDelete!=='function') throw err('deletion_unavailable',503,'Deletion is temporarily unavailable.');
-      const remove=()=>{const barrier=beforePrivateDelete();if(barrier&&typeof barrier.then==='function') throw new TypeError('Deletion barrier must be synchronous.');purgeSearch(ctx.accountId,id);};
+      const remove=()=>{const barrier=beforePrivateDelete();if(barrier&&typeof barrier.then==='function') throw new TypeError('Deletion barrier must be synchronous.');purgeSearch(ownerOf(ctx),id);};
       if(withPrivateTransaction)withPrivateTransaction(remove);
       else try{tx(db,remove);}finally{if(!db.isTransaction)afterPrivateTransaction?.();}
       return {status:200,body:{deleted:true}};
@@ -272,11 +282,11 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     if(ctx.method==='POST'&&ctx.path===`/searches/${id}/confirm`) {
       bodyKeys(ctx.body,['proposalId','expectedRevision']); const expected=revision(ctx.body.expectedRevision);
       return tx(db,()=>{
-        const current=row(ctx.accountId,id),p=db.prepare('SELECT * FROM demo_search_proposals WHERE id=? AND owner_id=? AND search_id=?').get(text(ctx.body.proposalId,128),ctx.accountId,id);
+        const current=row(ownerOf(ctx),id),p=db.prepare('SELECT * FROM demo_search_proposals WHERE id=? AND owner_id=? AND search_id=?').get(text(ctx.body.proposalId,128),ownerOf(ctx),id);
         if(!p||!current||current.revision!==expected||p.expected_revision!==expected||current.task_id!==p.task_id) throw err('revision_conflict',409,'This search changed. Reload it and try again.');
         const {proposalId,searchId,expectedRevision,...data}=JSON.parse(p.proposal_json),search={id,revision:expected+1,...data,status:'ready'};
-        db.prepare('UPDATE demo_searches SET revision=?,accepted_json=?,draft_json=NULL,task_id=NULL,updated_at=? WHERE id=? AND owner_id=?').run(search.revision,JSON.stringify(search),now(),id,ctx.accountId);
-        db.prepare('DELETE FROM demo_search_proposals WHERE search_id=? AND owner_id=?').run(id,ctx.accountId);
+        db.prepare('UPDATE demo_searches SET revision=?,accepted_json=?,draft_json=NULL,task_id=NULL,updated_at=? WHERE id=? AND owner_id=?').run(search.revision,JSON.stringify(search),now(),id,ownerOf(ctx));
+        db.prepare('DELETE FROM demo_search_proposals WHERE search_id=? AND owner_id=?').run(id,ownerOf(ctx));
         return {status:200,body:{search}};
       });
     }
@@ -285,30 +295,41 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       bodyKeys(ctx.body,creating?['query','requestKey']:['query','requestKey','expectedRevision']);
       const query=text(ctx.body.query),requestKey=key(ctx.body.requestKey),expected=creating?0:revision(ctx.body.expectedRevision);
       const fingerprint=hash({id:creating?null:id,query,expectedRevision:expected});
-      const prior=db.prepare('SELECT * FROM demo_search_submissions WHERE owner_id=? AND request_key=?').get(ctx.accountId,requestKey);
+      const prior=db.prepare('SELECT * FROM demo_search_submissions WHERE owner_id=? AND request_key=?').get(ownerOf(ctx),requestKey);
       if(prior) {
         if(prior.input_hash!==fingerprint) throw err('idempotency_conflict',409,'This request key was already used.');
-        const old=row(ctx.accountId,prior.search_id),task=tasks.get(ctx.accountId,prior.task_id);
+        const old=row(ownerOf(ctx),prior.search_id),task=tasks.get(ownerOf(ctx),prior.task_id);
         if(!old||!task) throw err('revision_conflict',409,'This search changed. Reload it and try again.');
         return {status:202,body:{search:publicSearch(old),task:tasks.publicView(task,taskResult(task,ctx)??null)}};
       }
       if(editing&&r.revision!==expected) throw err('revision_conflict',409,'This search changed. Reload it and try again.');
+      if(ctx.viewer.visitor)visitorIdentity?.admit(ownerOf(ctx),{creating});
       if(!available()) throw err('dependency_unavailable',503,'Search interpretation is temporarily unavailable.');
-      if(creating&&db.prepare('SELECT count(*) n FROM demo_searches WHERE owner_id=?').get(ctx.accountId).n>=20) throw err('task_limit',429,'The search limit has been reached.');
+      if(creating&&db.prepare('SELECT count(*) n FROM demo_searches WHERE owner_id=?').get(ownerOf(ctx)).n>=20) throw err('task_limit',429,'The search limit has been reached.');
       const searchId=creating?randomUUID():id;
-      const task=tasks.enqueue({ownerId:ctx.accountId,kind:'search_intent',requestKey,payload:{searchId,query,expectedRevision:expected}});
+      const task=tasks.enqueue({ownerId:ownerOf(ctx),kind:'search_intent',requestKey,payload:{searchId,query,expectedRevision:expected}});
       try { tx(db,()=>{
-        if(creating) db.prepare('INSERT INTO demo_searches VALUES(?,?,0,NULL,?,?,?,?)').run(searchId,ctx.accountId,JSON.stringify({query,taskId:task.id}),task.id,now(),now());
+        if(ctx.viewer.visitor)visitorIdentity?.recordSubmission(ownerOf(ctx));
+        if(creating) db.prepare('INSERT INTO demo_searches VALUES(?,?,0,NULL,?,?,?,?)').run(searchId,ownerOf(ctx),JSON.stringify({query,taskId:task.id}),task.id,now(),now());
         else {
-          if(r.task_id) tasks.cancel(ctx.accountId,r.task_id);
-          db.prepare('UPDATE demo_searches SET draft_json=?,task_id=?,updated_at=? WHERE id=? AND owner_id=? AND revision=?').run(JSON.stringify({query,taskId:task.id}),task.id,now(),id,ctx.accountId,expected);
-          db.prepare('DELETE FROM demo_search_proposals WHERE search_id=? AND owner_id=?').run(id,ctx.accountId);
+          if(r.task_id) tasks.cancel(ownerOf(ctx),r.task_id);
+          db.prepare('UPDATE demo_searches SET draft_json=?,task_id=?,updated_at=? WHERE id=? AND owner_id=? AND revision=?').run(JSON.stringify({query,taskId:task.id}),task.id,now(),id,ownerOf(ctx),expected);
+          db.prepare('DELETE FROM demo_search_proposals WHERE search_id=? AND owner_id=?').run(id,ownerOf(ctx));
         }
-        db.prepare('INSERT INTO demo_search_submissions VALUES(?,?,?,?,?)').run(ctx.accountId,requestKey,searchId,fingerprint,task.id);
-      }); } catch(e) { tasks.delete(ctx.accountId,task.id); throw e; }
-      return {status:202,body:{search:publicSearch(row(ctx.accountId,searchId)),task:tasks.publicView(task)}};
+        db.prepare('INSERT INTO demo_search_submissions VALUES(?,?,?,?,?)').run(ownerOf(ctx),requestKey,searchId,fingerprint,task.id);
+      }); } catch(e) { tasks.delete(ownerOf(ctx),task.id); throw e; }
+      return {status:202,body:{search:publicSearch(row(ownerOf(ctx),searchId)),task:tasks.publicView(task)}};
     }
     return null;
   }
-  return {capabilities:()=>({search:available()}),compilerCapabilities:catalogueCapabilities,route,taskResult,deleteAccountData,runTask};
+  function transferOwner(from,to) {
+    tasks.cancelOwner?.(from);
+    for(const r of db.prepare('SELECT * FROM demo_searches WHERE owner_id=?').all(from)) {
+      const draft=r.draft_json?{...JSON.parse(r.draft_json),taskId:null,status:'interrupted'}:null;
+      db.prepare('UPDATE demo_searches SET owner_id=?,draft_json=? WHERE owner_id=? AND id=?').run(to,draft?JSON.stringify(draft):null,from,r.id);
+    }
+    db.prepare('UPDATE demo_search_proposals SET owner_id=? WHERE owner_id=?').run(to,from);
+    for(const table of ['demo_search_cursors','demo_search_delegate_cursors','demo_search_submissions'])db.prepare(`DELETE FROM ${table} WHERE owner_id=?`).run(from);
+  }
+  return {transferOwner,capabilities:()=>({search:available()}),compilerCapabilities:catalogueCapabilities,route,taskResult,deleteAccountData,runTask};
 }

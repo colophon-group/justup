@@ -8,6 +8,7 @@ import { CompanyPage } from "../features/companies/CompanyPage.tsx";
 import { CompanyRequestPage } from "../features/companies/CompanyRequestPage.tsx";
 import { SearchWorkspace } from "../features/search/SearchWorkspace.tsx";
 import { useRoute } from "./useRoute.ts";
+import { coverageDescription } from "../shared/coverage.ts";
 
 export function App() {
   const expiryHandler = useRef<() => void>(() => {});
@@ -132,8 +133,8 @@ export function App() {
         Skip to content
       </a>
       <div className="edition-note">
-        <span>Preview · English interface</span>
-        <span>Payments disabled</span>
+        <span>English interface</span>
+        <span>Fresh work. Clear sources.</span>
       </div>
       <div className="paper">
         <header className="topbar">
@@ -237,6 +238,7 @@ export function App() {
             onSignIn={openSignIn}
             dialogOpen={dialog !== null}
             onCompanyRequest={requestCompany}
+            onAccount={() => setDialog("settings")}
           />
           <CompaniesPage
             key={`companies-${epoch}`}
@@ -272,9 +274,7 @@ export function App() {
         </main>
         <footer className="policy-footer">
           <p id="coverage-disclosure">
-            {coverage
-              ? `Imported snapshot${coverage.verifiedAt ? " · verified " + new Date(coverage.verifiedAt).toLocaleDateString("en") : ""}${coverage.stale ? " · refresh needed" : ""}. This preview does not imply continuous monitoring.`
-              : "Company coverage and import age are not reported by the service."}
+            {coverageDescription(coverage)}
           </p>
           <nav aria-label="Legal">
             <a href="/privacy.html">Privacy</a>

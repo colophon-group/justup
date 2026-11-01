@@ -5,11 +5,11 @@ const features = [
   ],
   [
     "Last 14 days. Always.",
-    "Each job shows when we first found it. Only jobs first observed in the last 14 days appear. Snapshot age is shown below.",
+    "Each job shows when we first found it. Only jobs first observed in the last 14 days appear. Source coverage and verification are shown below.",
   ],
   [
     "See what’s included.",
-    "Browse the imported companies and available original source links. Send us a lead for a company that’s missing.",
+    "Browse the included companies and their original career-page links. Send us a lead for a company that’s missing.",
   ],
   [
     "The original source.",

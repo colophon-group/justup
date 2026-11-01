@@ -5,7 +5,7 @@ read_when: Changing the interface, connecting the API or checking compiled front
 
 # Justup web application
 
-The browser application uses React and strict TypeScript, built by Vite. Its source lives in `src/`; `public/` contains the static Privacy and Usage documents. Generated `dist/` assets are ignored by Git. The application calls the authoritative same-origin `/api/v1` service and ships no fictional job records or simulated accounts.
+The browser application uses React and strict TypeScript, built by Vite. Its source lives in `src/`; `public/` contains the static Privacy and Usage documents. Generated `dist/` assets are ignored by Git. The application calls the authoritative same-origin `/api/v1` service for account access, accepted searches, job evidence and company requests.
 
 ## Develop and build
 
@@ -42,9 +42,9 @@ The production build runs TypeScript checking and emits hashed assets into `web/
 
 Account, query, draft and request state remains in memory or on the server, never in application localStorage. A session change cancels old operations and clears private view state. Network data is validated before rendering; React renders text without raw HTML insertion. Company evidence is displayed without inferring headquarters, missing pay, monitoring dates or hiring history.
 
-The account form requires reviewed same-origin policy URLs/version and explicit server login/registration availability. Invalid credentials do not revoke a valid session. Passwords and invitation fields clear when submitted or dismissed; account deletion requires a password and confirmed server completion. Cancellation prevents a late operation from changing another account's interface.
+The account form requires reviewed same-origin policy URLs/version and explicit server login/registration availability. Invitation entry follows the server’s `authentication.requiresInvitation` flag; a missing flag conservatively requires an invitation. Public registration omits the invitation field and credential when the server explicitly permits it. Invalid credentials do not revoke a valid session. Passwords and invitation fields clear when submitted or dismissed; account deletion requires a password and confirmed server completion. Cancellation prevents a late operation from changing another account's interface.
 
-Search warnings can offer an editable company-request lead. Opening it sends no request; only form submission starts discovery. Unverified imported results are cleared and paused with the source reason and a manual retry, rather than reported as a completed empty search.
+The result refresh action reads the accepted search revision without submitting the current text for interpretation. Unsent edits remain in the search bar. Search warnings can offer an editable company-request lead. Opening it sends no request; only form submission starts discovery. Unverified imported results are cleared and paused with the source reason and a manual retry, rather than reported as a completed empty search.
 
 Company requests use stable request keys and server task identities. A network interruption or polling timeout can resume the same pending work. Clarification and exact candidate confirmation remain explicit; a recorded identity never claims that career-page collection has started.
 
@@ -58,10 +58,16 @@ npm test
 
 Pure API/state contracts use the Node test runner. Playwright journeys exercise compiled assets, including malformed responses, failed edits, task resumption, stale revisions/accounts, confirmed deletion, company requests and source links. Both lists measure the actual next slot before revealing a row, with a 450 ms cadence after initial visible content. Backgrounding or scrolling away stops consumption; reduced motion removes animation while retaining pacing.
 
-Browser fixtures are outside `web/` and are not included in public assets. Explicit deployed smoke tests run without request interception. A separate fixed-candidate acceptance mode performs the real disposable-account/search/known-company/deletion journey after read-only identity, source and policy checks; see [deployed browser instructions](../docs/demo-preview-hosting.md#run-the-deployed-browser-journey). Live suites stay out of default CI and retain no credentials, traces, media or automatic error context. Provider, operations and full deployed release acceptance remain under the [release verification work](https://github.com/colophon-group/justup/issues/36).
+Browser fixtures are outside `web/` and are not included in public assets. Explicit deployed smoke tests run without request interception. A separate fixed-candidate acceptance mode creates a test account and exercises sign-in, search, known-company confirmation and deletion after read-only identity, source and policy checks; see [deployed browser instructions](../docs/frontend-delivery.md#run-the-deployed-browser-journey). Live suites stay out of default CI and retain no credentials, traces, media or automatic error context. Provider, operations and full deployed release acceptance follow the [release verification guide](../docs/development-process.md#6-verify-a-release-before-it-goes-live).
 
-## Current availability
+## Product and service state
 
-The browser consumes the [agreed API contract](https://github.com/colophon-group/justup/issues/33). Unavailable services fail visibly; no model-backed search, live SSE, followed/viewed writes, posting-language preferences, hidden-match totals, billing or news signal is simulated. The 51 English typing examples are decorative and never become input values or submit searches.
+The browser consumes the same-origin `/api/v1` account and search API through the [validated API client](src/api/client.ts). The same application serves visitors and signed-in accounts. Session capabilities govern search interpretation and company-request submission; reviewed policy metadata and explicit authentication availability govern account forms. Settings show the server's access description, with a neutral fallback when none is supplied. Billing availability never implies that a payment or subscription has occurred.
 
-`/privacy.html` and `/usage.html` remain static, explicitly unapproved drafts. Their successful build or integration does not approve the notices or enable sign-in. Actual data flows, public policy version/URLs, operator review and deployed verification remain required before sharing the service. See the [policy review guide](../docs/demo-policies.md) and [hosting guide](../docs/demo-preview-hosting.md).
+Source coverage is evidence, not an environment label. Imported snapshots are identified explicitly, with verification time and stale state when supplied. Other source types retain their reported description without being called a snapshot or treated as continuously monitored. Company pages display only reported facts.
+
+The interface is currently English. The typing examples are decorative and never become input values or submit searches. Posting-language selection, followed-company filters, viewed-state writes, live result streaming, subscription controls and Hiring Wire require supported service/UI contracts before they can be offered. These are product-readiness requirements. Until live streaming is supported, the explicit results action checks new data for the accepted revision without a model call.
+
+When result responses supply hidden-match metadata, the access notice displays the reported exact count or an explicit lower bound; absent or zero counts produce no notice. The compressed-paper illustration contains no restricted job data.
+
+`/privacy.html` and `/usage.html` remain static, explicitly unapproved drafts. Their successful build or integration does not approve the notices or enable sign-in. Actual data flows, public policy version/URLs, operator review and deployed verification remain required before sharing the service. See the [policy review guide](../docs/policies.md) and [hosting guide](../docs/frontend-delivery.md).

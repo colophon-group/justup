@@ -51,7 +51,8 @@ test('registration and case-insensitive login issue opaque sessions with account
   assert.deepEqual(auth.session(signedIn.token), {
     account: signedUp.account,
     expiresAt: START + SEVEN_DAYS,
-    access: { kind: 'account', fullAccess: true, legacy: false, billingEnabled: false, until: null },
+    access: { kind: 'limited', fullAccess: false, legacy: false, premium: false, billingEnabled: false,
+      until: null, canActivateFreePeriod: false, description: 'Verify your account to start your free period.' },
   });
 
   const stored = db.prepare('SELECT * FROM auth_accounts').get();
@@ -420,4 +421,63 @@ test('legacy account migration preserves credentials, tokens and identity withou
   const login = await reopened.login({ username: 'tester', password: PASSWORD });
   assert.deepEqual(login.account, first.account);
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+});
+
+test('a failed visitor handoff rolls back registration, its session and same-connection transfer', async (t) => {
+  const { auth, db } = fixture(t);
+  db.exec('CREATE TABLE visitor_transfers (account_id TEXT NOT NULL, search_id TEXT NOT NULL) STRICT');
+  const input = { username: 'tester', password: PASSWORD, inviteCode: INVITE,
+    // Untrusted request JSON cannot install a callback.
+    afterAuthenticated: () => { throw new Error('Must not execute request data.'); } };
+  await assert.rejects(auth.register(input, { afterAuthenticated: ({ db: connection, accountId, phase }) => {
+    assert.equal(connection, db); assert.equal(connection.isTransaction, true); assert.equal(phase, 'register');
+    connection.prepare('INSERT INTO visitor_transfers VALUES (?,?)').run(accountId, 'search-a');
+    throw new Error('Deliberate handoff failure.');
+  } }), /Deliberate handoff failure/);
+  assert.equal(db.prepare('SELECT count(*) n FROM auth_accounts').get().n, 0);
+  assert.equal(db.prepare('SELECT count(*) n FROM auth_sessions').get().n, 0);
+  assert.equal(db.prepare('SELECT count(*) n FROM visitor_transfers').get().n, 0);
+  const retried = await auth.register(input, { afterAuthenticated: ({ db: connection, accountId }) => {
+    connection.prepare('INSERT INTO visitor_transfers VALUES (?,?)').run(accountId, 'search-a');
+  } });
+  assert.equal(db.prepare('SELECT count(*) n FROM auth_sessions').get().n, 1);
+  assert.deepEqual(db.prepare('SELECT account_id,search_id FROM visitor_transfers').all().map((row) => ({ ...row })),
+    [{ account_id: retried.account.id, search_id: 'search-a' }]);
+});
+
+test('login handoff failure leaves prior sessions and search ownership untouched', async (t) => {
+  const { auth, db, register } = fixture(t);
+  db.exec('CREATE TABLE visitor_transfers (account_id TEXT NOT NULL, search_id TEXT NOT NULL) STRICT');
+  const first = await register();
+  await assert.rejects(auth.login({ username: 'tester', password: PASSWORD }, {
+    afterAuthenticated: ({ db: connection, accountId, phase }) => {
+      assert.equal(connection, db); assert.equal(connection.isTransaction, true); assert.equal(phase, 'login');
+      connection.prepare('INSERT INTO visitor_transfers VALUES (?,?)').run(accountId, 'search-b');
+      throw new Error('Deliberate login handoff failure.');
+    },
+  }), /Deliberate login handoff failure/);
+  assert.equal(db.prepare('SELECT count(*) n FROM auth_sessions').get().n, 1);
+  assert.equal(db.prepare('SELECT count(*) n FROM visitor_transfers').get().n, 0);
+  assert.ok(auth.session(first.token));
+  const retried = await auth.login({ username: 'tester', password: PASSWORD }, {
+    afterAuthenticated: ({ db: connection, accountId }) => {
+      connection.prepare('INSERT INTO visitor_transfers VALUES (?,?)').run(accountId, 'search-b');
+    },
+  });
+  assert.ok(auth.session(retried.token));
+  assert.equal(db.prepare('SELECT count(*) n FROM visitor_transfers').get().n, 1);
+});
+
+test('an asynchronous visitor handoff is rejected before authentication commits', async (t) => {
+  const { auth, db } = fixture(t);
+  db.exec('CREATE TABLE visitor_transfers (account_id TEXT NOT NULL) STRICT');
+  await assert.rejects(auth.register({ username: 'tester', password: PASSWORD, inviteCode: INVITE }, {
+    afterAuthenticated: ({ db: connection, accountId }) => {
+      connection.prepare('INSERT INTO visitor_transfers VALUES (?)').run(accountId);
+      return Promise.resolve();
+    },
+  }), /must be synchronous/);
+  assert.equal(db.prepare('SELECT count(*) n FROM auth_accounts').get().n, 0);
+  assert.equal(db.prepare('SELECT count(*) n FROM auth_sessions').get().n, 0);
+  assert.equal(db.prepare('SELECT count(*) n FROM visitor_transfers').get().n, 0);
 });

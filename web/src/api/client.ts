@@ -329,7 +329,7 @@ export class ApiClient {
     });
   }
   register(
-    body: { username: string; password: string; inviteCode: string },
+    body: { username: string; password: string; inviteCode?: string },
     signal?: AbortSignal,
   ) {
     return this.request("/auth/register", ignored, {

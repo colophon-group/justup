@@ -25,7 +25,7 @@ function sourceUrl(value) {
 export function validateGateConfig(value) {
   requireThat(record(value) && origin(value.origin), 'Set one fixed HTTPS acceptance origin.');
   const f = value.frontend, api = value.api, policies = value.policies, scenario = value.scenario;
-  requireThat(record(f) && ['sourceSha', 'treeSha'].every(key => hash(f[key], 40))
+  requireThat(record(f) && f.deploymentMode === 'preview' && ['sourceSha', 'treeSha'].every(key => hash(f[key], 40))
     && ['assetsSha256', 'workerSha256', 'artifactSha256', 'runtimeConfigSha256'].every(key => hash(f[key])), 'Supply exact frontend identities.');
   requireThat(record(api) && api.sourceCommit === f.sourceSha && api.schemaVersion === 1
     && plain(api.buildIdentity) && /^[A-Za-z0-9_.:-]{1,128}$/.test(api.runnerIdentity ?? '')
@@ -74,7 +74,7 @@ export async function preflight(config, get, now = Date.now) {
     requireThat(result.status === status, 'Preview preflight HTTP status failed.');
     return result;
   };
-  const frontend = await read('/__preview/version');
+  const frontend = await read('/__release/version');
   const api = await read('/api/v1/version');
   const health = await read('/api/v1/health');
   verifyBuilds(config, frontend.json, api.json, health.json, clock());

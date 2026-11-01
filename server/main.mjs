@@ -88,7 +88,9 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
     const tasks = createTasks({ db: store.db, now });
     const deletion = createDeletionBarrier({ generationPath: config.privateGenerationPath, backupDir: config.backupDir, dbPath: path, db: store.db });
     const withPrivateTransaction = (work) => { try { return store.transaction(work); } finally { deletion.afterPrivateTransaction(); } };
-    const services = serviceFactories.flatMap((factory) => factory({ db: store.db, feed, tasks, config, now, beforePrivateDelete: deletion.beforePrivateDelete, afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction }));
+    let auth;
+    const accessForAccount=id=>auth?.accessForAccount?.(id)??null;
+    const services = serviceFactories.flatMap((factory) => factory({ db: store.db, feed, tasks, config, now, accessForAccount, beforePrivateDelete: deletion.beforePrivateDelete, afterPrivateTransaction: deletion.afterPrivateTransaction, withPrivateTransaction }));
     if (services.some((s) => !s || typeof s.then === 'function')) throw new TypeError('Service factories must synchronously return services.');
     const deleteAccountData = (ownerId) => {
       deletion.beforePrivateDelete();
@@ -99,13 +101,14 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
       tasks.deleteOwner(ownerId);
     };
     const createAuth = authFactory ?? (await import('./auth.mjs')).createAuth;
-    const auth = createAuth({ db: store.db, config, now, deleteAccountData });
+    auth = createAuth({ db: store.db, config, now, deleteAccountData });
     let maintenanceReady = false;
     function maintainAuth() {
       try {
         if (typeof auth.cleanup !== 'function') return;
         const result = auth.cleanup();
         if (result && typeof result.then === 'function') throw new TypeError('Authentication cleanup must be synchronous.');
+        for(const service of services)service.cleanup?.();
         maintenanceReady = true;
       } catch { maintenanceReady = false; }
       finally { try { deletion.afterPrivateTransaction(); } catch { maintenanceReady = false; } }

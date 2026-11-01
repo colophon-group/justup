@@ -8,6 +8,7 @@ import { createCompanyService } from './companies.mjs';
 import { createCodexModel } from './model-runner.mjs';
 import { createBrokerExecutor } from './model-broker.mjs';
 import { runtimeEnv } from './config.mjs';
+import { createVisitorIdentity } from './visitor.mjs';
 import { runnerStatusPath } from './composition.mjs';
 
 export function runnerIdentity(env=process.env){
@@ -39,14 +40,16 @@ export async function createRunnerDependencies(){
   // Shared-state startup checks the service's operator-owned umask; never change
   // a caller's process mask silently or point this at another application's DB.
   if(config.sharedState===true&&(process.umask()&0o070)!==0)throw new Error('Shared runner state requires group access.');
-  const [{openStore},{createFeed},{createTasks},{createMatchingService}]=await Promise.all([import('./store.mjs'),import('./feed.mjs'),import('./tasks.mjs'),import('./matching.mjs')]);
+  const [{openStore},{createFeed},{createTasks},{createMatchingService},{createAccessReader}]=await Promise.all([import('./store.mjs'),import('./feed.mjs'),import('./tasks.mjs'),import('./matching.mjs'),import('./entitlements.mjs')]);
   const store=openStore(config.dbPath,{sharedState:config.sharedState===true});let heartbeatTimer,cleanupTimer;
   try{
     const feed=createFeed({db:store.db,verificationTtlMs:config.verificationTtlMs}),tasks=createTasks({db:store.db});
+    const identity=createVisitorIdentity({db:store.db,accessForAccount:createAccessReader({db:store.db})});
+    const ownership={ownerAuthority:identity.principal,visitorIdentity:identity,taskAdmission:identity.admitMatching};
     const modelConfig=config.model??{},executor=isAbsolute(modelConfig.socketPath??'')?createBrokerExecutor({socketPath:modelConfig.socketPath}):undefined;
     const model=createCodexModel({config:modelConfig,...(executor?{execute:executor}:{})});
-    const matching=createMatchingService({db:store.db,feed,tasks,config:{jev:config.jev??{},matching:config.matching}});
-    const intent=createIntentService({db:store.db,feed,tasks,model,matching}),companies=createCompanyService({db:store.db,feed,tasks,model});
+    const matching=createMatchingService({db:store.db,feed,tasks,...ownership,config:{jev:config.jev??{},matching:config.matching}});
+    const intent=createIntentService({db:store.db,feed,tasks,...ownership,model,matching}),companies=createCompanyService({db:store.db,feed,tasks,model});
     const workerId=`runner-${config.sourceCommit.slice(0,12)}-${createHash('sha256').update(config.buildIdentity).digest('hex').slice(0,12)}`;
     const statusPath=runnerStatusPath(config),capabilities=()=>({search:model.available('search_intent'),companyRequests:model.available('company_resolution'),aiMatching:matching.available()});
     const heartbeat=()=>writeRunnerStatus({path:statusPath,identity:workerId,config,capabilities:capabilities()});

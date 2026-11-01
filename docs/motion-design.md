@@ -1,22 +1,21 @@
 ---
-summary: Motion and reading-position rules for the Justup interface.
+summary: Result reveal, reading-position and reduced-motion rules for Justup.
 read_when: Changing result arrivals, scrolling, reduced motion or the news ribbon.
-status: Proposed design values for review.
 ---
 
 # Justup motion language
 
-The live-dot pulse is part of the orange-and-ink visual direction. Exact timing values are starting values for review.
+The current lists reveal rows at a 450 ms cadence with an ink reveal. The arrival, reading-position and Hiring Wire rules below define product behavior to implement and verify as their services become available.
 
 ## Visual baseline
 
-Use orange coral `#F28A60`, black and white ink, a condensed masthead, headlines in the same condensed face as the wordmark and readable typewriter copy, square controls, and small company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible. Keep “Last 14 days” explicit. The search is a pale, visibly editable field with a Search action. Search tabs include “+ New search.”
+Use orange coral `#F28A60`, black ink and cream accents, a condensed masthead, headlines in the same condensed face as the wordmark and readable typewriter copy, square controls, and small company marks at text size. Keep “Fresh work. Clear sources.” and “Live edition” visible. Keep “Last 14 days” explicit. The search is a pale, visibly editable field with a Search action. Search tabs include “+ New search.”
 
 Result lists have no footer or appended coverage panel, so reaching an end does not introduce a new layout block. Keep **Request a company** available in the catalogue header. Do not show an idle “Up to date” label.
 
 ## Marking new positions
 
-Use a small white **New** label beside the company name and a narrow white leading edge on the position. The label supplies the meaning; the edge helps scanning. The timestamp continues to mean when the server first observed the posting.
+Use a small cream **New** label beside the company name and a narrow cream leading edge on the position. The label supplies the meaning; the edge helps scanning. The timestamp continues to mean when the server first observed the posting.
 
 Newness is relative to the current search, while Viewed belongs to the user and posting across searches. A newly created search starts with its initial result set; live arrivals are marked New. Proposed return-visit behavior is to mark positions delivered since the previous visit, retaining that cohort throughout the current visit. Define and persist the search visit boundary before implementation so reloads and tab changes cannot accidentally clear the cohort or mark all old matches New.
 
@@ -24,10 +23,10 @@ The entrance ends; the marker remains. Do not remove New merely because the anim
 
 ## Timing and movement
 
-| Interaction | Starting motion | Persistent result |
+| Interaction | Motion | Persistent result |
 | --- | --- | --- |
 | A visible new position | Content settles downward by 4 px over 220 ms, with opacity resolving to 1. Use `cubic-bezier(.2,.7,.3,1)`. The leading edge reveals over 180 ms. | New label and edge stay visible. |
-| An older match during infinite scroll | Use a proposed 450 ms cycle per job. Motion treatment is under review: Dock, Glide, or Ink. Complete the cycle before beginning the next job, including when the next match is already buffered. | Continuous job-by-job disclosure without visible server page boundaries. |
+| An older match during infinite scroll | Use the 450 ms ink reveal cycle per job. Complete the cycle before beginning the next job, including when the next match is already buffered. | Continuous job-by-job disclosure without visible server page boundaries. |
 | Arrival above the reader | Insert automatically above the viewport and compensate scroll position in the same rendering transaction. Animate no existing row. Update the small “N new ↑” navigation cue without rolling digits or pulsing. | The same position, text selection, and keyboard target remain in place. |
 | Opening a company posting | Change text to the muted brand color over 160 ms; reveal the eye indicator over 120 ms. | Viewed remains muted at the same font weight, size, line wrapping, and row height. |
 | Live connection | Only the small live dot breathes between 0.6 and 1 opacity on a 2.8 s cycle. An optional faint halo expands from the dot. | “Live edition” text stays steady. |
@@ -41,15 +40,9 @@ Motion is local and functional. Use no springs, bounce, confetti, full-page fade
 
 The interface reveals individual jobs as the user scrolls down to them. Start a reveal only when the new row’s slot reaches the visible viewport; never consume or animate queued jobs below the screen. Background fetching may prepare matches without revealing them. Server collection pages, candidate scan batches and matching batches never appear as pages in the interface. A matched page arriving does not dump all its jobs onto the screen. A small ordered queue smooths irregular background loading.
 
-The animation itself imposes a deliberate consumption interval, including when data is already ready. The current proposed cycle is **450 ms per job**, with 350 ms and 550 ms comparisons available. The next job cannot begin until the current cycle completes and another ordered match is ready. This is purposeful browsing cadence, rather than an animation applied after a whole page was already disclosed.
+The animation itself imposes a deliberate consumption interval, including when data is already ready. The current cycle is **450 ms per job**. The next job cannot begin until the current cycle completes and another ordered match is ready.
 
-Three whole-row treatments are under review:
-
-- **Dock:** open only the newly appended slot during the first 44% of the cycle. After that space is open, introduce the complete job block with a 6 px settle, reaching its final appearance by 88%. Existing rows above stay still.
-- **Glide:** introduce the complete row from 14 px to the left, resolving position and opacity by 85% of the cycle.
-- **Ink:** keep text immediately readable and stationary. Draw its separator while a soft coral tint settles to the page color over the cycle.
-
-Dock and Glide use `cubic-bezier(.18,.8,.25,1)` for their settling movement. None scans a mask through individual lines of text. Each treatment has the same consumption deadline, ordering, matching states, and reduced-motion pacing.
+The ink reveal resolves the row's clipped area and opacity over the cycle. Existing rows stay still. The row is real content in newest-first order throughout the reveal; the effect does not scan through individual lines of text.
 
 Fetching and the optional extra AI-based matching step run alongside the reveal. They can take longer than a cycle: the interface waits for the next real match rather than inventing a position or resetting its animation. Older matches disclosed through scrolling do not receive the live-arrival New label.
 
@@ -77,8 +70,6 @@ Retain existing rows as new rows are appended below them. Do not animate the hei
 
 With reduced motion, a ready job appears without a wipe, translation, or fade, and the next job still waits for the same per-job cycle deadline. The looking indicator is static with the same status text. Reduced motion changes the visual treatment, while preserving the designed consumption pacing and server work limits.
 
-The infinite-scroll study simulates continued proximity to the loaded end. Its three scenarios show buffered matching jobs, a candidate batch with no matches followed by more AI-matched jobs, and confirmed exhaustion. It does not make real requests.
-
 ## Protecting reading and interaction
 
 New matching positions are added automatically in first-observed order. The count is a navigation shortcut to positions already inserted; it is never an “apply updates” gate.
@@ -97,7 +88,7 @@ Honor the operating system’s reduced-motion preference. Remove translations, e
 
 Announce incoming batches through one polite status region, such as “2 new matching positions added.” Do not make the entire feed a live region or announce every frame. Eye and outbound-link icons have accessible labels. Neither color nor motion is the only way to identify a new or viewed position.
 
-## Review and implementation checks
+## Verification
 
 - Reading: delivering one or several positions preserves the currently read row’s viewport offset and its DOM identity.
 - Editing: arrival preserves the active input, caret, selected text, and page position.
@@ -105,8 +96,6 @@ Announce incoming batches through one polite status region, such as “2 new mat
 - Recovery: duplicate events, reconnects, tab returns, and stale search revisions do not duplicate positions or replay entrances.
 - Motion preference: reduced motion produces no translations or ambient animation and loses no information.
 - Accessibility and layout: verify keyboard operation, announcements, contrast, long titles, and small screens in the real application viewport.
-
-The inline motion study demonstrates the arrival treatment, a cropped reading viewport, and the viewed transition. Its hidden “above viewport” region is illustrative; production insertion and scroll anchoring require end-to-end verification in the application.
 
 The company catalogue uses the same individual-row cadence and viewport gate as the job feed. Company rows open their profiles, with priority requests as an independent button. Clickable rows have a coral hover wash, a keyboard focus outline, and pressed feedback. Do not append footer panels at the end of either list. Reserve enough space for looking and end statuses to change without shifting the document. A fixed back-to-top button appears after scrolling and respects reduced motion; it restores focus to the top navigation. The Requested filter in Companies reuses the company-row component, including logos, source identity, details, status, single row separators and the shared arrow.
 
