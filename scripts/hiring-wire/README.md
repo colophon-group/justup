@@ -1,6 +1,6 @@
 ---
 summary: Bounded operator entry points for the weekly Hiring Wire task and history validation.
-read_when: Preparing the weekly scheduler, validating its authoritative export or maintaining its editorial tools.
+read_when: Operating the shared runner's weekly task, validating its authoritative export or maintaining its editorial tools.
 ---
 
 # Hiring Wire commands
@@ -9,7 +9,24 @@ These commands run without model credentials. They never start a provider, insta
 
 `node scripts/hiring-wire/enqueue.mjs` queues the latest completed Monday-to-Monday UTC period in the existing shared task database. Set the absolute existing `JUSTUP_DB_PATH`; use `JUSTUP_SHARED_STATE=true` only in the reviewed shared runtime. `--period 2026-11-02T00:00:00.000Z` selects an explicit period. The command prints only the task identity/status and edition period. Failed attempts can be requeued against the same immutable edition snapshot, with a maximum of eight task identities per period.
 
-The operations-owned weekly scheduler invokes this command. The existing runner dispatches `hiring_wire` only after interactive tasks, using the same global lease and resource ceiling. The queue command does not establish authoritative coverage, qualify a model, activate automation or grant model access to this database.
+The existing shared runner owns the fixed Monday 00:00 UTC tick through its
+`beforeClaim` integration hook. It persists one period across restarts and gives
+dependency unavailability at most three automatic attempts with 15-minute and
+two-hour backoff. This CLI is a manual/operator entry point to the same enqueue
+helper. No separate timer or daemon invokes it. The runner claims every non-Wire
+kind first and cooperatively pauses in-flight Wire only after cancellation cleanup
+is confirmed, using the same global lease and resource ceiling. The command does
+not establish authoritative coverage, qualify a model, activate automation or grant
+model access to this database.
+
+An unproven native cleanup creates a durable singleton queue halt: the held task
+stays running, readiness becomes unavailable, and claims, recovery and weekly ticks
+remain blocked across process restart or elapsed lease time. Do not use manual
+enqueueing to bypass it. Recovery requires stopping the runner, reviewed proof
+that the native invocation is gone and the broker is idle/clean, then one reviewed
+database transaction terminating that task and deleting the guard. There is no
+public or automatic clear operation. See [the integration contract](../../docs/hiring-wire-integration.md)
+for protected configuration, recovery boundaries and verification limits.
 
 `node scripts/hiring-wire/check-snapshot.mjs /absolute/reviewed-snapshot.json --period 2026-11-02T00:00:00.000Z` validates a bounded source projection and prints aggregate counts and a hash. It does not import, publish or echo source identifiers. A valid file still needs the reviewed authoritative producer; syntax validation cannot establish source trust.
 

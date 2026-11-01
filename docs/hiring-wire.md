@@ -9,12 +9,23 @@ Hiring Wire is a first-release feature. `server/hiring-wire.mjs` provides the co
 
 ## Integrate and verify an edition
 
-1. Compose `createHiringWireService({db,now})` in the API. Dispatch its `publicRoute(ctx)` only for public GET reads and include its actual `capabilities().hiringWire` value. No provider, source or account credentials belong in API composition.
-2. In the existing runner, inject the same factory with `tasks`, an authoritative `source` and a separately qualified `editorial` provider. Register `hiring_wire: service.runTask`. Keep one global lease and claim interactive work before editorial work. The service checks the live task lease again in the transaction that commits both task success and publication.
-3. The operations-owned weekly scheduler invokes [the enqueue command](../scripts/hiring-wire/README.md). It enqueues the fixed internal owner `__hiring_wire__`; no HTTP request creates an editorial task. `enqueuePeriod(periodEnd)` is idempotent while a task is pending, running or successful. A terminal failure permits a new task identity against the existing period and snapshot, up to eight task identities per period.
+1. Compose `createHiringWireApi({db,now})` from `server/hiring-wire-integration.mjs` in the API. Dispatch its `publicRoute(ctx)` only for public GET reads and include its actual `capabilities().hiringWire` value. No provider, source or account credentials belong in API composition.
+2. Await the integration helper's `createHiringWireRunner` in the existing queue with its protected source/model configuration and independently trusted build/host identity. Register `hiring_wire: wire.runTask` and `beforeClaim: wire.beforeClaim`. Keep one global lease and claim every non-Wire kind first. Running editorial work cooperatively aborts when foreground work arrives; only confirmed cleanup permits a lease-token compare-and-set pause of the same task. The service checks the live task lease and abort signal again in the publication transaction.
+3. The shared runner's fixed Monday 00:00 UTC tick records one durable period and queues the fixed internal owner `__hiring_wire__`; no HTTP request creates an editorial task. Dependency unavailability receives at most three scheduled attempts, with 15-minute and two-hour backoff. Factual and quality failures receive no automatic retry. [The enqueue command](../scripts/hiring-wire/README.md) remains an explicit operator entry point using the same `enqueuePeriod(periodEnd)` helper, rather than a separate scheduler. That helper is idempotent while a task is pending, running or successful; a reviewed terminal retry may use a new task identity against the existing frozen period and snapshot, up to eight identities per period.
 4. Verify a real edition using the authoritative producer, the qualified subscription CLI profile, the isolated preview API and the public browser read. Verify failure with unavailable history and an unavailable provider. A green deterministic suite alone does not establish either external contract.
 
 `periodEnd` is Monday at 00:00 UTC. The current half-open week is `[periodEnd - 7 days, periodEnd)`; the preceding week is `[periodEnd - 14 days, periodEnd - 7 days)`. A task can publish within 48 hours after its period ends. The trusted configuration can set `publicationLagMs` between one and seven days and `retainedEditions` between eight and 52; defaults are 48 hours and 52 editions. A retry cannot silently switch snapshots, facts or previous editions. A newer published edition prevents an older pending period from publishing out of order.
+
+The integration uses the fixed 48-hour window and 52-edition defaults. See [the
+integration contract](hiring-wire-integration.md) for exact queue-only configuration,
+restart behavior and priority. Wire is disabled by default, and enabling it does
+not qualify a native runtime or establish authoritative historical coverage.
+If native cancellation reports `cleanup_unproven`, a bounded singleton SQLite
+guard leaves the task held, stops all claims/recovery/scheduler actions across
+restart and marks runner readiness unavailable. Recovery requires a stopped runner,
+reviewed native/broker idle and cleanup proof, then one reviewed transaction to
+terminate the held task and remove the guard. No public or automatic clear exists;
+ordinary stored-feed/account access remains independent of runner availability.
 
 ## Authoritative source contract
 
