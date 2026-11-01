@@ -9,7 +9,7 @@ import { exact,plain,token,wireError } from './hiring-wire-facts.mjs';
 import { WIRE_PROFILE_DESCRIPTOR } from './hiring-wire-editorial.mjs';
 import { wireDescriptorMatches,wireProfileReady } from './hiring-wire-codex-policy.mjs';
 
-const MAX_FRAME=270_336,MAX_SESSION=4_194_304;
+const MAX_FRAME=270_336,MAX_SESSION=4_194_304,CANCEL_TIMEOUT_MS=5000;
 const SAFE=new Set(['dependency_unavailable','provider_unavailable','invalid_input','invalid_output','task_timeout','output_limit','tool_limit','tool_not_allowed','token_limit','task_limit']);
 const code=error=>SAFE.has(error?.code)?error.code:'provider_unavailable';
 const problem=value=>wireError(SAFE.has(value)?value:'invalid_input');
@@ -37,16 +37,24 @@ export function handleHiringWireCodexConnection(socket,{firstFrame,openSession,r
   const timeout=setTimeout(()=>void finish('task_timeout'),WIRE_PROFILE_DESCRIPTOR.maxMs);
   const abort=()=>void finish('task_timeout');signal?.addEventListener('abort',abort,{once:true});
   function write(value,end=false){if(!socket.destroyed){const data=frame(value,75_000);end?socket.end(data):socket.write(data);}}
-  async function finish(error,finalResponse) {
+  async function finish(error,finalResponse,cancelled=false) {
     if(cleanupPromise)return cleanupPromise;
     finished=true;controller.abort();clearTimeout(timeout);signal?.removeEventListener('abort',abort);
     cleanupPromise=(async()=>{
-      try{await openedPromise;}catch{}
-      try{await session?.cancel();}catch{}
       let cleanupError;
-      try{await dispose?.();}catch{cleanupError='dependency_unavailable';}
-      try{if(error||cleanupError)write({ok:false,executionId:open.executionId,error:{code:error??cleanupError}},true);else if(finalResponse)write({ok:true,executionId:open.executionId,response:finalResponse},true);else if(!socket.destroyed)socket.end();}catch{socket.destroy();}
-      try{release();}finally{resolveDone();}
+      try{await openedPromise;}catch(error){if(error?.code==='cleanup_unproven')cleanupError='cleanup_unproven';}
+      try{await session?.cancel();}catch{cleanupError='cleanup_unproven';}
+      try{await dispose?.();}catch{cleanupError='cleanup_unproven';}
+      // A failed cleanup quarantines the shared slot. Neither a socket close nor
+      // a failure reply grants the queue permission to hand it to foreground work.
+      if(!cleanupError)try{await release();}catch{cleanupError='cleanup_unproven';}
+      try {
+        if(error||cleanupError)write({ok:false,executionId:open.executionId,error:{code:cleanupError??error},cleanup:cleanupError?'unproven':'complete'},true);
+        else if(cancelled)write({ok:true,executionId:open.executionId,type:'cancelled'},true);
+        else if(finalResponse)write({ok:true,executionId:open.executionId,response:finalResponse,cleanup:'complete'},true);
+        else if(!socket.destroyed)socket.end();
+      }catch{socket.destroy();}
+      finally{resolveDone();}
     })();return cleanupPromise;
   }
   socket.on('error',()=>void finish('dependency_unavailable'));
@@ -55,20 +63,22 @@ export function handleHiringWireCodexConnection(socket,{firstFrame,openSession,r
     if(finished)return;
     bytes+=chunk.length;if(bytes>MAX_SESSION){void finish('output_limit');return;}
     try {
-      buffer+=decoder.decode(chunk,{stream:true});const end=buffer.indexOf('\n');
-      if(end<0){if(Buffer.byteLength(buffer)>MAX_FRAME)void finish('output_limit');return;}
-      if(Buffer.byteLength(buffer.slice(0,end))>MAX_FRAME||buffer.slice(end+1).trim())throw problem('invalid_input');
-      const value=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
-      if(!plain(value)||value.profile!=='hiring_wire'||value.executionId!==open.executionId)throw problem('invalid_input');
-      if(value.operation==='cancel') {exact(value,['profile','operation','executionId']);void finish('task_timeout');return;}
-      exact(value,['profile','operation','executionId','request']);
-      if(value.operation!=='step'||active||!session||value.request?.executionId!==open.executionId)throw problem('invalid_input');active=true;
-      Promise.resolve().then(()=>session.step(value.request,{signal:controller.signal})).then(response=>{
-        if(finished)return;
-        if(!plain(response)||!['tools','final'].includes(response.type))throw problem('invalid_output');
-        if(response.type==='final')void finish(undefined,response);
-        else write({ok:true,executionId:open.executionId,response});
-      }).catch(error=>void finish(code(error))).finally(()=>{active=false;});
+      buffer+=decoder.decode(chunk,{stream:true});let end;
+      while(!finished&&(end=buffer.indexOf('\n'))>=0) {
+        if(Buffer.byteLength(buffer.slice(0,end))>MAX_FRAME)throw problem('invalid_input');
+        const value=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
+        if(!plain(value)||value.profile!=='hiring_wire'||value.executionId!==open.executionId)throw problem('invalid_input');
+        if(value.operation==='cancel') {exact(value,['profile','operation','executionId']);void finish(undefined,undefined,true);return;}
+        exact(value,['profile','operation','executionId','request']);
+        if(value.operation!=='step'||active||!session||value.request?.executionId!==open.executionId)throw problem('invalid_input');active=true;
+        Promise.resolve().then(()=>{if(!finished)return session.step(value.request,{signal:controller.signal});}).then(response=>{
+          if(finished)return;
+          if(!plain(response)||!['tools','final'].includes(response.type))throw problem('invalid_output');
+          if(response.type==='final')void finish(undefined,response);
+          else write({ok:true,executionId:open.executionId,response});
+        }).catch(error=>void finish(code(error))).finally(()=>{active=false;});
+      }
+      if(Buffer.byteLength(buffer)>MAX_FRAME)void finish('output_limit');
     }catch(error){void finish(SAFE.has(error?.code)?error.code:'invalid_input');}
   });
   openedPromise=Promise.resolve().then(async()=>{
@@ -85,28 +95,60 @@ export function handleHiringWireCodexConnection(socket,{firstFrame,openSession,r
 // must use createHiringWireCodexTransport, whose production path checks proof.
 export function createHiringWireCodexClient({socketPath,executionId}={}) {
   if(!isAbsolute(socketPath))throw problem('invalid_input');token(executionId);
-  let socket,buffer='',bytes=0,waiter,opening,terminal=false,pendingStep=false,deadlineTimer;
+  let socket,buffer='',bytes=0,waiter,opening,terminal=false,pendingStep=false,deadlineTimer,cancelTimer;
+  let cleanupProven=false,cancelling=false,cancellation,resolveCancellation,rejectCancellation;
   const decoder=new TextDecoder('utf-8',{fatal:true});
-  function stop(error) {
-    terminal=true;clearTimeout(deadlineTimer);socket?.destroy();
+  function stop(error,proven=false) {
+    cleanupProven||=proven;terminal=true;clearTimeout(deadlineTimer);clearTimeout(cancelTimer);socket?.destroy();
     if(waiter){const current=waiter;waiter=null;current.reject(error??problem('task_timeout'));}
+    if(cancellation){cleanupProven?resolveCancellation():rejectCancellation(wireError('cleanup_unproven'));}
   }
-  function reply() {if(waiter)throw problem('task_limit');return new Promise((resolve,reject)=>{waiter={resolve,reject};});}
+  function reply(kind) {if(waiter)throw problem('task_limit');return new Promise((resolve,reject)=>{waiter={resolve,reject,kind};});}
   function connect() {
     opening=(async()=>{
-      const response=reply();socket=createConnection({path:socketPath});
-      deadlineTimer=setTimeout(()=>stop(problem('task_timeout')),WIRE_PROFILE_DESCRIPTOR.maxMs);
+      const response=reply('open');socket=createConnection({path:socketPath});
+      deadlineTimer=setTimeout(()=>void cancel().catch(()=>{}),WIRE_PROFILE_DESCRIPTOR.maxMs);
       socket.once('connect',()=>socket.write(frame({profile:'hiring_wire',operation:'open',executionId,descriptor:WIRE_PROFILE_DESCRIPTOR},2048)));
       socket.on('error',()=>stop(problem('dependency_unavailable')));socket.once('end',()=>stop(problem('provider_unavailable')));
+      socket.once('close',()=>{if(!terminal)stop(problem('dependency_unavailable'));});
       socket.on('data',chunk=>{
         if(terminal)return;bytes+=chunk.length;if(bytes>1_048_576){stop(problem('output_limit'));return;}
         try {
-          buffer+=decoder.decode(chunk,{stream:true});const end=buffer.indexOf('\n');if(end<0){if(Buffer.byteLength(buffer)>75_000)throw problem('output_limit');return;}
-          if(buffer.slice(end+1).trim()||!waiter||Buffer.byteLength(buffer.slice(0,end))>75_000)throw problem('invalid_output');
-          const value=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
-          if(!plain(value)||value.executionId!==executionId||typeof value.ok!=='boolean')throw problem('invalid_output');
-          if(!value.ok)throw problem(value.error?.code);
-          const current=waiter;waiter=null;current.resolve(value);
+          buffer+=decoder.decode(chunk,{stream:true});let end;
+          while(!terminal&&(end=buffer.indexOf('\n'))>=0) {
+            if(Buffer.byteLength(buffer.slice(0,end))>75_000)throw problem('invalid_output');
+            const value=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
+            if(!plain(value)||value.executionId!==executionId||typeof value.ok!=='boolean')throw problem('invalid_output');
+            if(!value.ok) {
+              exact(value,['ok','executionId','error','cleanup']);exact(value.error,['code']);
+              if(buffer.trim())throw problem('invalid_output');
+              if(value.error.code==='cleanup_unproven'&&value.cleanup==='unproven'){stop(wireError('cleanup_unproven'));return;}
+              if(!SAFE.has(value.error.code)||value.cleanup!=='complete')throw problem('invalid_output');
+              stop(problem(value.error.code),true);return;
+            }
+            if(value.type==='cancelled') {
+              exact(value,['ok','executionId','type']);if(!cancelling||buffer.trim())throw problem('invalid_output');
+              stop(problem('task_timeout'),true);return;
+            }
+            if(value.type==='opened') {
+              exact(value,['ok','executionId','type']);if(waiter?.kind!=='open')throw problem('invalid_output');
+            }else {
+              const response=value.response;
+              if(!plain(response)||!['tools','final'].includes(response.type))throw problem('invalid_output');
+              if(Buffer.byteLength(JSON.stringify(response))>WIRE_PROFILE_DESCRIPTOR.maxOutputBytes)throw problem('output_limit');
+              if(response.type==='final') {
+                exact(value,['ok','executionId','response','cleanup']);exact(response,['type','data']);if(value.cleanup!=='complete'||buffer.trim())throw problem('invalid_output');
+                const current=waiter;if(!cancelling&&current?.kind!=='step')throw problem('invalid_output');waiter=null;
+                stop(undefined,true);current?.resolve(value);return;
+              }
+              exact(value,['ok','executionId','response']);
+              exact(response,['type','calls']);if(!Array.isArray(response.calls)||!response.calls.length||response.calls.length>4)throw problem('invalid_output');
+              if(cancelling)continue;
+              if(waiter?.kind!=='step')throw problem('invalid_output');
+            }
+            const current=waiter;waiter=null;current.resolve(value);
+          }
+          if(Buffer.byteLength(buffer)>75_000)throw problem('output_limit');
         }catch(error){stop(problem(SAFE.has(error?.code)?error.code:'invalid_output'));}
       });
       const value=await response;exact(value,['ok','executionId','type']);if(value.type!=='opened')throw problem('invalid_output');
@@ -114,36 +156,56 @@ export function createHiringWireCodexClient({socketPath,executionId}={}) {
   }
   async function step(request,{signal}={}) {
     if(terminal||pendingStep)throw problem(terminal?'dependency_unavailable':'task_limit');pendingStep=true;
-    const abort=()=>stop(problem('task_timeout'));signal?.addEventListener('abort',abort,{once:true});
+    const abort=()=>void cancel().catch(()=>{});signal?.addEventListener('abort',abort,{once:true});
     try {
       if(signal?.aborted)throw problem('task_timeout');if(!opening)connect();await opening;
-      const response=reply();socket.write(frame({profile:'hiring_wire',operation:'step',executionId,request}));
-      const result=await response;exact(result,['ok','executionId','response']);
-      const value=result.response;
-      if(!plain(value)||!['tools','final'].includes(value.type))throw problem('invalid_output');
-      if(Buffer.byteLength(JSON.stringify(value))>WIRE_PROFILE_DESCRIPTOR.maxOutputBytes)throw problem('output_limit');
-      if(value.type==='final'){exact(value,['type','data']);stop();}else{exact(value,['type','calls']);if(!Array.isArray(value.calls)||!value.calls.length||value.calls.length>4)throw problem('invalid_output');}
-      return value;
-    }catch(error){stop(problem(code(error)));throw problem(code(error));}
+      if(cancelling)throw problem('task_timeout');
+      const response=reply('step');socket.write(frame({profile:'hiring_wire',operation:'step',executionId,request}));
+      const result=await response;
+      return result.response;
+    }catch(error){await cancel();throw problem(code(error));}
     finally{pendingStep=false;signal?.removeEventListener('abort',abort);}
   }
-  function cancel(){if(!terminal&&socket?.writable)try{socket.write(frame({profile:'hiring_wire',operation:'cancel',executionId},2048));}catch{}stop();}
+  function cancel() {
+    if(cancellation)return cancellation;
+    cancelling=true;clearTimeout(deadlineTimer);
+    cancellation=new Promise((resolve,reject)=>{resolveCancellation=resolve;rejectCancellation=reject;});
+    if(!socket){stop(undefined,true);return cancellation;}
+    if(terminal){stop();return cancellation;}
+    if(waiter?.kind==='step'){const current=waiter;waiter=null;current.reject(problem('task_timeout'));}
+    cancelTimer=setTimeout(()=>stop(wireError('cleanup_unproven')),CANCEL_TIMEOUT_MS);
+    // Opening may still be pending. Do not pipeline a cancel into the parent's
+    // first-frame admission; the eventual open must be disposed and acknowledged.
+    void opening.then(()=>{
+      if(terminal)return;
+      try{socket.write(frame({profile:'hiring_wire',operation:'cancel',executionId},2048));}
+      catch{stop(wireError('cleanup_unproven'));}
+    },()=>stop());
+    return cancellation;
+  }
   return {step,cancel};
 }
 export function createHiringWireCodexTransport({config={}}={}) {
-  const clients=new Map();
+  const clients=new Map();let lastCancellation;
   const qualified=descriptor=>wireProfileReady(config,descriptor);
+  function cancel(executionId) {
+    if(lastCancellation?.executionId===executionId)return lastCancellation.promise;
+    const client=clients.get(executionId);
+    const promise=(client?.cancel()??Promise.resolve()).then(()=>{clients.delete(executionId);});
+    lastCancellation={executionId,promise};return promise;
+  }
   return {
     qualified,executionId:()=>randomUUID(),
     async step(request,options) {
       if(!qualified(request?.descriptor))throw problem('dependency_unavailable');token(request.executionId);
+      if(lastCancellation?.executionId===request.executionId)throw problem('dependency_unavailable');
       if(!clients.has(request.executionId)) {
         if(clients.size)throw problem('task_limit');
         clients.set(request.executionId,createHiringWireCodexClient({socketPath:config.socketPath,executionId:request.executionId}));
       }
       try{return await clients.get(request.executionId).step(request,options);}
-      catch(error){clients.get(request.executionId)?.cancel();clients.delete(request.executionId);throw error;}
+      catch(error){await cancel(request.executionId);throw error;}
     },
-    async cancel(executionId){clients.get(executionId)?.cancel();clients.delete(executionId);}
+    cancel
   };
 }

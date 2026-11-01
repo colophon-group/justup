@@ -18,7 +18,7 @@ function input() {
   const compiled=compileWireSnapshot(wireFixture(),{periodEnd:END,now:AT});let script=structuredClone(DEFAULT_SCRIPT),revision='r-1';
   return {snapshot:{id:compiled.snapshot.snapshotId,sha256:compiled.snapshotSha256,asOf:END,factsVersion:compiled.factsVersion},facts:compiled.facts,previousEditions:[],workspace:{read:()=>({revision,sha256:digest(script),script:structuredClone(script)}),replace:(expected,next)=>{assert.equal(expected,revision);script=structuredClone(next);revision='r-2';return {revision,sha256:digest(script),script:structuredClone(script)};}}};
 }
-function harness({onTurn,onResult,onInitialize,onThread,chunk=false}={}) {
+function harness({onTurn,onResult,onInitialize,onThread,onKill,onProbe,chunk=false}={}) {
   const writes=[],kills=[];let child;
   const send=value=>{const line=Buffer.from(`${JSON.stringify(value)}\n`);if(chunk){const cut=Math.floor(line.length/2);child.stdout.write(line.subarray(0,cut));child.stdout.write(line.subarray(cut));}else child.stdout.write(line);};
   const notify=(method,params)=>send({method,params});
@@ -39,7 +39,12 @@ function harness({onTurn,onResult,onInitialize,onThread,chunk=false}={}) {
     });}callback();}});
     return child;
   };
-  const session=createHiringWireCodexSession({invocation,spawnProcess,killGroup:(pid,signal)=>kills.push({pid,signal})});
+  const session=createHiringWireCodexSession({invocation,spawnProcess,killGroup:(pid,signal)=>{
+    if(signal===0){if(onProbe)return onProbe({child,pid});throw Object.assign(Error('No process group.'),{code:'ESRCH'});}
+    kills.push({pid,signal});
+    if(onKill)return onKill({child,pid,signal});
+    if(signal==='SIGKILL')child.emit('close',null,'SIGKILL');
+  }});
   return {session,writes,kills,get child(){return child;}};
 }
 function request(source=input()) {
@@ -119,6 +124,41 @@ test('the global deadline kills a paused process without requiring another dispa
   t.mock.timers.tick(90_000);assert.equal(h.kills[0].signal,'SIGTERM');
   t.mock.timers.tick(100);await h.session.cancel();assert.equal(h.kills[1].signal,'SIGKILL');
   await assert.rejects(h.session.step(request().value));
+});
+
+test('native cancellation waits for child close even when the process group is already absent',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=harness({onTurn:({tool})=>tool(),onKill:()=>{}});await h.session.step(request().value);
+  let done=false;const cancelled=h.session.cancel().then(()=>{done=true;});t.mock.timers.tick(100);await Promise.resolve();
+  assert.equal(done,false);assert.equal(h.child.stdout.destroyed,false);
+  h.child.emit('close',null,'SIGKILL');t.mock.timers.tick(25);await cancelled;
+  assert.equal(h.child.stdout.destroyed,true);
+});
+
+test('native cancellation escalates after direct child exit and waits for remaining descendants',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});let groupGone=false;
+  const h=harness({onTurn:({tool})=>tool(),onKill:({child,signal})=>{if(signal==='SIGTERM')child.emit('close',0);},onProbe:()=>{if(groupGone)throw Object.assign(Error('No process group.'),{code:'ESRCH'});}});
+  await h.session.step(request().value);let done=false;const cancelled=h.session.cancel().then(()=>{done=true;});
+  t.mock.timers.tick(100);await Promise.resolve();assert.equal(done,false);assert.deepEqual(h.kills.map(value=>value.signal),['SIGTERM','SIGKILL']);
+  groupGone=true;t.mock.timers.tick(25);await cancelled;assert.equal(done,true);
+});
+
+test('unexpected signal and process-group probe failures make native cleanup unproven',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  for(const failure of ['SIGTERM','SIGKILL','probe']) {
+    const h=harness({onTurn:({tool})=>tool(),onKill:({child,signal})=>{if(signal==='SIGKILL')child.emit('close',null,'SIGKILL');if(signal===failure)throw Object.assign(Error('private signal error'),{code:'EPERM'});},onProbe:()=>{throw Object.assign(Error('private probe error'),{code:failure==='probe'?'EPERM':'ESRCH'});}});
+    await h.session.step(request().value);const rejected=assert.rejects(h.session.cancel(),error=>error.code==='cleanup_unproven'&&!error.message.includes('private'));
+    t.mock.timers.tick(100);await rejected;
+  }
+});
+
+test('native cleanup has a bounded failure when a descendant process group survives SIGKILL',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=harness({onTurn:({tool})=>tool(),onKill:({child,signal})=>{if(signal==='SIGKILL')child.emit('close',null,'SIGKILL');},onProbe:()=>{}});
+  await h.session.step(request().value);const rejected=assert.rejects(h.session.cancel(),{code:'cleanup_unproven'});
+  t.mock.timers.tick(100);await Promise.resolve();
+  for(let poll=0;poll<80;poll++){t.mock.timers.tick(25);await Promise.resolve();}
+  await rejected;
 });
 
 test('token, stream bytes, schema, factual angle and unexpected protocol drift reject the edition',async()=>{

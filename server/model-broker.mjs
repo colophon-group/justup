@@ -225,7 +225,7 @@ function createBrokerInvocation(config,{testOnly=false}={}) {
     const home=join(invocation,'home'),scratch=join(invocation,'scratch');mkdirSync(home,{mode:0o700});mkdirSync(scratch,{mode:0o700});
     auth=subscriptionAuth(readFileSync(join(config.protectedAuthHome,'auth.json')));writeFileSync(join(home,'auth.json'),auth,{mode:0o600,flag:'wx'});
     return {env:{...codexEnvironment({codexHome:home,taskCwd:config.taskCwd}),TMPDIR:scratch},wireInvocation:{executable:config.codexPath,codexHome:home,taskCwd:config.taskCwd,scratchPath:scratch},dispose};
-  }catch(error){try{dispose();}catch{}throw error;}
+  }catch(error){try{dispose();}catch{throw Object.assign(problem('dependency_unavailable'),{code:'cleanup_unproven'});}throw error;}
 }
 export function hiringWireBrokerReady(config={}) {
   return validWireConfiguration(config.hiringWire)&&config.hiringWire?.enabled===true&&process.versions.node===WIRE_NODE_VERSION&&config.hiringWire.modelUid===process.getuid()&&wireCatalogueReady()&&wireProfileReady({...config.hiringWire,buildIdentity:config.buildIdentity,hostPlanSha256:config.hostPlanSha256});
@@ -263,13 +263,13 @@ export function createModelBroker({config={},execute=executeCodex,fetchPage=fetc
       started=true;socket.setTimeout(0);
       let input,raw;try{if(buffer.slice(end+1).trim())throw problem('invalid_input');raw=JSON.parse(buffer.slice(0,end));if(raw?.profile==='hiring_wire')validateWireOpen(raw);else input=requestData(raw);}catch{reply({ok:false,error:{code:'invalid_input'}});return;}
       if(raw?.profile==='hiring_wire') {
-        if(!testOnly&&(!brokerConfigurationReady(config)||!hiringWireBrokerReady(config)||createWireSession!==createHiringWireCodexSession)){reply({ok:false,executionId:raw.executionId,error:{code:'dependency_unavailable'}});return;}
-        if(busy){reply({ok:false,executionId:raw.executionId,error:{code:'task_limit'}});return;}busy=true;
+        if(!testOnly&&(!brokerConfigurationReady(config)||!hiringWireBrokerReady(config)||createWireSession!==createHiringWireCodexSession)){reply({ok:false,executionId:raw.executionId,error:{code:'dependency_unavailable'},cleanup:'complete'});return;}
+        if(busy){reply({ok:false,executionId:raw.executionId,error:{code:'task_limit'},cleanup:'complete'});return;}busy=true;
         socket.removeListener('data',receiveFirst);
         const connection=handleHiringWireCodexConnection(socket,{firstFrame:raw,signal:controller.signal,release:()=>{busy=false;},openSession:async()=>{
           const invocation=createBrokerInvocation(config,{testOnly});
           try{return {session:createWireSession({invocation:invocation.wireInvocation}),dispose:invocation.dispose};}
-          catch(error){invocation.dispose();throw error;}
+          catch(error){try{invocation.dispose();}catch{throw Object.assign(problem('dependency_unavailable'),{code:'cleanup_unproven'});}throw error;}
         }});
         operations.add(connection.done);void connection.done.finally(()=>operations.delete(connection.done));return;
       }

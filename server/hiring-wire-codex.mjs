@@ -14,6 +14,7 @@ import { wireCodexArguments,wireCodexEnvironment,wireDescriptorMatches,wireDynam
 const SAFE=new Set(['dependency_unavailable','provider_unavailable','invalid_input','invalid_output','task_timeout','output_limit','tool_limit','tool_not_allowed','token_limit','task_limit']);
 const safeCode=error=>SAFE.has(error?.code)?error.code:'provider_unavailable';
 const fail=code=>wireError(SAFE.has(code)?code:'provider_unavailable');
+const CLEANUP_POLL_MS=25,CLEANUP_POLLS=80;
 const clone=value=>JSON.parse(JSON.stringify(value));
 function json(value,maxBytes,code='invalid_input') {
   let text;try{text=JSON.stringify(value);}catch{throw fail(code);}
@@ -90,21 +91,33 @@ export function createHiringWireCodexSession({invocation,spawnProcess=spawn,kill
     if(stopping)return stopping;
     stopping=(async()=>{
       clearTimeout(deadlineTimer);
+      let unproven=false;
       try{child?.stdin.end();}catch{}
       if(child?.pid) {
-        try{killGroup(child.pid,'SIGTERM');}catch{}
+        try{killGroup(child.pid,'SIGTERM');}catch(error){if(error?.code!=='ESRCH')unproven=true;}
         // Still escalate after the direct child exits: descendants may remain.
         await new Promise(resolve=>setTimeout(resolve,100));
-        try{killGroup(child.pid,'SIGKILL');}catch{}
+        try{killGroup(child.pid,'SIGKILL');}catch(error){if(error?.code!=='ESRCH')unproven=true;}
       }
+      let gone=!child;
+      for(let poll=0;child&&poll<=CLEANUP_POLLS;poll++) {
+        let groupGone=!child.pid;
+        if(child.pid)try{killGroup(child.pid,0);}catch(error){if(error?.code==='ESRCH')groupGone=true;else unproven=true;}
+        if(closed&&groupGone){gone=true;break;}
+        if(unproven||poll===CLEANUP_POLLS)break;
+        await new Promise(resolve=>setTimeout(resolve,CLEANUP_POLL_MS));
+      }
+      // Stream destruction cannot prove exit. Require the direct child's close
+      // (including reaping) and absence of its whole process group first.
       try{child?.stdin.destroy();child?.stdout.destroy();child?.stderr.destroy();}catch{}
       for(const pendingRequest of rpc.values())pendingRequest.reject(terminal??fail('task_timeout'));rpc.clear();
+      if(unproven||!gone)throw wireError('cleanup_unproven');
     })();
     return stopping;
   }
   function stop(code) {
     if(!terminal)terminal=fail(code);
-    wake();void cleanup();
+    wake();void cleanup().catch(()=>{});
   }
   function callRpc(method,params) {
     return new Promise((resolve,reject)=>{

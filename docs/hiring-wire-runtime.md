@@ -178,9 +178,16 @@ The existing preview resource ceiling remains unchanged: 50% CPU, 1 GiB RAM,
 
 Failure, abort, disconnect, final completion and dispatcher `finally` cancel the
 session. Cleanup closes stdin, sends SIGTERM to the actual process group, waits
-100 ms and sends SIGKILL even if the direct child exited, then destroys streams.
-The shared slot is released only after native cleanup and private invocation
-cleanup. Protected host UID, descriptor/network isolation, descendant termination
+100 ms and sends SIGKILL even if the direct child exited. Before destroying
+streams it waits up to two more seconds for the child's close
+event and a process-group probe returning `ESRCH`. Unexpected signal/probe errors
+or a surviving child/group fail with `cleanup_unproven` and quarantine the shared
+slot. The broker releases the slot only after native cleanup and private invocation
+cleanup, then sends `type:"cancelled"` or a terminal reply marked `cleanup:"complete"`.
+The client awaits that proof for at most five seconds; socket closure alone never
+proves cleanup. Repeated cancellation shares the same pending result. Unproven
+cleanup prevents queue handoff to interactive work and requires runtime recovery.
+Protected host UID, descriptor/network isolation, descendant termination
 and real trace retention still need evidence from the exact deployed candidate.
 
 Protocol evaluation version `hiring-wire-codex-protocol-eval-v1` covers the five
