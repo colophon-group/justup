@@ -286,3 +286,52 @@ test('real HTTP exposes account preferences and visitor languages with CSRF, han
   assert.equal((await b.call(`/searches/${id}/options`,'PATCH',{expectedRevision:2,followedOnly:false,postingLanguages:[]})).status,404);
   assert.equal((await a.call('/follows')).body.accountId,registered.body.user.id);
 });
+
+test('French-only policy approval admits preference, follow and automatic acceptance writes without approving English',async t=>{
+  const origin='https://preview.example';let companies,identity,modelCalls=0;
+  const app=await createApplication({now:()=>AT,config:{dbPath:':memory:',sourceCommit:'a'.repeat(40),buildIdentity:'synthetic-build',allowedOrigin:origin,
+    requiresInvitation:false,policiesReviewed:true,policyLocales:{fr:{privacyUrl:origin+'/privacy.fr.html',usageUrl:origin+'/usage.fr.html',version:'reviewed-fr',reviewed:true}}},
+    serviceFactories:[deps=>{
+      identity=createVisitorIdentity(deps);
+      const reading=createReadingPreferencesService({...deps,ownerAuthority:identity.principal});
+      companies=createCompanyService({...deps,ownerAuthority:identity.principal,readingPreferences:reading,model:{resolveCompany:async input=>{
+        modelCalls++;assert.equal(input.presentationLocale,'fr');
+        return {data:{status:'candidate',candidate:{name:'New Company',domain:'newcompany.com',websiteUrl:'https://newcompany.com/',evidenceUrls:['https://newcompany.com/about']},clarification:null},evidenceVerified:true};
+      }}});
+      return [reading,companies,{refreshAvailability:identity.refreshAvailability}];
+    }]});
+  app.store.importSnapshot(snapshot([['alpha-en','alpha',['en']]]));
+  await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));t.after(async()=>{app.server.closeAllConnections();await app.close();});
+  const base=`http://127.0.0.1:${app.server.address().port}/api/v1`,jar=new Map([['justup_interface_locale','fr']]);let csrf;
+  async function call(path,method='GET',body,headers={}){
+    const res=await fetch(base+path,{method,headers:{cookie:[...jar].map(([k,v])=>`${k}=${v}`).join('; '),
+      ...(method==='GET'?{}:{Origin:origin,'Content-Type':'application/json','X-CSRF-Token':csrf}),...headers},...(body?{body:JSON.stringify(body)}:{})});
+    for(const cookie of res.headers.getSetCookie()){const pair=cookie.split(';')[0],at=pair.indexOf('=');jar.set(pair.slice(0,at),pair.slice(at+1));}
+    const data=await res.json();if(data.csrfToken)csrf=data.csrfToken;return {status:res.status,body:data};
+  }
+  const session=await call('/session');assert.equal(session.body.policies.reviewedLocale,'fr');
+  const registered=await call('/auth/register','POST',{username:'french-only',password:'A synthetic French account password'});assert.equal(registered.status,201);
+  const owner=registered.body.user.id;assert.equal(identity.principal(owner),null);assert(identity.principal(owner,{locale:'fr'}));
+  const preferred=await call('/preferences','PATCH',{expectedRevision:0,interfaceLocale:'fr'});assert.equal(preferred.status,200,JSON.stringify(preferred.body));
+  assert.equal(preferred.body.interfaceLocale,'fr');
+  assert.equal((await call('/preferences','PATCH',{expectedRevision:1,interfaceLocale:null})).status,200);
+  const followed=await call('/follows/alpha','PATCH',{expectedRevision:0,followed:true});assert.equal(followed.status,200,JSON.stringify(followed.body));
+  const created=await call('/company-requests','POST',{input:'New Company',requestKey:'french-company'});assert.equal(created.status,202);
+  const task=app.tasks.claim({workerId:'fixture',kinds:['company_resolution']});assert.equal(task.payload.presentationLocale,'fr');assert.match(task.payload.policyKey,/^[a-f0-9]{64}$/);
+  assert.equal((await companies.runTask(task)).committed,true);assert.equal(modelCalls,1);
+  const request=(await call('/company-requests')).body.items[0],acceptPath=`/company-requests/${request.id}/accept`,acceptBody={candidateId:request.candidate.id,previewRevision:request.previewRevision};
+  jar.set('justup_interface_locale','en');const deniedSession=await call('/session');assert.equal(deniedSession.body.policies.reviewed,false);
+  for(const [path,method,body,headers] of [
+    ['/preferences','PATCH',{expectedRevision:2,interfaceLocale:'en'}],
+    ['/follows/alpha','PATCH',{expectedRevision:1,followed:false}],
+    [acceptPath,'POST',acceptBody,{'Idempotency-Key':'french-accept'}],
+  ]){const denied=await call(path,method,body,headers);assert.equal(denied.status,503);assert.equal(denied.body.error.code,'policy_unavailable');}
+  assert.equal(app.store.db.prepare('SELECT interface_locale FROM justup_preferences WHERE owner_id=?').get(owner).interface_locale,null);
+  assert.equal((await call('/follows')).body.revision,1);assert.equal(app.feed.companies().items.length,1);
+  jar.set('justup_interface_locale','fr');
+  const accepted=await call(acceptPath,'POST',acceptBody,{'Idempotency-Key':'french-accept'});assert.equal(accepted.status,200,JSON.stringify(accepted.body));
+  const id=accepted.body.request.companyId;assert(id);assert.equal(app.feed.company(id).name,'New Company');
+  assert.deepEqual(new Set((await call('/follows')).body.items.map(item=>item.companyId)),new Set(['alpha',id]));
+  assert.equal((await call(acceptPath,'POST',acceptBody,{'Idempotency-Key':'french-accept'})).status,200);
+  assert.equal((await call('/follows')).body.revision,2);assert.equal(identity.processingAvailable('en'),false);
+});

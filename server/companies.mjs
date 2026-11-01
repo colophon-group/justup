@@ -201,7 +201,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     } catch (error) { if (task) tasks.delete(ownerId, task.id); throw error; }
     return result(row(ownerId, id), known ? 201 : 202);
   }
-  function accept(ownerId, id, body, idempotencyKey) {
+  function accept(ownerId, id, body, idempotencyKey,locale) {
     exactKeys(body, ['candidateId', 'previewRevision']);
     if (typeof idempotencyKey !== 'string' || !KEY.test(idempotencyKey) || typeof body.candidateId !== 'string'
         || body.candidateId.length > 128 || !Number.isSafeInteger(body.previewRevision) || body.previewRevision < 1) throw problem('invalid_input');
@@ -218,7 +218,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
         if(!candidate.companyId&&feed.publishCompany){
           candidate.companyId=feed.publishCompany(candidate);
           db.prepare('UPDATE demo_company_requests SET candidate_json=? WHERE owner_id=? AND id=?').run(JSON.stringify(candidate),ownerId,id);
-          readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId);
+          readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId,locale);
           return result(row(ownerId,id));
         }
         return result(found);
@@ -229,7 +229,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
       if(readingPreferences&&!candidate.companyId)throw problem('dependency_unavailable',503);
       db.prepare("UPDATE demo_company_requests SET status='accepted',accept_key=?,candidate_json=? WHERE owner_id=? AND id=? AND status='candidate' AND preview_revision=?")
         .run(idempotencyKey,JSON.stringify(candidate),ownerId,id,body.previewRevision);
-      if(candidate.companyId)readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId);
+      if(candidate.companyId)readingPreferences?.followAcceptedCompany(ownerId,candidate.companyId,locale);
       return result(row(ownerId, id));
     });
   }
@@ -260,7 +260,7 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     let id;
     try { id = decodeURIComponent(ctx.path.split('/')[2]); } catch { throw problem('invalid_input'); }
     if (!id || id.length > 128 || id.includes('/')) throw problem('invalid_input');
-    if (ctx.path.endsWith('/accept') && ctx.method === 'POST') return accept(ownerId, id, ctx.body, ctx.idempotencyKey);
+    if (ctx.path.endsWith('/accept') && ctx.method === 'POST') return accept(ownerId, id, ctx.body, ctx.idempotencyKey,ctx.interfaceLocale);
     if (!ctx.path.endsWith('/accept') && ctx.method === 'DELETE') {
       const remove=() => {
         if (!row(ownerId, id)) throw problem('not_found', 404, 'Not found.');

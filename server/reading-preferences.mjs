@@ -35,7 +35,7 @@ export function createReadingPreferencesService({db,feed,ownerAuthority,now=Date
   let invalidateFollowedSearches=()=>[];
   const options=(owner,id)=>{const r=db.prepare('SELECT options_json FROM justup_search_options WHERE owner_id=? AND search_id=?').get(owner,id);return r?JSON.parse(r.options_json):structuredClone(DEFAULT_SEARCH_OPTIONS);};
   function requireOwner(ctx) {
-    const id=ctx.accountId,current=typeof id==='string'?ownerAuthority(id,{allowUnavailable:ctx.method==='GET'}):null;
+    const id=ctx.accountId,current=typeof id==='string'?ownerAuthority(id,{allowUnavailable:ctx.method==='GET',locale:ctx.interfaceLocale}):null;
     if(!id||ctx.viewer?.account?.id!==id||current?.account?.id!==id||typeof current.access?.fullAccess!=='boolean')throw problem('unauthenticated',401);
     return id;
   }
@@ -54,9 +54,9 @@ export function createReadingPreferencesService({db,feed,ownerAuthority,now=Date
   function follows(owner,invalidatedSearchIds=[]) {
     return {accountId:owner,revision:followsRevision(owner),items:followRows(owner).filter(r=>r.followed===1).map(r=>({companyId:r.canonicalId,followedAt:new Date(r.followed_at).toISOString()})),invalidatedSearchIds};
   }
-  function updateFollow(owner,companyId,followed,{automatic=false,expectedRevision}={}) {
+  function updateFollow(owner,companyId,followed,{automatic=false,expectedRevision,locale}={}) {
     return transaction(db,()=>{
-      if(ownerAuthority(owner)?.account?.id!==owner)throw problem('unauthenticated',401);
+      if(ownerAuthority(owner,{locale})?.account?.id!==owner)throw problem('unauthenticated',401);
       companyId=feed.company(companyId).id; // Source aliases resolve to the canonical catalogue identity.
       const previous=followRows(owner).find(r=>r.canonicalId===companyId);
       if(automatic&&previous)return follows(owner);
@@ -98,7 +98,7 @@ export function createReadingPreferencesService({db,feed,ownerAuthority,now=Date
       if(typeof ctx.body.followed!=='boolean')throw problem('invalid_input');
       let id;try{id=decodeURIComponent(ctx.path.split('/')[2]);}catch{throw problem('invalid_input');}
       if(!id||id.length>128)throw problem('invalid_input');
-      return {status:200,body:updateFollow(owner,id,ctx.body.followed,{expectedRevision:ctx.body.expectedRevision})};
+      return {status:200,body:updateFollow(owner,id,ctx.body.followed,{expectedRevision:ctx.body.expectedRevision,locale:ctx.interfaceLocale})};
     }
     if(ctx.method==='GET'&&ctx.path==='/preferences')return {status:200,body:preferences(owner,browserLanguages(ctx.url))};
     if(ctx.method==='PATCH'&&ctx.path==='/preferences') {
@@ -119,7 +119,7 @@ export function createReadingPreferencesService({db,feed,ownerAuthority,now=Date
       for(const field of ['companyInclude','companyExclude'])if(configuration.filters[field])configuration.filters[field]=[...new Set(configuration.filters[field].map(id=>feed.canonicalCompanyId?.(id)??id))];
       return applySearchOptions(configuration,options(owner,search.id),followedIds(owner));
     },
-    followAcceptedCompany:(owner,id)=>updateFollow(owner,id,true,{automatic:true}),
+    followAcceptedCompany:(owner,id,locale)=>updateFollow(owner,id,true,{automatic:true,locale}),
     setFollowInvalidator(fn){if(typeof fn!=='function')throw new TypeError('Search invalidator required.');invalidateFollowedSearches=fn;},
     deleteSearchData(owner,id){db.prepare('DELETE FROM justup_search_options WHERE owner_id=? AND search_id=?').run(owner,id);},
     transferSearches(from,to){db.prepare('UPDATE justup_search_options SET owner_id=? WHERE owner_id=?').run(to,from);},deleteAccountData};
