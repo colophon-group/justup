@@ -30,11 +30,62 @@ test('single global lease, heartbeat and recovery reject stale completion', (t) 
   assert.equal(tasks.complete(one.id, next.leaseToken, { status: 'warning', output: { reason: 'unknown' } }), true);
 });
 test('bounded attempts terminal failure and task ceilings are durable', (t) => {
-  const { tasks, advance } = setup(t, { maxAttempts: 1, maxTasks: 1 }); const one = tasks.enqueue(input());
+  const { tasks, advance } = setup(t, { maxAttempts: 1, maxActiveTasks: 1, maxStoredTasks: 1 }); const one = tasks.enqueue(input());
   tasks.claim({ workerId: 'worker', leaseMs: 1000 }); advance(1001); tasks.recover();
   assert.equal(tasks.get('a', one.id).status, 'failed'); assert.equal(tasks.claim({ workerId: 'worker' }), null);
   assert.throws(() => tasks.enqueue(input({ requestKey: 'two' })), { status: 429 });
   assert.throws(() => tasks.enqueue(input({ payload: { text: 'x'.repeat(16384) } })), { code: 'invalid_input' });
+});
+test('completed work leaves active capacity while exact retries survive a SQLite restart', (t) => {
+  const directory=mkdtempSync(join(tmpdir(),'task-history-')),path=join(directory,'queue.sqlite');
+  let store=openStore(path),at=100_000;
+  t.after(()=>{store.close();rmSync(directory,{recursive:true,force:true});});
+  let tasks=createTasks({db:store.db,now:()=>at}),first;
+  for(let i=0;i<96;i++){
+    const task=tasks.enqueue(input({requestKey:`work:${i}`}));
+    if(i===0)first=task;
+    const lease=tasks.claim({workerId:'worker'});
+    assert.equal(lease.id,task.id);
+    assert.equal(tasks.complete(task.id,lease.leaseToken,{status:'succeeded',output:{done:i}}),true);
+  }
+  assert.equal(store.db.prepare("SELECT count(*) n FROM justup_tasks WHERE status IN ('pending','running')").get().n,0);
+  const next=tasks.enqueue(input({requestKey:'work:96'}));
+  assert.equal(next.status,'pending');
+  const wire=tasks.enqueue(input({ownerId:'__hiring_wire__',kind:'hiring_wire',requestKey:'edition:next'}));
+  assert.equal(wire.status,'pending');
+  assert.equal(tasks.enqueue(input({requestKey:'work:0'})).id,first.id);
+  store.close();store=openStore(path);tasks=createTasks({db:store.db,now:()=>at});
+  assert.equal(tasks.enqueue(input({requestKey:'work:0'})).id,first.id);
+  assert.equal(tasks.get('a',next.id).status,'pending');
+  assert.equal(tasks.get('__hiring_wire__',wire.id).status,'pending');
+  const foreground=tasks.claim({workerId:'worker'});
+  assert.equal(foreground.id,next.id);
+  assert.equal(tasks.complete(next.id,foreground.leaseToken,{status:'succeeded'}),true);
+  assert.equal(tasks.claim({workerId:'worker'}).id,wire.id);
+});
+test('active and stored ceilings keep recent receipts and recover after retention', (t) => {
+  const {tasks,db,advance}=setup(t,{maxActiveTasks:1,maxStoredTasks:3,retentionMs:1000});
+  const finish=key=>{
+    const task=tasks.enqueue(input({requestKey:key})),lease=tasks.claim({workerId:'worker'});
+    assert.equal(tasks.complete(task.id,lease.leaseToken,{status:'succeeded'}),true);
+    return task;
+  };
+  const pending=tasks.enqueue(input({requestKey:'first'}));
+  assert.throws(()=>tasks.enqueue(input({requestKey:'second'})),{code:'task_limit'});
+  const lease=tasks.claim({workerId:'worker'});
+  assert.equal(tasks.complete(pending.id,lease.leaseToken,{status:'succeeded'}),true);
+  const second=finish('second'),third=finish('third');
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_tasks').get().n,3);
+  assert.throws(()=>tasks.enqueue(input({requestKey:'fourth'})),{code:'task_limit'});
+  assert.equal(tasks.enqueue(input({requestKey:'first'})).id,pending.id);
+  assert.throws(()=>tasks.enqueue(input({requestKey:'first',payload:{query:'Other'}})),{code:'idempotency_conflict'});
+  assert.equal(tasks.get('a',second.id).status,'succeeded');
+  assert.equal(tasks.get('a',third.id).status,'succeeded');
+  advance(1001);
+  const fourth=tasks.enqueue(input({requestKey:'fourth'}));
+  assert.equal(fourth.status,'pending');
+  assert.equal(tasks.get('a',pending.id),null);
+  assert.equal(db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
 });
 test('deletion and cancellation invalidate running work and public view omits private material', (t) => {
   const { tasks, db } = setup(t); const one = tasks.enqueue(input()); const lease = tasks.claim({ workerId: 'worker' });
