@@ -40,7 +40,7 @@ test('public documents have real shared HTML, canonical localized URLs, no priva
     assert.ok(html.includes(`rel="canonical" href="${origin}${path}"`));
     if (path.startsWith('/de')) { assert.match(html, /<html lang="de">/); assert.match(html, /Stellenbericht/); }
   }
-  assert.equal(calls, 3);
+  assert.equal(calls, 5);
 });
 test('status codes distinguish missing companies from dependency failures and malformed/oversized responses', async () => {
   for (const [upstream, status] of [[() => json({}, 404), 404], [() => json({}, 503), 503], [() => json({ id: 'wrong', name: 'Wrong' }), 503], [() => new Response('<script>private</script>', { headers: { 'content-type': 'text/html' } }), 503], [() => json({ ...company, description: 'x'.repeat(400 * 1024) }), 503]]) {
@@ -101,7 +101,7 @@ test('indexable company HTML excludes unapproved legacy links and browser-local 
   assert.equal(result.status, 200); assert.equal(result.headers.get('X-Robots-Tag'), null);
   const html = await result.text();
   assert.doesNotMatch(html, /127\.0\.0\.1|internal\.lan|192\.168\.0\.1|boards\.greenhouse\.io/);
-  assert.match(html, /Verified career-page links are unavailable/);
+  assert.doesNotMatch(html, /Verified career-page links are unavailable|No successful check reported/);
 });
 test('production public filtered catalogue stays noindex and follow without weakening preview or API privacy', async () => {
   const handle = createPublicHandler(() => json({ items: [company], nextCursor: null }));
@@ -111,4 +111,19 @@ test('production public filtered catalogue stays noindex and follow without weak
   assert.match(preview.headers.get('X-Robots-Tag'), /noindex, nofollow/);
   const api = await createPublicHandler(() => new Response('{}', { headers: { 'Content-Type': 'application/json', 'X-Robots-Tag': 'noindex, follow' } }))(request('/api/v1/companies'), environment('production'));
   assert.match(api.headers.get('X-Robots-Tag'), /noindex, nofollow/);
+});
+
+test('company documents hydrate only approved report links and preserve identity when report evidence fails', async () => {
+  const report = { companyId: company.id, asOf: '2026-11-01T12:00:00Z', sourceChecks: { state: 'available', items: [{
+    publicLink: { url: 'https://careers.example.com/jobs', status: 'approved', provenance: 'employer-careers', approvedAt: '2026-10-01T00:00:00Z' },
+    trackedSince: '2026-10-01T00:00:00Z', lastVerifiedAt: '2026-10-26T00:00:00Z', privateScopeId: 'PRIVATE_SCOPE_CANARY',
+  }] } };
+  for (const good of [true, false]) {
+    const handle = createPublicHandler(target => json(new URL(target).pathname.endsWith('/report') ? good ? report : { ...report, companyId: 'wrong' } : company));
+    const response = await handle(request('/companies/public-corp'), environment());
+    assert.equal(response.status, 200); const html = await response.text();
+    assert.match(html, /Public &amp; Co/); assert.doesNotMatch(html, /PRIVATE_SCOPE_CANARY/);
+    if (good) { assert.match(html, /href="https:\/\/careers.example.com\/jobs"/); assert.match(html, /Last checked/); }
+    else assert.doesNotMatch(html, /careers.example.com/);
+  }
 });

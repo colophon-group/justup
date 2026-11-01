@@ -114,6 +114,19 @@ export interface Company {
   hiringRoles?: { name: string; count?: number }[];
   reportedSalaries?: { role?: string; text: string }[];
 }
+// Narrow public projection of the report; unknown analytic sections stay out of hydration.
+export interface CompanySourceReport {
+  companyId: string;
+  asOf: string;
+  sourceChecks: {
+    state: "available" | "partial" | "unavailable";
+    items: {
+      publicLink: { url: string; status: "approved"; provenance: "employer-careers" | "ats-careers" | "reviewed-redirect"; approvedAt: string } | null;
+      trackedSince: string;
+      lastVerifiedAt: string | null;
+    }[];
+  };
+}
 export interface CompanyCataloguePage {
   items: Company[];
   nextCursor: string | null;

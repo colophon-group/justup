@@ -2,6 +2,7 @@ import { parseInterfaceLocale, type InterfaceLocale } from "../i18n/locales.ts";
 // Same-origin transport owns credentials, timeouts and response validation, not UI state.
 import {
   decodeCompany,
+  decodeCompanySourceReport,
   decodeCompanyCataloguePage,
   decodeCompanyRequest,
   decodeHiringWire,
@@ -365,6 +366,9 @@ export class ApiClient {
       },
       { signal },
     );
+  }
+  getCompanySourceReport(companyId: string, signal?: AbortSignal) {
+    return this.request(`/companies/${id(companyId)}/report`, value => decodeCompanySourceReport(value, companyId), { signal });
   }
   createCompanyRequest(
     body: {
