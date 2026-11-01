@@ -11,7 +11,7 @@ export function TypingExample({
   const { locale } = useInterfaceLocale();
   const searchExamples = interfaceExamples[locale];
   const [state, setState] = useState({ index: 0, position: 0, erasing: false });
-  const [visible, setVisible] = useState(() => typeof document === "undefined" || !document.hidden);
+  const [visible, setVisible] = useState(true);
   useEffect(() => { setState({ index: 0, position: 0, erasing: false }); }, [locale]);
   const prompt = searchExamples[state.index] ?? searchExamples[0] ?? "";
   useEffect(() => {

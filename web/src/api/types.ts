@@ -98,6 +98,11 @@ export interface Company {
   hiringRoles?: { name: string; count?: number }[];
   reportedSalaries?: { role?: string; text: string }[];
 }
+export interface CompanyCataloguePage {
+  items: Company[];
+  nextCursor: string | null;
+  coverage?: Coverage;
+}
 export interface Job {
   id: string;
   title: string;

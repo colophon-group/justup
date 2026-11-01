@@ -1,3 +1,4 @@
+import { pageHref } from '../../app/useRoute.ts';
 import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 // Reports render only supplied company facts and evidence, never fabricated analytics.
 import { useEffect, useState } from 'react';
@@ -6,23 +7,30 @@ import type { Company } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
 import { coverageLabel, reportDate, safeSourceUrl } from './presentation';
 
-export interface CompanyPageProps { client: ApiClient; id: string }
-export function CompanyPage({ client, id }: CompanyPageProps) {
+export interface CompanyPageProps { client: ApiClient; id: string; initialCompany?: Company | undefined }
+export function CompanyPage({ client, id, initialCompany }: CompanyPageProps) {
   const { t, locale, notice } = useInterfaceLocale();
-  const [company, setCompany] = useState<Company | null>(null);
+  const [company, setCompany] = useState<Company | null>(initialCompany ?? null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   useEffect(() => {
+    if (initialCompany?.id === id && retry === 0) return;
     const controller = new AbortController(); setCompany(null); setError('');
     client.getCompany(id, controller.signal).then(result => { if (!controller.signal.aborted) setCompany(result); }).catch(failure => { if (!isAbortError(failure) && !controller.signal.aborted) setError(errorText(failure)); });
     return () => controller.abort();
-  }, [client, id, retry]);
-  if (error) return <section id="company-page" className="page"><a className="back" href="#jobs">{t("← Back to search")}</a><h1>{t("Report unavailable.")}</h1><p role="status">{notice(error)}</p><button className="button outline" onClick={() => setRetry(value => value + 1)}>{t("Try again")}</button></section>;
+  }, [client, id, retry, initialCompany]);
+  useEffect(() => {
+    if (!company) return;
+    document.title = `${company.name} — ${t('Hiring report')} — Justup`;
+    const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
+    if (description) description.content = `${company.name}: ${company.description || t('Hiring report')}`.slice(0, 300);
+  }, [company, t]);
+  if (error) return <section id="company-page" className="page"><a className="back" href={pageHref("jobs", locale)}>{t("← Back to search")}</a><h1>{t("Report unavailable.")}</h1><p role="status">{notice(error)}</p><button className="button outline" onClick={() => setRetry(value => value + 1)}>{t("Try again")}</button></section>;
   if (!company) return <section id="company-page" className="page"><p role="status">{t("Opening the company report…")}</p></section>;
   const history = company.hiringHistory || [];
   const maximum = Math.max(1, ...history.map(point => point.count));
   return <section id="company-page" className="page">
-    <a className="back" href="#jobs">{t("← Back to search")}</a>
+    <a className="back" href={pageHref("jobs", locale)}>{t("← Back to search")}</a>
     <div className="section-heading"><h1>{company.name}</h1><span className="eyebrow">{t("Hiring report")}</span></div>
     <div className="detail-actions report-subtitle"><CompanyMark company={company} /></div>
     {company.description ? <p className="detail-description">{company.description}</p> : null}

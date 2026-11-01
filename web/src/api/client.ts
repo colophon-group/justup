@@ -2,7 +2,7 @@ import { parseInterfaceLocale, type InterfaceLocale } from "../i18n/locales.ts";
 // Same-origin transport owns credentials, timeouts and response validation, not UI state.
 import {
   decodeCompany,
-  decodeCompanyList,
+  decodeCompanyCataloguePage,
   decodeCompanyRequest,
   decodeRequestList,
   decodeRequestSubmission,
@@ -271,12 +271,10 @@ export class ApiClient {
       { signal },
     );
   }
-  getCompanies(query: string, signal?: AbortSignal) {
-    return this.request(
-      "/companies?" + new URLSearchParams({ q: query }),
-      decodeCompanyList,
-      { signal },
-    );
+  getCompanyCataloguePage(query: string, cursor?: string | null, signal?: AbortSignal) {
+    const params = new URLSearchParams({ q: query, limit: '20' });
+    if (cursor) params.set('cursor', cursor);
+    return this.request('/companies?' + params, decodeCompanyCataloguePage, { signal });
   }
   getCompany(companyId: string, signal?: AbortSignal) {
     return this.request(

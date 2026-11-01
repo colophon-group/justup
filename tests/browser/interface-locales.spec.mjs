@@ -23,7 +23,7 @@ for (const [locale, positions, prompt] of localized) {
     expect(await page.locator('#settings-dialog').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     await page.screenshot({ path:`/tmp/justup-interface-${locale}-375.png`, fullPage:true });
     await page.locator('#settings-dialog .icon-close').click();
-    for (const route of ['#companies', '#company/library', '#request']) {
+    for (const route of ['companies', 'companies/library', '#request']) {
       await page.goto('/' + route);
       await expect(page.locator('main .page:visible')).toHaveCount(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -66,7 +66,8 @@ test('account locale saves on the server without reinterpreting or rewriting the
   await expect(page.locator('#query')).toHaveValue('My exact unsent request: accueil à Paris, no weekends');
   await expect(page.getByRole('tab')).toHaveText('Library desk');
   expect(calls.filter(call => /^(POST|PATCH) \/search/.test(call.key))).toEqual([]);
-  expect(calls.every(call => call.headers['x-justup-locale'] === undefined)).toBe(true);
+  expect(calls.every(call => call.headers['x-justup-locale'] === undefined || call.headers['x-justup-locale'] === 'it')).toBe(true);
+  expect(calls.some(call => call.headers['x-justup-locale'] === 'it')).toBe(true);
   expect((await page.context().cookies()).find(cookie => cookie.name === 'justup_interface_locale')).toBeUndefined();
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('lang','it');
@@ -85,7 +86,8 @@ test('visitor locale cookie persists only a manual override and browser/default 
   await expect(page.locator('html')).toHaveAttribute('lang','en');
   expect((await page.context().cookies()).find(value => value.name==='justup_interface_locale')).toBeUndefined();
   expect(calls.filter(call => call.key.includes('preferences') || call.key.startsWith('POST'))).toEqual([]);
-  expect(calls.every(call => call.headers['x-justup-locale'] === undefined)).toBe(true);
+  expect(calls.every(call => call.headers['x-justup-locale'] === undefined || call.headers['x-justup-locale'] === 'fr')).toBe(true);
+  expect(calls.some(call => call.headers['x-justup-locale'] === 'fr')).toBe(true);
 });
 test('saved account override outranks visitor choice and null follows ordered browser settings', async ({page}) => {
   await page.context().addCookies([{name:'justup_interface_locale',value:'es',url:'http://127.0.0.1:4203'}]);

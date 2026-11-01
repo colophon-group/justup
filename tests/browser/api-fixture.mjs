@@ -24,6 +24,7 @@ export async function mockApi(page, handlers = {}) {
       else if (key === 'GET /companies/library') result = company;
       else result = { status: 503, body: { error: { code: 'unavailable', message: 'Endpoint unavailable in this test.' } } };
     }
+    if (key === 'GET /companies' && Array.isArray((result.body || result).items)) { const body = result.body || result; if (!Object.hasOwn(body, 'nextCursor')) { if (result.body) result = { ...result, body: { ...body, nextCursor: null } }; else result = { ...result, nextCursor: null }; } }
     if (result.abort) { await route.abort(); return; }
     await route.fulfill({ status: result.httpStatus || (typeof result.status === 'number' ? result.status : 200), contentType: 'application/json', body: JSON.stringify(result.body || result) });
   });

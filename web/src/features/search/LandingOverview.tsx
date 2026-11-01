@@ -1,3 +1,4 @@
+import { pageHref } from '../../app/useRoute.ts';
 import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 const features = [
   [
@@ -18,7 +19,7 @@ const features = [
   ],
 ] as const;
 export function LandingOverview() {
-  const { t } = useInterfaceLocale();
+  const { t, locale } = useInterfaceLocale();
   return (
     <section
       className="landing-overview"
@@ -39,7 +40,7 @@ export function LandingOverview() {
               <h3>{t(title)}</h3>
               <p>{t(description)}</p>
               {index === 2 ? (
-                <a className="coverage-proof" href="#companies">
+                <a className="coverage-proof" href={pageHref("companies", locale)}>
                   <span className="coverage-label">{t("Browse included companies")}</span>
                   <span aria-hidden="true">↗</span>
                 </a>

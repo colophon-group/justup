@@ -176,7 +176,7 @@ for (const surface of ['positions', 'companies']) {
     const items = Array.from({ length: 10 }, (_, index) => ({ ...company, id: `company-${index}`, name: `Library ${index}` }));
     await mockApi(page, { ...saved, 'GET /companies': { items }, 'GET /searches/search-1/results': completed(Array.from({ length: 10 }, (_, index) => job(index))) });
     const isJobs = surface === 'positions', rows = isJobs ? '#feed [data-job]' : '#company-list [data-company]', tail = isJobs ? '#feed-tail' : '#company-tail';
-    await page.goto(isJobs ? '/' : '/#companies');
+    await page.goto(isJobs ? '/' : '/companies');
     await expect(page.locator(isJobs ? '#feed-status' : '#company-scroll-status')).toContainText(isJobs ? 'Still checking' : 'More from the directory');
     await expect.poll(() => page.locator(tail).evaluate(element => element.getBoundingClientRect().top)).toBeGreaterThan(420);
     await page.waitForTimeout(600); await expect(page.locator(rows)).toHaveCount(0);
@@ -190,7 +190,7 @@ test('initial fills measure wrapped row geometry instead of assuming a fixed row
   const tallTitle = 'Long role title with detailed responsibilities '.repeat(18);
   const tallDescription = 'Imported company description with several lines of public evidence. '.repeat(25);
   await mockApi(page, { ...saved, 'GET /searches/search-1/results': completed(Array.from({ length: 12 }, (_, index) => ({ ...job(index), title: tallTitle + index }))), 'GET /companies': { items: Array.from({ length: 12 }, (_, index) => ({ ...company, id: `company-${index}`, description: tallDescription })) } });
-  for (const [route, rows] of [['/', '#feed [data-job]'], ['/#companies', '#company-list [data-company]']]) {
+  for (const [route, rows] of [['/', '#feed [data-job]'], ['/companies', '#company-list [data-company]']]) {
     await page.goto(route); await expect.poll(() => page.locator(rows).count()).toBeGreaterThan(0); await page.waitForTimeout(550);
     const tops = await page.locator(rows).evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top));
     expect(tops.every(top => top < 1100)).toBe(true); expect(tops.length).toBeLessThan(12);
@@ -228,7 +228,7 @@ test('reported salary ranges retain their currency, bounds and disclosed period 
 });
 
 test('company-request submission capability does not advertise an unsupported requested catalogue filter', async ({ page }) => {
-  await mockApi(page); await page.goto('/#companies'); await expect(page.locator('#companies-page')).toBeVisible(); await expect(page.locator('#company-list [data-company]')).toHaveCount(1); await expect(page.locator('#company-scroll-status')).toContainText('That’s the directory so far.');
+  await mockApi(page); await page.goto('/companies'); await expect(page.locator('#companies-page')).toBeVisible(); await expect(page.locator('#company-list [data-company]')).toHaveCount(1); await expect(page.locator('#company-scroll-status')).toContainText('That’s the directory so far.');
   await expect(page.locator('[data-status=requested]')).toBeHidden(); await expect(page.getByRole('link', { name: 'Request a company +' })).toBeVisible(); await capture(page, 'desktop-companies');
   await page.getByRole('link', { name: 'Request a company +' }).click(); await expect(page.getByRole('button', { name: 'Find company' })).toBeEnabled();
 });
@@ -292,5 +292,5 @@ test('skip navigation focuses content and search tabs support keyboard changes w
   await page.locator('#query').fill('Unsubmitted garden draft'); await garden.focus(); await page.keyboard.press('Home'); await expect(library).toBeFocused();
   await page.keyboard.press('End'); await expect(garden).toBeFocused(); await expect(page.locator('#query')).toHaveValue('Unsubmitted garden draft');
   expect(calls.some(call => call.key === 'POST /searches' || call.key.startsWith('PATCH /searches/'))).toBe(false);
-  await page.getByRole('link', { name: 'Companies', exact: true }).click(); await page.getByRole('link', { name: 'Skip to content' }).focus(); await page.keyboard.press('Enter'); await expect(page.locator('#main')).toBeFocused(); await expect(page).toHaveURL(/#companies$/);
+  await page.getByRole('link', { name: 'Companies', exact: true }).click(); await page.getByRole('link', { name: 'Skip to content' }).focus(); await page.keyboard.press('Enter'); await expect(page.locator('#main')).toBeFocused(); await expect(page).toHaveURL(/companies$/);
 });

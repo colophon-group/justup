@@ -11,11 +11,14 @@ import { CompaniesPage } from "../features/companies/CompaniesPage.tsx";
 import { CompanyPage } from "../features/companies/CompanyPage.tsx";
 import { CompanyRequestPage } from "../features/companies/CompanyRequestPage.tsx";
 import { SearchWorkspace } from "../features/search/SearchWorkspace.tsx";
-import { useRoute } from "./useRoute.ts";
+import { useRoute, pageHref, navigate } from "./useRoute.ts";
+import type { PublicBootstrap } from "../public/bootstrap.ts";
 import { coverageDescription } from "../shared/coverage.ts";
 
-export function App() {
+export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap | undefined }) {
   const { t, locale, explicitRequestLocale, notice: localizeNotice } = useInterfaceLocale();
+  const [interactive, setInteractive] = useState(!initialPublicPage);
+  useEffect(() => setInteractive(true), []);
   const expiryHandler = useRef<() => void>(() => {});
   const [client] = useState(
     () => new ApiClient({ onSessionExpired: () => expiryHandler.current() }),
@@ -30,20 +33,20 @@ export function App() {
   const [companyPrefill, setCompanyPrefill] =
     useState<CompanyRequestPrefill | null>(null);
   const consumePrefill = useCallback(() => setCompanyPrefill(null), []);
-  const requestCompany = useCallback((prefill: CompanyRequestPrefill) => {
-    setCompanyPrefill(prefill);
-    location.hash = "request";
-  }, []);
+
   const [dialog, setDialog] = useState<AccountDialog>(null),
     [signInReason, setSignInReason] = useState("Sign in to save your edition.");
   const [reducedMotion, setReducedMotion] = useState(
-      () => matchMedia("(prefers-reduced-motion: reduce)").matches,
+      () => false,
     ),
     [backToTop, setBackToTop] = useState(false);
   const sessionRef = useRef<Session | null>(null),
     sessionRequest = useRef<AbortController | null>(null),
     requestGeneration = useRef(0);
-  const route = useRoute();
+  const route = useRoute(initialPublicPage?.route);
+  const requestCompany = useCallback((prefill: CompanyRequestPrefill) => { setCompanyPrefill(prefill); navigate(pageHref("request", locale)); }, [locale]);
+  const publicPage = initialPublicPage?.route.locale === route.locale && initialPublicPage.route.page === route.page && (route.page !== "company" || (initialPublicPage.route.page === "company" && initialPublicPage.route.id === route.id)) ? initialPublicPage : undefined;
+  const [editionDate] = useState(() => initialPublicPage?.renderedAt ?? new Date().toISOString());
   const topLink = useRef<HTMLAnchorElement>(null),
     mainRef = useRef<HTMLElement>(null);
   const openSignIn = useCallback((reason = "Sign in to save your edition.") => {
@@ -98,9 +101,9 @@ export function App() {
   }, [client]);
   const signedOut = useCallback(async () => {
     clearPrivate();
-    location.hash = "jobs";
+    navigate(pageHref("jobs", route.locale));
     await refreshSession();
-  }, [clearPrivate, refreshSession]);
+  }, [clearPrivate, refreshSession, route.locale]);
   useEffect(() => {
     void refreshSession();
     return () => {
@@ -111,6 +114,7 @@ export function App() {
   useEffect(() => {
     const media = matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReducedMotion(media.matches);
+    update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
@@ -125,8 +129,14 @@ export function App() {
     return () => window.removeEventListener("scroll", update);
   }, []);
   useEffect(() => {
-    document.title = `Justup — ${route.page === "companies" ? t("Company catalogue") : route.page === "company" ? t("Hiring report") : route.page === "request" ? t("Request a company") : t("Fresh work. Clear sources.")}`;
-  }, [route.page, t]);
+    let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    if (!canonical) { canonical = document.createElement('link'); canonical.rel = 'canonical'; document.head.append(canonical); }
+    canonical.href = new URL(route.page === 'invalid' ? location.pathname : route.page === 'company' ? pageHref('company', route.locale, route.id) : route.page === 'companies' ? pageHref('companies', route.locale) : pageHref('jobs', route.locale).split('#')[0]!, location.origin).href;
+    if (route.page === 'invalid' || publicPage?.outcome === 'not-found') { document.title = `${t('Page not found')} — Justup`; return; }
+    if (publicPage?.outcome === 'unavailable') { document.title = `${t('Coverage temporarily unavailable')} — Justup`; return; }
+    if (route.page === "company") return;
+    document.title = `Justup — ${route.page === "companies" ? t("Company catalogue") : route.page === "request" ? t("Request a company") : t("Fresh work. Clear sources.")}`;
+  }, [route, publicPage, t]);
   const interfaceLanguage = useAccountLocale(client, session);
   const previousLocale = useRef({ locale, explicitRequestLocale });
   useEffect(() => {
@@ -134,7 +144,7 @@ export function App() {
     previousLocale.current = { locale, explicitRequestLocale };
     void refreshSession();
   }, [locale, explicitRequestLocale, refreshSession]);
-  const coverage = session?.coverage;
+  const coverage = session?.coverage ?? publicPage?.coverage;
   return (
     <>
       <a
@@ -154,19 +164,20 @@ export function App() {
           <nav aria-label={t("Main navigation")}>
             <a
               ref={topLink}
-              href="#jobs"
+              href={pageHref("jobs", locale)}
               aria-current={route.page === "jobs" ? "page" : undefined}
             >{t("Positions")}</a>
             <a
-              href="#companies"
+              href={pageHref("companies", locale)}
               aria-current={route.page === "companies" ? "page" : undefined}
             >{t("Companies")}</a>
           </nav>
           <span id="edition-date">
-            {new Date().toLocaleDateString(locale, {
+            {new Date(editionDate).toLocaleDateString(locale, {
               weekday: "short",
               day: "numeric",
               month: "long",
+              timeZone: "UTC",
             })}
           </span>
           {session?.user ? null : (
@@ -199,7 +210,7 @@ export function App() {
           </button>
         </header>
         <div className="masthead">
-          <a className="brand" href="#jobs" aria-label={t("Justup home")}>
+          <a className="brand" href={pageHref("jobs", locale)} aria-label={t("Justup home")}>
             JUST<span>UP.</span>
           </a>
           <p className="motto">{t("Fresh work.")}<br />{t("Clear sources.")}</p>
@@ -230,7 +241,7 @@ export function App() {
               >{t("Reconnect")}</button>
             ) : null}
           </div>
-          <SearchWorkspace
+          {interactive || route.page === "jobs" ? <SearchWorkspace
             key={`search-${epoch}`}
             client={client}
             session={session}
@@ -240,21 +251,23 @@ export function App() {
             dialogOpen={dialog !== null}
             onCompanyRequest={requestCompany}
             onAccount={() => setDialog("settings")}
-          />
-          <CompaniesPage
+          /> : null}
+          {interactive || route.page === "companies" ? <CompaniesPage
             key={`companies-${epoch}`}
             client={client}
-            active={route.page === "companies"}
-            connected={!!session}
-          />
-          {route.page === "company" ? (
+            active={route.page === "companies" && publicPage?.outcome !== "unavailable"}
+            initialCompanies={publicPage?.companies}
+            initialCatalogue={publicPage?.catalogue}
+          /> : null}
+          {route.page === "company" && publicPage?.outcome !== "unavailable" && publicPage?.outcome !== "not-found" ? (
             <CompanyPage
               key={`${epoch}:${route.id}`}
               client={client}
               id={route.id}
+              initialCompany={initialPublicPage?.company?.id === route.id ? initialPublicPage.company : undefined}
             />
           ) : null}
-          <CompanyRequestPage
+          {interactive ? <CompanyRequestPage
             key={`request-${epoch}`}
             client={client}
             session={session}
@@ -263,11 +276,12 @@ export function App() {
             accountEpoch={epoch}
             prefill={companyPrefill}
             onPrefillConsumed={consumePrefill}
-          />
-          {route.page === "invalid" ? (
+          /> : null}
+          {publicPage?.outcome === "unavailable" ? <section className="page"><h1>{t('Coverage temporarily unavailable')}</h1><p>{t('The company directory could not be verified. Please try again shortly.')}</p><a className="button outline" href={pageHref(route.page === "company" ? "company" : "companies", locale, route.page === "company" ? route.id : undefined)}>{t('Try again')}</a><a href={pageHref("jobs", locale)}>{t("← Back to search")}</a></section> : null}
+          {route.page === "invalid" || publicPage?.outcome === "not-found" ? (
             <section>
               <h1>{t("Page not found.")}</h1>
-              <a className="button dark" href="#jobs">{t("Back to search ↗")}</a>
+              <a className="button dark" href={pageHref("jobs", locale)}>{t("Back to search ↗")}</a>
             </section>
           ) : null}
         </main>
@@ -281,7 +295,7 @@ export function App() {
           </nav>
         </footer>
       </div>
-      <AccountControls
+      {interactive ? <AccountControls
         key={`account-${epoch}`}
         client={client}
         session={session}
@@ -293,7 +307,7 @@ export function App() {
         reducedMotion={reducedMotion}
         onReducedMotionChange={setReducedMotion}
         signInReason={signInReason}
-      />
+      /> : null}
       <button
         className="back-to-top"
         id="back-to-top"

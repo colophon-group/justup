@@ -14,5 +14,5 @@ export function safeSourceUrl(value: string | undefined): string | null {
 }
 export function reportDate(value: string, locale: InterfaceLocale = 'en'): string {
   const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', year: 'numeric' }).format(date) : translate(locale, 'Not reported');
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(date) : translate(locale, 'Not reported');
 }

@@ -2,6 +2,7 @@ import { parseInterfaceLocale } from "../i18n/locales.ts";
 // Validate public response shapes at the network boundary; ignore unrequested private fields.
 import type {
   Company,
+  CompanyCataloguePage,
   CompanyRequest,
   CompanyRequestPrefill,
   Coverage,
@@ -497,3 +498,14 @@ export const decodeCompanyList = (value: unknown): Company[] =>
   list(record(value).items, decodeCompany, "company list");
 export const decodeRequestList = (value: unknown): CompanyRequest[] =>
   list(record(value).items, decodeCompanyRequest, "request list");
+
+// Public catalogue pages have bounded source-owned continuation, never a position total.
+export function decodeCompanyCataloguePage(value: unknown): CompanyCataloguePage {
+  const o = record(value, 'company catalogue');
+  if (!Array.isArray(o.items) || o.items.length > 50) return fail('bounded company catalogue');
+  const items = list(o.items, decodeCompany, 'company catalogue');
+  if (new Set(items.map(item => item.id)).size !== items.length) return fail('unique company catalogue');
+  const nextCursor = o.nextCursor === null ? null : text(o.nextCursor, 'company catalogue continuation');
+  if (nextCursor && (nextCursor.length > 4096 || !items.length)) return fail('bounded company catalogue continuation');
+  return { items, nextCursor, ...(o.coverage == null ? {} : { coverage: decodeCoverage(o.coverage) }) };
+}

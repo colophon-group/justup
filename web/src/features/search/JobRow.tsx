@@ -1,3 +1,4 @@
+import { pageHref } from '../../app/useRoute.ts';
 import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 import { useEffect, useRef } from "react";
 import type { Job } from "../../api/types.ts";
@@ -96,7 +97,7 @@ export function JobRow({
         <div className="job-employer">
           <a
             className="job-company"
-            href={`#company/${encodeURIComponent(job.company.id)}`}
+            href={pageHref("company", locale, job.company.id)}
           >
             <CompanyMark company={job.company} />
             <span>{job.company.name}</span>
