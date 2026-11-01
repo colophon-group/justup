@@ -14,6 +14,7 @@ from unittest.mock import patch
 SPEC = importlib.util.spec_from_file_location('preview_feed', Path(__file__).with_name('preview-feed.py'))
 FEED = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FEED)
+REAL_BIND_CANDIDATE = FEED.bind_candidate_build
 BATCH_ID = '1' * 32
 SHA = 'a' * 64
 
@@ -124,6 +125,14 @@ class TransportTests(unittest.TestCase):
 
 
 class ImportSequenceTests(unittest.TestCase):
+    def test_child_stdout_is_capped_while_running(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(FEED.FeedStageError):
+                FEED.run_as_api([os.sys.executable, '-c', 'import sys; sys.stdout.write("x" * 1000000)'],
+                                dict(os.environ), root, 10, demote=lambda: None)
+            self.assertEqual(FEED.run_as_api([os.sys.executable, '-c', 'print("{\\\"ok\\\":true}")'],
+                                             dict(os.environ), root, 10, demote=lambda: None), {'ok': True})
+
     def test_wrong_independent_digest_blocks_import_authorization(self):
         with patch.object(FEED, 'batch_files', return_value=(Path('/safe'), Path('/safe/manifest.json'), {}, SHA)), \
                 patch.object(FEED, 'active_release') as release, \
@@ -165,6 +174,8 @@ class ImportSequenceTests(unittest.TestCase):
         patches = [
             patch.object(FEED, 'run_as_api', side_effect=run),
             patch.object(FEED, 'read_candidate', side_effect=lambda *_: events.append('validated')),
+            patch.object(FEED, 'candidate_marker', return_value={'bound': True} if candidate_exists else None),
+            patch.object(FEED, 'bind_candidate_build', side_effect=lambda *_: events.append('bound')),
             patch.object(FEED, 'node_import_environment', return_value={}),
             patch.object(FEED, 'latest_import_matches', side_effect=lambda *_: import_states.pop(0)),
             patch.object(FEED, 'promote_candidate', side_effect=lambda *_: events.append('promoted')),
@@ -180,19 +191,30 @@ class ImportSequenceTests(unittest.TestCase):
         args = self._case(False)
         result = FEED.consume_batch(*args[:-1], max_jobs=500)
         self.assertEqual(result['status'], 'staged_for_catchup')
-        self.assertEqual(args[-1], ['adapter', 'validated', 'promoted', 'receipt'])
+        self.assertEqual(args[-1], ['adapter', 'validated', 'bound', 'promoted', 'receipt'])
 
     def test_failed_app_import_retains_candidate_without_ack_then_retries(self):
         args = self._case(True, adapter_failure=True)
         with self.assertRaises(FEED.FeedStageError):
             FEED.consume_batch(*args[:-1], max_jobs=500)
-        self.assertEqual(args[-1], ['adapter', 'validated', 'node'])
+        self.assertEqual(args[-1], ['adapter', 'validated', 'bound', 'node'])
 
     def test_crash_after_app_commit_reuses_candidate_and_checks_db_before_ack(self):
         args = self._case(True, candidate_exists=True, already_imported=True)
         result = FEED.consume_batch(*args[:-1], max_jobs=500)
         self.assertEqual(result['status'], 'imported')
-        self.assertEqual(args[-1], ['validated', 'promoted', 'receipt'])
+        self.assertEqual(args[-1], ['validated', 'bound', 'promoted', 'receipt'])
+
+    def test_release_switch_refuses_reuse_of_previous_build_candidate(self):
+        args = self._case(True, candidate_exists=True)
+        old = {'schemaVersion': 1, 'manifestSha256': SHA,
+               'candidateSha256': SHA, 'buildIdentity': 'b' * 64}
+        with patch.object(FEED, 'candidate_marker', return_value=old), \
+                patch.object(FEED, 'candidate_digest', return_value=SHA), \
+                patch.object(FEED, 'bind_candidate_build', wraps=REAL_BIND_CANDIDATE):
+            with self.assertRaises(FEED.FeedStageError):
+                FEED.consume_batch(*args[:-1], max_jobs=500)
+        self.assertEqual(args[-1], ['validated'])
 
 
 if __name__ == '__main__':

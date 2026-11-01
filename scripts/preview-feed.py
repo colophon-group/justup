@@ -17,6 +17,7 @@ from pathlib import Path
 import pwd
 import re
 import resource
+import selectors
 import shutil
 import signal
 import socket
@@ -26,6 +27,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 
 BASE = Path('/srv/justup_preview')
 INBOX = BASE / 'state/feed-inbox'
@@ -425,6 +427,49 @@ def root_receipt(batch_id, digest):
     return receipt
 
 
+def candidate_marker_path(batch_id):
+    return RECEIPTS / f'batch-{batch_id}-candidate.json'
+
+
+def candidate_digest(candidate):
+    owner = pwd.getpwnam('justup-preview-api').pw_uid
+    if checked_file(candidate, owner) > 64 * 1024 * 1024:
+        raise FeedStageError('Feed candidate exceeds its limit.')
+    with candidate.open('rb') as handle:
+        return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+
+def candidate_marker(batch_id):
+    path = candidate_marker_path(batch_id)
+    if not path.exists() and not path.is_symlink():
+        return None
+    if checked_file(path, 0) > 1024:
+        raise FeedStageError('Feed candidate build marker is unsafe.')
+    try:
+        value = json.loads(path.read_text(), object_pairs_hook=unique_object)
+    except (OSError, ValueError) as exc:
+        raise FeedStageError('Feed candidate build marker is invalid.') from exc
+    if (not isinstance(value, dict)
+            or set(value) != {'schemaVersion', 'manifestSha256', 'candidateSha256', 'buildIdentity'}
+            or value['schemaVersion'] != 1
+            or any(not isinstance(value[key], str) or not SHA.fullmatch(value[key])
+                   for key in ('manifestSha256', 'candidateSha256', 'buildIdentity'))):
+        raise FeedStageError('Feed candidate build marker is invalid.')
+    return value
+
+
+def bind_candidate_build(batch_id, candidate, source_digest, build_identity):
+    actual = candidate_digest(candidate)
+    expected = {'schemaVersion': 1, 'manifestSha256': source_digest,
+                'candidateSha256': actual, 'buildIdentity': build_identity}
+    marker = candidate_marker(batch_id)
+    if marker is None:
+        write_private(candidate_marker_path(batch_id), json.dumps(expected, separators=(',', ':')).encode())
+        fsync_dir(RECEIPTS)
+    elif marker != expected:
+        raise FeedStageError('Feed candidate was prepared by another release or changed after preparation.')
+
+
 def require_source_digest(actual, expected):
     if not isinstance(expected, str) or not SHA.fullmatch(expected) or not hmac.compare_digest(actual, expected):
         raise FeedStageError('Staged feed differs from the independently reviewed source digest.')
@@ -480,22 +525,53 @@ def active_release():
     return release, manifest
 
 
-def run_as_api(argv, environment, cwd, timeout):
-    user = pwd.getpwnam('justup-preview-api')
-    groups = os.getgrouplist(user.pw_name, user.pw_gid)
+def run_as_api(argv, environment, cwd, timeout, demote=None):
+    if demote is None:
+        user = pwd.getpwnam('justup-preview-api')
+        groups = os.getgrouplist(user.pw_name, user.pw_gid)
 
-    def demote():
-        os.setgroups(groups)
-        os.setgid(user.pw_gid)
-        os.setuid(user.pw_uid)
+        def demote():
+            os.setgroups(groups)
+            os.setgid(user.pw_gid)
+            os.setuid(user.pw_uid)
 
-    result = subprocess.run(argv, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                            timeout=timeout, preexec_fn=demote, check=False)
-    if result.returncode != 0 or len(result.stdout) > 8192:
+    child = subprocess.Popen(argv, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             preexec_fn=demote, start_new_session=True)
+    output = bytearray()
+    selector = selectors.DefaultSelector()
+    deadline = time.monotonic() + timeout
+    try:
+        selector.register(child.stdout, selectors.EVENT_READ)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise FeedStageError('Feed import timed out; the batch remains staged.')
+            events = selector.select(remaining)
+            if not events:
+                raise FeedStageError('Feed import timed out; the batch remains staged.')
+            block = os.read(child.stdout.fileno(), min(4096, 8193 - len(output)))
+            if not block:
+                break
+            output.extend(block)
+            if len(output) > 8192:
+                raise FeedStageError('Feed import output exceeded its receipt limit.')
+        code = child.wait(timeout=max(0.1, deadline - time.monotonic()))
+    except BaseException:
+        if child.poll() is None:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait(timeout=5)
+        raise
+    finally:
+        selector.close()
+        child.stdout.close()
+    if code != 0:
         raise FeedStageError('Feed import did not complete; the batch remains staged.')
     try:
-        return json.loads(result.stdout.decode('utf-8'), object_pairs_hook=unique_object)
+        return json.loads(bytes(output).decode('utf-8'), object_pairs_hook=unique_object)
     except (UnicodeError, ValueError) as exc:
         raise FeedStageError('Feed import returned an invalid receipt.') from exc
 
@@ -550,8 +626,19 @@ def node_import_environment(release_manifest):
 def consume_batch(directory, manifest_path, manifest, digest, release, release_manifest,
                   inbox, max_jobs):
     candidate = directory / 'candidate.json'
+    batch_id = directory.name.removeprefix('batch-')
+    marker = candidate_marker(batch_id)
+    if marker is not None and not (candidate.exists() or candidate.is_symlink()):
+        raise FeedStageError('Bound feed candidate is missing; review the staged batch.')
+    if marker is None and (candidate.exists() or candidate.is_symlink()):
+        # The adapter may have completed just before a crash. No app import or
+        # acknowledgement can happen before this root-owned marker exists.
+        checked_file(candidate, pwd.getpwnam('justup-preview-api').pw_uid)
+        candidate.unlink()
+        fsync_dir(directory)
     if candidate.exists() or candidate.is_symlink():
         read_candidate(candidate, digest, manifest['complete'], max_jobs)
+        bind_candidate_build(batch_id, candidate, digest, release_manifest['buildIdentity'])
     else:
         argv = ['/usr/bin/python3', str(release / 'app/scripts/import-jobs.py'),
                 '--feed-manifest', str(manifest_path), '--max-jobs', str(max_jobs),
@@ -568,6 +655,7 @@ def consume_batch(directory, manifest_path, manifest, digest, release, release_m
                 or result.get('importable') != manifest['complete']):
             raise FeedStageError('Feed adapter receipt differs from source batch.')
         read_candidate(candidate, digest, manifest['complete'], max_jobs)
+        bind_candidate_build(batch_id, candidate, digest, release_manifest['buildIdentity'])
     if manifest['complete'] and not latest_import_matches(digest):
         environment = node_import_environment(release_manifest)
         argv = [str(release / 'runtime/bin/node'), str(release / release_manifest['entrypoint']),
@@ -576,7 +664,7 @@ def consume_batch(directory, manifest_path, manifest, digest, release, release_m
         if not isinstance(result, dict) or result.get('imported') is None or not latest_import_matches(digest):
             raise FeedStageError('Application did not confirm the exact feed import.')
     promote_candidate(candidate, inbox / 'latest.json')
-    store_receipt(directory.name.removeprefix('batch-'), digest)
+    store_receipt(batch_id, digest)
     return {'status': 'imported' if manifest['complete'] else 'staged_for_catchup',
             'manifestSha256': digest, 'releaseBuildIdentity': release_manifest['buildIdentity']}
 
