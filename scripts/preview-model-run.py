@@ -14,6 +14,46 @@ import stat
 
 BASE = Path('/srv/justup_preview')
 EMPTY_TOOL_CATALOG_SHA256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'
+MODEL_CATALOGUE_SHA256 = '0829441e0714986d05563eb5885fa7f22324eff3bf2446cc6be857a227c96402'
+CODEX_SOURCE_COMMIT = 'ff6aec96948b70d94983af2641a6b67c94faeff5'
+TASK_PROFILES = {
+    'search_intent': {'toolPolicySha256': 'f9fbda3d5135a678ecfb68f59bf64a52854da040629ea3ce9116ec429b3dedc1', 'toolNames': []},
+    'company_resolution': {'toolPolicySha256': 'a073f7fab18af21ef90c16bce81a687159da19cda045b2a6f1d19069e45ea559', 'toolNames': ['web.run']},
+}
+def validate_task_profiles(profiles, *, attested=False):
+    """Pin each task's policy separately; an empty-tool proof cannot approve web."""
+    if not isinstance(profiles, dict) or not profiles or set(profiles) - TASK_PROFILES.keys():
+        raise ValueError('Model task profiles must name reviewed task-specific policies.')
+    enabled = set()
+    for kind, entry in profiles.items():
+        if entry == {'enabled': False} and type(entry.get('enabled')) is bool:
+            continue
+        keys = {'enabled', 'toolPolicySha256', 'modelCatalogueSha256'} | ({'toolProof'} if attested else set())
+        if (not isinstance(entry, dict) or set(entry) != keys or entry.get('enabled') is not True
+                or entry.get('toolPolicySha256') != TASK_PROFILES[kind]['toolPolicySha256']
+                or entry.get('modelCatalogueSha256') != MODEL_CATALOGUE_SHA256):
+            raise ValueError('Model task policy or catalogue identity differs from the reviewed profile.')
+        if attested:
+            proof = entry['toolProof']
+            if not isinstance(proof, dict) or proof.get('toolNames') != TASK_PROFILES[kind]['toolNames']:
+                raise ValueError('Model tool proof differs from the task-specific native tool names.')
+            if proof.get('kind') == 'supported_static_policy':
+                if (set(proof) != {'kind', 'actualWireObserved', 'sourceCommit', 'toolNames'}
+                        or proof.get('actualWireObserved') is not False or proof.get('sourceCommit') != CODEX_SOURCE_COMMIT):
+                    raise ValueError('Static policy proof must not claim an observed wire catalogue.')
+            elif proof.get('kind') == 'actual_wire':
+                checksum = proof.get('toolCatalogSha256', '')
+                if (set(proof) != {'kind', 'actualWireObserved', 'toolCatalogSha256', 'toolNames'}
+                        or proof.get('actualWireObserved') is not True or not isinstance(checksum, str)
+                        or len(checksum) != 64 or any(char not in '0123456789abcdef' for char in checksum)
+                        or (checksum == EMPTY_TOOL_CATALOG_SHA256) != (kind == 'search_intent')):
+                    raise ValueError('Observed catalogue does not prove the task-specific native tools.')
+            else:
+                raise ValueError('A reviewed static policy or actual wire proof is required.')
+        enabled.add(kind)
+    if not enabled:
+        raise ValueError('Enabled model access requires at least one qualified task profile.')
+    return enabled
 
 
 def validate_configuration(config, release, manifest):
@@ -33,15 +73,18 @@ def validate_attestation(report, manifest, host_plan):
                 'deniedPathsVerified': True, 'retentionVerified': True,
                 'buildIdentity': manifest['buildIdentity'], 'hostPlanSha256': host_plan}
     if (not isinstance(report, dict) or any(type(report.get(key)) is not type(value) or report.get(key) != value for key, value in expected.items())
-            or report.get('toolCatalogSha256') != EMPTY_TOOL_CATALOG_SHA256):
+            or 'toolCatalogSha256' in report):
         raise ValueError('Broker isolation evidence is unavailable or does not match the pinned boundary.')
+    profiles = validate_task_profiles(report.get('taskProfiles'), attested=True)
+    if 'company_resolution' in profiles and report.get('companyResearchVerified') is not True:
+        raise ValueError('Company web research requires separately reviewed isolation evidence.')
 
 
 def child_environment(manifest, host_plan, process_id):
     return {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'HOME': '/nonexistent',
             'TMPDIR': str(BASE / 'model/invocations'), 'JUSTUP_MODEL_BROKER_CONFIG': str(BASE / 'model/config/broker.json'),
-            'JUSTUP_DEMO_SOURCE_COMMIT': manifest['sourceCommit'], 'JUSTUP_DEMO_BUILD_ID': manifest['buildIdentity'],
-            'JUSTUP_DEMO_HOST_PLAN_SHA256': host_plan, 'LISTEN_PID': str(process_id), 'LISTEN_FDS': '1'}
+            'JUSTUP_SOURCE_COMMIT': manifest['sourceCommit'], 'JUSTUP_BUILD_ID': manifest['buildIdentity'],
+            'JUSTUP_HOST_PLAN_SHA256': host_plan, 'LISTEN_PID': str(process_id), 'LISTEN_FDS': '1'}
 
 
 def main():

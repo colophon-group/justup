@@ -13,7 +13,7 @@ The runtime serves attributable Jobseek imports, durable local accounts, validat
 
 Use Node.js 24 LTS ES modules, built-in HTTP/crypto/SQLite and one bounded runner. SQLite stores durable application identity, searches, requests and task state. The first restricted deployment uses isolated storage with the same schema and runtime. No additional database service or auth vendor is needed.
 
-The existing ARM64 host is in Nuremberg. Keep its production Lightpanda renderer intact. The aggregate preview ceiling is half a CPU, 1 GiB RAM, 2 GiB disk and 96 tasks, with at most one model task in flight. Verify and enforce these limits before deployment. Builds run off-host. A resource outside the authorized host/free Cloudflare allowance needs a separately approved resource request.
+The [deployment plan](deployment-plan.md) and [operations guide](operations.md) define the current temporary host allocation, resource controls and Jobseek isolation. These deployment limits do not define product capacity or account lifetime. Builds run off-host; new resource allocation needs separate explicit approval.
 
 The browser application lives in `web/` and deploys its compiled React/Vite artifact. Build committed inputs and the lockfile in an unprivileged off-host builder, then upload the retained bytes. The API/runner package contains only backend runtime files. Record the frontend artifact identity alongside compatible API and runner identities; do not deploy source files or compile on the bounded host.
 
@@ -21,7 +21,7 @@ The browser application lives in `web/` and deploys its compiled React/Vite arti
 
 All browser calls use same-origin `/api/v1` routes. Bodies and responses are JSON except health text if needed. Times are ISO 8601 UTC; job discovery timestamps always retain their source value. IDs come from the server. Private records derive ownership from the session, never a supplied account ID.
 
-Set `Cache-Control: private, no-store` for session, account, search, task and request responses. Do not send hidden job IDs, titles, bodies or URLs and rely on browser blur for access control. Mutation requests require the session cookie, an allowed `Origin` and `X-CSRF-Token`. Authentication uses a host-only, HttpOnly, Secure, SameSite=Lax opaque session cookie. Local test HTTP is a separately explicit configuration.
+API responses use `Cache-Control: private, no-store` and `X-Robots-Tag: noindex` in both preview and production frontend modes. Do not send hidden job IDs, titles, bodies or URLs and rely on browser blur for access control. Mutation requests require the session cookie, an allowed `Origin` and `X-CSRF-Token`. Authentication uses a host-only, HttpOnly, Secure, SameSite=Lax opaque session cookie. Local test HTTP is a separately explicit configuration.
 
 Errors use the following shape, with safe messages and no provider output or secrets:
 
@@ -33,7 +33,7 @@ Use 400 for malformed input, 401 for a missing/expired session, 403 for denied a
 
 ## Accounts, admission and sessions
 
-The implemented login provider is Justup itself: local username/password accounts. `JUSTUP_REQUIRES_INVITATION` defaults true; setting it false permits public registration without an invitation, still subject to backend admission, policy and security checks. The safe default account cap is 30 and can be configured explicitly. Accounts are durable by default. Optional `JUSTUP_ACCOUNT_TTL_MS` or `JUSTUP_ACCOUNT_EXPIRES_AT` assign new temporary accounts a stored deadline; later policy changes do not alter existing accounts. Sessions expire independently after seven days by default. There is no external identity, payment identity, free-period activation, recovery or legacy entitlement in the current runtime. See [account contracts](auth.md) and the launch issue [account-access](https://github.com/colophon-group/justup/issues/29).
+The implemented login provider is Justup itself: local username/password accounts. `JUSTUP_REQUIRES_INVITATION` defaults true; setting it false permits public registration without an invitation, still subject to backend admission, policy and security checks. The safe default account cap is 30 and can be configured explicitly. Accounts are durable by default. Optional `JUSTUP_ACCOUNT_TTL_MS` or `JUSTUP_ACCOUNT_EXPIRES_AT` assign new temporary accounts a stored deadline; later policy changes do not alter existing accounts. Sessions expire independently after seven days by default. There is no external identity, payment identity, free-period activation, recovery or legacy entitlement in the current runtime. See [account contracts](auth.md) and the `account-access` launch criteria.
 
 Keep registration and login disabled until the static Privacy and Usage pages have been reviewed. Deploy the approved HTTPS page URLs and policy version with the API. The pages are frontend-owned; there is no policy JSON endpoint.
 
@@ -125,7 +125,7 @@ Missing or stale imported evidence returns an empty `paused` page with `retryAft
 
 Residual matching runs only after freshness and primary filters. JEV returns accept/reject/insufficient-evidence; provider failure is separate. Cached decisions bind condition, evidence hash and classifier version, scoped for account deletion. Batch enough candidates for low acceptance rates within bounded concurrency/work budgets. Deliver a resolved newest-first prefix; never substitute unevaluated candidates. Pauses and outages retain scan position and active AI requirements.
 
-SSE, follows, viewed state, preferences and hidden-match counts currently report unavailable. These accepted product paths remain launch requirements. Capability flags describe implemented availability; they cannot defer an accepted release requirement. The Hiring Wire API and worker are being integrated under their own bounded contract.
+SSE, follows, viewed state, preferences and hidden-match counts currently report unavailable. These accepted product paths remain launch requirements, alongside attributable company hiring reports and persisted posting-language preferences. Existing locale filters alone do not establish the preference journey. Capability flags describe implemented availability; they cannot defer an accepted release requirement. The Hiring Wire API and worker are being integrated under their own bounded contract.
 
 ## Companies and identity requests
 
