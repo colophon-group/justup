@@ -34,7 +34,7 @@
       <section class="policy-section" aria-labelledby="section-1">
         <h2 id="section-1">Accounts and private records</h2>
         <p>Account access uses a local username and password. Registration does not ask for an email address. The service currently has no Google login, resume upload or payment collection. Access restrictions for the temporary deployment are listed below.</p>
-        <p>The server checks your password and stores a salted password hash. It stores hashes of random session tokens rather than the tokens themselves. Sessions expire after at most seven days. Accounts are retained until you delete them unless an explicitly disclosed temporary account deadline is configured; a session cannot outlive such a deadline. Current deployment settings and cleanup limits are listed below.</p>
+        <p>The server checks your password and stores a salted password hash. It stores hashes of random session tokens rather than the tokens themselves. The default session lifetime is seven days; a deployment can configure a different lifetime, which must be disclosed before use. Accounts are retained until you delete them unless an explicitly disclosed temporary account deadline is configured; a session cannot outlive such a deadline. Current deployment settings and cleanup limits are listed below.</p>
         <p>Your account, saved searches, company requests and their background tasks are private account records. The server checks ownership and protects changes against cross-site requests. Public job and company records are separate from these private records.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-2">
@@ -69,7 +69,7 @@
       </section>
       <section class="policy-section" aria-labelledby="deployment-settings">
         <h2 id="deployment-settings">Temporary deployment settings</h2>
-        <p>The isolated preview uses invitation access. Its registration capacity, any temporary account deadline and deployment expiry must be verified and disclosed before invitations are issued. Accounts have no automatic expiry by default. A session lasts up to seven days, and a signed-out request-protection cookie lasts one hour.</p>
+        <p>The isolated preview uses invitation access. Its registration capacity, any temporary account deadline and deployment expiry must be verified and disclosed before invitations are issued. Accounts have no automatic expiry by default. The configured session lifetime must be verified and disclosed; its default is seven days. A signed-out request-protection cookie lasts one hour.</p>
         <p>Local matching decisions and diagnostic logs have seven-day limits. Recovery tooling permits at most two SQLite backups, with a seven-day usable backup age. These settings describe the temporary deployment, not a subscription or a permanent account-expiry promise. Any change to access, retention or recipients requires review of these notices before activation.</p>
       </section>
       <section class="policy-section" aria-labelledby="section-7">

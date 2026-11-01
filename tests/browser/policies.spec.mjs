@@ -38,12 +38,16 @@ test('privacy separates service data handling from temporary deployment settings
   const account = page.locator('section[aria-labelledby="section-1"]');
   await expect(account).toContainText('local username and password');
   await expect(account).toContainText('salted password hash');
+  await expect(account).toContainText('default session lifetime is seven days');
+  await expect(account).toContainText('a deployment can configure a different lifetime');
+  await expect(account).not.toContainText('Sessions expire after at most seven days');
   await expect(account).toContainText('Accounts are retained until you delete them');
   await expect(account).toContainText('unless an explicitly disclosed temporary account deadline is configured');
   await expect(account).not.toContainText('30 days after registration');
   const deployment = page.locator('section[aria-labelledby="deployment-settings"]');
   await expect(deployment).toContainText('must be verified and disclosed before invitations are issued');
   await expect(deployment).toContainText('Accounts have no automatic expiry by default');
+  await expect(deployment).toContainText('configured session lifetime must be verified and disclosed');
   await expect(deployment).not.toContainText('account access ends 30 days');
   await expect(deployment).toContainText('not a subscription or a permanent account-expiry promise');
   await expect(deployment).toContainText('two SQLite backups');
