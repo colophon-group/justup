@@ -107,6 +107,32 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     if(!expired.length)return;
     deletion(()=>{for(const row of expired){intent.deleteAccountData(row.id);matching?.deleteAccountData?.(row.id);tasks.deleteOwner(row.id);deleteAccountData(row.id);db.prepare('DELETE FROM justup_visitors WHERE id=?').run(row.id);}});
   }
+  function semanticallyEmpty(owner) {
+    if(!db.prepare('SELECT 1 FROM justup_visitors WHERE id=? AND handed_to IS NULL').get(owner))return false;
+    const saved=db.prepare('SELECT state_json FROM justup_workspaces WHERE owner_id=?').get(owner);
+    if(saved){
+      let state;try{state=JSON.parse(saved.state_json);}catch{return false;}
+      if(!state||typeof state!=='object'||Array.isArray(state)||Object.keys(state).some(k=>!['activeSearchId','drafts'].includes(k))||state.activeSearchId!==null&&typeof state.activeSearchId!=='string'||!state.drafts||typeof state.drafts!=='object'||Array.isArray(state.drafts)||Object.values(state.drafts).some(v=>typeof v!=='string'||v.length>0))return false;
+    }
+    // Count every persisted owner-scoped record, including a future feature's
+    // private work. Empty workspace bookkeeping alone has no user content.
+    const quote=name=>'"'+name.replaceAll('"','""')+'"';
+    for(const table of db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'justup_workspaces'").all()){
+      const columns=db.prepare("SELECT name FROM pragma_table_info(?) WHERE name IN ('owner_id','account_id','principal_id','visitor_id')").all(table.name);
+      if(columns.length&&db.prepare(`SELECT 1 FROM ${quote(table.name)} WHERE ${columns.map(c=>quote(c.name)+'=?').join(' OR ')} LIMIT 1`).get(...columns.map(()=>owner)))return false;
+    }
+    return true;
+  }
+  function reclaimEmptyVisitor(owner) {
+    if(!semanticallyEmpty(owner))return false;
+    return deletion(()=>{
+      // The write transaction serializes this final check with a concurrent
+      // draft, viewed action, search submission or another feature's work.
+      if(!semanticallyEmpty(owner))return false;
+      db.prepare('DELETE FROM justup_workspaces WHERE owner_id=?').run(owner);
+      return db.prepare('DELETE FROM justup_visitors WHERE id=? AND handed_to IS NULL').run(owner).changes===1;
+    });
+  }
   function workspace(owner) {
     const visible=new Set(feed.eligibleJobs({viewer:identity.principal(owner)}).map(job=>job.id));
     const state=db.prepare('SELECT state_json,revision FROM justup_workspaces WHERE owner_id=?').get(owner);
@@ -123,6 +149,7 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     const state={activeSearchId:body.activeSearchId,drafts:body.drafts};
     const json=JSON.stringify(state);if(Buffer.byteLength(json)>60_000)throw problem('invalid_input');
     savepoint(db,()=>{
+      if(!identity.principal(owner,{allowUnavailable:true}))throw problem('unauthenticated',401);
       const current=workspace(owner).revision;if(current!==body.expectedRevision)throw problem('revision_conflict',409);
       db.prepare('INSERT INTO justup_workspaces(owner_id,state_json,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,revision=excluded.revision').run(owner,json,now(),current+1);
     });
@@ -184,7 +211,11 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     const viewer=identity.fromToken(ctx.visitorToken,{allowUnavailable:ctx.method==='DELETE'});if(!viewer)throw problem('unauthenticated',401);
     const ownerId=viewer.visitor.id,path=ctx.path.slice('/visitor'.length);
     const privateCtx={...ctx,path,url:new URL(ctx.url),viewer,ownerId,accountId:null};
-    if(/^\/searches(?:\/|$)/.test(path))return intent.route(privateCtx);
+    if(/^\/searches(?:\/|$)/.test(path)){
+      const result=await intent.route(privateCtx);
+      if(ctx.method==='DELETE'&&/^\/searches\/[^/]+$/.test(path)&&result?.body?.deleted===true)reclaimEmptyVisitor(ownerId);
+      return result;
+    }
     if(ctx.method==='GET'&&/^\/tasks\/[^/]+$/.test(path)){
       const task=tasks.get(ownerId,path.split('/')[2]);if(!task)throw problem('not_found',404);
       return {status:200,body:tasks.publicView(task,intent.taskResult(task,privateCtx)??null)};
@@ -217,16 +248,19 @@ export function createVisitorService({db,feed,tasks,intent,matching,identity,con
     if(ctx.method==='PATCH'&&ctx.path==='/workspace')return {status:200,body:writeWorkspace(owner,ctx.body)};
     if(ctx.method==='POST'&&ctx.path==='/viewed'){
       keys(ctx.body,['jobId']);if(typeof ctx.body.jobId!=='string'||ctx.body.jobId.length>128)throw problem('invalid_input');
-      // The caller cannot use this write to probe withheld identifiers.
-      if(!feed.eligibleJobs({viewer:ctx.viewer}).some(j=>j.id===ctx.body.jobId))throw problem('not_found',404);
-      if(db.prepare('SELECT count(*) n FROM justup_viewed WHERE owner_id=?').get(owner).n>=1000&&!db.prepare('SELECT 1 FROM justup_viewed WHERE owner_id=? AND job_id=?').get(owner,ctx.body.jobId))throw problem('task_limit',429);
-      db.prepare('INSERT OR IGNORE INTO justup_viewed VALUES(?,?,?)').run(owner,ctx.body.jobId,now());return {status:200,body:{viewed:true}};
+      return savepoint(db,()=>{
+        const current=identity.principal(owner,{allowUnavailable:true});if(!current)throw problem('unauthenticated',401);
+        // The caller cannot use this write to probe withheld identifiers.
+        if(!feed.eligibleJobs({viewer:current}).some(j=>j.id===ctx.body.jobId))throw problem('not_found',404);
+        if(db.prepare('SELECT count(*) n FROM justup_viewed WHERE owner_id=?').get(owner).n>=1000&&!db.prepare('SELECT 1 FROM justup_viewed WHERE owner_id=? AND job_id=?').get(owner,ctx.body.jobId))throw problem('task_limit',429);
+        db.prepare('INSERT OR IGNORE INTO justup_viewed VALUES(?,?,?)').run(owner,ctx.body.jobId,now());return {status:200,body:{viewed:true}};
+      });
     }
     return null;
   }
   return {identity,publicVisitor,cleanup,handoff,visitorRoute,route:stateRoute,deleteAccountData,
     currentSession(token){cleanup();return identity.fromToken(token);},tokenRetired:token=>identity.tokenRetired(token),admitCreation:body=>intent.admitVisitorCreation(body),refreshAvailability:()=>identity.refreshAvailability(),
-    discardEmptySession(token){const current=identity.fromToken(token);if(current&&!db.prepare('SELECT 1 FROM demo_searches WHERE owner_id=?').get(current.visitor.id))db.prepare('DELETE FROM justup_visitors WHERE id=?').run(current.visitor.id);},
+    discardEmptySession(token){const current=identity.fromToken(token,{allowUnavailable:true});if(current)reclaimEmptyVisitor(current.visitor.id);},
     openSession(token){cleanup();return identity.open(token);},
     capabilities:()=>({visitorSearch:identity.processingAvailable(),viewed:true,hiddenMatchCounts:typeof feed.restrictedLatestJobs==='function'})};
 }

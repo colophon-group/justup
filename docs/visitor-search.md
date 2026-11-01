@@ -33,6 +33,8 @@ The signed-in equivalents remain `/searches`, `/tasks/:id`, `/workspace` and `/v
 
 Search and task shapes reuse the accepted interpretation contract. Submitted criteria change only when a valid result or explicitly confirmed proposal advances the search revision. Invalid interpretation retains the accepted criteria and the submitted draft. Searching/editing uses a fresh request key; an identical retry returns its existing task, and a changed body with that key conflicts. Cross-owner IDs return 404. Expired or deleted visitor ownership returns 401. Quota exhaustion returns 429 `task_limit`; admission/peer limits return 429 `rate_limit`. Unapproved policy returns 503 `policy_unavailable`, and an unavailable interpreter returns 503 `dependency_unavailable`.
 
+After successful search deletion, the service reclaims a visitor only when it has no remaining search, task, model state, viewed record, recovered draft, nonempty workspace draft or other persisted owner-scoped work. Empty workspace bookkeeping may be removed with the principal. The final emptiness check and deletion share the existing private-deletion transaction and barrier; a concurrent save prevents reclamation. This frees capacity after a create/delete/discard-cookie cycle without evicting active users. It never resets a monetary ledger or creates identity/redemption tombstones. A retained draft or viewed observation keeps its owner and cookie usable. The next admitted search can allocate fresh durable ownership from the stateless hint when an empty principal has been reclaimed.
+
 ## Drafts, active tab and viewed state
 
 A workspace snapshot is:
