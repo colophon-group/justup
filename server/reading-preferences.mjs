@@ -39,16 +39,26 @@ export function createReadingPreferencesService({db,feed,ownerAuthority,now=Date
     if(!id||ctx.viewer?.account?.id!==id||current?.account?.id!==id||typeof current.access?.fullAccess!=='boolean')throw problem('unauthenticated',401);
     return id;
   }
-  const followedIds=owner=>db.prepare('SELECT company_id FROM justup_company_follows WHERE owner_id=? AND followed=1 ORDER BY company_id').all(owner).map(r=>r.company_id);
+  function followRows(owner){
+    const canonical=id=>feed.canonicalCompanyId?.(id)??id,groups=new Map();
+    for(const r of db.prepare('SELECT * FROM justup_company_follows WHERE owner_id=? ORDER BY followed_at,company_id').all(owner)){
+      const id=canonical(r.company_id),old=groups.get(id);
+      // An explicit canonical choice takes precedence over an older alias. For
+      // equal-time legacy aliases, preserve a negative choice conservatively.
+      if(!old||r.company_id===id||old.company_id!==id&&(r.followed_at>old.followed_at||r.followed_at===old.followed_at&&r.followed===0))groups.set(id,{...r,canonicalId:id});
+    }
+    return [...groups.values()].sort((a,b)=>a.canonicalId.localeCompare(b.canonicalId));
+  }
+  const followedIds=owner=>followRows(owner).filter(r=>r.followed===1).map(r=>r.canonicalId);
   const followsRevision=owner=>db.prepare('SELECT revision FROM justup_follow_revisions WHERE owner_id=?').get(owner)?.revision??0;
   function follows(owner,invalidatedSearchIds=[]) {
-    return {accountId:owner,revision:followsRevision(owner),items:db.prepare('SELECT company_id,followed_at FROM justup_company_follows WHERE owner_id=? AND followed=1 ORDER BY company_id').all(owner).map(r=>({companyId:r.company_id,followedAt:new Date(r.followed_at).toISOString()})),invalidatedSearchIds};
+    return {accountId:owner,revision:followsRevision(owner),items:followRows(owner).filter(r=>r.followed===1).map(r=>({companyId:r.canonicalId,followedAt:new Date(r.followed_at).toISOString()})),invalidatedSearchIds};
   }
   function updateFollow(owner,companyId,followed,{automatic=false,expectedRevision}={}) {
     return transaction(db,()=>{
       if(ownerAuthority(owner)?.account?.id!==owner)throw problem('unauthenticated',401);
       companyId=feed.company(companyId).id; // Source aliases resolve to the canonical catalogue identity.
-      const previous=db.prepare('SELECT followed FROM justup_company_follows WHERE owner_id=? AND company_id=?').get(owner,companyId);
+      const previous=followRows(owner).find(r=>r.canonicalId===companyId);
       if(automatic&&previous)return follows(owner);
       if(!automatic&&expectedRevision!==followsRevision(owner)) {
         if(previous?.followed===Number(followed))return follows(owner);
@@ -104,7 +114,11 @@ export function createReadingPreferencesService({db,feed,ownerAuthority,now=Date
     return null;
   }
   return {route,capabilities:{follows:true,preferences:true},follows,followedIds,preferences,options,validateOptions,saveOptions,
-    configurationForSearch:(owner,search)=>applySearchOptions(search.configuration,options(owner,search.id),followedIds(owner)),
+    configurationForSearch:(owner,search)=>{
+      const configuration=structuredClone(search.configuration);
+      for(const field of ['companyInclude','companyExclude'])if(configuration.filters[field])configuration.filters[field]=[...new Set(configuration.filters[field].map(id=>feed.canonicalCompanyId?.(id)??id))];
+      return applySearchOptions(configuration,options(owner,search.id),followedIds(owner));
+    },
     followAcceptedCompany:(owner,id)=>updateFollow(owner,id,true,{automatic:true}),
     setFollowInvalidator(fn){if(typeof fn!=='function')throw new TypeError('Search invalidator required.');invalidateFollowedSearches=fn;},
     deleteSearchData(owner,id){db.prepare('DELETE FROM justup_search_options WHERE owner_id=? AND search_id=?').run(owner,id);},

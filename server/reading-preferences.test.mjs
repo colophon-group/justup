@@ -187,9 +187,12 @@ test('a requested company keeps its public URL, follow and search identity when 
   assert.equal(f.feed.company(publicId).id,publicId);assert.equal(f.feed.company('source-uuid').id,publicId);assert.equal(f.feed.company(publicId).websiteUrl,'https://newcompany.com/');
   assert.equal(f.feed.companies({q:'New Company'}).items.length,1);assert.equal(f.feed.companies({q:'New Company'}).items[0].id,publicId);
   const result=(await f.route('GET',`/searches/${search.id}/results?revision=1`)).body;assert.deepEqual(result.items.map(j=>[j.id,j.company.id]),[['new-role',publicId]]);
+  const legacy=JSON.parse(f.db.prepare('SELECT accepted_json FROM demo_searches WHERE id=?').get(search.id).accepted_json);legacy.configuration.filters.companyInclude=['source-uuid'];f.db.prepare('UPDATE demo_searches SET accepted_json=? WHERE id=?').run(JSON.stringify(legacy),search.id);
+  assert.deepEqual((await f.route('GET',`/searches/${search.id}/results?revision=1`)).body.items.map(j=>j.id),['new-role']);
   assert.equal(f.db.prepare('SELECT company_id FROM job_source_identities WHERE id=?').get('new-role').company_id,'source-uuid');assert.equal(JSON.parse(f.db.prepare('SELECT data_json FROM demo_jobs WHERE id=?').get('new-role').data_json).companyId,'source-uuid');
   assert(f.intent.compilerCapabilities().values.companies.some(c=>c.id===publicId&&c.aliases.includes('source-uuid')));
   const unfollow=f.follow('source-uuid',false,1);assert.deepEqual(unfollow.items,[]);assert.equal(f.db.prepare('SELECT company_id FROM justup_company_follows WHERE owner_id=?').get('alice').company_id,publicId);
+  f.db.prepare('INSERT INTO justup_company_follows VALUES(?,?,1,?)').run('alice','source-uuid',AT);assert.deepEqual(f.reading.follows('alice').items,[]); // canonical explicit unfollow also wins legacy alias rows.
   await f.companies.route({...f.ctx('POST',acceptPath,acceptBody),idempotencyKey:'accept-before-import'});assert.deepEqual(f.reading.follows('alice').items,[]);
   const wrong=structuredClone(imported);wrong.companyIdentities[0].officialDomain='different-company.com';assert.throws(()=>f.store.importSnapshot(wrong),{status:409});assert.equal(f.feed.company('source-uuid').id,publicId);
   for(const officialDomain of ['greenhouse.io','localhost','newcompany.com/path','https://newcompany.com']){const invalid=structuredClone(imported);invalid.companyIdentities[0].officialDomain=officialDomain;assert.throws(()=>f.store.importSnapshot(invalid),{status:400});}
