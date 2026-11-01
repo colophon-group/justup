@@ -20,7 +20,7 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   db.exec('CREATE TABLE IF NOT EXISTS justup_requested_companies(id TEXT PRIMARY KEY,domain TEXT NOT NULL UNIQUE,data_json TEXT NOT NULL) STRICT');
   initializeCompanyIdentities(db);
   const canonicalId=id=>canonicalCompanyId(db,id);
-  const latest = () => db.prepare('SELECT * FROM demo_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
+  const latest = () => db.prepare('SELECT * FROM justup_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   const access = (viewer) => viewer?.account?.id && viewer.access?.fullAccess === true ? 'account' : 'guest';
   function coverageAt(at) {
     const row = latest();
@@ -33,7 +33,7 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
     if (coverageAt(at).stale) return [];
     const upper = restrictedLatest?at:at - (access(viewer) === 'guest' ? 2 * DAY_MS : 0);
     const lower=at-(restrictedLatest?2:14)*DAY_MS;
-    return db.prepare(`SELECT * FROM demo_jobs WHERE active=1 AND reserved=0 AND first_seen_at${restrictedLatest?'>':'>='}? AND first_seen_at<=?
+    return db.prepare(`SELECT * FROM justup_jobs WHERE active=1 AND reserved=0 AND first_seen_at${restrictedLatest?'>':'>='}? AND first_seen_at<=?
       AND verified_at>? AND verified_at<=? ORDER BY first_seen_at DESC, id ASC`).all(lower, upper, at - verificationTtlMs, at)
       .map((r) => ({ ...JSON.parse(r.data_json), companyId:canonicalId(r.company_id),bodyText: r.body_text, evidenceHash: r.evidence_hash,
         verifiedAt: new Date(r.verified_at).toISOString() }));
@@ -76,7 +76,7 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
     }, ai: { status: 'not_required' }, coverage: currentCoverage };
   }
   function companyRows() {
-    return db.prepare('SELECT company_id, data_json FROM demo_jobs ORDER BY first_seen_at DESC, id ASC').all();
+    return db.prepare('SELECT company_id, data_json FROM justup_jobs ORDER BY first_seen_at DESC, id ASC').all();
   }
   function companyDto(job) {
     const id=canonicalId(job.companyId),requested=db.prepare('SELECT data_json FROM justup_requested_companies WHERE id=?').get(id);
@@ -127,7 +127,7 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   }
   function company(id) {
     id=canonicalId(id);
-    const row = db.prepare('SELECT data_json FROM demo_jobs WHERE company_id=? OR company_id IN (SELECT source_company_id FROM justup_company_aliases WHERE company_id=?) ORDER BY first_seen_at DESC, id ASC LIMIT 1').get(id,id);
+    const row = db.prepare('SELECT data_json FROM justup_jobs WHERE company_id=? OR company_id IN (SELECT source_company_id FROM justup_company_aliases WHERE company_id=?) ORDER BY first_seen_at DESC, id ASC LIMIT 1').get(id,id);
     if(row)return companyDto(JSON.parse(row.data_json));
     const requested=db.prepare('SELECT data_json FROM justup_requested_companies WHERE id=?').get(id);
     if(!requested)throw problem('not_found',404,'Not found.');

@@ -7,6 +7,7 @@ purges backups synchronously before its database transaction can commit.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, closing
 import hashlib
 import importlib.util
 import json
@@ -19,9 +20,12 @@ import sys
 import time
 from urllib.parse import quote
 import uuid
+import pwd
+import grp
 
 MAX_BACKUP = 256 * 1024 ** 2
 MAX_AGE = 7 * 86400
+APPLICATION_SCHEMA = 2
 BACKUP_NAME = re.compile(r'^backup-[0-9]{8}T[0-9]{6}Z-[a-f0-9-]{36}\.sqlite$')
 
 
@@ -79,10 +83,12 @@ def check_folder(folder):
     return folder
 
 
+@contextmanager
 def readonly(path):
     if Path(path).is_symlink() or not Path(path).is_file():
         raise ValueError('Database must be an existing regular file.')
-    return sqlite3.connect('file:' + quote(str(Path(path).resolve()), safe='/') + '?mode=ro', uri=True)
+    with closing(sqlite3.connect('file:' + quote(str(Path(path).resolve()), safe='/') + '?mode=ro', uri=True)) as connection:
+        yield connection
 
 
 def prune(folder, now=None):
@@ -99,7 +105,7 @@ def prune(folder, now=None):
     fsync_directory(folder)
 
 
-def backup(database, folder, barrier, source_commit, build_identity, now=None):
+def backup(database, folder, barrier, source_commit, build_identity, now=None, schema_version=APPLICATION_SCHEMA):
     folder = check_folder(folder)
     if not re.fullmatch('[a-f0-9]{40}', source_commit) or not re.fullmatch('[a-f0-9]{64}', build_identity):
         raise ValueError('Backup needs the exact active source and build identity.')
@@ -114,12 +120,15 @@ def backup(database, folder, barrier, source_commit, build_identity, now=None):
         # as normal backup flow. The source is opened read-only and never copied
         # with raw filesystem cp while WAL may be active.
         with readonly(database) as source:
+            actual_schema = source.execute('PRAGMA user_version').fetchone()[0]
+            if actual_schema != schema_version or schema_version not in {1, APPLICATION_SCHEMA}:
+                raise ValueError('Backup database epoch differs from the verified active artifact.')
             pages, page_size = source.execute('PRAGMA page_count').fetchone()[0], source.execute('PRAGMA page_size').fetchone()[0]
             if pages * page_size > MAX_BACKUP:
                 raise ValueError('Database exceeds the 256 MiB backup budget.')
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             os.close(fd)
-            with sqlite3.connect(target) as destination:
+            with closing(sqlite3.connect(target)) as destination:
                 deadline = time.monotonic() + 30
                 def progress(status, remaining, total):
                     if time.monotonic() > deadline or total * page_size > MAX_BACKUP:
@@ -137,7 +146,7 @@ def backup(database, folder, barrier, source_commit, build_identity, now=None):
         report = {'formatVersion': 1, 'createdAtUnix': now, 'privateGeneration': start_generation,
                   'sourceCommit': source_commit, 'buildIdentity': build_identity,
                   'databaseSha256': file_digest(target), 'bytes': target.stat().st_size,
-                  'sessionsRequireInvalidation': True}
+                  'sessionsRequireInvalidation': True, 'schemaVersion': actual_schema}
         with metadata.open('x') as stream:
             os.chmod(metadata, 0o600)
             json.dump(report, stream, sort_keys=True)
@@ -174,37 +183,45 @@ def validate_restore(snapshot, barrier, now=None):
     if snapshot.stat().st_size > MAX_BACKUP or file_digest(snapshot) != info.get('databaseSha256'):
         raise ValueError('Snapshot is oversized or its digest differs.')
     with readonly(snapshot) as db:
+        actual_schema = db.execute('PRAGMA user_version').fetchone()[0]
+        if actual_schema not in {1, APPLICATION_SCHEMA} or info.get('schemaVersion', 1) != actual_schema:
+            raise ValueError('Snapshot schema epoch is unsupported or differs from its metadata.')
+        info['schemaVersion'] = actual_schema
         if db.execute('PRAGMA integrity_check').fetchone() != ('ok',):
             raise ValueError('Snapshot integrity check failed.')
     return info
 
 
-def restore(snapshot, barrier, destination, prepare_command, now=None):
+def restore(snapshot, barrier, destination, prepare_command, now=None, migrate_v1=False):
     snapshot, destination = Path(snapshot), Path(destination)
     info = validate_restore(snapshot, barrier, now)
     if destination.exists() or destination.is_symlink() or not prepare_command:
         raise ValueError('Restore requires a new destination and an explicit auth-owned preparation command.')
+    if info['schemaVersion'] != APPLICATION_SCHEMA and not (info['schemaVersion'] == 1 and migrate_v1):
+        raise ValueError('Epoch-1 recovery requires the explicit forward migration option.')
     initial = stable_generation(barrier)
     published = False
     try:
         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         os.close(fd)
-        with readonly(snapshot) as source, sqlite3.connect(destination) as target:
+        with readonly(snapshot) as source, closing(sqlite3.connect(destination)) as target:
             source.backup(target, pages=128)
         # The installed auth-owned command must remove ALL restored sessions and
         # check schema compatibility. Its fixed argv is reviewed with that build;
         # this module never guesses application table names or executes shell text.
-        result = subprocess.run([*prepare_command, str(destination)], check=True, capture_output=True,
+        result = subprocess.run([*prepare_command, str(destination), *(['--migrate-v1'] if info['schemaVersion'] == 1 else [])], check=True, capture_output=True,
                                 env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
                                      'JUSTUP_DB_PATH': str(destination.parent / 'preview.sqlite')}, timeout=30)
         if len(result.stdout) > 4096:
             raise ValueError('Auth-owned restore receipt exceeds its bound.')
         receipt = json.loads(result.stdout)
-        if receipt.get('schemaVersion') != 1 or receipt.get('sessionsInvalidated') is not True or receipt.get('remainingSessions') != 0 or type(receipt.get('sessionsDeleted')) is not int or receipt['sessionsDeleted'] < 0:
+        if receipt.get('schemaVersion') != APPLICATION_SCHEMA or receipt.get('sessionsInvalidated') is not True or receipt.get('remainingSessions') != 0 or type(receipt.get('sessionsDeleted')) is not int or receipt['sessionsDeleted'] < 0:
             raise ValueError('Auth-owned restore session invalidation was not confirmed.')
         if stable_generation(barrier) != initial:
             raise ValueError('Deletion generation changed during restore.')
         with readonly(destination) as target:
+            if target.execute('PRAGMA user_version').fetchone()[0] != APPLICATION_SCHEMA:
+                raise ValueError('Prepared restore has the wrong schema epoch.')
             if target.execute('PRAGMA integrity_check').fetchone() != ('ok',):
                 raise ValueError('Prepared restore is not valid SQLite.')
         fd = os.open(destination, os.O_RDONLY)
@@ -223,7 +240,7 @@ def restore(snapshot, barrier, destination, prepare_command, now=None):
                 Path(str(destination) + suffix).unlink(missing_ok=True)
 
 
-def operational_context(paths):
+def operational_context(paths, build_identity=None):
     base = Path('/srv/justup_preview')
     state = base / 'state'
     expected = {state / 'preview.sqlite', state / 'private-generation', state / 'backups'}
@@ -237,11 +254,64 @@ def operational_context(paths):
         spec.loader.exec_module(module)
         return module
     load('preview-host').guard()
-    release = (base / 'current').resolve(strict=True)
+    if build_identity is not None and not re.fullmatch('[a-f0-9]{64}', build_identity):
+        raise ValueError('Migration requires an exact retained target build identity.')
+    release = (base / 'releases' / build_identity).resolve(strict=True) if build_identity else (base / 'current').resolve(strict=True)
     if release.parent != base / 'releases':
         raise ValueError('Current recovery executable is outside the retained release inventory.')
-    manifest = load('preview-artifact').verify_directory(release)
+    artifact = load('preview-artifact')
+    artifact.read_host_plan(base)
+    manifest = artifact.verify_directory(release)
     return manifest, [str(release / 'runtime/bin/node'), str(release / manifest['entrypoint']), '--prepare-restored-db']
+
+
+def migrate_live(database, folder, barrier, target_manifest, migration_command, active_manifest, *, base=Path('/srv/justup_preview'), host=None):
+    """Explicit protected upgrade: close launches, prove idle UIDs, back up, rename.
+
+    A retained lock after any incomplete operation needs reviewed reconciliation.
+    It is never treated as stale or removed by startup/recovery automatically.
+    """
+    if os.geteuid() != 0 or target_manifest['schemaVersion'] != APPLICATION_SCHEMA or active_manifest['schemaVersion'] != 1 or host is None:
+        raise ValueError('Migration requires root, current operator tools and exact epoch-1/2 artifacts.')
+    host.require_operator()
+    initial = stable_generation(barrier)
+    lock = Path(base) / '.preview-schema-migration.lock'
+    fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    lock_bytes = (json.dumps({'targetBuild': target_manifest['buildIdentity'], 'privateGeneration': initial}) + '\n').encode()
+    try:
+        os.write(fd, lock_bytes)
+        lock_meta = os.fstat(fd)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    fsync_directory(base)
+    host.require_idle_preview()
+    # Online-backup API remains the only supported snapshot path. All dedicated
+    # service identities are stopped before this snapshot and the schema commit.
+    saved = backup(database, folder, barrier, active_manifest['sourceCommit'], active_manifest['buildIdentity'], schema_version=1)
+    if stable_generation(barrier) != initial:
+        raise ValueError('Deletion generation changed before schema migration.')
+    api = pwd.getpwnam(host.USER)
+    group = grp.getgrnam(host.STATE_GROUP)
+    result = subprocess.run(migration_command, check=True, capture_output=True, timeout=30,
+                            env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'JUSTUP_DB_PATH': str(database), 'JUSTUP_SHARED_STATE': 'true'},
+                            user=api.pw_uid, group=group.gr_gid, extra_groups=[], umask=0o007)
+    if len(result.stdout) > 4096:
+        raise ValueError('Schema migration receipt exceeds its bound.')
+    receipt = json.loads(result.stdout)
+    if (receipt.get('schemaVersion') != APPLICATION_SCHEMA or receipt.get('previousSchemaVersion') != 1
+            or type(receipt.get('migratedTables')) is not int or not 2 <= receipt['migratedTables'] <= 19
+            or stable_generation(barrier) != initial):
+        raise ValueError('Schema migration was not confirmed; retain the maintenance lock.')
+    with readonly(database) as db:
+        if db.execute('PRAGMA user_version').fetchone()[0] != APPLICATION_SCHEMA or db.execute('PRAGMA integrity_check').fetchone() != ('ok',):
+            raise ValueError('Migrated database did not pass independent epoch/integrity verification.')
+    current_lock = lock.lstat()
+    if (current_lock.st_dev, current_lock.st_ino) != (lock_meta.st_dev, lock_meta.st_ino) or lock.read_bytes() != lock_bytes:
+        raise ValueError('Migration lock ownership changed; preserve it for review.')
+    lock.unlink()
+    fsync_directory(base)
+    return {**receipt, 'backup': saved['backup'], 'activated': False, 'writersStopped': True}
 
 
 def main():
@@ -260,23 +330,39 @@ def main():
     use.add_argument('--snapshot', type=Path, required=True)
     use.add_argument('--generation', type=Path, required=True)
     use.add_argument('--destination', type=Path, required=True)
+    use.add_argument('--migrate-v1', action='store_true')
+    use.add_argument('--build-identity')
+    migration = sub.add_parser('migrate')
+    migration.add_argument('--database', type=Path, required=True)
+    migration.add_argument('--backup-dir', type=Path, required=True)
+    migration.add_argument('--generation', type=Path, required=True)
+    migration.add_argument('--build-identity', required=True)
     clean = sub.add_parser('prune')
     clean.add_argument('--backup-dir', type=Path, required=True)
     args = parser.parse_args()
     try:
         paths = [getattr(args, key) for key in ('database', 'backup_dir', 'generation', 'snapshot', 'destination') if hasattr(args, key)]
-        manifest, prepare_command = operational_context(paths)
+        manifest, prepare_command = operational_context(paths, getattr(args, 'build_identity', None) if args.command in {'migrate', 'restore'} else None)
         if args.command == 'backup':
             if args.source_commit != manifest['sourceCommit'] or args.build_identity != manifest['buildIdentity']:
                 raise ValueError('Backup identity differs from the active immutable artifact.')
-            result = backup(args.database, args.backup_dir, args.generation, args.source_commit, args.build_identity)
+            result = backup(args.database, args.backup_dir, args.generation, args.source_commit, args.build_identity, schema_version=manifest['schemaVersion'])
+        elif args.command == 'migrate':
+            current, _ = operational_context(paths)
+            spec = importlib.util.spec_from_file_location('migration_host', Path(__file__).with_name('preview-host.py'))
+            host = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(host)
+            result = migrate_live(args.database, args.backup_dir, args.generation, manifest, [*prepare_command[:-1], '--migrate-db'], current, host=host)
         elif args.command == 'restore':
             if os.geteuid() != 0:
                 raise ValueError('Restoration is an explicit root operator step.')
-            for unit in ('justup-preview-api.service', 'justup-preview-runner.service'):
-                if subprocess.run(['systemctl', 'is-active', '--quiet', unit], check=False).returncode == 0:
-                    raise ValueError('Stop preview writers before preparing a restore.')
-            result = restore(args.snapshot, args.generation, args.destination, prepare_command)
+            spec = importlib.util.spec_from_file_location('restore_host', Path(__file__).with_name('preview-host.py'))
+            host = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(host)
+            host.require_idle_preview()
+            if manifest['schemaVersion'] != APPLICATION_SCHEMA:
+                raise ValueError('Restore requires the current epoch-2 runtime.')
+            result = restore(args.snapshot, args.generation, args.destination, prepare_command, migrate_v1=args.migrate_v1)
         elif args.command == 'check-restore':
             validate_restore(args.snapshot, args.generation)
             result = {'eligible': True, 'activated': False, 'sessionsStillRequireInvalidation': True}

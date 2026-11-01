@@ -23,7 +23,7 @@ test('store isolates SQLite settings and strips unapproved imported fields', (t)
   const s = openStore(); t.after(() => s.close());
   const raw = fixture(); raw.privateBoardConfig = { password: 'never' };
   s.importSnapshot(snapshot([raw]));
-  const row = s.db.prepare('SELECT * FROM demo_jobs').get();
+  const row = s.db.prepare('SELECT * FROM justup_jobs').get();
   assert.equal(s.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
   assert.equal(s.db.prepare('PRAGMA synchronous').get().synchronous, 2);
   assert.equal(s.db.prepare('PRAGMA busy_timeout').get().timeout, 5000);
@@ -35,12 +35,12 @@ test('source discovery changes reject the whole import without resetting first o
   const s = openStore(); t.after(() => s.close()); s.importSnapshot(snapshot()); const generation = s.generation().generation;
   assert.throws(() => s.importSnapshot(snapshot([fixture('new'), fixture('job-1', AT - DAY_MS)])), { code: 'source_identity_conflict' });
   assert.equal(s.generation().generation, generation);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_jobs').get().n, 1);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_jobs').get().n, 1);
 });
 test('missing refresh stays unknown while inactive and reserved observations suppress independently', (t) => {
   const s = openStore(); t.after(() => s.close()); s.importSnapshot(snapshot([fixture('unknown'), fixture('closed'), fixture('reserved')]));
   s.importSnapshot(snapshot([], { observations: [{ id: 'closed', active: false, observedAt: iso(AT) }, { id: 'reserved', active: true, reserved: true, observedAt: iso(AT) }], unknownIds: ['unknown'] }));
-  const row = (id) => s.db.prepare('SELECT * FROM demo_jobs WHERE id=?').get(id);
+  const row = (id) => s.db.prepare('SELECT * FROM justup_jobs WHERE id=?').get(id);
   assert.equal(row('unknown').active, 1);
   assert.equal(row('closed').active, 0); assert.equal(row('closed').closed_observed_at, AT);
   assert.equal(row('reserved').reserved, 1); assert.equal(row('reserved').closed_observed_at, null);
@@ -63,12 +63,12 @@ test('source identity survives evidence pruning and reopen without allowing reas
   const path = join(dir,'store.sqlite'); let store = openStore(path);
   store.importSnapshot(snapshot());
   // The same pruning step used by bounded retention removes bodies, not source identity.
-  store.db.prepare('DELETE FROM demo_jobs WHERE first_seen_at < ?').run(AT);
+  store.db.prepare('DELETE FROM justup_jobs WHERE first_seen_at < ?').run(AT);
   store.close(); store = openStore(path); t.after(()=>store.close());
   const reassigned = fixture(); reassigned.companyId='another-company';
   for (const changed of [fixture('job-1',AT-DAY_MS),reassigned]) assert.throws(()=>store.importSnapshot(snapshot([changed])),{code:'source_identity_conflict'});
   store.importSnapshot(snapshot());
-  assert.equal(store.db.prepare('SELECT count(*) AS n FROM demo_jobs').get().n,1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM justup_jobs').get().n,1);
   assert.equal(store.db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
 });
 test('older record observations cannot reopen closed jobs or undo newer evidence', (t) => {
@@ -76,23 +76,23 @@ test('older record observations cannot reopen closed jobs or undo newer evidence
   const later = AT+1000;
   store.importSnapshot(snapshot([], {verifiedAt:iso(later),observations:[{id:'job-1',active:false,observedAt:iso(later)}]}));
   store.importSnapshot(snapshot([fixture()],{verifiedAt:iso(later+1000)}));
-  assert.equal(store.db.prepare('SELECT active FROM demo_jobs').get().active,0);
+  assert.equal(store.db.prepare('SELECT active FROM justup_jobs').get().active,0);
   const fresh = fixture(); fresh.evidence.metadataFetchedAt=iso(later+2000);
   store.importSnapshot(snapshot([fresh],{verifiedAt:iso(later+2000)}));
-  assert.equal(store.db.prepare('SELECT active FROM demo_jobs').get().active,1);
+  assert.equal(store.db.prepare('SELECT active FROM justup_jobs').get().active,1);
   store.importSnapshot(snapshot([],{verifiedAt:iso(later+3000),observations:[{id:'job-1',active:false,observedAt:iso(later)}]}));
-  assert.equal(store.db.prepare('SELECT active FROM demo_jobs').get().active,1);
+  assert.equal(store.db.prepare('SELECT active FROM justup_jobs').get().active,1);
 });
 
 test('closure knowledge survives bounded evidence eviction before a stale job returns', (t) => {
   const store=openStore();t.after(()=>store.close());store.importSnapshot(snapshot());
   store.importSnapshot(snapshot([],{verifiedAt:iso(AT+1000),observations:[{id:'job-1',active:false,observedAt:iso(AT+1000)}]}));
-  store.db.exec('DELETE FROM demo_jobs');
+  store.db.exec('DELETE FROM justup_jobs');
   store.importSnapshot(snapshot([fixture()],{verifiedAt:iso(AT+2000)}));
-  assert.equal(store.db.prepare('SELECT count(*) AS n FROM demo_jobs').get().n,0);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM justup_jobs').get().n,0);
   const fresh=fixture();fresh.evidence.metadataFetchedAt=iso(AT+3000);
   store.importSnapshot(snapshot([fresh],{verifiedAt:iso(AT+3000)}));
-  assert.equal(store.db.prepare('SELECT active FROM demo_jobs').get().active,1);
+  assert.equal(store.db.prepare('SELECT active FROM justup_jobs').get().active,1);
 });
 
 test('identity-only schema reopens with source observations preserved by additive migration', (t) => {

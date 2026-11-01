@@ -18,7 +18,9 @@ test-results/
 web/dist/
 *.tsbuildinfo
 
-# Isolated demo storage and private public-source exports
+# Isolated application storage and private public-source exports
+.justup/
+# Retain protection for historical private storage.
 .demo/
 *.sqlite
 *.sqlite-shm

@@ -18,7 +18,7 @@ export function createLiveResultsService({ db, feed, intent, now = Date.now, con
   for (const [name, [min, max]] of Object.entries(bounds)) if (!Number.isSafeInteger(options[name]) || options[name] < min || options[name] > max) throw new TypeError('Invalid live result bounds.');
   const connections = new Set(), identities = new Map(), cache = new Map();
   let timer = null, polling = false, closed = false;
-  const revisionKey = connection => JSON.stringify(db.prepare('SELECT id,revision FROM demo_searches WHERE owner_id=? AND id=? AND accepted_json IS NOT NULL').all(connection.ownerId, connection.searchId).map(r => [r.id, r.revision]));
+  const revisionKey = connection => JSON.stringify(db.prepare('SELECT id,revision FROM justup_searches WHERE owner_id=? AND id=? AND accepted_json IS NOT NULL').all(connection.ownerId, connection.searchId).map(r => [r.id, r.revision]));
   const cacheKey = connection => JSON.stringify([connection.ownerId, connection.searchId, connection.revision]);
   const databaseKey = () => `${db.prepare('PRAGMA data_version').get().data_version}:${db.prepare('SELECT total_changes() AS n').get().n}`;
   function remember(scope) {
@@ -128,7 +128,7 @@ export function createLiveResultsService({ db, feed, intent, now = Date.now, con
     if (lastEventId != null && (typeof lastEventId !== 'string' || !TOKEN.test(lastEventId))) throw problem('invalid_cursor');
     const viewer = readAuthority(), ownerId = ownerOf(viewer);
     if (!ownerId) throw problem('unauthenticated', 401);
-    const accepted = db.prepare('SELECT revision FROM demo_searches WHERE owner_id=? AND id=? AND accepted_json IS NOT NULL').get(ownerId, searchId);
+    const accepted = db.prepare('SELECT revision FROM justup_searches WHERE owner_id=? AND id=? AND accepted_json IS NOT NULL').get(ownerId, searchId);
     if (!accepted) throw problem('not_found',404);
     if (accepted.revision !== revision) throw problem('revision_conflict',409);
     if (connections.size >= options.maxConnections || [...connections].filter(c => c.ownerId === ownerId).length >= options.maxConnectionsPerOwner) throw problem('rate_limit', 429);

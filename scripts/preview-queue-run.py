@@ -123,6 +123,13 @@ def child_environment(manifest, host_plan):
             'JUSTUP_HOST_PLAN_SHA256': host_plan}
 
 
+def artifact_module():
+    spec = importlib.util.spec_from_file_location('preview_artifact', Path(__file__).with_name('preview-artifact.py'))
+    artifact = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(artifact)
+    return artifact
+
+
 def main():
     try:
         if os.getuid() == 0 or os.umask(0o007) & 0o070:
@@ -130,10 +137,9 @@ def main():
         release = (BASE / 'current').resolve(strict=True)
         if release.parent != BASE / 'releases':
             raise ValueError('Queue release is outside the immutable inventory.')
-        spec = importlib.util.spec_from_file_location('preview_artifact', Path(__file__).with_name('preview-artifact.py'))
-        artifact = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(artifact)
+        artifact = artifact_module()
         manifest = artifact.verify_directory(release)
+        artifact.check_database_schema(BASE / 'state/preview.sqlite', manifest, allow_missing=True)
         host_plan = artifact.read_host_plan(BASE)
         required = {'runner', 'runner-adapter', 'composition', 'model-broker', 'model-runner',
                     'intent', 'companies', 'matching', 'jev', 'jev-budget'}

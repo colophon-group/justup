@@ -1,5 +1,6 @@
 // Same-origin application HTTP boundary. All mutation, cookie, policy and private route
 // checks are centralized here before feature service code receives a request.
+import { SCHEMA_VERSION } from './schema.mjs';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { POLICY_LOCALES,policyState,policyScopes,requestLocale,validatePolicyConfig } from './policies.mjs';
 import { problem, boundedJson } from './store.mjs';
@@ -219,7 +220,7 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         return finish(readiness.ready ? 200 : 503, { ...readiness, coverage: feed.coverage() });
       }
       if (method === 'GET' && path === '/version') return finish(200, {
-        sourceCommit: config.sourceCommit ?? null, schemaVersion: 1, buildIdentity: config.buildIdentity ?? null,
+        sourceCommit: config.sourceCommit ?? null, schemaVersion: SCHEMA_VERSION, buildIdentity: config.buildIdentity ?? null,
         runner: (typeof config.readiness === 'function' ? config.readiness().runner : null) ?? { ready: false, identity: null },
         importGeneration: feed.generation(),
       });

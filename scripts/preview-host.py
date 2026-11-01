@@ -352,7 +352,7 @@ def artifact_module():
 def require_operator(cleanup=False):
     if os.geteuid() != 0:
         raise ValueError('Deployment and teardown require the dedicated root operator step.')
-    if os.path.lexists(BASE / UPGRADE_LOCK):
+    if any(os.path.lexists(BASE / name) for name in (UPGRADE_LOCK, '.preview-schema-migration.lock')):
         raise ValueError('An operator update is pending; reconcile it before another operation.')
     if cleanup:
         verify_caps()
@@ -619,12 +619,11 @@ def switch(build):
         old = current.resolve(strict=True)
         if old.parent != BASE / 'releases':
             raise ValueError('Existing current link leaves the release directory.')
-        previous_manifest = artifact.verify_directory(old)
-        if previous_manifest['schemaVersion'] != manifest['schemaVersion']:
-            raise ValueError('Schema differs; perform the reviewed database recovery before switching.')
+        artifact.verify_directory(old)
     else:
         old = None
     stop_preview()
+    artifact.check_database_schema(BASE / 'state/preview.sqlite', manifest, allow_missing=True)
     if old is not None:
         point_link('previous', old.relative_to(BASE))
     point_link('current', release.relative_to(BASE))

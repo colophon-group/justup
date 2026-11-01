@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, closing
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -76,10 +76,10 @@ def payload():
              'app/scripts/import-jobs.py': b'# canonical importer fixture\n',
              'app/server/main.mjs': b'export const ready = true;'}
     files.update({'app/server/' + name + '.mjs': b'export {};' for name in
-                 ('auth', 'http', 'store', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter', 'policies', 'processing-admission')})
+                 ('auth', 'http', 'store', 'schema', 'feed', 'tasks', 'config', 'composition', 'runner', 'runner-adapter', 'policies', 'processing-admission')})
     files.update(CODEX_FIXTURES)
     manifest = {'formatVersion': 2, 'sourceCommit': 'a' * 40, 'sourceTree': 'b' * 40,
-                'schemaVersion': 1, 'nodeVersion': '24.22.2', 'platform': 'linux-arm64',
+                'schemaVersion': 2, 'nodeVersion': '24.22.2', 'platform': 'linux-arm64',
                 'nodeArchiveSha256': artifact.NODE_ARCHIVE_SHA256, 'entrypoint': 'app/server/main.mjs',
                 'codexVersion': artifact.CODEX_VERSION, 'codexTarget': artifact.CODEX_TARGET,
                 'codexArchiveSha256': artifact.CODEX_ARCHIVE_SHA256, 'codexEntrypoint': artifact.CODEX_ENTRYPOINT,
@@ -1180,7 +1180,8 @@ class RecoveryContracts(unittest.TestCase):
         barrier = root / 'private-generation'
         barrier.write_text(str(uuid.uuid4()) + '\n')
         db = root / 'preview.sqlite'
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute('PRAGMA user_version=2')
             conn.execute('CREATE TABLE private_records (value TEXT)')
             conn.execute('INSERT INTO private_records VALUES (?)', ('private fixture',))
         return db, folder, barrier
@@ -1195,7 +1196,7 @@ class RecoveryContracts(unittest.TestCase):
             db, folder, barrier = self.fixture(root)
             snapshot = self.make_backup(db, folder, barrier)
             recovery.validate_restore(snapshot, barrier, now=1001)
-            with sqlite3.connect(snapshot) as conn:
+            with closing(sqlite3.connect(snapshot)) as conn, conn:
                 self.assertEqual(conn.execute('SELECT value FROM private_records').fetchone(), ('private fixture',))
             barrier.write_text(str(uuid.uuid4()) + '\n')
             with self.assertRaisesRegex(ValueError, 'private deletion'):
@@ -1214,7 +1215,7 @@ class RecoveryContracts(unittest.TestCase):
             pending.write_text(str(uuid.uuid4()) + '\n')
             barrier.write_text(str(uuid.uuid4()) + '\n')
             writer.execute('DELETE FROM private_records')
-            with sqlite3.connect(db) as reader:
+            with closing(sqlite3.connect(db)) as reader, reader:
                 self.assertEqual(reader.execute('SELECT count(*) FROM private_records').fetchone()[0], 1)
             with self.assertRaisesRegex(ValueError, 'transaction is pending'):
                 self.make_backup(db, folder, barrier)
@@ -1224,7 +1225,7 @@ class RecoveryContracts(unittest.TestCase):
             # Only the transaction owner removes/fsyncs this after COMMIT.
             pending.unlink()
             snapshot = self.make_backup(db, folder, barrier)
-            with sqlite3.connect(snapshot) as reader:
+            with closing(sqlite3.connect(snapshot)) as reader, reader:
                 self.assertEqual(reader.execute('SELECT count(*) FROM private_records').fetchone()[0], 0)
 
     def test_retained_pending_marker_blocks_backup_and_restore_after_crash(self):
@@ -1280,7 +1281,7 @@ class RecoveryContracts(unittest.TestCase):
             snapshot = self.make_backup(db, folder, barrier)
             before = barrier.read_bytes()
             destination = root / 'restored.sqlite'
-            good = "import json; print(json.dumps({'schemaVersion':1,'sessionsInvalidated':True,'remainingSessions':0,'sessionsDeleted':2}))"
+            good = "import json; print(json.dumps({'schemaVersion':2,'sessionsInvalidated':True,'remainingSessions':0,'sessionsDeleted':2}))"
             result = recovery.restore(snapshot, barrier, destination, [sys.executable, '-c', good], now=1001)
             self.assertTrue(result['sessionsInvalidated'])
             self.assertFalse(result['activated'])
@@ -1299,7 +1300,7 @@ class RecoveryContracts(unittest.TestCase):
             db, folder, barrier = self.fixture(root)
             snapshot = self.make_backup(db, folder, barrier)
             destination = root / 'restored.sqlite'
-            command = "from pathlib import Path; import uuid,json; Path(" + repr(str(barrier)) + ").write_text(str(uuid.uuid4())+'\\n'); print(json.dumps({'schemaVersion':1,'sessionsInvalidated':True,'remainingSessions':0,'sessionsDeleted':0}))"
+            command = "from pathlib import Path; import uuid,json; Path(" + repr(str(barrier)) + ").write_text(str(uuid.uuid4())+'\\n'); print(json.dumps({'schemaVersion':2,'sessionsInvalidated':True,'remainingSessions':0,'sessionsDeleted':0}))"
             with self.assertRaisesRegex(ValueError, 'changed during restore'):
                 recovery.restore(snapshot, barrier, destination, [sys.executable, '-c', command], now=1001)
             self.assertFalse(destination.exists())
@@ -1315,6 +1316,157 @@ class RecoveryContracts(unittest.TestCase):
             (folder / 'nested').mkdir()
             with self.assertRaisesRegex(ValueError, 'flat'):
                 self.make_backup(db, folder, barrier)
+
+
+class SchemaOperationsContracts(unittest.TestCase):
+    def database(self, path, epoch=2):
+        prefix = 'justup_' if epoch == 2 else 'demo_'
+        with closing(sqlite3.connect(path)) as db, db:
+            db.executescript(f"CREATE TABLE {prefix}imports(id TEXT); CREATE TABLE {prefix}jobs(id TEXT); CREATE TABLE job_source_identities(id TEXT); PRAGMA user_version={epoch};")
+
+    def test_actual_api_and_queue_launchers_refuse_retained_epoch_one_release_before_executing_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            release = base / 'releases' / ('b' * 64)
+            release.mkdir(parents=True)
+            (base / 'current').symlink_to(release)
+            (base / 'state').mkdir()
+            self.database(base / 'state/preview.sqlite')
+            old, _ = payload()
+            old['schemaVersion'] = 1
+            with patch.object(artifact, 'verify_directory', return_value=old), patch.object(artifact, 'read_host_plan', return_value='f' * 64), patch.object(artifact, 'check_database_schema', wraps=artifact.check_database_schema) as check:
+                with patch.object(launcher, 'BASE', base), patch.object(launcher, 'module', return_value=artifact), patch.object(launcher.subprocess, 'Popen') as execute:
+                    self.assertEqual(launcher.main(), 1)
+                    execute.assert_not_called()
+                with patch.object(queue, 'BASE', base), patch.object(queue, 'artifact_module', return_value=artifact), patch.object(queue.os, 'getuid', return_value=1001), patch.object(queue.os, 'umask', return_value=0o007), patch.object(queue.os, 'execve') as execute:
+                    self.assertEqual(queue.main(), 1)
+                    execute.assert_not_called()
+                self.assertEqual(check.call_count, 2)
+            with self.assertRaisesRegex(ValueError, 'epoch'):
+                artifact.check_database_schema(base / 'state/preview.sqlite', old)
+
+    def test_switch_stops_writers_and_checks_actual_database_before_changing_links(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            release = base / 'releases' / ('b' * 64)
+            release.mkdir(parents=True)
+            (base / 'current').symlink_to(release)
+            (base / 'state').mkdir()
+            self.database(base / 'state/preview.sqlite')
+            old, _ = payload()
+            old['schemaVersion'] = 1
+            before = (base / 'current').readlink()
+            with patch.object(host, 'BASE', base), patch.object(host, 'require_operator'), patch.object(host, 'artifact_module', return_value=artifact), patch.object(artifact, 'verify_directory', return_value=old), patch.object(host, 'stop_preview') as stop:
+                with self.assertRaisesRegex(ValueError, 'epoch'):
+                    host.switch('b' * 64)
+                stop.assert_called_once()
+                self.assertEqual((base / 'current').readlink(), before)
+                self.assertFalse((base / 'previous').exists())
+
+    def test_migration_requires_idle_identities_before_backup_or_sql_and_keeps_failed_maintenance_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            (base / 'backups').mkdir()
+            barrier = base / 'private-generation'
+            barrier.write_text(str(uuid.uuid4()) + '\n')
+            database = base / 'preview.sqlite'
+            self.database(database, 1)
+            current = {'schemaVersion': 1, 'sourceCommit': 'a' * 40, 'buildIdentity': 'b' * 64}
+            target = {**current, 'schemaVersion': 2, 'buildIdentity': 'c' * 64}
+            boundary = SimpleNamespace(require_operator=lambda: None, require_idle_preview=lambda: (_ for _ in ()).throw(ValueError('dedicated identity still running')))
+            with patch.object(recovery.os, 'geteuid', return_value=0), patch.object(recovery, 'backup') as save, patch.object(recovery.subprocess, 'run') as execute:
+                with self.assertRaisesRegex(ValueError, 'still running'):
+                    recovery.migrate_live(database, base / 'backups', barrier, target, ['fixed-target-node'], current, base=base, host=boundary)
+                save.assert_not_called()
+                execute.assert_not_called()
+            self.assertTrue((base / '.preview-schema-migration.lock').exists())
+            with self.assertRaisesRegex(ValueError, 'blocked'):
+                artifact.read_host_plan(base)
+            with closing(sqlite3.connect(database)) as db, db:
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
+
+    def test_protected_migration_runs_exact_target_after_idle_and_backup_with_no_credential_environment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            folder = base / 'backups'
+            folder.mkdir()
+            barrier = base / 'private-generation'
+            barrier.write_text(str(uuid.uuid4()) + '\n')
+            database = base / 'preview.sqlite'
+            with closing(sqlite3.connect(database)) as db, db:
+                db.executescript((HERE.parent / 'server/fixtures/schema-v1.sql').read_text())
+                db.execute("INSERT INTO demo_jev_usage VALUES('project','original',100,3,192000,0,8064000,1)")
+            current = {'schemaVersion': 1, 'sourceCommit': 'a' * 40, 'buildIdentity': 'b' * 64}
+            target = {**current, 'schemaVersion': 2, 'buildIdentity': 'c' * 64}
+            idle = []
+            def stop_and_prove_idle():
+                self.assertTrue((base / '.preview-schema-migration.lock').exists())
+                idle.append(True)
+            boundary = SimpleNamespace(require_operator=lambda: None, require_idle_preview=stop_and_prove_idle, USER='fixture-api', STATE_GROUP='fixture-state')
+            command = [shutil.which('node'), str(HERE.parent / 'server/main.mjs'), '--migrate-db']
+            real_run = subprocess.run
+            def child(argv, **kwargs):
+                self.assertEqual(argv, command)
+                self.assertEqual(idle, [True])
+                self.assertEqual(len(list(folder.glob('backup-*.sqlite'))), 1)
+                self.assertEqual(kwargs.pop('user'), 1001)
+                self.assertEqual(kwargs.pop('group'), 1002)
+                self.assertEqual(kwargs.pop('extra_groups'), [])
+                self.assertEqual(kwargs['umask'], 0o007)
+                self.assertEqual(set(kwargs['env']), {'PATH','LANG','JUSTUP_DB_PATH','JUSTUP_SHARED_STATE'})
+                return real_run(argv, **kwargs)
+            before = barrier.read_bytes()
+            with patch.object(recovery.os, 'geteuid', return_value=0), patch.object(recovery.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1001)), patch.object(recovery.grp, 'getgrnam', return_value=SimpleNamespace(gr_gid=1002)), patch.object(recovery.subprocess, 'run', side_effect=child):
+                result = recovery.migrate_live(database, folder, barrier, target, command, current, base=base, host=boundary)
+            self.assertEqual(result['schemaVersion'], 2)
+            self.assertTrue(result['writersStopped'])
+            self.assertFalse(result['activated'])
+            self.assertFalse((base / '.preview-schema-migration.lock').exists())
+            self.assertEqual(barrier.read_bytes(), before)
+            with closing(sqlite3.connect(database)) as db:
+                self.assertEqual(db.execute('SELECT calls,cost_nano,ambiguous FROM justup_jev_usage').fetchone(), (3,8064000,1))
+            snapshot = folder / result['backup']
+            self.assertEqual(recovery.validate_restore(snapshot, barrier)['schemaVersion'], 1)
+
+    def test_forward_restore_uses_actual_migration_and_auth_helper_without_restoring_ledger_or_generation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            folder = base / 'backups'
+            folder.mkdir()
+            barrier = base / 'private-generation'
+            barrier.write_text(str(uuid.uuid4()) + '\n')
+            database = base / 'preview.sqlite'
+            with closing(sqlite3.connect(database)) as db, db:
+                db.executescript((HERE.parent / 'server/fixtures/schema-v1.sql').read_text())
+                db.execute("INSERT INTO auth_accounts VALUES('account-a','synthetic-user',?,?,100,NULL)", (bytes(range(16)), bytes(range(64))))
+                db.execute("INSERT INTO auth_sessions VALUES(?,'account-a',100,9999999999999)", (bytes(range(32)),))
+                db.execute("INSERT INTO job_source_identities VALUES('closed-source','company-original',10,200,0,1)")
+                db.execute("INSERT INTO demo_jev_usage VALUES('project','project-original',100,9,576000,0,24192000,2)")
+                db.execute("INSERT INTO demo_jev_reservations VALUES('reservation-original','account-a','project-original',100,64000,0,2688000,'ambiguous',150)")
+            ledger = base / 'jev.jsonl'
+            ledger.write_bytes(b'{"schemaVersion":1,"kind":"approval","resourceSlug":"demo-jev-evaluation-budget"}\n{"kind":"reserve","reservedNanodollars":2688000}\n')
+            before_generation, before_ledger = barrier.read_bytes(), ledger.read_bytes()
+            saved = recovery.backup(database, folder, barrier, 'a' * 40, 'b' * 64, now=1000, schema_version=1)
+            snapshot = folder / saved['backup']
+            destination = base / 'restored-forward.sqlite'
+            command = [shutil.which('node'), str(HERE.parent / 'server/main.mjs'), '--prepare-restored-db']
+            with self.assertRaisesRegex(ValueError, 'explicit forward'):
+                recovery.restore(snapshot, barrier, destination, command, now=1001)
+            self.assertFalse(destination.exists())
+            result = recovery.restore(snapshot, barrier, destination, command, now=1001, migrate_v1=True)
+            self.assertTrue(result['sessionsInvalidated'])
+            with closing(sqlite3.connect(destination)) as db, db:
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 2)
+                self.assertEqual(db.execute('SELECT count(*) FROM auth_sessions').fetchone()[0], 0)
+                self.assertEqual(db.execute('SELECT password_hash FROM auth_accounts').fetchone()[0], bytes(range(64)))
+                self.assertEqual(db.execute('SELECT * FROM job_source_identities').fetchone(), ('closed-source','company-original',10,200,0,1))
+                self.assertEqual(db.execute('SELECT calls,input_tokens,cost_nano,ambiguous FROM justup_jev_usage').fetchone(), (9,576000,24192000,2))
+                self.assertEqual(db.execute('SELECT state,cost_nano FROM justup_jev_reservations').fetchone(), ('ambiguous',2688000))
+            self.assertEqual(barrier.read_bytes(), before_generation)
+            self.assertEqual(ledger.read_bytes(), before_ledger)
+            with closing(sqlite3.connect(database)) as db, db:
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
+                self.assertEqual(db.execute('SELECT count(*) FROM auth_sessions').fetchone()[0], 1)
 
 
 class HTTPVerificationContracts(unittest.TestCase):
@@ -1373,7 +1525,7 @@ class HTTPVerificationContracts(unittest.TestCase):
     def responses(self):
         manifest, _ = payload()
         values = {'/api/v1/health': {'ready': True},
-                  '/api/v1/version': {'sourceCommit': manifest['sourceCommit'], 'buildIdentity': manifest['buildIdentity'], 'schemaVersion': 1,
+                  '/api/v1/version': {'sourceCommit': manifest['sourceCommit'], 'buildIdentity': manifest['buildIdentity'], 'schemaVersion': 2,
                                       'runner': {'ready': False, 'identity': None}, 'importGeneration': None},
                   '/api/v1/session': {'user': None, 'access': {'kind': 'guest', 'fullAccess': False, 'billingEnabled': False},
                                       'capabilities': {name: False for name in ('sse', 'follows', 'viewed', 'preferences', 'hiddenMatchCounts')}}}

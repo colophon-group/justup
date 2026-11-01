@@ -29,7 +29,7 @@ test('independent age expiry and verification TTL never invent closure', (t) => 
   const { s, feed, add, advance } = setup(t); add([['expiry', 14], ['valid', 3]]);
   advance(1); assert.deepEqual(feed.list().items.map((j) => j.id), ['valid']);
   advance(DAY_MS); assert.equal(feed.list().items.length, 0); assert.equal(feed.coverage().stale, true);
-  assert.equal(s.db.prepare("SELECT active FROM demo_jobs WHERE id='valid'").get().active, 1);
+  assert.equal(s.db.prepare("SELECT active FROM justup_jobs WHERE id='valid'").get().active, 1);
 });
 test('missing evidence pauses the feed while a fresh eligible zero completes', (t) => {
   const { feed, add } = setup(t);
@@ -56,7 +56,7 @@ test('stale evidence pauses after cursor validation and a refreshed import recov
   assert.deepEqual(paused.continuation, { cursor, state: 'paused', retryAfterMs: 5000 });
   assert.equal(paused.coverage.stale, true);
   assert.equal(paused.coverage.state, 'import_unavailable');
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM demo_jobs WHERE active=1').get().n, 2);
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_jobs WHERE active=1').get().n, 2);
   assert.throws(() => feed.list({ cursor: cursor + 'x' }), { code: 'invalid_cursor' });
   assert.throws(() => feed.list({ viewer, cursor }), { code: 'stale_cursor' });
   add(rows, AT + ttl);
@@ -129,6 +129,6 @@ test('signed-in accounts without full access receive only the guest slice', (t) 
 test('private latest cohort shares source gates and excludes the exact visible cutoff',t=>{
   const {s,feed,add,advance}=setup(t);add([['new',1],['boundary',2],['older',3]]);
   assert.deepEqual(feed.restrictedLatestJobs().map(j=>j.id),['new']);
-  s.db.prepare("UPDATE demo_jobs SET reserved=1 WHERE id='new'").run();assert.deepEqual(feed.restrictedLatestJobs(),[]);
-  s.db.prepare("UPDATE demo_jobs SET reserved=0 WHERE id='new'").run();advance(DAY_MS);assert.deepEqual(feed.restrictedLatestJobs(),[]);assert.equal(feed.coverage().stale,true);
+  s.db.prepare("UPDATE justup_jobs SET reserved=1 WHERE id='new'").run();assert.deepEqual(feed.restrictedLatestJobs(),[]);
+  s.db.prepare("UPDATE justup_jobs SET reserved=0 WHERE id='new'").run();advance(DAY_MS);assert.deepEqual(feed.restrictedLatestJobs(),[]);assert.equal(feed.coverage().stale,true);
 });

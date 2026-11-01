@@ -106,20 +106,20 @@ test('sign-in cancels pending anonymous inference and a late reply cannot recrea
   const submitted=await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'pending'}});const work=s.work('search_intent');await Promise.resolve();
   await c.login('one');release(interpretation());await work;
   const searches=(await c.request('/searches')).body.items;assert.equal(searches.length,1);assert.equal(searches[0].revision,0);assert.equal(searches[0].draft.query,'Engineer');assert.equal(searches[0].draft.taskId,null);
-  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks WHERE owner_id LIKE ?').get('visitor:%').n,0);assert.equal(submitted.status,202);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks WHERE owner_id LIKE ?').get('visitor:%').n,0);assert.equal(submitted.status,202);
 });
 
 test('temporary deletion and expiry invalidate old cookies and late queued work',async t=>{
   const s=await setup(t),c=s.client();await c.session();const id=await s.create(c),token=c.jar.get('__Host-justup_visitor');
-  assert.equal((await c.request('/visitor/session',{method:'DELETE',body:{}})).status,200);assert.equal(s.identity.fromToken(token),null);assert.equal(s.app.store.db.prepare('SELECT 1 FROM demo_searches WHERE id=?').get(id),undefined);
-  await c.session();await s.create(c,'second');s.advance(DAY+1);assert.equal((await c.request('/visitor/searches')).status,401);await c.session();assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_searches').get().n,0);
+  assert.equal((await c.request('/visitor/session',{method:'DELETE',body:{}})).status,200);assert.equal(s.identity.fromToken(token),null);assert.equal(s.app.store.db.prepare('SELECT 1 FROM justup_searches WHERE id=?').get(id),undefined);
+  await c.session();await s.create(c,'second');s.advance(DAY+1);assert.equal((await c.request('/visitor/searches')).status,401);await c.session();assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_searches').get().n,0);
 });
 
 test('paid queued matching uses current full access and discards a downgrade during provider wait',async t=>{
   let release,seen;const s=await setup(t,{residual:true,provider:args=>{seen=args.jobs.map(j=>j.id);return new Promise(resolve=>release=()=>resolve({decisions:args.jobs.map(j=>({id:j.id,decision:'accepted'}))}));}}),c=s.client();await c.session();await c.login('one');
   const created=await c.request('/searches',{method:'POST',body:{query:'Engineer four day week',requestKey:'paid'}});await s.work('search_intent');const id=created.body.search.id,path=`/searches/${id}/results?revision=1`;
   const pending=await c.request(path);const work=s.work('ai_match');await Promise.resolve();assert(seen.includes('hidden-accepted'),'the live paid authority includes latest candidates');
-  s.accounts.get('one').access={...s.accounts.get('one').access,kind:'expired',fullAccess:false};release();const discarded=await work;assert.equal(discarded.committed,undefined);assert.equal(s.app.store.db.prepare("SELECT count(*) n FROM demo_match_jobs WHERE decision='accepted'").get().n,0);
+  s.accounts.get('one').access={...s.accounts.get('one').access,kind:'expired',fullAccess:false};release();const discarded=await work;assert.equal(discarded.committed,undefined);assert.equal(s.app.store.db.prepare("SELECT count(*) n FROM justup_match_jobs WHERE decision='accepted'").get().n,0);
   assert.equal((await c.request(`${path}&cursor=${pending.body.continuation.cursor}`)).status,409);const downgraded=await c.request(path);assert.equal(downgraded.body.items.length,0);assert.equal(JSON.stringify(downgraded.body).includes('hidden-accepted'),false);
 });
 
@@ -143,7 +143,7 @@ test('workspace CAS preserves concurrent edits and durable sign-in draft recover
 test('a handoff failure rolls back visitor movement, task cancellation, workspace and session insertion',async t=>{
   const s=await setup(t),c=s.client();await c.session();const id=await s.create(c),token=c.jar.get('__Host-justup_visitor');
   await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{[id]:'Unsent'}}});s.failHandoff();const failed=await c.login('one');assert.equal(failed.status,503);assert.equal(s.sessions.size,0);assert(s.identity.fromToken(token));
-  assert.equal(s.app.store.db.prepare('SELECT owner_id FROM demo_searches WHERE id=?').get(id).owner_id,s.identity.fromToken(token).visitor.id);
+  assert.equal(s.app.store.db.prepare('SELECT owner_id FROM justup_searches WHERE id=?').get(id).owner_id,s.identity.fromToken(token).visitor.id);
   assert.equal((await c.request('/visitor/workspace')).body.state.drafts[id],'Unsent');assert.equal((await c.login('one')).status,200);assert.equal((await c.request('/searches')).body.items[0].id,id);
 });
 
@@ -170,7 +170,7 @@ test('the independent queue reader honors persisted paid and free periods and re
     const queueIdentity=createVisitorIdentity({db,now:s.time,config:s.config,accessForAccount:createAccessReader({db,now:s.time})});let release,selected;
     const queue=createMatchingService({db,feed:s.app.feed,tasks:s.app.tasks,now:s.time,ownerAuthority:queueIdentity.principal,taskAdmission:queueIdentity.admitMatching,provider:{available:()=>true,classify:args=>{selected=args.jobs.map(j=>j.id);return new Promise(resolve=>release=()=>resolve({decisions:args.jobs.map(j=>({id:j.id,decision:'accepted'}))}));}}});
     const task=s.app.tasks.claim({workerId:'independent-queue',kinds:['ai_match']}),work=queue.runTask(task);await Promise.resolve();assert(selected.includes('hidden-accepted'));
-    s.advance(1001);release();const result=await work;assert.equal(result.committed,undefined);assert.equal(db.prepare("SELECT count(*) n FROM demo_match_jobs WHERE decision='accepted'").get().n,0);assert.equal((await c.request(`${path}&cursor=${initial.body.continuation.cursor}`)).status,409);
+    s.advance(1001);release();const result=await work;assert.equal(result.committed,undefined);assert.equal(db.prepare("SELECT count(*) n FROM justup_match_jobs WHERE decision='accepted'").get().n,0);assert.equal((await c.request(`${path}&cursor=${initial.body.continuation.cursor}`)).status,409);
     assert.equal((await c.request('/workspace')).body.viewed.some(j=>j.jobId==='hidden-accepted'),false);
   });
 });
@@ -219,7 +219,7 @@ test('losing the entire first search response reuses the prior stateless ownersh
   // Both headers and body disappeared: only cookies/CSRF established before the
   // POST survive. Repeated retries must not require its Set-Cookie response.
   for(let i=0;i<3;i++){c.restore(previous);const retry=await c.request('/visitor/searches',{method:'POST',body});assert.equal(retry.status,202);assert.equal(retry.body.search.id,first.body.search.id);assert.equal(retry.body.task.id,first.body.task.id);assert.equal(c.jar.get('__Host-justup_visitor'),pendingCookie);}
-  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_searches').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,1);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_searches').get().n,1);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
   await s.work('search_intent');c.restore(previous);const done=await c.request('/visitor/searches',{method:'POST',body});assert.equal(done.body.search.id,first.body.search.id);assert.equal(done.body.task.id,first.body.task.id);assert.equal(done.body.task.status,'succeeded');assert.equal(s.modelCalls(),1);
   // Unknown supplied cookies require a fresh session bootstrap. A first POST
   // must not silently substitute another ownership token.
@@ -247,7 +247,7 @@ test('deleted and reclaimed ownership cookies cannot recreate or read a future p
     // Discard all DELETE headers and body, retaining the prior seed and hint.
     c.restore(beforeDelete);const body={query:'Future private query',requestKey:'future'};
     for(let i=0;i<2;i++)assert.equal((await c.request('/visitor/searches',{method:'POST',body})).status,401);
-    for(const table of ['justup_visitors','demo_searches','demo_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+    for(const table of ['justup_visitors','justup_searches','justup_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
     assert.equal((await c.request('/visitor/workspace')).status,401);
     const fresh=await c.session();assert.equal(fresh.body.visitor,null);assert.notEqual(c.jar.get('__Host-justup_visitor'),oldToken);
     assert.equal(c.jar.get('__Host-justup_csrf'),beforeDelete.jar.find(([key])=>key==='__Host-justup_csrf')[1],'the same guest CSRF seed is safe across epochs');
@@ -256,7 +256,7 @@ test('deleted and reclaimed ownership cookies cannot recreate or read a future p
     const old=s.client();old.restore(beforeDelete);
     for(const path of ['/visitor/searches','/visitor/workspace',`/visitor/searches/${future.body.search.id}/results?revision=0`])assert.equal((await old.request(path)).status,401);
     assert.equal((await old.request('/visitor/searches',{method:'POST',body})).status,401);
-    assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_searches').get().n,1);
+    assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_searches').get().n,1);
   });
 });
 
@@ -274,7 +274,7 @@ test('issuance is rechecked after admission and before allocating a durable owne
   s.visitor.openSession=(token,options)=>{s.identity.rotateIssuanceEpoch();return original(token,options);};
   const body={query:'Engineer',requestKey:'changed-during-admission'};
   assert.equal((await c.request('/visitor/searches',{method:'POST',body})).status,401);
-  for(const table of ['justup_visitors','demo_searches','demo_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+  for(const table of ['justup_visitors','justup_searches','justup_tasks'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
   s.visitor.openSession=original;await c.session();assert.equal((await c.request('/visitor/searches',{method:'POST',body})).status,202);
 });
 
@@ -293,7 +293,7 @@ test('deleting the last search reclaims an empty visitor so discarded cookies ca
     await c.session();const created=await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:`cycle-${i}`}});assert.equal(created.status,202);
     if(i)await s.work('search_intent');
     assert.equal((await c.request(`/visitor/searches/${created.body.search.id}`,{method:'DELETE',body:{}})).status,200);
-    for(const table of ['justup_visitors','demo_tasks','demo_searches'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
+    for(const table of ['justup_visitors','justup_tasks','justup_searches'])assert.equal(s.app.store.db.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,table);
     c.jar.delete('__Host-justup_visitor');
   }
   await c.session();assert.equal((await c.request('/visitor/searches',{method:'POST',body:{query:'Engineer',requestKey:'third-owner'}})).status,202);
@@ -302,7 +302,7 @@ test('deleting the last search reclaims an empty visitor so discarded cookies ca
 
 test('last-search deletion preserves every nonempty draft, recovered record, viewed record and other owned work',async t=>{
   for(const kind of ['draft','recovery','viewed','other-task','other-table'])await t.test(kind,async t=>{
-    const s=await setup(t,{visitor:{maxVisitors:2}}),c=s.client();await c.session();const id=await s.create(c),db=s.app.store.db,owner=db.prepare('SELECT owner_id FROM demo_searches WHERE id=?').get(id).owner_id;
+    const s=await setup(t,{visitor:{maxVisitors:2}}),c=s.client();await c.session();const id=await s.create(c),db=s.app.store.db,owner=db.prepare('SELECT owner_id FROM justup_searches WHERE id=?').get(id).owner_id;
     if(kind==='draft')assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:id,drafts:{new:'Keep this unsent draft'}}})).status,200);
     if(kind==='recovery')db.prepare('INSERT INTO justup_recovered_drafts VALUES(?,?,?,?)').run('retained',owner,'Keep this recovered draft',START);
     if(kind==='viewed')assert.equal((await c.request('/visitor/viewed',{method:'POST',body:{jobId:'visible-accepted'}})).status,200);
@@ -319,7 +319,7 @@ test('last-search deletion preserves every nonempty draft, recovered record, vie
 });
 
 test('a draft saved while last-search deletion awaits completion prevents empty-owner reclamation',async t=>{
-  const s=await setup(t,{visitor:{maxVisitors:2}}),c=s.client();await c.session();const id=await s.create(c),owner=s.app.store.db.prepare('SELECT owner_id FROM demo_searches WHERE id=?').get(id).owner_id;
+  const s=await setup(t,{visitor:{maxVisitors:2}}),c=s.client();await c.session();const id=await s.create(c),owner=s.app.store.db.prepare('SELECT owner_id FROM justup_searches WHERE id=?').get(id).owner_id;
   const original=s.intent.route;let release,deleted;const afterDelete=new Promise(resolve=>deleted=resolve),hold=new Promise(resolve=>release=resolve);
   s.intent.route=async ctx=>{const result=await original(ctx);if(ctx.method==='DELETE'){deleted();await hold;}return result;};
   const removing=c.request(`/visitor/searches/${id}`,{method:'DELETE',body:{}});await afterDelete;
@@ -329,7 +329,7 @@ test('a draft saved while last-search deletion awaits completion prevents empty-
 
 test('empty-owner reclamation respects a newly pending deletion barrier and never clears the foreign marker',async t=>{
   const dir=mkdtempSync(join(tmpdir(),'justup-visitor-empty-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),generationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(generationPath,'00000000-0000-4000-8000-000000000000\n');
-  const s=await setup(t,{runtime:{dbPath:join(dir,'state.sqlite'),privateGenerationPath:generationPath,backupDir}}),c=s.client();await c.session();const id=await s.create(c),owner=s.app.store.db.prepare('SELECT owner_id FROM demo_searches WHERE id=?').get(id).owner_id;
+  const s=await setup(t,{runtime:{dbPath:join(dir,'state.sqlite'),privateGenerationPath:generationPath,backupDir}}),c=s.client();await c.session();const id=await s.create(c),owner=s.app.store.db.prepare('SELECT owner_id FROM justup_searches WHERE id=?').get(id).owner_id;
   const original=s.intent.route;let release,deleted;const afterDelete=new Promise(resolve=>deleted=resolve),hold=new Promise(resolve=>release=resolve);
   s.intent.route=async ctx=>{const result=await original(ctx);if(ctx.method==='DELETE'){deleted();await hold;}return result;};
   const removing=c.request(`/visitor/searches/${id}`,{method:'DELETE',body:{}});await afterDelete;writeFileSync(generationPath+'.pending','foreign retained marker');release();assert.equal((await removing).status,500);
@@ -340,12 +340,12 @@ test('empty-owner reclamation respects a newly pending deletion barrier and neve
 test('current policy closure revokes existing visitor reads, query writes and queued interpretation/classification while cleanup stays available',async t=>{
   const s=await setup(t,{residual:true}),c=s.client();await c.session();const id=await s.create(c);await s.results(c,id);
   const pending=await c.request(`/visitor/searches/${id}`,{method:'PATCH',body:{query:'Persisted pending edit',requestKey:'pending-edit',expectedRevision:1}});assert.equal(pending.status,202);
-  const before=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,modelCalls=s.modelCalls(),providerCalls=s.providerCalls();
+  const before=s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,modelCalls=s.modelCalls(),providerCalls=s.providerCalls();
   s.config.policiesReviewed=false;s.identity.refreshAvailability();
   const cookie=c.jar.get('__Host-justup_visitor');assert.equal((await c.session()).body.visitor,null);assert.equal(c.jar.get('__Host-justup_visitor'),cookie,'policy closure must retain live ownership for explicit cleanup');
   assert.equal((await s.results(c,id)).status,503);
   assert.notEqual((await c.request(`/visitor/searches/${id}`,{method:'PATCH',body:{query:'Must not persist',requestKey:'denied',expectedRevision:1}})).status,202);
-  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,before);assert.equal(JSON.parse(s.app.store.db.prepare('SELECT draft_json FROM demo_searches WHERE id=?').get(id).draft_json).query,'Persisted pending edit');
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,before);assert.equal(JSON.parse(s.app.store.db.prepare('SELECT draft_json FROM justup_searches WHERE id=?').get(id).draft_json).query,'Persisted pending edit');
   await s.work('search_intent');await s.work('ai_match');assert.equal(s.modelCalls(),modelCalls);assert.equal(s.providerCalls(),providerCalls);
   assert.equal((await c.request('/visitor/session',{method:'DELETE',body:{}})).status,200);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
 });
@@ -356,21 +356,21 @@ test('restart with unreviewed policy revokes persisted visitor processing before
   // A second API instance is the restart proof writer; its database is real and
   // already contains the queued visitor request and the prior enabled proof.
   const next=await setup(t,{runtime,policiesReviewed:false});assert.equal(next.identity.fromToken(token),null);
-  const queueIdentity=createVisitorIdentity({db:next.app.store.db,config:next.config,now:next.time});assert.equal(queueIdentity.principal(old.app.store.db.prepare('SELECT owner_id FROM demo_searches').get().owner_id),null);
+  const queueIdentity=createVisitorIdentity({db:next.app.store.db,config:next.config,now:next.time});assert.equal(queueIdentity.principal(old.app.store.db.prepare('SELECT owner_id FROM justup_searches').get().owner_id),null);
   await next.work('search_intent');assert.equal(next.modelCalls(),0);
 });
 
 test('a live private pending marker stops visitor writes and independent queued work, and proof expiry or wrong build fails closed',async t=>{
   const dir=mkdtempSync(join(tmpdir(),'justup-visitor-barrier-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const backupDir=join(dir,'backups'),generationPath=join(dir,'private-generation');mkdirSync(backupDir);writeFileSync(generationPath,'00000000-0000-4000-8000-000000000000\n');
   const s=await setup(t,{runtime:{dbPath:join(dir,'state.sqlite'),privateGenerationPath:generationPath,backupDir},residual:true}),c=s.client();await c.session();const id=await s.create(c);await s.results(c,id);
-  const owner=s.app.store.db.prepare('SELECT owner_id FROM demo_searches WHERE id=?').get(id).owner_id,queue=createVisitorIdentity({db:s.app.store.db,config:s.config,now:s.time});assert(queue.principal(owner));
+  const owner=s.app.store.db.prepare('SELECT owner_id FROM justup_searches WHERE id=?').get(id).owner_id,queue=createVisitorIdentity({db:s.app.store.db,config:s.config,now:s.time});assert(queue.principal(owner));
   assert.equal(createVisitorIdentity({db:s.app.store.db,config:{...s.config,buildIdentity:'other-build'},now:s.time}).principal(owner),null);
   const previous=s.app.store.db.prepare('SELECT checked_at FROM justup_processing_admission').get().checked_at;
   await c.session();await c.session();assert.equal(s.app.store.db.prepare('SELECT checked_at FROM justup_processing_admission').get().checked_at,previous);
   writeFileSync(generationPath+'.pending','retained');assert.equal(visitorPrivateGeneration(s.config),null);assert.equal(queue.principal(owner),null);
-  const before=s.app.store.db.prepare('SELECT draft_json FROM demo_searches WHERE id=?').get(id).draft_json,count=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
+  const before=s.app.store.db.prepare('SELECT draft_json FROM justup_searches WHERE id=?').get(id).draft_json,count=s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n;
   for(const method of ['POST','PATCH']){const path=method==='POST'?'/visitor/searches':`/visitor/searches/${id}`,body={query:'Private text must not persist',requestKey:method,...(method==='PATCH'?{expectedRevision:1}:{})};assert.equal((await c.request(path,{method,body})).status,503);}
-  assert.equal((await s.results(c,id)).status,503);assert.equal(s.app.store.db.prepare('SELECT draft_json FROM demo_searches WHERE id=?').get(id).draft_json,before);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,count);await s.work('ai_match');assert.equal(s.providerCalls(),0);
+  assert.equal((await s.results(c,id)).status,503);assert.equal(s.app.store.db.prepare('SELECT draft_json FROM justup_searches WHERE id=?').get(id).draft_json,before);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,count);await s.work('ai_match');assert.equal(s.providerCalls(),0);
   unlinkSync(generationPath+'.pending');s.advance(90_001);assert.equal(queue.principal(owner),null);s.identity.refreshAvailability();assert(queue.principal(owner));
   s.config.policiesReviewed=false;s.identity.refreshAvailability();assert.equal((await c.request('/visitor/session',{method:'DELETE',body:{}})).status,200);
 });
@@ -379,10 +379,10 @@ test('current policy closure stops an existing signed-in account submission and 
   const s=await setup(t),c=s.client();await c.session();await c.login('one');
   const queued=await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'before-close'}});assert.equal(queued.status,202);
   s.config.policiesReviewed=false;
-  const before=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
+  const before=s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n;
   const denied=await c.request('/searches',{method:'POST',body:{query:'Private blocked query',requestKey:'after-close'}});
   assert.equal(denied.status,503);assert.equal(denied.body.error.code,'policy_unavailable');
-  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,before);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,before);
   const blocked=await s.work('search_intent');assert.equal(blocked.committed,undefined);assert.equal(blocked.errorCode,'processing_unavailable');assert.equal(s.modelCalls(),0);
   const paused=s.app.tasks.publicView(s.app.tasks.get('one',queued.body.task.id));assert.equal(paused.error.code,'processing_unavailable');assert.equal(paused.error.retryable,false);
   assert.equal((await c.request('/session/logout',{method:'POST',body:{}})).status,200);
@@ -395,9 +395,9 @@ test('policy-paused stored workspace reads retain current paid viewed access wit
   s.config.policiesReviewed=false;s.identity.refreshAvailability();assert.equal(s.identity.principal('one'),null);
   const workspace=await c.request('/workspace');assert.equal(workspace.status,200);
   assert.deepEqual(workspace.body.viewed.map(item=>item.jobId),['hidden-accepted']);
-  const count=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
+  const count=s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n;
   assert.equal((await c.request('/searches',{method:'POST',body:{query:'Must stay blocked',requestKey:'policy-paused'}})).status,503);
-  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,count);assert.equal(s.modelCalls(),0);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,count);assert.equal(s.modelCalls(),0);
   s.accounts.get('one').access={...s.accounts.get('one').access,fullAccess:false};
   assert.deepEqual((await c.request('/workspace')).body.viewed,[]);
   assert.equal(s.app.store.db.prepare("SELECT count(*) n FROM justup_viewed WHERE owner_id='one'").get().n,1);
@@ -410,11 +410,11 @@ test('persisted account session survives a policy-closed restart while query and
   assert.equal((await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'before-restart'}})).status,202);
   assert.equal((await c.request('/company-requests',{method:'POST',body:{input:'Synthetic Unlisted Company',scope:null,requestKey:'company-before-restart'}})).status,202);
   const next=await setup(t,{runtime,realAuth:true,policiesReviewed:false}),persisted=next.client();persisted.restore(c.snapshot());const current=await persisted.session();assert.equal(current.body.user.id,registered.body.user.id);
-  const count=next.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
+  const count=next.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n;
   for(const [path,body] of [['/searches',{query:'Must not persist',requestKey:'denied'}],['/company-requests',{input:'Must not persist',scope:null,requestKey:'denied-company'}]])assert.equal((await persisted.request(path,{method:'POST',body})).status,503);
-  assert.equal(next.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,count);await next.work('search_intent');await next.work('company_resolution');assert.equal(next.modelCalls(),0);assert.equal(next.companyCalls(),0);
+  assert.equal(next.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,count);await next.work('search_intent');await next.work('company_resolution');assert.equal(next.modelCalls(),0);assert.equal(next.companyCalls(),0);
   assert.equal((await persisted.request('/searches')).status,200);assert.equal((await persisted.request('/company-requests')).status,200);assert.equal((await persisted.request('/workspace')).status,200);
-  assert.equal((await persisted.request('/account',{method:'DELETE',body:{password:'Synthetic account password 123!'}})).status,200);assert.equal(next.app.store.db.prepare('SELECT count(*) n FROM demo_searches').get().n,0);
+  assert.equal((await persisted.request('/account',{method:'DELETE',body:{password:'Synthetic account password 123!'}})).status,200);assert.equal(next.app.store.db.prepare('SELECT count(*) n FROM justup_searches').get().n,0);
 });
 
 test('account pending deletion blocks new private writes and independent queued inference before commit',async t=>{
@@ -423,18 +423,18 @@ test('account pending deletion blocks new private writes and independent queued 
   assert.equal((await c.request('/searches',{method:'POST',body:{query:'Engineer',requestKey:'before-marker'}})).status,202);
   const queue=createVisitorIdentity({db:s.app.store.db,config:s.config,now:s.time,accessForAccount:id=>s.accounts.get(id)?.access});assert(queue.principal('one'));
   writeFileSync(generationPath+'.pending','retained');assert.equal(queue.principal('one'),null);
-  const before=s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n;
+  const before=s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n;
   for(const [path,body]of [['/searches',{query:'Must not persist',requestKey:'denied'}],['/company-requests',{input:'Must not persist',scope:null,requestKey:'denied-company'}],['/workspace',{expectedRevision:0,activeSearchId:null,drafts:{new:'Must not persist'}}]])assert.equal((await c.request(path,{method:path==='/workspace'?'PATCH':'POST',body})).status,503);
-  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_tasks').get().n,before);await s.work('search_intent');assert.equal(s.modelCalls(),0);assert.equal((await c.request('/workspace')).status,200);unlinkSync(generationPath+'.pending');
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,before);await s.work('search_intent');assert.equal(s.modelCalls(),0);assert.equal((await c.request('/workspace')).status,200);unlinkSync(generationPath+'.pending');
 });
 
 test('policy revocation during interpretation or classification discards account and visitor private effects',async t=>{
   for(const account of [false,true]){
     let release;const s=await setup(t,{residual:true,model:()=>new Promise(resolve=>release=()=>resolve(interpretation({residual:true})))}),c=s.client();await c.session();if(account)await c.login('one');const prefix=account?'':'/visitor';
     const created=await c.request(prefix+'/searches',{method:'POST',body:{query:'Engineer four day week',requestKey:'waiting'}});assert.equal(created.status,202);const work=s.work('search_intent');await Promise.resolve();s.config.policiesReviewed=false;s.identity.refreshAvailability();release();assert.equal((await work).committed,undefined);
-    assert.equal(s.app.store.db.prepare('SELECT accepted_json FROM demo_searches WHERE id=?').get(created.body.search.id).accepted_json,null);
+    assert.equal(s.app.store.db.prepare('SELECT accepted_json FROM justup_searches WHERE id=?').get(created.body.search.id).accepted_json,null);
     let finish;const m=await setup(t,{residual:true,provider:({jobs})=>new Promise(resolve=>finish=()=>resolve({decisions:jobs.map(j=>({id:j.id,decision:'accepted'}))}))}),d=m.client();await d.session();if(account)await d.login('one');const id=account?(await d.request('/searches',{method:'POST',body:{query:'Engineer four day week',requestKey:'matching'}})).body.search.id:await m.create(d);if(account)await m.work('search_intent');await d.request(`${prefix}/searches/${id}/results?revision=1`);
-    const matching=m.work('ai_match');await Promise.resolve();m.config.policiesReviewed=false;m.identity.refreshAvailability();finish();assert.equal((await matching).committed,undefined);assert.equal(m.app.store.db.prepare("SELECT count(*) n FROM demo_match_jobs WHERE decision='accepted'").get().n,0);assert.equal(m.app.store.db.prepare('SELECT count(*) n FROM demo_match_cache').get().n,0);
+    const matching=m.work('ai_match');await Promise.resolve();m.config.policiesReviewed=false;m.identity.refreshAvailability();finish();assert.equal((await matching).committed,undefined);assert.equal(m.app.store.db.prepare("SELECT count(*) n FROM justup_match_jobs WHERE decision='accepted'").get().n,0);assert.equal(m.app.store.db.prepare('SELECT count(*) n FROM justup_match_cache').get().n,0);
   }
 });
 
@@ -453,7 +453,7 @@ test('company policy revocation during provider wait discards clarification and 
   let release,seen;const s=await setup(t,{companyModel:args=>{seen=args;return new Promise(resolve=>release=()=>resolve({status:'unresolved',candidate:null,clarification:'Must not commit'}));}}),c=s.client();await c.session();await c.login('one');
   const created=await c.request('/company-requests',{method:'POST',body:{input:'Synthetic Private Company',scope:null,requestKey:'waiting-company'}});assert.equal(created.status,202);
   const work=s.work('company_resolution');await Promise.resolve();assert.equal(seen.presentationLocale,'en');assert.equal(seen.input,'Synthetic Private Company');s.config.policiesReviewed=false;s.identity.refreshAvailability();release();assert.equal((await work).committed,undefined);
-  const row=s.app.store.db.prepare('SELECT status,clarification FROM demo_company_requests WHERE id=?').get(created.body.request.id);assert.equal(row.status,'pending');assert.equal(row.clarification,null);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM demo_company_evidence').get().n,0);
+  const row=s.app.store.db.prepare('SELECT status,clarification FROM justup_company_requests WHERE id=?').get(created.body.request.id);assert.equal(row.status,'pending');assert.equal(row.clarification,null);assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_company_evidence').get().n,0);
 });
 
 
