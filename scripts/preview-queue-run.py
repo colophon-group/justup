@@ -10,13 +10,14 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import pwd
 import stat
 
 BASE = Path('/srv/justup_preview')
 CONFIG_PATH = BASE / 'queue/config/runner.json'
 LEDGER_PATH = BASE / 'queue/budget/jev.jsonl'
 CONFIG_KEYS = {'dbPath', 'sharedState', 'runnerStatusPath',
-               'model', 'jev', 'matching', 'verificationTtlMs'}
+               'model', 'jev', 'matching', 'verificationTtlMs', 'hiringWire', 'sourceCoverage'}
 MODEL_KEYS = {'enabled', 'isolationVerified', 'cliVersion', 'socketPath', 'attestationPath',
               'taskProfiles', 'companyResearchVerified'}
 BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49'
@@ -48,6 +49,17 @@ def validate_configuration(config, manifest):
             or config.get('sharedState') is not True
             or config.get('runnerStatusPath') != str(BASE / 'state/runner-status.json')):
         raise ValueError('Queue configuration differs from the fixed candidate and state boundary.')
+    if 'sourceCoverage' in config:
+        source = config['sourceCoverage']
+        if (not isinstance(source, dict) or set(source) != {'directory', 'sourceVersion'}
+                or source.get('sourceVersion') != 'jobseek-coverage-v1' or not isinstance(source.get('directory'), str)):
+            raise ValueError('Source coverage must use the reviewed queue-only reader configuration.')
+        directory = Path(source['directory'])
+        if (not directory.is_absolute() or str(directory) != source['directory'] or '..' in directory.parts
+                or directory.is_relative_to(BASE / 'state')):
+            raise ValueError('Source coverage requires a canonical path outside shared state and backups.')
+        if not {'app/server/source-coverage.mjs', 'app/server/hiring-wire-integration.mjs'} <= manifest.get('files', {}).keys():
+            raise ValueError('Source coverage requires the fixed reader in this exact artifact.')
     model = config.get('model', {})
     if (not isinstance(model, dict) or set(model) - MODEL_KEYS
             or ('socketPath' in model and model['socketPath'] != str(BASE / 'broker/model.sock'))
@@ -60,6 +72,12 @@ def validate_configuration(config, manifest):
         profiles = model_contract().validate_task_profiles(model.get('taskProfiles'))
         if 'company_resolution' in profiles and model.get('companyResearchVerified') is not True:
             raise ValueError('Company web research requires a separately qualified task profile.')
+    if 'hiringWire' in config:
+        wire = config['hiringWire']
+        model_uid = pwd.getpwnam('justup-preview-model').pw_uid if isinstance(wire, dict) and wire.get('enabled') is True else None
+        contract = model_contract()
+        if contract.validate_wire_configuration(wire, private=False, model_uid=model_uid):
+            contract.validate_wire_inventory(manifest)
     jev = config.get('jev', {})
     if not isinstance(jev, dict):
         raise ValueError('Queue provider configuration is unavailable.')
@@ -127,6 +145,10 @@ def main():
                 or meta.st_nlink != 1 or meta.st_size > 32_768):
             raise ValueError('Queue configuration must be a protected root-owned file.')
         config = validate_configuration(json.loads(CONFIG_PATH.read_text()), manifest)
+        if config.get('hiringWire', {}).get('enabled') is True:
+            contract = model_contract()
+            contract.validate_wire_attestation(contract.read_wire_attestation(config['hiringWire']['attestationPath']),
+                                               config['hiringWire'], manifest, host_plan)
         if config.get('jev', {}).get('enabled') is True:
             validate_ledger(expected_identity=budget_identity(config['jev']['cumulativeBudget']))
         node = str(release / 'runtime/bin/node')

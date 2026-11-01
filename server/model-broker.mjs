@@ -10,6 +10,9 @@ import { pathToFileURL } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import { CODEX_VERSION,codexArguments,codexEnvironment,executeCodex,validateModelData,modelCatalogueReady,MODEL_PROFILES } from './model-runner.mjs';
 import { validateCompanyUrl } from './companies.mjs';
+import { createHiringWireCodexSession } from './hiring-wire-codex.mjs';
+import { handleHiringWireCodexConnection,validWireConfiguration,validateWireOpen } from './hiring-wire-codex-broker.mjs';
+import { wireCatalogueReady,wireProfileReady,WIRE_NODE_VERSION } from './hiring-wire-codex-policy.mjs';
 
 const schemas={intent:new URL('./model-schemas/intent.schema.json',import.meta.url),company:new URL('./model-schemas/company.schema.json',import.meta.url)};
 // This schema is private orchestration state, never a socket registry entry.
@@ -191,9 +194,9 @@ export async function fetchCompanyEvidence(url,{signal,resolveAddresses=addresse
 function protectedDirectory(path,{root=false,immutable=false}={}){if(!isAbsolute(path)||realpathSync(path)!==path)throw problem('dependency_unavailable');const s=lstatSync(path);if(!s.isDirectory()||s.uid!==(root?0:process.getuid())||(s.mode&(immutable?0o222:0o077))!==0)throw problem('dependency_unavailable');}
 export function recoverBrokerScratch(invocationRoot){
   protectedDirectory(invocationRoot);
-  const paths=readdirSync(invocationRoot).map(name=>({name,path:join(invocationRoot,name)}));
-  for(const {name,path} of paths){const meta=lstatSync(path);if(!/^task-[A-Za-z0-9]+$/.test(name)||!meta.isDirectory()||meta.isSymbolicLink()||meta.uid!==process.getuid())throw problem('dependency_unavailable');}
-  for(const {path} of paths)rmSync(path,{recursive:true,force:true,maxRetries:1});
+  // Directory ownership and a stopped parent cannot prove native descendants
+  // are gone. Preserve all retained private evidence for reviewed recovery.
+  if(readdirSync(invocationRoot).length)throw problem('dependency_unavailable');
 }
 function subscriptionAuth(bytes){
   if(bytes.length>65_536)throw problem('dependency_unavailable');let auth;try{auth=JSON.parse(bytes);}catch{throw problem('dependency_unavailable');}
@@ -202,7 +205,7 @@ function subscriptionAuth(bytes){
 }
 export function brokerConfigurationReady(config){
   try{
-    if(config.enabled!==true||config.cliVersion!==CODEX_VERSION||process.getuid()===0||!modelCatalogueReady()||!/^[a-f0-9]{64}$/.test(config.buildIdentity??'')||!/^[a-f0-9]{64}$/.test(config.hostPlanSha256??''))return false;
+    if(!validWireConfiguration(config.hiringWire)||config.enabled!==true||config.cliVersion!==CODEX_VERSION||process.getuid()===0||!modelCatalogueReady()||!/^[a-f0-9]{64}$/.test(config.buildIdentity??'')||!/^[a-f0-9]{64}$/.test(config.hostPlanSha256??''))return false;
     protectedDirectory(config.protectedAuthHome);protectedDirectory(config.invocationRoot);protectedDirectory(config.taskCwd,{root:true,immutable:true});
     if(readdirSync(config.taskCwd).length||readdirSync(config.protectedAuthHome).some(n=>n!=='auth.json'))return false;
     for(const path of [config.codexPath,join(config.protectedAuthHome,'auth.json')]){if(realpathSync(path)!==path)return false;const s=lstatSync(path);if(!s.isFile()||s.uid!==(path===config.codexPath?0:process.getuid())||(s.mode&(path===config.codexPath?0o022:0o077))!==0)return false;}
@@ -210,19 +213,30 @@ export function brokerConfigurationReady(config){
     return true;
   }catch{return false;}
 }
-export function createModelBroker({config={},execute=executeCodex,fetchPage=fetchCompanyEvidence,testOnly=false}={}){
-  let busy=false;const controllers=new Set(),sockets=new Set();
+function createBrokerInvocation(config,{testOnly=false}={}) {
+  let invocation=null,auth=null;
+  function dispose() {
+    try{if(invocation){const refreshed=subscriptionAuth(readFileSync(join(invocation,'home','auth.json'))),temp=join(config.protectedAuthHome,`.auth-${randomUUID()}`);try{writeFileSync(temp,refreshed,{mode:0o600,flag:'wx'});renameSync(temp,join(config.protectedAuthHome,'auth.json'));}finally{refreshed.fill(0);rmSync(temp,{force:true});}}}
+    finally{auth?.fill(0);if(invocation)rmSync(invocation,{recursive:true,force:true,maxRetries:1});invocation=null;auth=null;}
+  }
+  try {
+    if(testOnly)return {env:undefined,wireInvocation:undefined,dispose};
+    invocation=mkdtempSync(join(config.invocationRoot,'task-'));chmodSync(invocation,0o700);
+    const home=join(invocation,'home'),scratch=join(invocation,'scratch');mkdirSync(home,{mode:0o700});mkdirSync(scratch,{mode:0o700});
+    auth=subscriptionAuth(readFileSync(join(config.protectedAuthHome,'auth.json')));writeFileSync(join(home,'auth.json'),auth,{mode:0o600,flag:'wx'});
+    return {env:{...codexEnvironment({codexHome:home,taskCwd:config.taskCwd}),TMPDIR:scratch},wireInvocation:{executable:config.codexPath,codexHome:home,taskCwd:config.taskCwd,scratchPath:scratch},dispose};
+  }catch(error){try{dispose();}catch{throw Object.assign(problem('dependency_unavailable'),{code:'cleanup_unproven'});}throw error;}
+}
+export function hiringWireBrokerReady(config={}) {
+  return validWireConfiguration(config.hiringWire)&&config.hiringWire?.enabled===true&&process.versions.node===WIRE_NODE_VERSION&&config.hiringWire.modelUid===process.getuid()&&wireCatalogueReady()&&wireProfileReady({...config.hiringWire,buildIdentity:config.buildIdentity,hostPlanSha256:config.hostPlanSha256});
+}
+export function createModelBroker({config={},execute=executeCodex,fetchPage=fetchCompanyEvidence,createWireSession=createHiringWireCodexSession,testOnly=false}={}){
+  let busy=false;const controllers=new Set(),sockets=new Set(),operations=new Set();
   async function perform(input,signal){
     if(!testOnly&&!brokerConfigurationReady(config))throw problem('dependency_unavailable');
-    let invocation=null,auth=null;
+    const invocation=createBrokerInvocation(config,{testOnly});
     try{
-      let env;
-      if(!testOnly){
-        invocation=mkdtempSync(join(config.invocationRoot,'task-'));chmodSync(invocation,0o700);
-        const home=join(invocation,'home'),scratch=join(invocation,'scratch');mkdirSync(home,{mode:0o700});mkdirSync(scratch,{mode:0o700});
-        auth=subscriptionAuth(readFileSync(join(config.protectedAuthHome,'auth.json')));writeFileSync(join(home,'auth.json'),auth,{mode:0o600,flag:'wx'});
-        env={...codexEnvironment({codexHome:home,taskCwd:config.taskCwd}),TMPDIR:scratch};
-      }
+      const env=invocation.env;
       const kind=input.schemaId==='intent'?'search_intent':'company_resolution';
       const executeStage=({prompt,schemaPath,signal:stageSignal=signal,timeoutMs,maxOutputTokens=6000,maxToolCalls=MODEL_PROFILES[kind].maximumNativeToolCalls})=>execute({executable:config.codexPath,args:codexArguments({kind,schemaPath,taskCwd:config.taskCwd??'/empty'}),cwd:config.taskCwd,env,stdin:prompt,signal:stageSignal,timeoutMs,kind,maxToolCalls,maxOutputTokens});
       if(input.schemaId==='company'){
@@ -233,13 +247,8 @@ export function createModelBroker({config={},execute=executeCodex,fetchPage=fetc
       const result=await abortable(executeStage({prompt:input.prompt,schemaPath:schemas.intent.pathname,timeoutMs:Math.min(input.timeoutMs,30_000)}),signal);
       if(validateModelData(result.data,schema(input.schemaId)).length)throw problem('invalid_output');
       const usage=usageData(result.usage);
-      // Preserve only scoped subscription refresh state. Rollouts/logs/cache and
-      // prompt-containing files stay inside the invocation and are removed below.
       return {ok:true,data:result.data,usage,evidenceVerified:false,evidenceProvenance:[]};
-    }finally{
-      try{if(invocation){const refreshed=subscriptionAuth(readFileSync(join(invocation,'home','auth.json'))),temp=join(config.protectedAuthHome,`.auth-${randomUUID()}`);try{writeFileSync(temp,refreshed,{mode:0o600,flag:'wx'});renameSync(temp,join(config.protectedAuthHome,'auth.json'));}finally{refreshed.fill(0);rmSync(temp,{force:true});}}}
-      finally{auth?.fill(0);if(invocation)rmSync(invocation,{recursive:true,force:true,maxRetries:1});}
-    }
+    }finally{invocation.dispose();}
   }
   const server=createServer(socket=>{
     sockets.add(socket);
@@ -247,16 +256,28 @@ export function createModelBroker({config={},execute=executeCodex,fetchPage=fetc
     const controller=new AbortController();controllers.add(controller);
     const reply=value=>{if(!socket.destroyed)try{socket.end(frame(value,75_000));}catch{socket.destroy();}};
     socket.on('error',()=>{});socket.once('close',()=>{controller.abort();controllers.delete(controller);sockets.delete(socket);});
-    socket.on('data',chunk=>{
+    const receiveFirst=chunk=>{
       if(started){controller.abort();socket.destroy();return;}
       bytes+=chunk.length;if(bytes>32_768){reply({ok:false,error:{code:'invalid_input'}});return;}
       buffer+=decoder.write(chunk);const end=buffer.indexOf('\n');if(end<0)return;
       started=true;socket.setTimeout(0);
-      let input;try{if(buffer.slice(end+1).trim())throw problem('invalid_input');input=requestData(JSON.parse(buffer.slice(0,end)));}catch{reply({ok:false,error:{code:'invalid_input'}});return;}
+      let input,raw;try{if(buffer.slice(end+1).trim())throw problem('invalid_input');raw=JSON.parse(buffer.slice(0,end));if(raw?.profile==='hiring_wire')validateWireOpen(raw);else input=requestData(raw);}catch{reply({ok:false,error:{code:'invalid_input'}});return;}
+      if(raw?.profile==='hiring_wire') {
+        if(!testOnly&&(!brokerConfigurationReady(config)||!hiringWireBrokerReady(config)||createWireSession!==createHiringWireCodexSession)){reply({ok:false,executionId:raw.executionId,error:{code:'dependency_unavailable'},cleanup:'complete'});return;}
+        if(busy){reply({ok:false,executionId:raw.executionId,error:{code:'task_limit'},cleanup:'complete'});return;}busy=true;
+        socket.removeListener('data',receiveFirst);
+        const connection=handleHiringWireCodexConnection(socket,{firstFrame:raw,signal:controller.signal,release:()=>{busy=false;},openSession:async()=>{
+          const invocation=createBrokerInvocation(config,{testOnly});
+          try{return {session:createWireSession({invocation:invocation.wireInvocation}),dispose:invocation.dispose};}
+          catch(error){try{invocation.dispose();}catch{throw Object.assign(problem('dependency_unavailable'),{code:'cleanup_unproven'});}throw error;}
+        }});
+        operations.add(connection.done);void connection.done.finally(()=>operations.delete(connection.done));return;
+      }
       if(busy){reply({ok:false,error:{code:'task_limit'}});return;}busy=true;
       const timeout=setTimeout(()=>controller.abort(),Math.min(input.timeoutMs,60_000));
-      perform(input,controller.signal).then(reply,error=>reply({ok:false,error:{code:code(error)}})).finally(()=>{clearTimeout(timeout);busy=false;});
-    });
+      const operation=perform(input,controller.signal).then(reply,error=>reply({ok:false,error:{code:code(error)}})).finally(()=>{clearTimeout(timeout);busy=false;operations.delete(operation);});operations.add(operation);
+    };
+    socket.on('data',receiveFirst);
   });
   server.maxConnections=8;
   async function listen({fd,socketPath}={}){
@@ -265,7 +286,7 @@ export function createModelBroker({config={},execute=executeCodex,fetchPage=fetc
     await new Promise((resolveListen,reject)=>{server.once('error',reject);server.listen(fd===3?{fd}:socketPath,()=>{server.removeListener('error',reject);resolveListen();});});
     if(socketPath)chmodSync(socketPath,0o600);
   }
-  async function close(){for(const controller of controllers)controller.abort();for(const socket of sockets)socket.destroy();await new Promise(resolveClose=>server.close(()=>resolveClose()));}
+  async function close(){for(const controller of controllers)controller.abort();for(const socket of sockets)socket.destroy();await Promise.allSettled([...operations]);await new Promise(resolveClose=>server.close(()=>resolveClose()));}
   return {listen,close,ready:()=>!busy&&brokerConfigurationReady(config)};
 }
 
@@ -295,7 +316,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).hr
     if(process.env.LISTEN_PID!==String(process.pid)||process.env.LISTEN_FDS!=='1')throw problem('dependency_unavailable');
     const path=process.env.JUSTUP_MODEL_BROKER_CONFIG;if(!isAbsolute(path)||realpathSync(path)!==path)throw problem('dependency_unavailable');const meta=lstatSync(path);if(!meta.isFile()||meta.uid!==0||(meta.mode&0o022)!==0||meta.size>16_384)throw problem('dependency_unavailable');
     const supplied=JSON.parse(readFileSync(path,'utf8'));
-    if(!plain(supplied)||Object.keys(supplied).some(key=>!['enabled','cliVersion','codexPath','protectedAuthHome','invocationRoot','taskCwd'].includes(key)))throw problem('dependency_unavailable');
+    if(!plain(supplied)||Object.keys(supplied).some(key=>!['enabled','cliVersion','codexPath','protectedAuthHome','invocationRoot','taskCwd','hiringWire'].includes(key)))throw problem('dependency_unavailable');
+    if(!validWireConfiguration(supplied.hiringWire))throw problem('dependency_unavailable');
     const config={...supplied,buildIdentity:process.env.JUSTUP_BUILD_ID,hostPlanSha256:process.env.JUSTUP_HOST_PLAN_SHA256};
     broker=createModelBroker({config});await broker.listen({fd:3});
     for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>broker.close().then(()=>process.exit(0)));

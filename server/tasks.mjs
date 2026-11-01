@@ -7,6 +7,7 @@ const SAFE_TASK_ERRORS = new Set(['task_failed', 'task_interrupted', 'dependency
 const RETRYABLE_TASK_ERRORS = new Set(['dependency_unavailable', 'provider_unavailable', 'provider_down', 'task_timeout', 'timeout', 'rate_limit', 'provider_rate_limit']);
 const TERMINAL = new Set(['succeeded', 'warning', 'failed', 'cancelled']);
 const KIND = /^[a-z][a-z0-9_.-]{0,63}$/;
+const WIRE_KIND = 'hiring_wire', WIRE_OWNER = '__hiring_wire__';
 export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOwner = 4, maxAttempts = 3, retentionMs = 30 * DAY_MS } = {}) {
   if (!db || ![maxTasks, maxPendingPerOwner, maxAttempts, retentionMs].every((n) => Number.isSafeInteger(n) && n > 0)
       || maxTasks > 96 || retentionMs > 30 * DAY_MS) throw new TypeError('Invalid task configuration.');
@@ -15,7 +16,12 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
     payload_json TEXT NOT NULL, output_json TEXT, status TEXT NOT NULL CHECK(status IN ('pending','running','succeeded','warning','failed','cancelled')),
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, lease_until INTEGER, lease_token TEXT, worker_id TEXT,
     attempts INTEGER NOT NULL DEFAULT 0, error_code TEXT, UNIQUE(owner_id,kind,request_key)
-  ) STRICT; CREATE INDEX IF NOT EXISTS demo_tasks_owner ON demo_tasks(owner_id);
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS hiring_wire_cleanup_halt (
+    id INTEGER PRIMARY KEY CHECK(id=1),task_id TEXT NOT NULL,created_at INTEGER NOT NULL,
+    reason TEXT NOT NULL CHECK(reason='cleanup_unproven')
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS demo_tasks_owner ON demo_tasks(owner_id);
   CREATE INDEX IF NOT EXISTS demo_tasks_queue ON demo_tasks(status,created_at);`);
   function hydrate(row) {
     return row ? { id: row.id, ownerId: row.owner_id, kind: row.kind, requestKey: row.request_key,
@@ -31,7 +37,8 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
   }
   function enqueue({ ownerId, kind, requestKey, payload }) {
     if (typeof ownerId !== 'string' || !ownerId || ownerId.length > 128 || !KIND.test(kind ?? '')
-        || typeof requestKey !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(requestKey)) throw problem('invalid_input');
+        || typeof requestKey !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(requestKey)
+        || (kind === WIRE_KIND) !== (ownerId === WIRE_OWNER)) throw problem('invalid_input');
     const json = boundedJson(payload, 16_384);
     return transaction(db, () => {
       const existing = db.prepare('SELECT * FROM demo_tasks WHERE owner_id=? AND kind=? AND request_key=?').get(ownerId, kind, requestKey);
@@ -50,6 +57,7 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
     });
   }
   function recoverWithinTransaction() {
+    if(halted())return;
     db.prepare(`UPDATE demo_tasks SET status=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,
       error_code=CASE WHEN attempts>=? THEN 'task_interrupted' ELSE NULL END,updated_at=?,lease_until=NULL,lease_token=NULL,worker_id=NULL
       WHERE status='running' AND lease_until<=?`).run(maxAttempts, maxAttempts, now(), now());
@@ -60,10 +68,12 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
         || !Number.isSafeInteger(leaseMs) || leaseMs < 1000 || leaseMs > 300_000
         || (kinds != null && (!Array.isArray(kinds) || kinds.length > 32 || kinds.some((k) => !KIND.test(k))))) throw problem('invalid_input');
     return transaction(db, () => {
+      if(halted())return null;
       recoverWithinTransaction();
       if (db.prepare("SELECT 1 FROM demo_tasks WHERE status='running' LIMIT 1").get()) return null;
-      const row = kinds == null ? db.prepare("SELECT id FROM demo_tasks WHERE status='pending' ORDER BY created_at,id LIMIT 1").get()
-        : kinds.length ? db.prepare(`SELECT id FROM demo_tasks WHERE status='pending' AND kind IN (${kinds.map(() => '?').join(',')}) ORDER BY created_at,id LIMIT 1`).get(...kinds) : null;
+      const priority = "CASE WHEN kind='hiring_wire' THEN 1 ELSE 0 END,created_at,id";
+      const row = kinds == null ? db.prepare(`SELECT id FROM demo_tasks WHERE status='pending' ORDER BY ${priority} LIMIT 1`).get()
+        : kinds.length ? db.prepare(`SELECT id FROM demo_tasks WHERE status='pending' AND kind IN (${kinds.map(() => '?').join(',')}) ORDER BY ${priority} LIMIT 1`).get(...kinds) : null;
       if (!row) return null;
       db.prepare("UPDATE demo_tasks SET status='running',worker_id=?,lease_token=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?")
         .run(workerId, randomUUID(), now() + leaseMs, now(), row.id);
@@ -79,7 +89,37 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
     if (!TERMINAL.has(status) || status === 'cancelled' || (errorCode != null && !KIND.test(errorCode))) throw problem('invalid_input');
     const json = boundedJson(output);
     return db.prepare(`UPDATE demo_tasks SET status=?,output_json=?,error_code=?,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=?
-      WHERE id=? AND status='running' AND lease_token=? AND lease_until>?`).run(status, json, errorCode, now(), id, leaseToken, now()).changes === 1;
+      WHERE id=? AND status='running' AND lease_token=? AND lease_until>?
+      AND NOT EXISTS (SELECT 1 FROM hiring_wire_cleanup_halt WHERE id=1)`).run(status, json, errorCode, now(), id, leaseToken, now()).changes === 1;
+  }
+  function hasForeground() {
+    return !!db.prepare("SELECT 1 FROM demo_tasks WHERE status='pending' AND kind<>'hiring_wire' LIMIT 1").get();
+  }
+  function halted() {
+    return !!db.prepare('SELECT 1 FROM hiring_wire_cleanup_halt WHERE id=1').get();
+  }
+  // No automatic clear operation exists. A reviewed operator recovery must
+  // prove native cleanup and idle broker state before ending this durable halt.
+  function haltWire(id,leaseToken) {
+    return transaction(db,()=>{
+      const existing=db.prepare('SELECT task_id FROM hiring_wire_cleanup_halt WHERE id=1').get();
+      if(existing)return existing.task_id===id;
+      const live=db.prepare("SELECT 1 FROM demo_tasks WHERE id=? AND kind='hiring_wire' AND owner_id=? AND status='running' AND lease_token=? AND lease_until>?")
+        .get(id,WIRE_OWNER,leaseToken,now());
+      if(!live)return false;
+      db.prepare("INSERT INTO hiring_wire_cleanup_halt VALUES (1,?,?,'cleanup_unproven')").run(id,now());
+      return true;
+    });
+  }
+  // Called only after the runner has awaited Wire cancellation and native
+  // cleanup. Keep the same task/period and bound repeated interruptions.
+  function pauseWire(id, leaseToken) {
+    return db.prepare(`UPDATE demo_tasks SET status=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,
+      error_code=CASE WHEN attempts>=? THEN 'task_preempted' ELSE NULL END,
+      output_json=NULL,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=?
+      WHERE id=? AND kind='hiring_wire' AND owner_id=? AND status='running' AND lease_token=? AND lease_until>?
+      AND NOT EXISTS (SELECT 1 FROM hiring_wire_cleanup_halt WHERE id=1)`)
+      .run(maxAttempts,maxAttempts,now(),id,WIRE_OWNER,leaseToken,now()).changes === 1;
   }
   // These helpers deliberately do not open transactions: auth and feature deletion
   // compose them inside their existing transaction, making late completions inert.
@@ -92,6 +132,7 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
     return db.prepare("UPDATE demo_tasks SET status='cancelled',payload_json='null',output_json=NULL,lease_until=NULL,lease_token=NULL,worker_id=NULL,updated_at=? WHERE owner_id=? AND id=? AND status IN ('pending','running')").run(now(), ownerId, id).changes === 1;
   }
   function publicView(task, result = null) {
+    if (task.kind === WIRE_KIND || task.ownerId === WIRE_OWNER) throw problem('not_found',404,'Task not found.');
     const failed = task.status === 'failed';
     const completed = task.status === 'succeeded' || task.status === 'warning';
     if (result != null && (!result || typeof result !== 'object' || Array.isArray(result)
@@ -100,5 +141,5 @@ export function createTasks({ db, now = Date.now, maxTasks = 96, maxPendingPerOw
       result: completed ? result : null,
       error: failed ? { code: SAFE_TASK_ERRORS.has(task.errorCode) ? task.errorCode : 'task_failed', message: 'This task could not finish.', retryable: RETRYABLE_TASK_ERRORS.has(task.errorCode) } : null };
   }
-  return { enqueue, get, claim, heartbeat, complete, recover, cancel, cancelOwner, deleteOwner, delete: deleteTask, publicView };
+  return { enqueue, get, claim, heartbeat, complete, recover, hasForeground, pauseWire, halted, haltWire, cancel, cancelOwner, deleteOwner, delete: deleteTask, publicView };
 }
