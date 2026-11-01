@@ -97,10 +97,11 @@ function terminationReceipt(db,receipt){
   return {operation,binding};
 }
 function receiptFailure(receipt,operation){return BILLING_FAILURES.has(operation.error_code)?operation.error_code:BILLING_FAILURES.has(receipt.errorCode)?receipt.errorCode:'billing_unavailable';}
-function terminationOutcome(receipt,{operation,binding}){
+function terminationOutcome(receipt,{operation}){
   if(receipt.status==='failed')return {status:'failed',error:receiptFailure(receipt,operation)};
-  if(receipt.errorCode===null&&operation.status==='ready'&&operation.error_code===null&&binding.termination_revision===binding.closing_revision
-      &&Number.isSafeInteger(binding.termination_verified_at)&&binding.termination_verified_at>0)return {status:'ready',error:null};
+  // The operation records the handler's committed outcome. Restore can revoke
+  // deletion proof later without making that known receipt unabsorbable.
+  if(receipt.errorCode===null&&operation.status==='ready'&&operation.error_code===null)return {status:'ready',error:null};
   return null;
 }
 function absorbedTermination(db,receipt){
@@ -110,6 +111,7 @@ function absorbedTermination(db,receipt){
     &&operation.status===outcome.status&&operation.error_code===outcome.error;
 }
 function hasTerminationReceipt(db,owner){return Boolean(db.prepare("SELECT 1 FROM justup_tasks WHERE kind='billing_terminate' AND (owner_id=? OR id IN (SELECT task_id FROM justup_billing_operations WHERE account_id=? AND kind='terminate')) LIMIT 1").get(owner,owner));}
+function freshTerminationProof(binding,at){return binding?.closing_revision>0&&binding.termination_revision===binding.closing_revision&&binding.termination_verified_at<=at&&binding.termination_verified_at>=at-30_000;}
 function enqueue(db,tasks,operation,now) {
   if(operation.task_id&&['pending','running'].includes(tasks.get(operation.account_id,operation.task_id)?.status))return;
   // A terminal cleanup receipt must be observed and released through the API's
@@ -148,11 +150,11 @@ export function createStripeBillingApi({db,tasks,config={},now=Date.now,getAuth,
     return owner;
   }
   function view(operation) {
-    const closing=accountRow(db,operation.account_id)?.closing_revision>0;
-    const awaitingReceipt=operation.kind==='terminate'&&hasTerminationReceipt(db,operation.account_id);
+    const binding=accountRow(db,operation.account_id),closing=binding?.closing_revision>0;
+    const awaitingTermination=operation.kind==='terminate'&&(!freshTerminationProof(binding,now())||hasTerminationReceipt(db,operation.account_id));
     const allowed=operation.kind==='terminate'||enabled()&&admission.processingPolicy(operation.locale)?.key===operation.policy_key&&operation.configuration_hash===configurationHash(settings);
-    const ready=operation.status==='ready'&&!awaitingReceipt&&allowed&&(!closing||operation.kind==='terminate')&&(operation.expires_at==null||operation.expires_at>now());
-    const pending=awaitingReceipt&&operation.status==='ready'||['pending','running','ambiguous'].includes(operation.status);
+    const ready=operation.status==='ready'&&!awaitingTermination&&allowed&&(!closing||operation.kind==='terminate')&&(operation.expires_at==null||operation.expires_at>now());
+    const pending=awaitingTermination&&operation.status==='ready'||['pending','running','ambiguous'].includes(operation.status);
     return {id:operation.id,kind:operation.kind,status:ready?'ready':pending?'pending':'failed',
       url:ready&&operation.url?operation.url:null,expiresAt:iso(operation.expires_at),retryAfterMs:ready||operation.error_code==='billing_operator_reconciliation_required'?null:5000,
       error:operation.error_code||!allowed?{code:operation.error_code??'processing_unavailable',retryable:operation.error_code!=='billing_operator_reconciliation_required'}:null};
@@ -207,7 +209,7 @@ export function createStripeBillingApi({db,tasks,config={},now=Date.now,getAuth,
     const ctx={accountId,sessionHash:hash(token),interfaceLocale:'en'};current(ctx,{cleanup:true});
     cleanup();
     let binding=accountRow(db,accountId);if(!binding)return true;
-    if(binding.closing_revision>0&&binding.termination_revision===binding.closing_revision&&binding.termination_verified_at<=now()&&binding.termination_verified_at>=now()-30_000&&!hasTerminationReceipt(db,accountId))return true;
+    if(freshTerminationProof(binding,now())&&!hasTerminationReceipt(db,accountId))return true;
     if(!enabled())fail('billing_termination_unavailable',503);
     withPrivateTransaction(()=>{
       current(ctx,{cleanup:true});binding=accountRow(db,accountId);
@@ -228,7 +230,7 @@ export function createStripeBillingApi({db,tasks,config={},now=Date.now,getAuth,
   }
   function assertDeletionReady(owner) {
     const binding=accountRow(db,owner);if(!binding)return;
-    if(binding.closing_revision<1||binding.termination_revision!==binding.closing_revision||binding.termination_verified_at>now()||binding.termination_verified_at<now()-30_000||hasTerminationReceipt(db,owner))fail('billing_termination_pending',409);
+    if(!freshTerminationProof(binding,now())||hasTerminationReceipt(db,owner))fail('billing_termination_pending',409);
   }
   function deleteAccountData(owner){assertDeletionReady(owner);if(!db.prepare("SELECT 1 FROM sqlite_schema WHERE name='auth_accounts' AND type='table'").get())return;
     db.prepare('DELETE FROM justup_billing_operations WHERE account_id=?').run(owner);db.prepare('DELETE FROM justup_billing_accounts WHERE account_id=?').run(owner);}
