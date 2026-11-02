@@ -79,7 +79,19 @@ class PrepareTests(unittest.TestCase):
                 if path == inbox:
                     path.chmod(0o2700)
 
-            with patch.object(Path, 'mkdir', new=inherit_sgid):
+            def same_owner_chown(path, uid, gid):
+                self.assertEqual(Path(path), inbox)
+                self.assertEqual((uid, gid), (inbox.stat().st_uid, inbox.stat().st_gid))
+
+            def same_owner_fchown(fd, uid, gid):
+                self.assertEqual(os.fstat(fd).st_ino, inbox.stat().st_ino)
+                self.assertEqual((uid, gid), (inbox.stat().st_uid, inbox.stat().st_gid))
+
+            # macOS clears SGID even for same-owner chown; preserve the inherited
+            # bit here to reproduce the observed host result after ownership setup.
+            with patch.object(Path, 'mkdir', new=inherit_sgid), \
+                    patch.object(FEED.os, 'chown', side_effect=same_owner_chown), \
+                    patch.object(FEED.os, 'fchown', side_effect=same_owner_fchown):
                 self.assertEqual(self.prepare(inbox, receipts), {'prepared': True, 'created': True})
             self.assertEqual(stat.S_IMODE(inbox.lstat().st_mode), 0o700)
             self.assertEqual(inbox.lstat().st_uid, os.geteuid())
