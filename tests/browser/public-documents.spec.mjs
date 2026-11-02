@@ -228,11 +228,12 @@ test('a mismatched company identity cannot publish wrong facts under the request
   await page.setViewportSize({ width: 1280, height: 1100 });
   await mockApi(page, { 'GET /searches': { items: [search()] }, 'GET /searches/search-1/results': completed([job(1)]),
     'GET /companies/library': { id: 'different-company', name: 'WRONG_COMPANY_CANARY', description: 'Wrong company facts.' } });
-  await page.goto('/'); await page.locator('.job-company').click();
-  await expect(page.getByRole('heading', { name: 'Report unavailable.' })).toBeVisible();
-  await expect(page).toHaveTitle('Coverage temporarily unavailable — Justup');
+  await page.goto('/fr/'); await page.locator('.job-company').click();
+  await expect(page.getByRole('heading', { name: 'Rapport indisponible.' })).toBeVisible();
+  await expect(page).toHaveTitle('Couverture temporairement indisponible — Justup');
   await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
-  await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', `${origin}/companies/library`);
+  await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', `${origin}/fr/companies/library`);
+  await expect(page.locator('#company-page [role=status]')).toHaveText('Le répertoire des entreprises n’a pas pu être vérifié. Réessaie dans un instant.');
   expect(await page.content()).not.toContain('WRONG_COMPANY_CANARY');
   expect(await page.locator('head').innerHTML()).not.toContain('Wrong company facts.');
 });

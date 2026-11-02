@@ -303,6 +303,6 @@ test('company identity reads reject mismatched successful responses before publi
   for (const wrapped of [false, true]) {
     const client = new ApiClient({ fetch: async () => json(wrapped ? { company } : company) });
     assert.equal((await client.getCompany('expected')).name, 'Reported company');
-    await assert.rejects(client.getCompany('different'));
+    await assert.rejects(client.getCompany('different'), { message: 'The company directory could not be verified. Please try again shortly.' });
   }
 });

@@ -387,7 +387,7 @@ export class ApiClient {
       (value) => {
         const o = record(value);
         const company = decodeCompany(o.company ?? o);
-        if (company.id !== companyId) throw new TypeError('The company response did not match the requested company.');
+        if (company.id !== companyId) throw new TypeError('The company directory could not be verified. Please try again shortly.');
         return company;
       },
       { signal },
