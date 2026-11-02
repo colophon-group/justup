@@ -186,7 +186,9 @@ test('a failed hidden metadata read keeps rows, reports unavailable and waits fo
   await page.clock.runFor(2000); await expect(page.locator('#hidden-matches-title')).toHaveText('The recent hidden-match count is unavailable.');
   await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   await page.clock.runFor(10_000); expect(reads).toBe(2);
-  await page.locator('#retry-results').click(); await expect(page.locator('#hidden-matches')).toHaveCount(0);
+  const recovered = page.waitForResponse(response => response.url().includes('/visitor/searches/search-1/results'));
+  await page.locator('#retry-results').click(); await (await recovered).finished(); await page.evaluate(() => {});
+  await page.clock.runFor(120); await expect(page.locator('#hidden-matches')).toHaveCount(0);
   expect(reads).toBe(3); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
 });
 

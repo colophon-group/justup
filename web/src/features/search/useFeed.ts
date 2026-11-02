@@ -243,7 +243,9 @@ export function useFeed(
     )
       return;
     void load(value.continuation.cursor);
-  }, [key, load, updateFeed]);
+  // Re-arm viewport continuation after cursor recovery even when publication
+  // coalesces loading transitions and the loaded rows stay identical.
+  }, [key, load, feed.continuation.cursor]);
   const publishDeferred = () => {
     deferredCommit.current = false;
     if (feedRef.current === publishedFeed.current) return;
