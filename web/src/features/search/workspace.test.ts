@@ -215,3 +215,48 @@ test('a canonically invalidated search is removed while other in-flight searches
   const newer = { ...state, searches: [search('deleted', 2), search('other')] };
   assert.equal(reconcileInvalidatedSearch(newer, [search('deleted')], invalidated).authoritative, false);
 });
+test('option acknowledgements preserve newer text and invalidate only the target proposal', () => {
+  const initial = { ...search(), options: { followedOnly: true, postingLanguages: ['en'] } };
+  let state = workspaceReducer(emptyWorkspace(), { type: 'loaded', searches: [initial, search('other')] });
+  state = workspaceReducer(state, { type: 'query', value: 'My unsent text stays exact  ' });
+  const proposal = { proposalId: 'p', searchId: 's', expectedRevision: 1, query: queryText(state), title: 'Jobs', requirements: [], warnings: [] };
+  state = workspaceReducer(state, { type: 'proposal', proposal });
+  const updated = { ...initial, revision: 2, options: { followedOnly: true, postingLanguages: ['de-CH', 'fr'] }, draft: { query: 'Submitted work', taskId: null, status: 'interrupted' } };
+  const accepted = workspaceReducer(state, { type: 'optionsSaved', search: updated });
+  assert.equal(queryText(accepted), 'My unsent text stays exact  ');
+  assert.equal(accepted.proposal, null);
+  assert.deepEqual(accepted.searches.find(s => s.id === 's')?.options, updated.options);
+  assert.equal(accepted.searches.find(s => s.id === 's')?.draft?.taskId, null);
+  const switched = workspaceReducer(state, { type: 'select', id: 'other' });
+  const late = workspaceReducer(switched, { type: 'optionsSaved', search: updated });
+  assert.equal(late.selectedId, 'other');
+  assert.equal(late.status, switched.status);
+  assert.equal(queryText(late), 'Library jobs');
+  const newer = workspaceReducer(accepted, { type: 'optionsSaved', search: initial });
+  assert.equal(newer.searches.find(s => s.id === 's')?.revision, 2);
+});
+
+test('unchanged canonical option reads preserve valid clarification and ignore deleted or newer searches', () => {
+  let state = workspaceReducer(emptyWorkspace(), { type: 'loaded', searches: [search()] });
+  const proposal = { proposalId: 'p', searchId: 's', expectedRevision: 1, query: 'Library jobs', title: 'Library', requirements: [], warnings: [] };
+  state = workspaceReducer(state, { type: 'proposal', proposal });
+  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: { ...search(), proposal } }).proposal, proposal);
+  const newer = workspaceReducer(state, { type: 'optionsSaved', search: search('s', 2) });
+  assert.equal(workspaceReducer(newer, { type: 'optionsSaved', search: search() }), newer);
+  const deleted = workspaceReducer(state, { type: 'deleted', id: 's' });
+  assert.equal(workspaceReducer(deleted, { type: 'optionsSaved', search: search() }), deleted);
+});
+
+test('canonical options recovery installs a newly completed proposal only for the displayed query and revision', () => {
+  let state = workspaceReducer(emptyWorkspace(), { type: 'loaded', searches: [search()] });
+  const proposal = { proposalId: 'p', searchId: 's', expectedRevision: 1, query: 'My submitted refinement', title: 'Library', requirements: [], warnings: [] };
+  state = workspaceReducer(state, { type: 'query', value: proposal.query });
+  const canonical = { ...search(), proposal };
+  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: canonical }).proposal, proposal);
+  const newer = workspaceReducer(state, { type: 'query', value: 'My newer unsent text  ' });
+  const updated = workspaceReducer(newer, { type: 'optionsSaved', search: canonical });
+  assert.equal(updated.proposal, null);
+  assert.equal(queryText(updated), 'My newer unsent text  ');
+  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: { ...canonical, proposal: { ...proposal, expectedRevision: 2 } } }).proposal, null);
+  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: { ...canonical, proposal: { ...proposal, searchId: 'other' } } }).proposal, null);
+});

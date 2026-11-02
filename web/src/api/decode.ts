@@ -17,6 +17,8 @@ import type {
   Salary,
   Search,
   SearchProposal,
+  SearchOptions,
+  SearchOptionsCatalogue,
   SearchSubmission,
   Session,
   SessionPolicies,
@@ -346,6 +348,28 @@ const decodeRequirement = (value: unknown): Requirement => {
     ...optionalText(o, "reason"),
   };
 };
+// Retain actual imported identifiers: validation must never translate or shorten them.
+function languageId(value: unknown): string {
+  const id = text(value, "posting language");
+  try { if (id.length <= 200 && Intl.getCanonicalLocales(id).length === 1) return id; } catch { /* Invalid BCP 47. */ }
+  return fail("posting language");
+}
+export function decodeSearchOptions(value: unknown): SearchOptions {
+  const o = record(value, "search options"), postingLanguages = list(o.postingLanguages, languageId, "posting languages");
+  if (new Set(postingLanguages).size !== postingLanguages.length) fail("unique posting languages");
+  return { followedOnly: flag(o.followedOnly, "followed company scope"), postingLanguages };
+}
+export function decodeSearchOptionsCatalogue(value: unknown): SearchOptionsCatalogue {
+  const o = record(value, "search options catalogue");
+  if (o.emptySelection !== "any" || o.selectionOperator !== "or" || o.queryCombination !== "intersection") fail("search option semantics");
+  const postingLanguages = list(o.postingLanguages, value => {
+    const item = record(value, "posting language option"), name = text(item.name, "posting language name");
+    if (!name.trim() || name.length > 400) fail("posting language name");
+    return { id: languageId(item.id), name };
+  }, "posting language options");
+  if (new Set(postingLanguages.map(item => item.id)).size !== postingLanguages.length) fail("unique posting language options");
+  return { postingLanguages, emptySelection: "any", selectionOperator: "or", queryCombination: "intersection" };
+}
 export function decodeSearch(value: unknown): Search {
   const o = record(value, "search");
   return {
@@ -355,6 +379,7 @@ export function decodeSearch(value: unknown): Search {
     title: text(o.title, "search title"),
     status: text(o.status, "search status"),
     ...optionalText(o, "description"),
+    ...(o.options === undefined ? {} : { options: decodeSearchOptions(o.options) }),
     requirements: list(o.requirements ?? [], decodeRequirement, "requirements"),
     warnings: list(o.warnings ?? [], decodeWarning, "warnings"),
     ...(o.draft == null ? {} : { draft: (() => {

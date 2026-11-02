@@ -75,6 +75,16 @@ export interface Warning {
   message: string;
   companyRequestPrefill?: CompanyRequestPrefill;
 }
+export interface SearchOptions {
+  followedOnly: boolean;
+  postingLanguages: string[];
+}
+export interface SearchOptionsCatalogue {
+  postingLanguages: { id: string; name: string }[];
+  emptySelection: "any";
+  selectionOperator: "or";
+  queryCombination: "intersection";
+}
 export interface Search {
   id: string;
   revision: number;
@@ -84,6 +94,7 @@ export interface Search {
   description?: string;
   requirements: Requirement[];
   warnings: Warning[];
+  options?: SearchOptions;
   draft?: { query: string; taskId: string | null; status?: string };
   proposal?: SearchProposal;
 }

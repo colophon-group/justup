@@ -11,13 +11,14 @@ import {
   decodeResults,
   decodeSearch,
   decodeSearchList,
+  decodeSearchOptionsCatalogue,
   decodeSearchSubmission,
   decodeSession,
   decodeTask,
   decodeWorkspace,
   record,
 } from "./decode.ts";
-import type { RegistrationAcceptance, SavedWorkspaceState, SearchScope, Session } from "./types.ts";
+import type { RegistrationAcceptance, SavedWorkspaceState, SearchOptions, SearchScope, Session } from "./types.ts";
 import { liveResultsPath, readLiveResults, validEventId, type EventFrame } from "./liveResults.ts";
 import { sessionOwner } from './sessionOwner.ts';
 export class ApiError extends Error {
@@ -314,8 +315,16 @@ export class ApiClient {
   listSearches(signal?: AbortSignal, scope: SearchScope = "account") {
     return this.request(searchPath(scope), decodeSearchList, { signal });
   }
+  getSearchOptions(signal?: AbortSignal, scope: SearchScope = "account") {
+    return this.request(`${scope === "visitor" ? "/visitor" : ""}/search-options`, decodeSearchOptionsCatalogue, { signal });
+  }
+  updateSearchOptions(searchId: string, body: SearchOptions & { expectedRevision: number }, signal?: AbortSignal, scope: SearchScope = "account") {
+    return this.request(`${searchPath(scope)}/${id(searchId)}/options`, value => decodeSearch(record(value).search), {
+      method: "PATCH", body, signal,
+    });
+  }
   createSearch(
-    body: { query: string; requestKey: string },
+    body: { query: string; requestKey: string; options?: SearchOptions },
     signal?: AbortSignal,
     scope: SearchScope = "account",
   ) {
