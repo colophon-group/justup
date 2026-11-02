@@ -84,9 +84,9 @@ test('logout revokes only its own session and repeated or invalid logout is harm
   const { auth, register } = fixture(t);
   const first = await register();
   const second = await auth.login({ username: 'tester', password: PASSWORD });
-  auth.logout(first.token);
-  auth.logout(first.token);
-  auth.logout(undefined);
+  assert.equal(auth.logout(first.token), true);
+  assert.equal(auth.logout(first.token), false);
+  assert.equal(auth.logout(undefined), false);
   assert.equal(auth.session(first.token), null);
   assert.ok(auth.session(second.token));
   for (const token of [undefined, null, '', 'invalid', 'x'.repeat(43), {}, 1]) {

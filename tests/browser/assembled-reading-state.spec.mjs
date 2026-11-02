@@ -87,27 +87,77 @@ test('lost follow and option acknowledgements reconcile committed state without 
   await expect(page.locator('#query')).toHaveValue('Exact unsent text  ');
   expect(runtime.calls.filter(call => call.method === 'PATCH' && call.path.endsWith('/options'))).toHaveLength(1); expect(runtime.modelCalls()).toBe(1);
 });
-test('a held previous-account follow reply cannot change the signed-out or next-account interface', async ({ page, context }) => {
+for(const order of [[0,1],[1,0]])test(`competing logout bootstraps in order ${order.join('-')} permit the next account and fence a held follow reply`, async ({ page, context }) => {
   await runtime.app.auth.register({ username: 'second-reader', password });
   await page.goto(runtime.origin); await login(page); await company(page);
   const other = await context.newPage(); await other.goto(runtime.origin); await expect(other.locator('#header-sign-in')).toBeHidden();
   const held = runtime.holdNext('PATCH', '/follows/assembled');
+  const bootstraps=[];
   try {
     await page.locator('[data-company="assembled"]').getByRole('button', { name: 'Follow Assembled Company', exact: true }).click(); await held.arrived;
-    await logout(other); await expect(page.locator('#header-sign-in')).toBeVisible(); await expect(page.locator('.follow-company')).toHaveCount(0);
-    // Establish a canonical signed-out session before the next credentials.
-    // Concurrent guest-seed bootstraps have their own tracked recovery gap;
-    // this journey proves held follow replies across a genuine owner change.
-    await expect(page.locator('#live-label')).toHaveText('LIVE EDITION');
-    await expect(other.locator('#live-label')).toHaveText('LIVE EDITION');
-    await other.reload(); await expect(other.locator('#live-label')).toHaveText('LIVE EDITION');
-    await login(other, 'second-reader'); await expect(page.locator('#header-sign-in')).toBeHidden();
+    // Arm both transport holds before logout. They buffer actual API/Worker
+    // bytes and headers before Chromium can publish either response's cookies.
+    bootstraps.push(runtime.holdNext('GET','/session'),runtime.holdNext('GET','/session'));
+    const responses=[page,other].map(tab=>tab.waitForResponse(response=>response.url()===runtime.origin+'/api/v1/session'));
+    const before=runtime.calls.filter(call=>call.path==='/api/v1/session').length;
+    await other.locator('#account-open').click(); await other.getByRole('button',{name:'Sign out',exact:true}).click();
+    await Promise.all(bootstraps.map(hold=>hold.arrived));
+    await expect(page.locator('.follow-company')).toBeHidden();
+    await expect(page.locator('#session-private-surfaces')).toHaveAttribute('aria-busy','true');
+    await expect(other.locator('#header-sign-in')).toBeVisible();
+    bootstraps[order[0]].release(); const first=await Promise.race(responses); await first.finished();
+    bootstraps[order[1]].release(); const delivered=await Promise.all(responses); await Promise.all(delivered.map(response=>response.finished()));
+    const metadata=await Promise.all(delivered.map(response=>response.json()));
+    expect(metadata.every(body=>body.user===null&&body.visitor===null)).toBe(true);
+    expect(metadata[0].csrfToken===metadata[1].csrfToken).toBe(true);
+    // Both metadata reads are complete; no reload or additional canonical read.
+    await expect(page.locator('#live-label')).toHaveText('LIVE EDITION'); await expect(other.locator('#live-label')).toHaveText('LIVE EDITION');
+    expect(runtime.calls.filter(call=>call.path==='/api/v1/session').length-before).toBe(2);
+    await other.locator('#header-sign-in').click(); await other.locator('#auth-username').fill('second-reader');
+    await other.locator('#auth-password').fill('Wrong synthetic password'); await other.locator('#auth-submit').click();
+    await expect(other.locator('#auth-password')).toHaveValue(''); await expect(other.locator('#auth-submit')).toBeEnabled();
+    expect(runtime.calls.filter(call=>call.path==='/api/v1/auth/login').map(call=>call.status)).toEqual([200,401]);
+    expect(runtime.calls.filter(call=>call.path==='/api/v1/session').length-before).toBe(2);
+    await other.locator('#auth-password').fill(password); await other.locator('#auth-submit').click();
+    await expect(other.locator('#header-sign-in')).toBeHidden(); await expect(page.locator('#header-sign-in')).toBeHidden();
+    expect(runtime.calls.filter(call=>call.path==='/api/v1/auth/login').map(call=>call.status)).toEqual([200,401,200]);
     await expect(page.locator('[data-company="assembled"]').getByRole('button', { name: 'Follow Assembled Company', exact: true })).toBeEnabled();
     held.release();
     await expect(page.locator('[data-company="assembled"]').getByRole('button', { name: 'Follow Assembled Company', exact: true })).toBeEnabled();
     const follows = await (await page.request.get(runtime.origin + '/api/v1/follows')).json(); expect(follows.items).toEqual([]);
     expect(runtime.db.prepare('SELECT count(*) n FROM justup_company_follows WHERE followed=1').get().n).toBe(1);
-  } finally { held.release(); await other.close(); }
+    expect(runtime.modelCalls()).toBe(0);
+  } finally { held.release(); for(const hold of bootstraps)hold.release(); await other.close(); }
+});
+
+for(const seeded of [false,true])for(const releasing of ['logout','next-login'])test(`a ${seeded?'live-visitor':'unseeded'} session reply canceled by account invalidation cannot publish cookies after ${releasing}`,async ({page,context})=>{
+  await runtime.app.auth.register({username:'second-reader',password});
+  let held;
+  const other=await context.newPage();
+  try {
+    if(seeded){
+      await page.goto(runtime.origin);await expect(page.locator('#live-label')).toHaveText('LIVE EDITION');
+      await page.locator('#query').fill('Prior visitor private draft');await expect.poll(()=>runtime.count('justup_visitors')).toBe(1);
+      held=runtime.holdNext('GET','/session');
+      await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));
+    }else{held=runtime.holdNext('GET','/session');await page.goto(runtime.origin);}
+    await held.arrived;
+    const canceled=page.waitForEvent('requestfailed',{predicate:request=>request.url()===runtime.origin+'/api/v1/session'});
+    await other.goto(runtime.origin);await login(other);await canceled;
+    await expect(page.locator('#header-sign-in')).toBeHidden();
+    await logout(other);await expect(page.locator('#header-sign-in')).toBeVisible();
+    await expect(page.locator('#live-label')).toHaveText('LIVE EDITION');await expect(other.locator('#live-label')).toHaveText('LIVE EDITION');
+    if(releasing==='next-login'){await login(other,'second-reader');await expect(page.locator('#header-sign-in')).toBeHidden();}
+    const cookies=await context.cookies(runtime.origin),reads=runtime.calls.filter(call=>call.path==='/api/v1/session').length;
+    held.release();await held.finished;
+    expect(JSON.stringify(await context.cookies(runtime.origin))===JSON.stringify(cookies)).toBe(true);
+    expect(runtime.calls.filter(call=>call.path==='/api/v1/session')).toHaveLength(reads);
+    if(releasing==='logout'){await login(other,'second-reader');await expect(page.locator('#header-sign-in')).toBeHidden();}
+    const current=await (await other.request.get(runtime.origin+'/api/v1/session')).json();expect(current.user.username).toBe('second-reader');
+    expect(runtime.calls.filter(call=>call.path==='/api/v1/auth/login').map(call=>call.status)).toEqual([200,200]);
+    expect(runtime.db.prepare('SELECT count(*) n FROM justup_visitors WHERE handed_to IS NULL').get().n).toBe(0);expect(runtime.modelCalls()).toBe(0);
+    expect(JSON.stringify((await (await other.request.get(runtime.origin+'/api/v1/workspace')).json()).state.drafts)).not.toContain('Prior visitor');
+  } finally {held?.release();await other.close();}
 });
 
 test('a stale same-choice success reconciles another session’s invalidated followed search', async ({ page, browser }) => {

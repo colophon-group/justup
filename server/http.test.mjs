@@ -123,7 +123,16 @@ test('logout and confirmed account deletion clear cookie and invalidate viewer',
   assert.equal(deleted.body.deleted, true); assert.match(deleted.res.headers.get('set-cookie'), /Max-Age=0/);
   assert.equal((await s.request('/session', { headers: { Cookie: login.cookie } })).body.user, null);
   login = await s.login(); const logout = await s.request('/session/logout', { method: 'POST', headers: headers(), body: '{}' });
-  assert.equal(logout.body.loggedOut, true); assert.match(logout.res.headers.get('set-cookie'), /Max-Age=0/);
+  assert.equal(logout.body.loggedOut, true);
+  const published=logout.res.headers.getSetCookie();assert.equal(published.length,3);
+  assert.match(published.find(value=>value.startsWith('__Host-justup_session=')),/Max-Age=0$/);
+  assert.match(published.find(value=>value.startsWith('__Host-justup_csrf=')),/=[A-Za-z0-9_-]{43};.*Max-Age=3600$/);
+  for(const value of published){for(const flag of ['HttpOnly','Secure','SameSite=Lax','Path=/'])assert.ok(value.includes(flag));assert.ok(!value.includes('Domain='));}
+  const guestCookie=published.map(value=>value.split(';')[0]).join('; ');
+  const guest=await s.request('/session',{headers:{Cookie:guestCookie}});assert.equal(guest.body.user,null);assert.equal(guest.res.headers.getSetCookie().length,0);
+  const before=await s.request('/session',{headers:{Cookie:s.guestCookie}});assert.equal(before.res.headers.getSetCookie().length,0);
+  // Both delayed seeded snapshots carry no cookie writes across future transitions.
+  assert.notEqual(guest.body.csrfToken,before.body.csrfToken);
 });
 
 test('authentication availability reflects deletion/config gates and wrong deletion password retains session', async (t) => {
