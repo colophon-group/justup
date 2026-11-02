@@ -28,8 +28,11 @@ function secondCompany() {
 test('follows filter real saved results; unfollow refreshes revisions without changing raw draft; source viewing survives a new session', async ({ page, browser }) => {
   secondCompany(); await page.goto(runtime.origin); await login(page); await company(page);
   const row = page.locator('[data-company="assembled"]');
+  await row.evaluate(row => { window.followRow = { row, height: row.getBoundingClientRect().height, button: row.querySelector('.follow-company') }; });
   await row.getByRole('button', { name: 'Follow Assembled Company', exact: true }).click();
   await expect(row.getByRole('button', { name: 'Unfollow Assembled Company', exact: true })).toBeEnabled();
+  await expect(row.locator('.follow-company')).toBeFocused();
+  expect(await row.evaluate(row => ({ same: row === window.followRow.row, height: row.getBoundingClientRect().height === window.followRow.height, button: row.querySelector('.follow-company') === window.followRow.button }))).toEqual({ same: true, height: true, button: true });
   await positions(page); await page.locator('#followed-only').check();
   await page.locator('#query').fill('Engineer'); await page.locator('#job-search button[type=submit]').click();
   await expect(page.locator('[data-job]')).toHaveCount(1); await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible();
@@ -105,4 +108,73 @@ test('a held previous-account follow reply cannot change the signed-out or next-
     const follows = await (await page.request.get(runtime.origin + '/api/v1/follows')).json(); expect(follows.items).toEqual([]);
     expect(runtime.db.prepare('SELECT count(*) n FROM justup_company_follows WHERE followed=1').get().n).toBe(1);
   } finally { held.release(); await other.close(); }
+});
+
+test('a stale same-choice success reconciles another session’s invalidated followed search', async ({ page }) => {
+  await page.goto(runtime.origin); await login(page);
+  await page.locator('#followed-only').check(); await page.locator('#query').fill('Engineer');
+  await page.locator('#job-search button[type=submit]').click();
+  await expect(page.locator('#search-status')).toContainText('Search saved.');
+  await expect(page.locator('#job-search button[type=submit]')).toBeEnabled();
+  const id = runtime.db.prepare('SELECT id FROM justup_searches').get().id;
+  const raw = 'Unsent text across same-choice follow  '; await page.locator('#query').fill(raw); await page.locator('#query').blur();
+  await company(page);
+  const follow = page.locator('[data-company="assembled"]').getByRole('button', { name: 'Follow Assembled Company', exact: true });
+  await expect(follow).toBeEnabled();
+  // Another real HTTP client makes the same choice while this tab retains
+  // revision zero. The second idempotent success returns an empty ID list.
+  const remote = await page.request.patch(runtime.origin + '/api/v1/follows/assembled', { headers: { Origin: runtime.origin, 'X-CSRF-Token': (await (await page.request.get(runtime.origin + '/api/v1/session')).json()).csrfToken }, data: { followed: true, expectedRevision: 0 } });
+  expect(remote.status()).toBe(200); expect((await remote.json()).invalidatedSearchIds).toEqual([id]);
+  await follow.click(); await expect(page.locator('[data-company="assembled"]').getByRole('button', { name: 'Unfollow Assembled Company', exact: true })).toBeEnabled();
+  await positions(page); await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible(); await expect(page.locator('#query')).toHaveValue(raw);
+  const writes = runtime.calls.filter(call => call.method === 'PATCH' && call.path.endsWith('/follows/assembled'));
+  expect(writes.map(call => call.body.expectedRevision)).toEqual([0, 0]);
+  expect(runtime.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(id).revision).toBe(2);
+  expect(runtime.modelCalls()).toBe(1);
+});
+
+test('accepted known-company requests refresh shared follows and searches while preserving explicit unfollow', async ({ page }) => {
+  await runtime.close(); runtime = await startVisitorRuntime({ knownCompanyRequests: true });
+  await page.goto(runtime.origin); await login(page); await page.locator('#followed-only').check();
+  await page.locator('#query').fill('Engineer'); await page.locator('#job-search button[type=submit]').click();
+  await expect(page.locator('#search-status')).toContainText('Search saved.');
+  const raw = 'Unsent text across automatic follow  '; await page.locator('#query').fill(raw); await page.locator('#query').blur();
+  const requestCompany = async scope => {
+    await company(page); await page.getByRole('link', { name: 'Request a company +', exact: true }).click();
+    await page.locator('#request-query').fill('Assembled Company'); await page.locator('#request-scope').fill(scope);
+    await page.locator('#request-form button[type=submit]').click();
+    await page.locator('#accept-company').click(); await expect(page.locator('#request-page')).toContainText('On the record.');
+    await page.getByRole('link', { name: 'View company ↗', exact: true }).click();
+  };
+  await requestCompany('First known-company scope');
+  await expect(page.locator('#company-page').getByRole('button', { name: 'Unfollow Assembled Company', exact: true })).toBeEnabled();
+  await positions(page); await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible(); await expect(page.locator('#query')).toHaveValue(raw);
+  await page.locator('[data-job="assembled-engineer"] .job-company').click();
+  await page.locator('#company-page').getByRole('button', { name: 'Unfollow Assembled Company', exact: true }).click();
+  await expect(page.locator('#company-page').getByRole('button', { name: 'Follow Assembled Company', exact: true })).toBeEnabled();
+  await page.reload(); // Start a separate request; the accepted request itself remains durable.
+  await requestCompany('Second scope after explicit unfollow');
+  await expect(page.locator('#company-page').getByRole('button', { name: 'Follow Assembled Company', exact: true })).toBeEnabled();
+  await positions(page); await expect(page.locator('[data-job]')).toHaveCount(0); await expect(page.locator('#query')).toHaveValue(raw);
+  expect(runtime.modelCalls()).toBe(1); expect(runtime.count('justup_company_requests')).toBe(2);
+});
+test('long French Italian and Spanish follow labels retain row geometry and keyboard focus during held acknowledgements', async ({ page }) => {
+  await page.goto(runtime.origin); await login(page);
+  for (const locale of ['fr', 'it', 'es']) {
+    await page.goto(`${runtime.origin}/${locale}/companies`);
+    const button = page.locator('[data-company="assembled"] .follow-company'), row = page.locator('[data-company="assembled"]');
+    await expect(button).toBeEnabled();
+    const geometry = await row.evaluate(row => ({ height: row.getBoundingClientRect().height, width: row.querySelector('.follow-company').getBoundingClientRect().width }));
+    const held = runtime.holdNext('PATCH', '/follows/assembled');
+    try {
+      await button.focus(); await page.keyboard.press('Space'); await held.arrived;
+      await expect(button).toBeFocused(); await expect(button).toBeDisabled();
+      const writes = runtime.calls.filter(call => call.method === 'PATCH' && call.path.endsWith('/follows/assembled')).length;
+      await page.keyboard.press('Space'); expect(runtime.calls.filter(call => call.method === 'PATCH' && call.path.endsWith('/follows/assembled'))).toHaveLength(writes);
+      held.release(); await expect(button).toBeEnabled(); await expect(button).toBeFocused();
+      expect(await row.evaluate(row => ({ height: row.getBoundingClientRect().height, width: row.querySelector('.follow-company').getBoundingClientRect().width }))).toEqual(geometry);
+      await button.click(); await expect(button).toBeEnabled();
+      expect(await row.evaluate(row => ({ height: row.getBoundingClientRect().height, width: row.querySelector('.follow-company').getBoundingClientRect().width }))).toEqual(geometry);
+    } finally { held.release(); }
+  }
 });

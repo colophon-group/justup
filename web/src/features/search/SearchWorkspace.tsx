@@ -234,10 +234,12 @@ export function SearchWorkspace({
                 </button>
               </div>
             </form>
-            {session?.user && session.capabilities.follows ? <div className="followed-search-option">
+            {session?.user && session.capabilities.follows ? <div className="followed-search-option" aria-busy={workspace.optionsSaving}>
               <label><input id="followed-only" type="checkbox" checked={workspace.followedOnly}
-                disabled={workspace.loading || workspace.recovering || !!workspace.conflict || workspace.optionsSaving || (!search && state.busy) || (!!search && !search.options) || search?.status === 'unavailable'}
-                onChange={event => void workspace.saveFollowedOnly(event.target.checked, search?.revision)} /> {t("Followed companies only")}</label>
+                disabled={workspace.loading || workspace.recovering || !!workspace.conflict || (!search && state.busy) || (!!search && !search.options) || search?.status === 'unavailable'}
+                aria-disabled={workspace.optionsSaving}
+                onClick={event => { if (workspace.optionsSaving) event.preventDefault(); }}
+                onChange={event => { if (!workspace.optionsSaving) void workspace.saveFollowedOnly(event.target.checked, search?.revision); }} /> {t("Followed companies only")}</label>
               {!search && workspace.followedOnly ? <p className="helper">{t("This choice is saved when you submit Search. Reloading or signing out clears the unsaved choice.")}</p> : null}
               {followError ? <p role="status">{t("Followed searches could not be refreshed.")} <button type="button" className="text-link" onClick={() => setFollowRefresh(value => value + 1)}>{t("Try again")}</button></p> : null}
             </div> : null}

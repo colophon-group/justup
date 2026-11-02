@@ -390,6 +390,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
           ) : null}
           {interactive ? <CompanyRequestPage
             key={`request-${epoch}`}
+            onAccepted={follows.retry}
             client={client}
             session={session}
             active={route.page === "request"}

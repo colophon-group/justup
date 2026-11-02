@@ -5,7 +5,7 @@ import { pollTask, TaskFailure } from '../../api/tasks';
 import type { CompanyRequest, RequestSubmission } from '../../api/types';
 
 interface PendingLookup { input: string; scope: string | null; key: string; submission?: RequestSubmission }
-export function useCompanyRequest(client: ApiClient, active: boolean, accountEpoch: number) {
+export function useCompanyRequest(client: ApiClient, active: boolean, accountEpoch: number, onAccepted?: () => void) {
   const [request, setRequest] = useState<CompanyRequest | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -26,6 +26,12 @@ export function useCompanyRequest(client: ApiClient, active: boolean, accountEpo
     const id = ++generation.current; setBusy(true); setError('');
     return { abort, valid: () => mounted.current && id === generation.current && !abort.signal.aborted };
   }
+  const showRequest = (next: CompanyRequest) => {
+    setRequest(next);
+    // Accepted requests may automatically follow a company. Read the shared
+    // canonical follow snapshot after this owned acknowledgement/recovery.
+    if (next.status === 'accepted') onAccepted?.();
+  };
   async function resolveLookup(input: string, scope: string | null = null) {
     if (!input.trim()) return;
     const operation = begin();
@@ -35,12 +41,12 @@ export function useCompanyRequest(client: ApiClient, active: boolean, accountEpo
     try {
       const submission = lookup.submission ?? await client.createCompanyRequest({ input, ...(scope === null ? {} : { scope }), requestKey: lookup.key }, operation.abort.signal);
       if (!operation.valid()) return;
-      lookup.submission = submission; setRequest(submission.request);
+      lookup.submission = submission; showRequest(submission.request);
       if (!submission.task) { pending.current = null; return; }
       const result = await pollTask(client, submission.task.id, operation.abort.signal);
       if (!operation.valid()) return;
       if (!('request' in result)) throw new Error('The company check returned an unexpected result. Please try another lead.');
-      setRequest(result.request); pending.current = null;
+      showRequest(result.request); pending.current = null;
     } catch (failure) {
       if (!operation.valid() || isAbortError(failure)) return;
       if (failure instanceof TaskFailure) pending.current = null;
@@ -56,7 +62,7 @@ export function useCompanyRequest(client: ApiClient, active: boolean, accountEpo
       if (!operation.valid()) return;
       const updated = items.find(item => item.id === current.id);
       if (!updated) throw new Error('This request is no longer available.');
-      setRequest(updated);
+      showRequest(updated);
     } catch (failure) { if (operation.valid() && !isAbortError(failure)) setError(errorText(failure)); }
     finally { if (operation.valid()) setBusy(false); }
   }
@@ -66,7 +72,7 @@ export function useCompanyRequest(client: ApiClient, active: boolean, accountEpo
     if (acceptance.current?.requestId !== current.id || acceptance.current.preview !== preview) acceptance.current = { requestId: current.id, preview, key: crypto.randomUUID() };
     try {
       const result = await client.acceptCompanyRequest(current.id, { candidateId: candidate.id, previewRevision: preview }, acceptance.current.key, operation.abort.signal);
-      if (operation.valid()) { setRequest(result); pending.current = null; }
+      if (operation.valid()) { showRequest(result); pending.current = null; }
     } catch (failure) { if (operation.valid() && !isAbortError(failure)) setError(errorText(failure)); }
     finally { if (operation.valid()) setBusy(false); }
   }

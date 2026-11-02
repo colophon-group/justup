@@ -48,7 +48,10 @@ export function useFollows(client: ApiClient, session: Session | null): FollowCo
       const result = await client.updateFollow(companyId, followed, snapshot.revision, controller.signal);
       if (!valid()) return;
       if (result.accountId !== owner || result.revision < snapshot.revision || result.items.some(item => item.companyId === companyId) !== followed) throw new Error('Unexpected follow acknowledgement');
-      setSnapshot(result); invalidate(result.invalidatedSearchIds);
+      setSnapshot(result);
+      // Stale same-choice requests can succeed without this request changing
+      // anything. Gaps/empty invalidation may hide changes made by another tab.
+      invalidate(result.revision === snapshot.revision + 1 && result.invalidatedSearchIds.length ? result.invalidatedSearchIds : null);
     } catch (failure) {
       if (!valid() || isAbortError(failure)) return;
       // A lost response may have committed. Reconcile without repeating a write;

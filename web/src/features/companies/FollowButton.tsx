@@ -5,9 +5,9 @@ export function FollowButton({ companyId, name, follows }: { companyId: string; 
   const { t } = useInterfaceLocale();
   if (!follows?.available) return null;
   const followed = follows.items.has(companyId);
-  return <button type="button" className="follow-company button outline" disabled={follows.disabled}
+  return <button type="button" className="follow-company button outline" aria-disabled={follows.disabled} aria-busy={follows.busy}
     aria-label={t(followed ? 'Unfollow {company}' : 'Follow {company}', { company: name })}
-    onClick={() => void follows.change(companyId, !followed)}>{t(followed ? 'Unfollow' : 'Follow')}</button>;
+    onClick={() => { if (!follows.disabled) void follows.change(companyId, !followed); }}>{t(followed ? 'Unfollow' : 'Follow')}</button>;
 }
 export function FollowNotice({ follows }: { follows?: FollowControl | undefined }) {
   const { t, notice } = useInterfaceLocale();

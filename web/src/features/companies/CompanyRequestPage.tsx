@@ -9,6 +9,7 @@ import { coverageLabel, safeSourceUrl } from './presentation';
 import { useCompanyRequest } from './useCompanyRequest';
 
 export interface CompanyRequestPageProps {
+  onAccepted?: (() => void) | undefined;
   client: ApiClient;
   session: Session | null;
   active: boolean;
@@ -17,7 +18,7 @@ export interface CompanyRequestPageProps {
   prefill: CompanyRequestPrefill | null;
   onPrefillConsumed: () => void;
 }
-export function CompanyRequestPage({ client, session, active, onSignIn, accountEpoch, prefill, onPrefillConsumed }: CompanyRequestPageProps) {
+export function CompanyRequestPage({ client, session, active, onSignIn, accountEpoch, prefill, onPrefillConsumed, onAccepted }: CompanyRequestPageProps) {
   const { t, locale, notice } = useInterfaceLocale();
   const [input, setInput] = useState('');
   const [scope, setScope] = useState('');
@@ -25,7 +26,7 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
   const previousUser = useRef(session?.user?.id ?? null);
   const inputRef = useRef<HTMLInputElement>(null);
   const focusPrefill = useRef(false);
-  const flow = useCompanyRequest(client, active, accountEpoch);
+  const flow = useCompanyRequest(client, active, accountEpoch, onAccepted);
   useLayoutEffect(() => {
     if (!prefill) return;
     focusPrefill.current = true;

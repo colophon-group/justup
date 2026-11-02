@@ -8,7 +8,7 @@ import { join, resolve, extname, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createPublicHandler } from '../../web/worker-dist/worker.mjs';
-export async function startVisitorRuntime({ now = Date.now, interpretIntent, classify } = {}) {
+export async function startVisitorRuntime({ now = Date.now, interpretIntent, classify, knownCompanyRequests = false } = {}) {
   const ingressSecret = 'A'.repeat(43);
   const dir = mkdtempSync(join(tmpdir(), 'justup-assembled-visitor-')), ref = process.env.JUSTUP_ASSEMBLED_API_REF;
   let app, server, heartbeatTimer, queue, closing = false, closePromise;
@@ -75,7 +75,7 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
     const suffix = locale === 'en' ? '' : `.${locale}`, hash = kind => createHash('sha256').update(readFileSync(`web/dist/${kind}${suffix}.html`)).digest('hex');
     return [locale, { version, privacySha256: hash('privacy'), usageSha256: hash('usage') }];
   })) };
-  const heartbeat = () => writeFileSync(status, JSON.stringify({ schemaVersion: 1, identity: 'assembled-local-queue', sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', ready: true, updatedAt: new Date(now()).toISOString(), capabilities: { search: available, companyRequests: false, aiMatching: matchingAvailable } }), { mode: 0o640 });
+  const heartbeat = () => writeFileSync(status, JSON.stringify({ schemaVersion: 1, identity: 'assembled-local-queue', sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', ready: true, updatedAt: new Date(now()).toISOString(), capabilities: { search: available, companyRequests: knownCompanyRequests, aiMatching: matchingAvailable } }), { mode: 0o640 });
   heartbeat(); heartbeatTimer = setInterval(heartbeat, 5000);
   app = await createConfiguredApplication({ now, config: { dbPath: join(dir, 'state.sqlite'), privateGenerationPath: generation, backupDir: backups,
     servicesEnabled: true, sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', runnerStatusPath: status,
