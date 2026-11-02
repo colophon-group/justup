@@ -47,3 +47,11 @@ Its optional injected business clock defaults to `Date.now`; API, initial import
 and synthetic runner heartbeat use that clock. Advancing it and refreshing the
 synthetic heartbeat proves that stale source evidence removes numerical samples
 without inventing zeros or replacing company identity.
+
+`assembled-runtime-cleanup.spec.mjs` keeps a raw pre-TLS socket, a real stream
+and a held committed HTTP reply open during shutdown. The shared adapter stops
+accepting first, aborts requests, releases held replies and destroys all accepted
+transport sockets, including sockets that never reached HTTP. It drains the
+in-flight deterministic queue task before closing services and SQLite. Repeated
+close calls share the same cleanup; startup failures use that cleanup too. This
+is test isolation, not a production shutdown or deployment contract.
