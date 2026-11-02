@@ -247,7 +247,8 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
   useEffect(() => {
     const previous = previousPage.current;
     previousPage.current = route;
-    if (previous.page !== route.page || (route.page === 'company' && previous.page === 'company' && previous.id !== route.id)) focusMain();
+    // The private request workflow owns focus when opening an editable company lead.
+    if (route.page !== 'request' && (previous.page !== route.page || (route.page === 'company' && previous.page === 'company' && previous.id !== route.id))) focusMain();
   }, [route, focusMain]);
   const interfaceLanguage = useAccountLocale(client, session);
   const previousLocale = useRef({ locale, explicitRequestLocale });
