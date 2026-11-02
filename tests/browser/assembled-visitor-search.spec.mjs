@@ -79,11 +79,6 @@ for (const decision of ['accepted', 'insufficient_evidence']) test(`real hidden 
     expect(await page.locator('[data-job="assembled-engineer"]').evaluate(row => window.heldVisitorRow === row)).toBe(true);
     await expect(page.locator('#query')).toHaveValue('Unsent exact refinement  ');
     await expect(page.locator('[data-job="withheld-private"], [data-job="too-old"]')).toHaveCount(0);
-    const id = runtime.db.prepare('SELECT id FROM justup_searches').get().id;
-    const result = await page.request.get(`${runtime.origin}/api/v1/visitor/searches/${id}/results?revision=1`);
-    const body = await result.json(); expect(body.continuation.state).toBe('exhausted');
-    expect(body.hiddenMatches).toEqual(decision === 'accepted' ? { status: 'exact', count: 1 } : { status: 'lower_bound', count: 0 });
-    expect(JSON.stringify(body)).not.toContain('withheld-private'); expect(runtime.modelCalls()).toBe(1);
     if (decision === 'insufficient_evidence') {
       await expect(page.locator('#live-status')).toContainText('Live results connected.');
       await page.waitForTimeout(6500);
@@ -91,6 +86,12 @@ for (const decision of ['accepted', 'insufficient_evidence']) test(`real hidden 
       // then owns the stable lower bound instead of spending the fallback budget.
       expect(runtime.calls.filter(call => call.path.endsWith('/results')).length).toBeLessThanOrEqual(readsBeforeCompletion + 1);
     }
+    const id = runtime.db.prepare('SELECT id FROM justup_searches').get().id;
+    const result = await page.request.get(`${runtime.origin}/api/v1/visitor/searches/${id}/results?revision=1`);
+    const body = await result.json(); expect(body.continuation.state).toBe('exhausted');
+    expect(body.hiddenMatches).toEqual(decision === 'accepted' ? { status: 'exact', count: 1 } : { status: 'lower_bound', count: 0 });
+    expect(JSON.stringify(body)).not.toContain('withheld-private'); expect(runtime.modelCalls()).toBe(1);
+
   } finally { release(); }
 });
 
