@@ -386,7 +386,9 @@ export class ApiClient {
       `/companies/${id(companyId)}`,
       (value) => {
         const o = record(value);
-        return decodeCompany(o.company ?? o);
+        const company = decodeCompany(o.company ?? o);
+        if (company.id !== companyId) throw new TypeError('The company response did not match the requested company.');
+        return company;
       },
       { signal },
     );

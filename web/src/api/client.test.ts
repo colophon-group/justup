@@ -297,3 +297,12 @@ test('only an exact explicit route locale supplies the request header and cleari
   assert.equal(calls.at(-1)?.headers.has('X-Justup-Locale'), false);
   assert.equal(calls.some(call => call.path.includes('locale=')), false);
 });
+
+test('company identity reads reject mismatched successful responses before public rendering', async () => {
+  const company = { id: 'expected', name: 'Reported company' };
+  for (const wrapped of [false, true]) {
+    const client = new ApiClient({ fetch: async () => json(wrapped ? { company } : company) });
+    assert.equal((await client.getCompany('expected')).name, 'Reported company');
+    await assert.rejects(client.getCompany('different'));
+  }
+});

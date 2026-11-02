@@ -77,7 +77,16 @@ test('sample reports retain source occupation labels and stay readable in five l
   await page.setViewportSize({ width: 375, height: 812 });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   for (const locale of ['en', 'de', 'fr', 'it', 'es']) {
-    await page.goto(`${locale === 'en' ? '' : '/' + locale}/companies/library`);
+    const response = await page.goto(`${locale === 'en' ? '' : '/' + locale}/companies/library`);
+    const source = await response.text();
+    const readHead = html => {
+      const doc = html ? new DOMParser().parseFromString(html, 'text/html') : document;
+      return { title: doc.title, description: doc.querySelector('meta[name=description]').content,
+        canonical: new URL(doc.querySelector('link[rel=canonical]').href).pathname,
+        alternates: [...doc.querySelectorAll('link[rel=alternate][hreflang]')].map(link => [link.hreflang, new URL(link.href).pathname]) };
+    };
+    const httpMetadata = await page.evaluate(readHead, source);
+    await expect.poll(() => page.evaluate(readHead)).toEqual(httpMetadata);
     await expect(page.locator('.sample-roles li').first()).toContainText('Software developers');
     await expect(page.locator('.sample-roles li').last()).toContainText('Archivists & curators');
     await expect(page.locator('.sample-salaries li')).toHaveCount(3);
@@ -213,4 +222,17 @@ for (const allocated of [false, true]) test(`anonymous landing after session boo
   else await expect(page.locator('meta[name=robots]')).toHaveCount(0);
   await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', `${origin}/`);
   await expect(page.locator('meta[name=description]')).toHaveAttribute('content', /Find fresh jobs first observed/);
+});
+
+test('a mismatched company identity cannot publish wrong facts under the requested canonical URL', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await mockApi(page, { 'GET /searches': { items: [search()] }, 'GET /searches/search-1/results': completed([job(1)]),
+    'GET /companies/library': { id: 'different-company', name: 'WRONG_COMPANY_CANARY', description: 'Wrong company facts.' } });
+  await page.goto('/'); await page.locator('.job-company').click();
+  await expect(page.getByRole('heading', { name: 'Report unavailable.' })).toBeVisible();
+  await expect(page).toHaveTitle('Coverage temporarily unavailable — Justup');
+  await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', `${origin}/companies/library`);
+  expect(await page.content()).not.toContain('WRONG_COMPANY_CANARY');
+  expect(await page.locator('head').innerHTML()).not.toContain('Wrong company facts.');
 });
