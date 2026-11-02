@@ -149,3 +149,40 @@ test('a failed restored task can be retried explicitly without repeatedly pollin
   expect(calls.filter(call => call.key === 'GET /visitor/tasks/failed-task')).toHaveLength(1);
   expect(calls.filter(call => call.key === 'PATCH /visitor/searches/search-1')).toHaveLength(1);
 });
+
+for (const [hiddenMatches, title] of [
+  [{ status: 'pending', count: null }, 'Checking recent hidden matches…'],
+  [{ status: 'unavailable', count: null }, 'The recent hidden-match count is unavailable.'],
+  [{ status: 'lower_bound', count: 0 }, 'No recent hidden matches confirmed yet.'],
+  [{ status: 'exact', count: 0 }, null],
+]) test(`hidden ${hiddenMatches.status}:${hiddenMatches.count} retains its honest state after visible exhaustion`, async ({ page }) => {
+  await mockApi(page, {
+    'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
+    'GET /visitor/searches/search-1/results': { ...completed([visibleJob(1)]), hiddenMatches },
+  });
+  await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  if (title) await expect(page.locator('#hidden-matches-title')).toHaveText(title);
+  else await expect(page.locator('#hidden-matches')).toHaveCount(0);
+});
+
+test('hidden refresh preserves loaded rows and pagination, pauses for dialogs and stops at its retry budget', async ({ page }) => {
+  await page.clock.install(); let reads = 0;
+  const calls = await mockApi(page, {
+    'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
+    'GET /visitor/searches/search-1/results': () => ({ ...completed([visibleJob(++reads === 1 ? 1 : 2)]), hiddenMatches: { status: 'lower_bound', count: 0 } }),
+  });
+  await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.locator('[data-job="job-1"]').evaluate(row => { window.originalHiddenRow = row; });
+  await page.locator('#header-sign-in').click(); await page.clock.runFor(10_000);
+  expect(reads).toBe(1); await page.keyboard.press('Escape');
+  for (let count = 2; count <= 31; count++) {
+    await page.clock.runFor(2000); await expect.poll(() => reads).toBe(count);
+  }
+  await page.clock.runFor(10_000); expect(reads).toBe(31);
+  await expect(page.locator('[data-job="job-2"]')).toHaveCount(0);
+  expect(await page.locator('[data-job="job-1"]').evaluate(row => window.originalHiddenRow === row)).toBe(true);
+  await page.locator('#query').fill('Exact unsent text  '); await expect(page.locator('#query')).toHaveValue('Exact unsent text  ');
+  expect(calls.filter(call => /^(POST|PATCH) \/visitor\/searches/.test(call.key))).toHaveLength(0);
+  await page.locator('#refresh-results').click(); await expect.poll(() => reads).toBe(32);
+  await page.clock.runFor(2000); await expect.poll(() => reads).toBe(33);
+});

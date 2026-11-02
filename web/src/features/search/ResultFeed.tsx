@@ -126,16 +126,16 @@ export function ResultFeed({
           <span className="eyebrow">{t("Last 14 days")}</span>
           <span className="feed-order">{t("Newest first")}</span>
         </div>
-        {feed.hiddenMatches.count !== null && feed.hiddenMatches.count > 0 ? (
+        {feed.received && session?.access.fullAccess !== true && (feed.hiddenMatches.status !== "exact" || feed.hiddenMatches.count > 0) ? (
           <section id="hidden-matches" className="hidden-matches" aria-labelledby="hidden-matches-title">
             <div className="compressed-matches" aria-hidden="true"><i /><i /><i /></div>
             <div className="hidden-matches-prompt">
               <div>
                 <span className="eyebrow">{t("More in this edition")}</span>
-                <h2 id="hidden-matches-title">{t(feed.hiddenMatches.status === "exact" ? feed.hiddenMatches.count === 1 ? "{count} recent match hidden" : "{count} recent matches hidden" : feed.hiddenMatches.count === 1 ? "At least {count} recent match hidden" : "At least {count} recent matches hidden", { count: feed.hiddenMatches.count.toLocaleString(locale) })}</h2>
-                <p>{session?.user ? t("Your current account access does not include these matches.") : t("Sign in to see the newest matches.")}</p>
+                <h2 id="hidden-matches-title" role="status" aria-live="polite">{feed.hiddenMatches.status === "pending" ? t("Checking recent hidden matches…") : feed.hiddenMatches.status === "unavailable" ? t("The recent hidden-match count is unavailable.") : feed.hiddenMatches.count === 0 ? t("No recent hidden matches confirmed yet.") : t(feed.hiddenMatches.status === "exact" ? feed.hiddenMatches.count === 1 ? "{count} recent match hidden" : "{count} recent matches hidden" : feed.hiddenMatches.count === 1 ? "At least {count} recent match hidden" : "At least {count} recent matches hidden", { count: (feed.hiddenMatches.count ?? 0).toLocaleString(locale) })}</h2>
+                <p>{session?.user ? t("Your current account access does not include these matches.") : t("Sign in to keep your search and review account access.")}</p>
               </div>
-              <button className="button dark" onClick={() => session?.user ? onAccount() : onSignIn('Sign in to see the newest matches.')}>
+              <button className="button dark" onClick={() => session?.user ? onAccount() : onSignIn('Sign in to keep your search and review account access.')}>
                 {session?.user ? t("Account access ↗") : t("Sign in ↗")}
               </button>
             </div>

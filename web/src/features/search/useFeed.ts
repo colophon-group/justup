@@ -15,6 +15,7 @@ interface Feed {
   bufferVersion: number;
   immediateIds: ReadonlySet<string>;
   arrivalBatch: { sequence: number; count: number } | null;
+  received: boolean;
   loading: boolean;
   error: string | null;
 }
@@ -28,6 +29,7 @@ const emptyFeed = (key: string): Feed => ({
   bufferVersion: 0,
   immediateIds: new Set(),
   arrivalBatch: null,
+  received: false,
   loading: false,
   error: null,
 });
@@ -50,6 +52,7 @@ export function useFeed(
   const before = useRef(beforeUpdate); before.current = beforeUpdate;
   const seenIds = useRef(new Set<string>()),
     seenCursors = useRef(new Set<string>());
+  const hiddenChecks = useRef(0);
   const interrupted = useRef<{ cursor: string | null } | null>(null);
   const feedRef = useRef(feed);
   // Canonical HTTP and SSE writes share one publication barrier. True arrivals
@@ -67,7 +70,7 @@ export function useFeed(
     } else feedRef.current = updated;
   }, []);
   const load = useCallback(
-    async (cursor: string | null, replace = false) => {
+    async (cursor: string | null, replace = false, metadataOnly = false) => {
       if (!search || !key || inFlight.current) return;
       let recoverCursor = false;
       const epoch = generation.current,
@@ -103,6 +106,7 @@ export function useFeed(
             current.key === key
               ? {
                   ...current,
+                  received: true,
                   jobs: [],
                   hiddenMatches: { status: "unavailable", count: null },
                   coverage: page.coverage,
@@ -118,6 +122,11 @@ export function useFeed(
                 }
               : current,
           );
+          return;
+        }
+        if (metadataOnly) {
+          updateFeed(current => current.key === key ? { ...current, received: true,
+            hiddenMatches: page.hiddenMatches, coverage: page.coverage, loading: false, error: null } : current);
           return;
         }
         const next = page.continuation.cursor;
@@ -142,6 +151,7 @@ export function useFeed(
           current.key === key
             ? {
                 ...current,
+                received: true,
                 jobs: [...(replace ? [] : current.jobs), ...fresh.map(job => ({ ...job, isNew: current.jobs.find(existing => existing.id === job.id)?.isNew ?? false }))].sort(jobOrder),
                 continuation: page.continuation,
                 ai: page.ai,
@@ -178,6 +188,7 @@ export function useFeed(
     controller.current?.abort();
     inFlight.current = false;
     initialized.current = false;
+    hiddenChecks.current = 0;
     interrupted.current = null;
     seenIds.current.clear();
     seenCursors.current.clear();
@@ -200,6 +211,21 @@ export function useFeed(
     const pending = interrupted.current; interrupted.current = null;
     void load(pending.cursor);
   }), [client, active, load]);
+  // Hidden matching can outlive visible pagination. Canonical reads schedule
+  // that work; SSE snapshots alone do not. Bound retries because insufficient
+  // evidence can leave a lower bound permanently unfinished.
+  useEffect(() => {
+    if (!active || !key || feed.key !== key || feed.loading || feed.error ||
+        feed.continuation.state !== "exhausted" ||
+        !["pending", "lower_bound"].includes(feed.hiddenMatches.status)) return;
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      if (hiddenChecks.current >= 30) { window.clearInterval(timer); return; }
+      hiddenChecks.current++;
+      void load(null, false, true);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [active, key, feed.key, feed.loading, feed.error, feed.continuation.state, feed.hiddenMatches.status, load]);
   const next = useCallback(() => {
     const value = feedRef.current;
     if (
@@ -236,7 +262,7 @@ export function useFeed(
       const currentIds = new Set(reconciled.jobs.map(job => job.id));
       pendingArrivals.current = new Set([...pendingArrivals.current].filter(id => currentIds.has(id)));
       const immediateIds = new Set([...current.immediateIds, ...reconciled.arrivals].filter(id => currentIds.has(id)));
-      const updated = { ...current, loading: false, jobs: unavailable ? [] : reconciled.jobs, immediateIds,
+      const updated = { ...current, received: true, loading: false, jobs: unavailable ? [] : reconciled.jobs, immediateIds,
         continuation: { ...event.page.continuation, cursor: current.continuation.cursor }, ai: event.page.ai, coverage: event.page.coverage,
         hiddenMatches: unavailable ? { status: 'unavailable' as const, count: null } : event.page.hiddenMatches, error: null };
       updateFeed(() => updated, !deferred);
@@ -248,6 +274,7 @@ export function useFeed(
       updateFeed(() => ({ ...emptyFeed(key), continuation: { state: 'paused', cursor: null, retryAfterMs: null } }));
     },
     refresh: (replace = false) => {
+      hiddenChecks.current = 0;
       publishDeferred();
       generation.current++;
       controller.current?.abort();

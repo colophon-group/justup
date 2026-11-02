@@ -1639,12 +1639,10 @@ export const messages = {
     "L’accesso attuale al tuo account non include questi risultati.",
     "El acceso actual a tu cuenta no incluye estos resultados."
   ],
-  "Sign in to see the newest matches.": [
-    "Melde dich an, um die neuesten Treffer zu sehen.",
-    "Connecte-toi pour voir les derniers résultats.",
-    "Accedi per vedere i risultati più recenti.",
-    "Inicia sesión para ver los resultados más recientes."
-  ],
+  "Checking recent hidden matches…": ["Neue verborgene Treffer werden geprüft…", "Vérification des résultats récents masqués…", "Verifica dei risultati recenti nascosti…", "Comprobando resultados recientes ocultos…"],
+  "The recent hidden-match count is unavailable.": ["Die Anzahl neuer verborgener Treffer ist nicht verfügbar.", "Le nombre de résultats récents masqués est indisponible.", "Il numero di risultati recenti nascosti non è disponibile.", "El número de resultados recientes ocultos no está disponible."],
+  "No recent hidden matches confirmed yet.": ["Noch keine neuen verborgenen Treffer bestätigt.", "Aucun résultat récent masqué confirmé pour le moment.", "Nessun risultato recente nascosto ancora confermato.", "Aún no se han confirmado resultados recientes ocultos."],
+  "Sign in to keep your search and review account access.": ["Melde dich an, um deine Suche zu behalten und den Kontozugriff zu prüfen.", "Connecte-toi pour conserver ta recherche et consulter l’accès de ton compte.", "Accedi per conservare la ricerca e verificare l’accesso dell’account.", "Inicia sesión para conservar tu búsqueda y consultar el acceso de tu cuenta."],
   "Account access ↗": [
     "Kontozugriff ↗",
     "Accès au compte ↗",

@@ -8,7 +8,7 @@ import { join, resolve, extname, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createPublicHandler } from '../../web/worker-dist/worker.mjs';
-export async function startVisitorRuntime({ now = Date.now } = {}) {
+export async function startVisitorRuntime({ now = Date.now, interpretIntent, classify } = {}) {
   const ingressSecret = 'A'.repeat(43);
   const dir = mkdtempSync(join(tmpdir(), 'justup-assembled-visitor-')), ref = process.env.JUSTUP_ASSEMBLED_API_REF;
   let app, server, heartbeatTimer, queue, closing = false, closePromise;
@@ -51,11 +51,11 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
     execFileSync('tar', ['-x', '-C', source], { input: execFileSync('git', ['archive', API_COMMIT], { maxBuffer: 64 * 1024 * 1024 }), env: { ...process.env, LC_ALL: 'C' } });
   }
   const load = name => import(pathToFileURL(join(source, 'server', name)).href);
-  const { createConfiguredApplication } = await load('main.mjs'), { createIntentService } = await load('intent.mjs');
+  const { createConfiguredApplication } = await load('main.mjs'), { createIntentService } = await load('intent.mjs'), { createMatchingService } = await load('matching.mjs');
   const origin = `https://127.0.0.1:${process.env.JUSTUP_ASSEMBLED_TEST_PORT || 4204}`;
   const generation = join(dir, 'private-generation'), backups = join(dir, 'backups'), status = join(dir, 'runner-status.json');
   mkdirSync(backups); writeFileSync(generation, '00000000-0000-4000-8000-000000000000\n');
-  let available = true, modelCalls = 0, busy = false, loss = null, hold = null;
+  let available = true, matchingAvailable = typeof classify === 'function', modelCalls = 0, busy = false, loss = null, hold = null;
   const calls = [], modelInputs = [];
   const locales = ['en', 'de', 'fr', 'it', 'es'], version = 'synthetic-reviewed';
   const policyLocales = Object.fromEntries(locales.map(locale => { const suffix = locale === 'en' ? '' : `.${locale}`; return [locale, { reviewed: true, version, privacyUrl: `${origin}/privacy${suffix}.html`, usageUrl: `${origin}/usage${suffix}.html` }]; }));
@@ -65,7 +65,7 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
     const suffix = locale === 'en' ? '' : `.${locale}`, hash = kind => createHash('sha256').update(readFileSync(`web/dist/${kind}${suffix}.html`)).digest('hex');
     return [locale, { version, privacySha256: hash('privacy'), usageSha256: hash('usage') }];
   })) };
-  const heartbeat = () => writeFileSync(status, JSON.stringify({ schemaVersion: 1, identity: 'assembled-local-queue', sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', ready: true, updatedAt: new Date(now()).toISOString(), capabilities: { search: available, companyRequests: false, aiMatching: false } }), { mode: 0o640 });
+  const heartbeat = () => writeFileSync(status, JSON.stringify({ schemaVersion: 1, identity: 'assembled-local-queue', sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', ready: true, updatedAt: new Date(now()).toISOString(), capabilities: { search: available, companyRequests: false, aiMatching: matchingAvailable } }), { mode: 0o640 });
   heartbeat(); heartbeatTimer = setInterval(heartbeat, 5000);
   app = await createConfiguredApplication({ now, config: { dbPath: join(dir, 'state.sqlite'), privateGenerationPath: generation, backupDir: backups,
     servicesEnabled: true, sourceCommit: API_COMMIT, buildIdentity: 'assembled-local', runnerStatusPath: status,
@@ -78,8 +78,12 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
   if (!records?.runTask || !identity?.principal || !reading?.preferences)
     throw new Error('API source must include the reviewed visitor, reading-preferences and product-record composition before current-source assembly can pass.');
   const filters = ['companyInclude', 'companyExclude', 'titleAny', 'bodyAll', 'bodyNone', 'locations', 'workplaces', 'employmentTypes', 'postingLanguages', 'seniority'];
-  const worker = createIntentService({ db, feed: app.feed, tasks: app.tasks, ownerAuthority: identity.principal, visitorIdentity: identity, readingPreferences: reading, records,
+  const ownership = { ownerAuthority: identity.principal, visitorIdentity: identity, taskAdmission: identity.admitMatching };
+  const matching = createMatchingService({ db, feed: app.feed, tasks: app.tasks, now, ...ownership, readingPreferences: reading, records,
+    provider: { available: () => matchingAvailable, classify: input => classify(input) } });
+  const worker = createIntentService({ db, feed: app.feed, tasks: app.tasks, now, ...ownership, matching, readingPreferences: reading, records,
     model: { interpretIntent: async input => { modelCalls++; modelInputs.push(input); records.onModelMetric({ kind: 'search_intent', model: 'gpt-6-luna', usage: { inputTokens: 10, outputTokens: 3 } });
+      if (interpretIntent) return interpretIntent(input);
       return { title: 'Engineering', configuration: { schemaVersion: 1, filters: { ...Object.fromEntries(filters.map(key => [key, null])), titleAny: ['engineer'] }, residualAi: null }, requirements: [{ id: 'role', text: 'Engineer', handling: 'primary', reason: 'Synthetic title evidence.', bindings: [{ field: 'titleAny', values: ['engineer'] }], companyReference: null }] };
     } },
   });
@@ -87,7 +91,7 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
     if (busy || !available || closing) return;
     busy = true;
     queueWork = (async () => {
-      try { const task = app.tasks.claim({ workerId: 'assembled-local', kinds: ['search_intent'] }); if (task) { const result = await records.runTask(task, worker.runTask); if (!result.committed) app.tasks.complete(task.id, task.leaseToken, result); records.taskFinished(task); } }
+      try { const task = app.tasks.claim({ workerId: 'assembled-local', kinds: matchingAvailable ? ['search_intent', 'ai_match'] : ['search_intent'] }); if (task) { const result = await records.runTask(task, task.kind === 'ai_match' ? matching.runTask : worker.runTask); if (!result.committed) app.tasks.complete(task.id, task.leaseToken, result); records.taskFinished(task); } }
       finally { busy = false; }
     })();
   }, 20);
@@ -166,6 +170,7 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
     refreshHeartbeat: heartbeat,
     liveConnections: () => liveConnections.size,
     dropLiveConnections() { for (const connection of liveConnections) connection.destroy(); },
+    setMatchingAvailable(value) { matchingAvailable = value; heartbeat(); },
     setAvailable(value) { available = value; heartbeat(); },
     loseNext(method, path, when = () => true) { loss = { method, path, when }; },
     holdNext(method, path, when = () => true) { let reached, release; const arrived = new Promise(resolve => { reached = resolve; }); const wait = new Promise(resolve => { release = resolve; }); hold = { method, path, when, reached, wait, release }; return { arrived, release }; },
