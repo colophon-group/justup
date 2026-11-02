@@ -1,12 +1,12 @@
 // One React tree serves public HTML and the interactive app. This module never reads a session.
 import { StrictMode } from 'react';
 import { INTERFACE_LOCALES, type InterfaceLocale } from '../i18n/locales.ts';
-import { translate } from '../i18n/messages.ts';
+import { canonicalPath, publicMetadata } from './metadata.ts';
 import { renderToString } from 'react-dom/server';
 import { App } from '../app/App.tsx';
 import { InterfacePresentation } from './InterfacePresentation.tsx';
 import { ErrorBoundary } from '../app/ErrorBoundary.tsx';
-import { readRoute, explicitRouteLocale, type Route } from '../app/useRoute.ts';
+import { readRoute, explicitRouteLocale } from '../app/useRoute.ts';
 import { decodeCompany, decodeCompanyReport, decodeCompanyCataloguePage, record } from '../api/decode.ts';
 import type { PublicBootstrap } from './bootstrap.ts';
 // @ts-expect-error Private dependency-free edge helper is covered by deployment contracts.
@@ -53,10 +53,6 @@ async function publicJSON(target: URL, fetchUpstream: typeof fetch, ingress: Hea
 function publicCompany(company: ReturnType<typeof decodeCompany>) {
   const { evidenceUrls: _evidence, ...publicFacts } = decodeCompany(company);
   return publicFacts;
-}
-function canonicalPath(route: Route): string {
-  const prefix = route.locale === 'en' ? '' : `/${route.locale}`;
-  return route.page === 'company' ? `${prefix}/companies/${encodeURIComponent(route.id)}` : route.page === 'companies' ? `${prefix}/companies` : `${prefix}/`;
 }
 function renderApp(initial: PublicBootstrap): string {
   return renderToString(<StrictMode><InterfacePresentation initialPublicPage={initial}><ErrorBoundary><App initialPublicPage={initial} /></ErrorBoundary></InterfacePresentation></StrictMode>);
@@ -127,24 +123,14 @@ export async function renderPublicDocument(request: Request, env: Record<string,
       }
     } catch { initial.outcome = 'unavailable'; }
   }
-  const copy = [
-    translate(route.locale, 'Fresh jobs. Clear sources.'),
-    translate(route.locale, 'Company catalogue'),
-    translate(route.locale, 'Hiring report'),
-    translate(route.locale, 'Page not found'),
-    translate(route.locale, 'Coverage temporarily unavailable'),
-    translate(route.locale, 'Find fresh jobs first observed in the last 14 days. Original employer sources, no paid placement, and transparent company coverage.'),
-    translate(route.locale, 'Browse the companies included in Justup and see the career pages we track. Coverage is reported openly; request a missing company.'),
-  ] as const;
-  const title = initial.outcome === 'not-found' ? copy[3] : initial.outcome === 'unavailable' ? copy[4] : route.page === 'company' ? `${initial.company!.name} — ${copy[2]}` : route.page === 'companies' ? copy[1] : copy[0];
-  const description = route.page === 'company' && initial.company ? `${initial.company.name}: ${initial.company.description || copy[2]}. ${copy[6]}`.slice(0, 300) : route.page === 'companies' ? copy[6] : copy[5];
+  const pageMetadata = publicMetadata(route, initial, env.PUBLIC_ORIGIN!, url.pathname, !!(cursor || catalogueQuery));
   const publicLanding = route.page === 'jobs' && initial.outcome === 'ready' ? landing(route.locale, initial.renderedAt) : undefined;
   const body = publicLanding?.body ?? renderApp(initial);
   const bootstrap = publicLanding ? { ...publicLanding.initial, ...(explicitLocale ? { explicitLocale } : {}) } : initial;
   const status = initial.outcome === 'not-found' ? 404 : initial.outcome === 'unavailable' ? 503 : 200;
-  const alternates = route.page === 'invalid' ? '' : INTERFACE_LOCALES.map(locale => `<link rel="alternate" hreflang="${locale}" href="${escape(new URL(canonicalPath({ ...route, locale }), env.PUBLIC_ORIGIN).href)}">`).join('');
-  const robots = route.page === 'companies' && (cursor || catalogueQuery) ? '<meta name="robots" content="noindex,follow">' : '';
-  const metadata = `<meta name="description" content="${escape(description)}"><link rel="canonical" href="${escape(canonical)}"><meta name="justup-public-document" content="v1"><meta name="justup-source" content="${release.sourceSha}">${alternates}${robots}<meta name="justup-runtime-config" content="${escape(env.RUNTIME_CONFIG_SHA256 || '')}">`;
-  const html = template.replace('<html lang="en">', `<html lang="${route.locale}">`).replace(/<title>[^<]*<\/title>/, `<title>${escape(title)} — Justup</title>`).replace(/<meta\s+name="description"[^>]*>/, '').replace('</head>', `${metadata}</head>`).replace('<div id="root"></div>', `<div id="root">${body}</div><template id="public-bootstrap" data-public="${escape(JSON.stringify(bootstrap))}"></template>`);
+  const alternates = pageMetadata.alternates.map(({ locale, href }) => `<link rel="alternate" hreflang="${locale}" href="${escape(href)}">`).join('');
+  const robots = pageMetadata.noindex ? '<meta name="robots" content="noindex,follow">' : '';
+  const metadata = `<meta name="description" content="${escape(pageMetadata.description)}"><link rel="canonical" href="${escape(pageMetadata.canonical)}"><meta name="justup-public-document" content="v1"><meta name="justup-source" content="${release.sourceSha}">${alternates}${robots}<meta name="justup-runtime-config" content="${escape(env.RUNTIME_CONFIG_SHA256 || '')}">`;
+  const html = template.replace('<html lang="en">', `<html lang="${route.locale}">`).replace(/<title>[^<]*<\/title>/, `<title>${escape(pageMetadata.title)}</title>`).replace(/<meta\s+name="description"[^>]*>/, '').replace('</head>', `${metadata}</head>`).replace('<div id="root"></div>', `<div id="root">${body}</div><template id="public-bootstrap" data-public="${escape(JSON.stringify(bootstrap))}"></template>`);
   return new Response(html, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Content-Language': route.locale, ...(robots ? { 'X-Robots-Tag': 'noindex, follow' } : {}), ...(status === 503 ? { 'Retry-After': '30' } : {}) } });
 }

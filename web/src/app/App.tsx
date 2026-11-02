@@ -11,6 +11,7 @@ import { CompanyPage } from "../features/companies/CompanyPage.tsx";
 import { CompanyRequestPage } from "../features/companies/CompanyRequestPage.tsx";
 import { SearchWorkspace } from "../features/search/SearchWorkspace.tsx";
 import { useRoute, pageHref, navigate } from "./useRoute.ts";
+import { applyPublicMetadata, publicMetadata, type PublicDocumentState } from '../public/metadata.ts';
 import type { PublicBootstrap } from "../public/bootstrap.ts";
 import { coverageDescription } from "../shared/coverage.ts";
 import { HiringWire } from "../features/news/HiringWire.tsx";
@@ -62,6 +63,8 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
   const route = useRoute(initialPublicPage?.route);
   const requestCompany = useCallback((prefill: CompanyRequestPrefill) => { setCompanyPrefill(prefill); navigate(pageHref("request", locale)); }, [locale]);
   const publicPage = initialPublicPage?.route.locale === route.locale && initialPublicPage.route.page === route.page && (route.page !== "company" || (initialPublicPage.route.page === "company" && initialPublicPage.route.id === route.id)) ? initialPublicPage : undefined;
+  const [companyDocument, setCompanyDocument] = useState<{ id: string; state: PublicDocumentState } | null>(null);
+  const companyDocumentChanged = useCallback((id: string, state: PublicDocumentState) => setCompanyDocument({ id, state }), []);
   const [editionDate] = useState(() => initialPublicPage?.renderedAt ?? new Date().toISOString());
   const topLink = useRef<HTMLAnchorElement>(null),
     mainRef = useRef<HTMLElement>(null);
@@ -234,14 +237,18 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
     return () => window.removeEventListener("scroll", update);
   }, []);
   useEffect(() => {
-    let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
-    if (!canonical) { canonical = document.createElement('link'); canonical.rel = 'canonical'; document.head.append(canonical); }
-    canonical.href = new URL(route.page === 'invalid' ? location.pathname : route.page === 'company' ? pageHref('company', route.locale, route.id) : route.page === 'companies' ? pageHref('companies', route.locale) : pageHref('jobs', route.locale).split('#')[0]!, location.origin).href;
-    if (route.page === 'invalid' || publicPage?.outcome === 'not-found') { document.title = `${t('Page not found')} — Justup`; return; }
-    if (publicPage?.outcome === 'unavailable') { document.title = `${t('Coverage temporarily unavailable')} — Justup`; return; }
-    if (route.page === "company") return;
-    document.title = `Justup — ${route.page === "companies" ? t("Company catalogue") : route.page === "request" ? t("Request a company") : t("Fresh work. Clear sources.")}`;
-  }, [route, publicPage, t]);
+    const state: PublicDocumentState = route.page === 'company'
+      ? companyDocument?.id === route.id ? companyDocument.state : publicPage ?? { outcome: 'pending' }
+      : publicPage ?? { outcome: route.page === 'invalid' ? 'not-found' : 'ready' };
+    const privateSurface = !!(location.search || location.hash || dialog || (route.page === 'jobs' && sessionOwner(session)));
+    applyPublicMetadata(publicMetadata(route, state, location.origin, location.pathname, privateSurface, locale));
+  }, [route, publicPage, companyDocument, locale, dialog, session]);
+  const previousPage = useRef(route);
+  useEffect(() => {
+    const previous = previousPage.current;
+    previousPage.current = route;
+    if (previous.page !== route.page || (route.page === 'company' && previous.page === 'company' && previous.id !== route.id)) focusMain();
+  }, [route, focusMain]);
   const interfaceLanguage = useAccountLocale(client, session);
   const previousLocale = useRef({ locale, explicitRequestLocale });
   useEffect(() => {
@@ -372,6 +379,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
               id={route.id}
               initialCompany={initialPublicPage?.company?.id === route.id ? initialPublicPage.company : undefined}
               initialReport={initialPublicPage?.companyReport?.companyId === route.id ? initialPublicPage.companyReport : undefined}
+              onDocumentState={companyDocumentChanged}
             />
           ) : null}
           {interactive ? <CompanyRequestPage

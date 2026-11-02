@@ -61,6 +61,7 @@ export function CompaniesPage({ client, active, connected = true, initialCompani
     const criteria = nextQuery.trim();
     const params = new URLSearchParams(); if (criteria) params.set('q', criteria);
     history.replaceState(history.state, '', `${pageHref('companies', locale)}${params.size ? '?' + params : ''}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
     setSearch(previous => ({ query: criteria, revision: previous.revision + 1 }));
   }
   function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); reload(query); }
