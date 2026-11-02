@@ -103,3 +103,28 @@ test('unchanged Apply leaves the recorded interpretation poll running through co
   expect(calls.filter(call => call.key === 'GET /tasks/recorded-task')).toHaveLength(1);
   expect(calls.filter(call => call.key.endsWith('/options') && call.key.startsWith('PATCH'))).toHaveLength(0);
 });
+
+test('a failed changed-options write resumes only the canonically unchanged recorded task and keeps newer text', async ({ page }) => {
+  let taskReads = 0, releaseFirst;
+  const first = new Promise(resolve => { releaseFirst = resolve; });
+  const saved = { ...initial(), draft: { query: 'My submitted refinement', taskId: 'recorded-task', status: 'pending' } };
+  const finished = { ...saved, draft: undefined, revision: 2, query: saved.draft.query };
+  const calls = await mockApi(page, {
+    'GET /search-options': catalogue, 'GET /searches': { items: [saved] },
+    'GET /searches/search-1/results': call => completed([], Number(call.url.searchParams.get('revision'))),
+    'GET /tasks/recorded-task': () => ++taskReads === 1 ? first : task('recorded-task', 'succeeded', { search: finished }),
+    'PATCH /searches/search-1/options': { status: 503, body: { error: { code: 'dependency_unavailable', message: 'Write rejected before commit' } } },
+  });
+  await page.goto('/'); await expect.poll(() => taskReads).toBe(1);
+  const newer = 'My newer unsent draft  '; await page.locator('#query').fill(newer);
+  await page.locator('#posting-languages').click();
+  await page.locator('.language-options input[value="fr"]').check();
+  await page.locator('#apply-posting-languages').click();
+  await expect(page.locator('#posting-language-dialog')).toContainText('could not be confirmed');
+  await expect.poll(() => taskReads).toBe(2);
+  await expect(page.locator('#search-status')).toContainText('Search saved.');
+  await expect(page.locator('#query')).toHaveValue(newer);
+  expect(calls.filter(call => call.key === 'PATCH /searches/search-1/options')).toHaveLength(1);
+  expect(calls.filter(call => call.key === 'POST /searches' || call.key === 'PATCH /searches/search-1')).toHaveLength(0);
+  releaseFirst(task('recorded-task', 'succeeded', { search: finished }));
+});

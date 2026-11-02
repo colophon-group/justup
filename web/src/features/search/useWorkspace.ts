@@ -263,7 +263,17 @@ export function useWorkspace(
           const searches = await client.listSearches(controller.signal, scope);
           const remote = searches.find(item => item.id === search.id);
           if (optionsOperation.current !== controller) return false;
-          if (remote) apply({ type: "optionsSaved", search: remote });
+          if (remote) {
+            apply({ type: "optionsSaved", search: remote });
+            // A rejected write may leave the exact recorded interpretation
+            // alive. Resume only that canonically confirmed GET task; a new
+            // revision or interrupted draft never revives invalidated work.
+            if (remote.revision === search.revision && remote.query === search.query
+              && search.draft?.taskId && remote.draft?.taskId === search.draft.taskId
+              && remote.draft.query === search.draft.query && !remote.proposal
+              && !["interrupted", "failed"].includes(remote.draft.status ?? ""))
+              resumedTasks.current.delete(search.draft.taskId);
+          }
         } catch { /* The explicit error keeps the uncertainty visible. */ }
       }
       if (optionsOperation.current === controller) apply({ type: "status", text: "Posting language changes could not be confirmed. Review the saved choices before trying again.", busy: false });
