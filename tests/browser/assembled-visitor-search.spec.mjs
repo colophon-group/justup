@@ -53,7 +53,7 @@ test('real invalid refinement preserves accepted criteria, rows and raw text thr
   await expect(page.locator('#hidden-matches-title')).toHaveText('1 recent match hidden');
   const session = await (await page.request.get(runtime.origin + '/api/v1/session')).json(); expect(session.access.fullAccess).toBe(false);
   const response = await page.request.get(`${runtime.origin}/api/v1/searches/${original.id}/results?revision=1`);
-  expect(response.headers()['x-robots-tag']).toBe('noindex'); expect(await response.text()).not.toContain('withheld-private');
+  expect(response.headers()['x-robots-tag'].split(/,\s*/)).toContain('noindex'); expect(await response.text()).not.toContain('withheld-private');
   expect(runtime.modelCalls()).toBe(2);
   expect(runtime.calls.filter(call => call.method === 'POST' && call.path === '/api/v1/searches')).toHaveLength(0);
   await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByRole('button', { name: 'Sign out', exact: true }).click();

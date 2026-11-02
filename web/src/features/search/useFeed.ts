@@ -223,7 +223,8 @@ export function useFeed(
         feed.continuation.state !== "exhausted" ||
         !["pending", "lower_bound"].includes(feed.hiddenMatches.status)) return;
     const timer = window.setInterval(() => {
-      if (inFlight.current || document.hidden || document.querySelector("dialog[open]") || liveConnected.current && hiddenChecks.current > 0) return;
+      if (inFlight.current || document.hidden || document.querySelector("dialog[open]") || liveConnected.current && hiddenChecks.current > 0 ||
+          !["pending", "lower_bound"].includes(feedRef.current.hiddenMatches.status)) return;
       if (hiddenChecks.current >= 30) { window.clearInterval(timer); return; }
       hiddenChecks.current++;
       void load(null, false, true);

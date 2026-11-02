@@ -2,6 +2,7 @@
 import { expect, test } from '@playwright/test';
 import { mockApi, session, search, job, completed, task, proposal } from './api-fixture.mjs';
 const visitor = () => session({ user: null, visitor: { expiresAt: '2026-11-02T12:00:00.000Z' }, access: { kind: 'guest', fullAccess: false, billingEnabled: false }, capabilities: { search: true, visitorSearch: true, viewed: true, companyRequests: false } });
+const freezeClock = async page => { await page.clock.install({ time: new Date('2026-11-02T08:00:00Z') }); await page.clock.pauseAt(new Date('2026-11-02T08:01:00Z')); };
 const visibleJob = index => ({ ...job(index), firstObserved: '2026-10-29T08:00:00.000Z' });
 const submit = async (page, query) => { await page.locator('#query').fill(query); await page.locator('#job-search button[type=submit]').click(); };
 test.beforeEach(async ({ page }) => { await page.setViewportSize({ width: 1280, height: 1100 }); });
@@ -150,23 +151,8 @@ test('a failed restored task can be retried explicitly without repeatedly pollin
   expect(calls.filter(call => call.key === 'PATCH /visitor/searches/search-1')).toHaveLength(1);
 });
 
-for (const [hiddenMatches, title] of [
-  [{ status: 'pending', count: null }, 'Checking recent hidden matches…'],
-  [{ status: 'unavailable', count: null }, 'The recent hidden-match count is unavailable.'],
-  [{ status: 'lower_bound', count: 0 }, 'No recent hidden matches confirmed yet.'],
-  [{ status: 'exact', count: 0 }, null],
-]) test(`hidden ${hiddenMatches.status}:${hiddenMatches.count} retains its honest state after visible exhaustion`, async ({ page }) => {
-  await mockApi(page, {
-    'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
-    'GET /visitor/searches/search-1/results': { ...completed([visibleJob(1)]), hiddenMatches },
-  });
-  await page.goto('/'); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
-  if (title) await expect(page.locator('#hidden-matches-title')).toHaveText(title);
-  else await expect(page.locator('#hidden-matches')).toHaveCount(0);
-});
-
 test('hidden refresh preserves loaded rows and pagination, pauses for dialogs and stops at its retry budget', async ({ page }) => {
-  await page.clock.install(); let reads = 0;
+  await freezeClock(page); let reads = 0;
   const calls = await mockApi(page, {
     'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
     'GET /visitor/searches/search-1/results': () => ({ ...completed([visibleJob(++reads === 1 ? 1 : 2)]), hiddenMatches: { status: 'lower_bound', count: 0 } }),
@@ -190,7 +176,7 @@ test('hidden refresh preserves loaded rows and pagination, pauses for dialogs an
 });
 
 test('a failed hidden metadata read keeps rows, reports unavailable and waits for explicit recovery', async ({ page }) => {
-  await page.clock.install(); let reads = 0;
+  await freezeClock(page); let reads = 0;
   await mockApi(page, {
     'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
     'GET /visitor/searches/search-1/results': () => ++reads === 2 ? { abort: true } : { ...completed([visibleJob(1)]), hiddenMatches: reads === 1 ? { status: 'pending', count: null } : { status: 'exact', count: 0 } },

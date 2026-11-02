@@ -51,7 +51,7 @@ test('checking new positions refreshes the accepted revision without interpretin
   expect(calls.some(call => call.key.startsWith('POST /searches') || call.key.startsWith('PATCH /searches'))).toBe(false);
 });
 
-for (const hidden of [{ count: 7, status: 'exact' }, { count: 3, status: 'lower_bound' }, { count: 0, status: 'exact' }, { count: null, status: 'pending' }, { count: null, status: 'unavailable' }, null]) {
+for (const hidden of [{ count: 7, status: 'exact' }, { count: 3, status: 'lower_bound' }, { count: 0, status: 'lower_bound' }, { count: 0, status: 'exact' }, { count: null, status: 'pending' }, { count: null, status: 'unavailable' }, null]) {
   test(`hidden-match access notice uses only reported counts: ${JSON.stringify(hidden)}`, async ({ page }) => {
     await mockApi(page, {
       'GET /session': session({ access: { kind: 'account', fullAccess: false, billingEnabled: false } }),
@@ -60,9 +60,12 @@ for (const hidden of [{ count: 7, status: 'exact' }, { count: 3, status: 'lower_
     });
     await page.goto('/');
     await expect(page.locator('#refresh-results')).toBeVisible();
+    if (hidden?.status === 'exact' && hidden.count === 0) {
+      await expect(page.locator('#hidden-matches')).toHaveCount(0); return;
+    }
     if (!hidden?.count) {
-      await expect(page.locator('#hidden-matches')).toHaveCount(0);
-      return;
+      await expect(page.locator('#hidden-matches-title')).toHaveText(hidden?.status === 'pending' ? 'Checking recent hidden matches…' : hidden?.status === 'lower_bound' ? 'No recent hidden matches confirmed yet.' : 'The recent hidden-match count is unavailable.');
+      await expect(page.locator('.compressed-matches')).toHaveCount(0); return;
     }
     await expect(page.locator('#hidden-matches-title')).toHaveText(`${hidden.status === 'exact' ? '' : 'At least '}${hidden.count} recent matches hidden`);
     await expect(page.locator('.compressed-matches')).toHaveAttribute('aria-hidden', 'true');
