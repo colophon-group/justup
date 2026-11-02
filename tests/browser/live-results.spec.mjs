@@ -204,3 +204,23 @@ test('arrivals keep the header position while the reader is above the results', 
   await expect(page.locator('[data-job="job-92"]')).toHaveCount(1);
   expect(await page.locator('.topbar').evaluate(element => ({ top: element.getBoundingClientRect().top, y: scrollY }))).toEqual(before);
 });
+
+test('authoritative import churn retains surviving nodes and reintroduced older rows must pass the viewport gate again', async ({ page }) => {
+  await open(page); await reveal(page, 8);
+  const retained = await page.locator('[data-job="job-5"]').elementHandle();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const removed = fixture.jobs.filter(item => item.id !== 'job-6');
+  fixture.setJobs(removed); fixture.snapshot({ items: removed, retained: removed.map(item => item.id) });
+  await expect(page.locator('[data-job="job-6"]')).toHaveCount(0);
+  // Full accepted-ID evidence can establish a baseline without creating a row.
+  fixture.setJobs(fixture.jobs); fixture.snapshot({ items: fixture.jobs.slice(0, 2), retained: fixture.jobs.map(item => item.id) });
+  fixture.snapshot({ items: fixture.jobs, retained: fixture.jobs.map(item => item.id) });
+  await page.waitForTimeout(600);
+  await expect(page.locator('[data-job="job-6"]')).toHaveCount(0);
+  expect(await retained.evaluate(element => element === document.querySelector('[data-job="job-5"]'))).toBe(true);
+  await expect(page.locator('.is-new')).toHaveCount(0);
+  await page.locator('#feed-tail').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200); await expect(page.locator('[data-job="job-6"]')).toHaveCount(0);
+  await expect(page.locator('[data-job="job-6"]')).toHaveCount(1);
+  expect(await retained.evaluate(element => element === document.querySelector('[data-job="job-5"]'))).toBe(true);
+});

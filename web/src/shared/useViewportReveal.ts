@@ -1,5 +1,6 @@
 // Reveal from a ready buffer only when the real next slot is visible.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { retainRevealedIds } from "./revealState.ts";
 import type { RefObject } from "react";
 interface Options<T> {
   items: readonly T[];
@@ -28,7 +29,11 @@ export function useViewportReveal<T>({
   immediateIds,
 }: Options<T>): { visible: T[]; revealing: boolean; initialCount: number } {
   const [admitted, setAdmitted] = useState<ReadonlySet<string>>(new Set());
-  const pending = itemKey ? items.filter(item => !admitted.has(itemKey(item)) && !immediateIds?.has(itemKey(item))) : [];
+  const retainedAdmitted = itemKey ? retainRevealedIds(admitted, new Set(items.map(itemKey))) : admitted;
+  useLayoutEffect(() => {
+    if (retainedAdmitted !== admitted) setAdmitted(retainedAdmitted);
+  }, [admitted, retainedAdmitted]);
+  const pending = itemKey ? items.filter(item => !retainedAdmitted.has(itemKey(item)) && !immediateIds?.has(itemKey(item))) : [];
   const pendingKey = pending.length && itemKey ? itemKey(pending[0]!) : null;
   const disclose = () => {
     if (itemKey && pendingKey !== null) setAdmitted(current => new Set([...current, pendingKey]));
@@ -138,7 +143,7 @@ export function useViewportReveal<T>({
     resetKey,
   ]);
   return {
-    visible: key.current !== resetKey ? [] : itemKey ? items.filter(item => admitted.has(itemKey(item)) || immediateIds?.has(itemKey(item))) : items.slice(0, count),
+    visible: key.current !== resetKey ? [] : itemKey ? items.filter(item => retainedAdmitted.has(itemKey(item)) || immediateIds?.has(itemKey(item))) : items.slice(0, count),
     revealing,
     initialCount,
   };
