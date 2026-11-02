@@ -14,6 +14,8 @@ test('a visitor interprets their own search and sees delayed matches without ope
     'GET /visitor/searches/search-1/results': { ...completed([visibleJob(1)]), hiddenMatches: { status: 'exact', count: 7 } },
   });
   await page.goto('/'); await submit(page, 'Remote library jobs');
+  // Result admission follows the real viewport after the options/control area.
+  await page.locator('#feed-tail').scrollIntoViewIfNeeded();
   await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   await expect(page.locator('#hidden-matches-title')).toHaveText('7 recent matches hidden');
   await expect(page.locator('#query')).toHaveValue('Remote library jobs');
@@ -42,6 +44,7 @@ test('visitor refinements keep accepted rows until their exact warning is confir
   await expect(page.locator('#hidden-matches-title')).toHaveText('At least 2 recent matches hidden');
   await expect(page.locator('#sign-in-dialog')).not.toBeVisible();
   await page.locator('#confirm-search-proposal').click();
+  await page.locator('#feed-tail').scrollIntoViewIfNeeded();
   await expect(page.locator('[data-job="job-2"]')).toBeVisible();
   await expect(page.locator('[data-job="job-1"]')).toHaveCount(0);
   expect(calls.find(call => call.key === 'PATCH /visitor/searches/search-1').body.expectedRevision).toBe(1);

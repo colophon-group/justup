@@ -7,6 +7,7 @@ import { Dialog } from "../../shared/Dialog.tsx";
 import { LandingOverview } from "./LandingOverview.tsx";
 import { ResultFeed } from "./ResultFeed.tsx";
 import { TypingExample } from "./TypingExample.tsx";
+import { PostingLanguages } from "./PostingLanguages.tsx";
 import { SearchWarning } from "./SearchWarning.tsx";
 import { useWorkspace } from "./useWorkspace.ts";
 interface Props {
@@ -215,7 +216,7 @@ export function SearchWorkspace({
                   className="search-submit"
                   disabled={
                     !session ||
-                    state.busy ||
+                    state.busy || workspace.optionsSaving ||
                     !session.capabilities.search ||
                     (!session.user && !session.capabilities.visitorSearch)
                   }
@@ -223,6 +224,10 @@ export function SearchWorkspace({
                 </button>
               </div>
             </form>
+            <PostingLanguages key={search?.id ?? "new"} client={client} scope={workspace.scope}
+              selected={workspace.postingLanguages} revision={search?.revision} supported={!search || !!search.options}
+              disabled={(!search && state.busy) || workspace.loading || workspace.recovering || !!workspace.conflict || search?.status === "unavailable"}
+              saving={workspace.optionsSaving} active={active} onSave={workspace.savePostingLanguages} />
             <p className="search-guidance" id="search-guidance">{t("Be as specific as you need. We’ll show how your requirements are handled.")}</p>
           </div>
           <div id="search-status" className="helper" role="status">

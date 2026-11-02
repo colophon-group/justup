@@ -67,6 +67,7 @@ export type Action =
   | { type: "loaded"; searches: Search[] }
   | { type: "restored"; searches: Search[]; saved: SavedWorkspaceState; preserveLocal: boolean; defaultSelection?: boolean; authoritative?: boolean }
   | { type: "submitted"; search: Search; previousId: string | null }
+  | { type: "optionsSaved"; search: Search }
   | { type: "taskFailed"; id: string }
   | { type: "editing" }
   | { type: "query"; value: string }
@@ -110,6 +111,16 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
         delete drafts.new;
       } else if (drafts[key] === undefined) drafts[key] = action.search.query;
       return { ...state, searches: [...state.searches.filter(search => search.id !== action.search.id), action.search], selectedId: action.search.id, drafts };
+    }
+    case "optionsSaved": {
+      const previous = state.searches.find(search => search.id === action.search.id);
+      if (!previous || previous.revision > action.search.revision) return state;
+      const candidate = action.search.proposal;
+      const query = state.drafts[draftKey(action.search.id)] ?? action.search.query;
+      const proposal = candidate && candidate.searchId === action.search.id && candidate.expectedRevision === action.search.revision && candidate.query === query ? candidate : null;
+      return { ...state, searches: state.searches.map(search => search.id === action.search.id ? action.search : search),
+        proposal: state.selectedId === action.search.id ? proposal : state.proposal,
+        status: state.selectedId === action.search.id ? "Posting languages saved." : state.status };
     }
     case "taskFailed":
       return { ...state, searches: state.searches.map(search => search.id === action.id && search.draft

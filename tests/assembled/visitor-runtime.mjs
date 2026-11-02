@@ -11,8 +11,38 @@ import { createPublicHandler } from '../../web/worker-dist/worker.mjs';
 export async function startVisitorRuntime({ now = Date.now } = {}) {
   const ingressSecret = 'A'.repeat(43);
   const dir = mkdtempSync(join(tmpdir(), 'justup-assembled-visitor-')), ref = process.env.JUSTUP_ASSEMBLED_API_REF;
-  let app, server, heartbeatTimer, queue;
-  const liveConnections = new Set();
+  let app, server, heartbeatTimer, queue, closing = false, closePromise;
+  let queueWork = Promise.resolve();
+  const liveConnections = new Set(), frontendSockets = new Set(), apiSockets = new Set();
+  const controllers = new Set(), heldReplies = new Set();
+  const trackSockets = (listener, sockets) => listener.on('connection', socket => {
+    // HTTPS closeAllConnections does not cover sockets waiting for TLS/HTTP.
+    // A connection already accepted when close starts must retire as well.
+    if (closing) { socket.destroy(); return; }
+    sockets.add(socket); socket.once('close', () => sockets.delete(socket));
+  });
+  const stopListener = (listener, sockets) => {
+    if (!listener) return Promise.resolve();
+    const stopped = new Promise((resolve, reject) => listener.close(error => error && error.code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve()));
+    listener.closeAllConnections();
+    for (const socket of sockets) socket.destroy();
+    return stopped;
+  };
+  const close = () => closePromise ??= (async () => {
+    closing = true;
+    clearInterval(queue); clearInterval(heartbeatTimer);
+    // Stop each listener before destroying its accepted sockets; waiting on only
+    // the frontend would leave service streams or pre-TLS connections alive.
+    const frontendStopped = stopListener(server, frontendSockets);
+    const apiStopped = stopListener(app?.server, apiSockets);
+    for (const controller of controllers) controller.abort();
+    for (const reply of heldReplies) reply.release();
+    const drained = await Promise.allSettled([frontendStopped, apiStopped, queueWork]);
+    try { await app?.close(); }
+    finally { rmSync(dir, { recursive: true, force: true }); }
+    const failed = drained.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  })();
   try {
   const API_COMMIT = execFileSync('git', ['rev-parse', '--verify', `${ref || 'HEAD'}^{commit}`], { encoding: 'utf8' }).trim();
   let source = process.cwd();
@@ -42,6 +72,7 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
     allowedOrigin: origin, trustedIngressSecret: ingressSecret, requiresInvitation: false, policiesReviewed: true, policyVersion: 'synthetic-reviewed', privacyUrl: origin + '/privacy.html', usageUrl: origin + '/usage.html',
     policyLocales, policyAssetProof,
   } });
+  trackSockets(app.server, apiSockets);
   const db = app.store.db, records = app.services.find(service => typeof service.onModelMetric === 'function'), identity = app.services.find(service => service.identity)?.identity;
   const reading = app.services.find(service => typeof service.preferences === 'function');
   if (!records?.runTask || !identity?.principal || !reading?.preferences)
@@ -52,7 +83,14 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
       return { title: 'Engineering', configuration: { schemaVersion: 1, filters: { ...Object.fromEntries(filters.map(key => [key, null])), titleAny: ['engineer'] }, residualAi: null }, requirements: [{ id: 'role', text: 'Engineer', handling: 'primary', reason: 'Synthetic title evidence.', bindings: [{ field: 'titleAny', values: ['engineer'] }], companyReference: null }] };
     } },
   });
-  queue = setInterval(async () => { if (busy || !available) return; busy = true; try { const task = app.tasks.claim({ workerId: 'assembled-local', kinds: ['search_intent'] }); if (task) { const result = await records.runTask(task, worker.runTask); if (!result.committed) app.tasks.complete(task.id, task.leaseToken, result); records.taskFinished(task); } } finally { busy = false; } }, 20);
+  queue = setInterval(() => {
+    if (busy || !available || closing) return;
+    busy = true;
+    queueWork = (async () => {
+      try { const task = app.tasks.claim({ workerId: 'assembled-local', kinds: ['search_intent'] }); if (task) { const result = await records.runTask(task, worker.runTask); if (!result.committed) app.tasks.complete(task.id, task.leaseToken, result); records.taskFinished(task); } }
+      finally { busy = false; }
+    })();
+  }, 20);
   const at = now();
   app.store.importSnapshot({ schemaVersion: 1, snapshotAt: new Date(at).toISOString(), verifiedAt: new Date(at).toISOString(), observations: [], unknownIds: [], jobs: [{
     id: 'assembled-engineer', companyId: 'assembled', companyName: 'Assembled Company', companySlug: 'assembled', title: 'Engineer', sourceUrl: 'https://example.org/careers/engineer', active: true, reserved: false, hasContent: true,
@@ -77,7 +115,9 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
   const key = join(dir, 'tls.key'), cert = join(dir, 'tls.crt');
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
   server = createServer({ key: readFileSync(key), cert: readFileSync(cert) }, async (req, res) => {
+    if (closing) { req.socket.destroy(); return; }
     const abort = new AbortController();
+    controllers.add(abort);
     const disconnected = () => abort.abort();
     res.once('close', disconnected);
     try {
@@ -114,12 +154,13 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
       }
       const bytes = Buffer.from(await result.arrayBuffer());
       const matched = fault => fault && req.method === fault.method && new URL(origin + req.url).pathname === '/api/v1' + fault.path && fault.when(chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null);
-      if (matched(hold)) { const waiting = hold; hold = null; waiting.reached(); await waiting.wait; }
+      if (matched(hold)) { const waiting = hold; hold = null; heldReplies.add(waiting); waiting.reached(); try { await waiting.wait; } finally { heldReplies.delete(waiting); } }
       if (matched(loss)) { loss = null; res.writeHead(result.status, { ...headers, 'Content-Length': bytes.length }); res.flushHeaders(); res.destroy(); return; }
       res.writeHead(result.status, headers); res.end(bytes);
     } catch { if (!res.destroyed) { if (res.headersSent) res.destroy(); else { res.writeHead(500); res.end('Local assembled fixture failed'); } } }
-    finally { res.off('close', disconnected); }
+    finally { res.off('close', disconnected); controllers.delete(abort); }
   });
+  trackSockets(server, frontendSockets);
   await new Promise(resolve => server.listen(Number(new URL(origin).port), '127.0.0.1', resolve));
   return { origin, calls, modelInputs, app, db, sourceCommit: API_COMMIT, modelCalls: () => modelCalls,
     refreshHeartbeat: heartbeat,
@@ -127,16 +168,13 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
     dropLiveConnections() { for (const connection of liveConnections) connection.destroy(); },
     setAvailable(value) { available = value; heartbeat(); },
     loseNext(method, path, when = () => true) { loss = { method, path, when }; },
-    holdNext(method, path, when = () => true) { let reached, release; const arrived = new Promise(resolve => { reached = resolve; }); const wait = new Promise(resolve => { release = resolve; }); hold = { method, path, when, reached, wait }; return { arrived, release }; },
+    holdNext(method, path, when = () => true) { let reached, release; const arrived = new Promise(resolve => { reached = resolve; }); const wait = new Promise(resolve => { release = resolve; }); hold = { method, path, when, reached, wait, release }; return { arrived, release }; },
     count: table => db.prepare(`SELECT count(*) n FROM ${table}`).get().n,
     workspaces: () => db.prepare('SELECT state_json,revision FROM justup_workspaces').all().map(row => ({ revision: row.revision, ...JSON.parse(row.state_json) })),
-    async close() { clearInterval(queue); clearInterval(heartbeatTimer); server.closeAllConnections(); app.server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await app.close(); rmSync(dir, { recursive: true, force: true }); },
+    close,
   };
   } catch (cause) {
-    clearInterval(queue); clearInterval(heartbeatTimer);
-    server?.closeAllConnections(); app?.server.closeAllConnections();
-    if (server?.listening) await new Promise(resolve => server.close(resolve));
-    await app?.close(); rmSync(dir, { recursive: true, force: true });
+    await close();
     throw new Error(`Assembled API source ${ref || 'checked-out/current'} is not compatible with this candidate.`, { cause });
   }
 }
