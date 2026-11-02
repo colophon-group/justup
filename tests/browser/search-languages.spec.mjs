@@ -128,3 +128,28 @@ test('a failed changed-options write resumes only the canonically unchanged reco
   expect(calls.filter(call => call.key === 'POST /searches' || call.key === 'PATCH /searches/search-1')).toHaveLength(0);
   releaseFirst(task('recorded-task', 'succeeded', { search: finished }));
 });
+test('a committed options revision never revives the invalidated recorded task after a lost acknowledgement', async ({ page }) => {
+  let releaseFirst;
+  const first = new Promise(resolve => { releaseFirst = resolve; });
+  let saved = { ...initial(), draft: { query: 'My submitted refinement', taskId: 'recorded-task', status: 'pending' } };
+  const calls = await mockApi(page, {
+    'GET /search-options': catalogue, 'GET /searches': () => ({ items: [saved] }),
+    'GET /searches/search-1/results': call => completed([], Number(call.url.searchParams.get('revision'))),
+    'GET /tasks/recorded-task': () => first,
+    'PATCH /searches/search-1/options': call => {
+      saved = { ...saved, revision: 2, options: { followedOnly: true, postingLanguages: call.body.postingLanguages }, draft: { ...saved.draft, taskId: null, status: 'interrupted' } };
+      return { abort: true };
+    },
+  });
+  await page.goto('/'); await expect.poll(() => calls.filter(call => call.key === 'GET /tasks/recorded-task').length).toBe(1);
+  const newer = 'My newer unsent draft  '; await page.locator('#query').fill(newer);
+  await page.locator('#posting-languages').click(); await page.locator('.language-options input[value="fr"]').check();
+  await page.locator('#apply-posting-languages').click();
+  await expect(page.locator('#posting-language-dialog')).toContainText('could not be confirmed');
+  await page.locator('#review-posting-languages').click();
+  await expect(page.locator('.language-options input[value="fr"]')).toBeChecked();
+  await expect(page.locator('#query')).toHaveValue(newer);
+  expect(calls.filter(call => call.key === 'GET /tasks/recorded-task')).toHaveLength(1);
+  expect(calls.filter(call => call.key === 'POST /searches' || call.key === 'PATCH /searches/search-1')).toHaveLength(0);
+  releaseFirst(task('recorded-task', 'succeeded', { search: { ...initial(), revision: 2, query: 'My submitted refinement' } }));
+});
