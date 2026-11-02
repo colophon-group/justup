@@ -364,7 +364,22 @@ def prepare(inbox=INBOX):
         if path.parent.resolve() != path.parent or not path.parent.is_dir():
             raise FeedStageError('Feed inbox parent is invalid.')
         path.mkdir(mode=0o700)
-        os.chown(path, owner.pw_uid, owner.pw_gid)
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fchown(fd, owner.pw_uid, owner.pw_gid)
+            # mkdir inherits the parent's set-group-ID bit on Linux.
+            os.fchmod(fd, 0o700)
+            os.fsync(fd)
+            meta = os.fstat(fd)
+            named = path.lstat()
+            if (not stat.S_ISDIR(named.st_mode)
+                    or (meta.st_dev, meta.st_ino) != (named.st_dev, named.st_ino)
+                    or meta.st_uid != owner.pw_uid or meta.st_gid != owner.pw_gid
+                    or stat.S_IMODE(meta.st_mode) != 0o700):
+                raise FeedStageError('Feed inbox is not private.')
+        finally:
+            os.close(fd)
+        private_inbox(path, owner.pw_uid)
         fsync_dir(path.parent)
         created = True
     if RECEIPTS.exists() or RECEIPTS.is_symlink():
