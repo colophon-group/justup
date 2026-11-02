@@ -44,3 +44,11 @@ test('first-observed order retains submillisecond precision and normalizes UTC s
   const items = [job('a', '2026-11-01T12:00:00.000000001Z'), job('z', '2026-11-01T12:00:00.000000002+00:00'), job('same-b', '2026-11-01T12:00:00Z'), job('same-a', '2026-11-01T12:00:00.000Z')];
   assert.deepEqual(items.sort(jobOrder).map(job => job.id), ['z', 'a', 'same-a', 'same-b']);
 });
+test('ordered complete then incomplete frames retain proven removals and accepted-ID baseline evidence', () => {
+  const initial = reconcileLive([], event(['a', 'expired']), null);
+  const complete = reconcileLive(initial.jobs, event(['a'], ['a', 'older-accepted']), initial.baseline);
+  const incomplete = reconcileLive(complete.jobs, event(['a', 'older-accepted'], [], false), complete.baseline);
+  assert.deepEqual(incomplete.jobs.map(job => job.id), ['a', 'older-accepted']);
+  assert.deepEqual(incomplete.arrivals, []);
+  assert.ok(incomplete.jobs.every(job => !job.isNew));
+});

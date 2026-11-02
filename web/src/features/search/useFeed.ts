@@ -50,10 +50,10 @@ export function useFeed(
     seenCursors = useRef(new Set<string>());
   const interrupted = useRef<{ cursor: string | null } | null>(null);
   const feedRef = useRef(feed);
-  const updateFeed = useCallback((change: (current: Feed) => Feed) => {
+  const updateFeed = useCallback((change: (current: Feed) => Feed, render = true) => {
     const updated = change(feedRef.current);
     feedRef.current = updated;
-    setFeed(updated);
+    if (render) setFeed(updated);
   }, []);
   const load = useCallback(
     async (cursor: string | null, replace = false) => {
@@ -205,11 +205,11 @@ export function useFeed(
     feed: feed.key === key ? feed : emptyFeed(key),
     next,
     retry,
-    receive: (event: LiveSnapshot) => {
+    receive: (event: LiveSnapshot, deferred = false) => {
       const current = feedRef.current;
       if (current.key !== key) return;
       const reconciled = reconcileLive(current.jobs, event, baseline.current);
-      before.current();
+      if (!deferred) before.current();
       generation.current++; controller.current?.abort(); inFlight.current = false;
       baseline.current = reconciled.baseline;
       seenIds.current = new Set(reconciled.jobs.map(job => job.id));
@@ -219,8 +219,9 @@ export function useFeed(
       const updated = { ...current, loading: false, jobs: unavailable ? [] : reconciled.jobs, immediateIds,
         continuation: { ...event.page.continuation, cursor: current.continuation.cursor }, ai: event.page.ai, coverage: event.page.coverage,
         hiddenMatches: unavailable ? { status: 'unavailable' as const, count: null } : event.page.hiddenMatches, error: null };
-      updateFeed(() => updated);
+      updateFeed(() => updated, !deferred);
     },
+    flush: () => { before.current(); updateFeed(current => current); },
     invalidate: () => {
       generation.current++; controller.current?.abort(); inFlight.current = false;
       updateFeed(() => ({ ...emptyFeed(key), continuation: { state: 'paused', cursor: null, retryAfterMs: null } }));

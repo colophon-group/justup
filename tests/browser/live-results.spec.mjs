@@ -224,3 +224,44 @@ test('authoritative import churn retains surviving nodes and reintroduced older 
   await expect(page.locator('[data-job="job-6"]')).toHaveCount(1);
   expect(await retained.evaluate(element => element === document.querySelector('[data-job="job-5"]'))).toBe(true);
 });
+test('gesture batching folds complete removal evidence before a later incomplete prefix', async ({ page }) => {
+  await open(page); await reveal(page, 8);
+  const survivor = await page.locator('[data-job="job-5"]').elementHandle();
+  await page.locator('[data-job="job-4"] .posting-link').dispatchEvent('pointerdown');
+  const removed = fixture.jobs.filter(item => item.id !== 'job-6');
+  const older = { ...job(90), firstObserved: '2026-10-30T12:00:00Z' };
+  fixture.setJobs([...removed, older]);
+  fixture.snapshot({ items: removed, retained: [...removed.map(item => item.id), older.id] });
+  fixture.snapshot({ items: [removed[0], older], retained: [], complete: false });
+  await page.waitForTimeout(300);
+  await expect(page.locator('[data-job="job-6"]')).toHaveCount(1);
+  await expect(page.locator('[data-job="job-90"]')).toHaveCount(0);
+  await page.locator('[data-job="job-4"] .posting-link').dispatchEvent('pointerup');
+  await expect(page.locator('[data-job="job-6"]')).toHaveCount(0);
+  await expect(page.locator('.is-new')).toHaveCount(0);
+  expect(await survivor.evaluate(element => element === document.querySelector('[data-job="job-5"]'))).toBe(true);
+});
+test('interrupted pointer gestures recover after window blur and a hidden-document return without a pointerup', async ({ page }) => {
+  await open(page); await reveal(page, 6);
+  await page.locator('[data-job="job-4"] .posting-link').dispatchEvent('pointerdown');
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  const first = { ...job(93), firstObserved: '2026-11-02T11:00:00Z' };
+  fixture.setJobs([first, ...fixture.jobs]); fixture.snapshot();
+  await expect(page.locator('[data-job="job-93"]')).toHaveCount(1);
+  await page.locator('[data-job="job-4"] .posting-link').dispatchEvent('pointerdown');
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await expect.poll(() => fixture.streams.at(-1).closed).toBe(true);
+  const streamCount = fixture.streams.length;
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
+  await expect.poll(() => fixture.streams.length).toBeGreaterThan(streamCount);
+  const second = { ...job(94), firstObserved: '2026-11-02T11:30:00Z' };
+  fixture.setJobs([second, first, ...fixture.jobs]); fixture.snapshot({ reason: 'recovery' });
+  await expect(page.locator('[data-job="job-94"]')).toHaveCount(1);
+});
+test('HTTP404 on reconnect reloads a deleted accepted search without interpretation', async ({ page }) => {
+  await open(page); fixture.setSearch([]); fixture.rejectStreams(404); fixture.disconnect();
+  await expect(page.locator('[data-job]')).toHaveCount(0);
+  await expect(page.getByRole('tab')).toHaveCount(0);
+  expect(fixture.calls.filter(call => call.path === '/api/v1/searches').length).toBeGreaterThanOrEqual(2);
+  expect(fixture.calls.some(call => ['POST', 'PATCH'].includes(call.method) && /\/searches/.test(call.path))).toBe(false);
+});
