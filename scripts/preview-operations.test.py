@@ -1970,6 +1970,95 @@ class RecoveryContracts(unittest.TestCase):
                 context.assert_called_once_with([folder, barrier], None, cleanup_logs=False)
                 self.assertTrue(json.loads(output.getvalue())['healthy'])
 
+    def test_scheduled_backup_uses_fixed_paths_and_verified_active_manifest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            manifest = {'sourceCommit': 'a' * 40, 'buildIdentity': 'b' * 64, 'schemaVersion': 2}
+            with patch.object(recovery, 'SCHEDULED_BASE', root), \
+                 patch.object(recovery, 'operational_context', return_value=(manifest, [])) as context, \
+                 patch.object(recovery.sys, 'argv', ['preview-recovery.py', 'scheduled-backup']), \
+                 patch.object(recovery.time, 'time', return_value=1000), \
+                 patch.object(recovery.sys, 'stdout', io.StringIO()) as output:
+                self.assertEqual(recovery.main(), 0)
+                context.assert_called_once_with([db, folder, barrier], None, cleanup_logs=False,
+                                                resource_only=True)
+                result = json.loads(output.getvalue())
+            info = json.loads((folder / result['backup']).with_suffix('.json').read_text())
+            self.assertEqual((info['sourceCommit'], info['buildIdentity'], info['schemaVersion']),
+                             (manifest['sourceCommit'], manifest['buildIdentity'], 2))
+            self.assertEqual(len(list(folder.iterdir())), 2)
+
+    def test_scheduled_backup_fails_closed_on_manifest_epoch_or_pending_deletion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            argv = ['preview-recovery.py', 'scheduled-backup']
+            wrong_epoch = {'sourceCommit': 'a' * 40, 'buildIdentity': 'b' * 64, 'schemaVersion': 1}
+            with patch.object(recovery, 'SCHEDULED_BASE', root), \
+                 patch.object(recovery, 'operational_context', return_value=(wrong_epoch, [])), \
+                 patch.object(recovery.sys, 'argv', argv), patch.object(recovery.sys, 'stderr', io.StringIO()):
+                self.assertEqual(recovery.main(), 1)
+            self.assertEqual(list(folder.iterdir()), [])
+            barrier.with_name(barrier.name + '.pending').write_text(str(uuid.uuid4()) + '\n')
+            correct = {**wrong_epoch, 'schemaVersion': 2}
+            with patch.object(recovery, 'SCHEDULED_BASE', root), \
+                 patch.object(recovery, 'operational_context', return_value=(correct, [])), \
+                 patch.object(recovery.sys, 'argv', argv), patch.object(recovery.sys, 'stderr', io.StringIO()):
+                self.assertEqual(recovery.main(), 1)
+            self.assertEqual(list(folder.iterdir()), [])
+
+    def test_manual_and_scheduled_backups_share_fail_fast_directory_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            manifest = {'sourceCommit': 'a' * 40, 'buildIdentity': 'b' * 64, 'schemaVersion': 2}
+            with recovery.backup_lock(folder):
+                with self.assertRaisesRegex(ValueError, 'already running'):
+                    recovery.backup(db, folder, barrier, 'a' * 40, 'b' * 64)
+                with self.assertRaisesRegex(ValueError, 'already running'):
+                    recovery.prune(folder)
+                with patch.object(recovery, 'SCHEDULED_BASE', root), \
+                     patch.object(recovery, 'operational_context', return_value=(manifest, [])), \
+                     patch.object(recovery.sys, 'argv', ['preview-recovery.py', 'scheduled-backup']), \
+                     patch.object(recovery.sys, 'stderr', io.StringIO()):
+                    self.assertEqual(recovery.main(), 1)
+            self.assertEqual(list(folder.iterdir()), [])
+            self.make_backup(db, folder, barrier)
+
+    def test_next_backup_discards_only_unpaired_crash_debris_before_retention(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            first = self.make_backup(db, folder, barrier, now=1000)
+            orphan = folder / ('backup-20000101T000000Z-' + str(uuid.uuid4()) + '.sqlite')
+            orphan.write_bytes(b'incomplete private snapshot')
+            metadata_orphan = folder / ('backup-20000101T000001Z-' + str(uuid.uuid4()) + '.json')
+            metadata_orphan.write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'metadata'):
+                recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=1001)
+            second = self.make_backup(db, folder, barrier, now=2000)
+            self.assertFalse(orphan.exists())
+            self.assertFalse(metadata_orphan.exists())
+            self.assertEqual({path.name for path in folder.glob('*.sqlite')}, {first.name, second.name})
+            self.assertEqual(recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64,
+                                                    3600, now=2001)['snapshotCount'], 2)
+
+    def test_candidate_timer_has_one_bounded_run_without_missed_run_replay(self):
+        service = (HERE.parent / 'deploy/justup-preview/justup-preview-backup.service').read_text()
+        timer = (HERE.parent / 'deploy/justup-preview/justup-preview-backup.timer').read_text()
+        self.assertIn('ExecStart=/usr/bin/python3 /srv/justup_preview/ops/preview-recovery.py scheduled-backup', service)
+        self.assertIn('Slice=justup-preview.slice', service)
+        self.assertIn('User=justup-preview-api', service)
+        self.assertIn('TimeoutStartSec=90', service)
+        self.assertIn('ReadWritePaths=/srv/justup_preview/state/backups', service)
+        self.assertIn('OnCalendar=*-*-* 03:00:00 UTC', timer)
+        self.assertIn('Persistent=false', timer)
+        self.assertNotIn('OnBootSec=', timer)
+        self.assertEqual(timer.count('OnCalendar='), 1)
+        self.assertNotIn('justup-preview-backup.service', host.UNITS)
+        self.assertNotIn('justup-preview-backup.timer', host.UNITS)
+
 
 class SchemaOperationsContracts(unittest.TestCase):
     def database(self, path, epoch=2):

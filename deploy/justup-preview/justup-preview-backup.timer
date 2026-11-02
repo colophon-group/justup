@@ -1,0 +1,13 @@
+# Candidate only: no host upgrade or timer enablement is included here.
+[Unit]
+Description=Run one Justup preview snapshot daily
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+AccuracySec=1min
+RandomizedDelaySec=0
+Persistent=false
+Unit=justup-preview-backup.service
+
+[Install]
+WantedBy=timers.target
