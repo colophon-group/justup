@@ -283,6 +283,10 @@ export class ApiClient {
         credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'text/event-stream', ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}) }, signal: controller.signal,
       });
       clearTimeout(headersDeadline);
+      if (!response.ok) {
+        void response.body?.cancel().catch(() => {});
+        throw new ApiError(response.status, 'live_unavailable', 'Live results are unavailable. Check again to reconnect.');
+      }
       await readLiveResults(response, controller.signal, frame => {
         if (!controller.signal.aborted && !this.suspended && version === this.sessionVersion) receive(frame);
       });

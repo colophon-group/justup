@@ -13,7 +13,7 @@ The canonical search snapshot uses the same primary filters, search options, cur
 
 ## Events and reconciliation
 
-The browser opens a stream only when the session advertises `capabilities.sse`, a search revision is accepted and selected, and the document is visible with no open dialog. It uses same-origin fetch streaming with an explicit `Last-Event-ID` header, a 1 MiB frame bound, a 20-second header deadline and a 45-second idle deadline. Closing a dialog or resuming the document reuses the last accepted identity for the same owner, revision and locale. Session quarantine immediately cancels the stream; old chunks cannot cross the authority barrier. Transient failures retry up to eight times, at one to eight seconds, before requiring the explicit check action. No public preview flag is enabled by this consumer.
+The browser opens a stream only when the session advertises `capabilities.sse`, a search revision is accepted and selected, and the document is visible with no open dialog. It uses same-origin fetch streaming with an explicit `Last-Event-ID` header, a 1 MiB frame bound, a 20-second header deadline and a 45-second idle deadline. Closing a dialog or resuming the document reuses the last accepted identity for the same owner, revision and locale. Session quarantine immediately cancels the stream; old chunks cannot cross the authority barrier. HTTP 401, 403 and 409 opening failures also reload current session or search authority instead of treating an unavailable stream as an empty search. Transient failures retry up to eight times, at one to eight seconds, before requiring the explicit check action. No public preview flag is enabled by this consumer.
 
 An event has `event: snapshot`, an opaque 43-character `id`, and JSON data:
 
@@ -38,7 +38,7 @@ An event has `event: snapshot`, an opaque 43-character `id`, and JSON data:
 }
 ```
 
-Opening snapshots use `initial`, `resumed` or `recovery`; normal subsequent changes use `changed`.
+Opening snapshots use `initial`, `resumed` or `recovery`; normal subsequent changes use `changed`. Frame order and the current transport scope govern reconciliation; `asOf` is a server timestamp and is not a monotonic sequence across reconnects or clock corrections.
 
 `searches` covers only the explicitly selected search. Its absence says nothing about inactive tabs. `items` contains the currently deliverable newest-first resolved prefix, limited to 96 public postings. Reconcile these by stable posting identity, preserving existing row nodes, reading anchor, selection and focus. An item's first-observed timestamp and ID determine its order. Duplicate events or reconnects do not create duplicate rows or mark existing rows as new arrivals.
 

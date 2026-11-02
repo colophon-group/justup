@@ -8,6 +8,11 @@ const envelope = () => ({ schemaVersion: 1, scope: 'active_search', searchId: 's
 test('event decoder rejects foreign revisions, unbounded prefixes, invalid reconciliation and unsupported events', () => {
   assert.equal(decodeLiveSnapshot(envelope(), 's', 1).reason, 'changed');
   for (const value of [{ ...envelope(), revision: 2 }, { ...envelope(), searches: [] }, { ...envelope(), schemaVersion: 2 }, { ...envelope(), reason: 'fake' }]) assert.throws(() => decodeLiveSnapshot(value, 's', 1));
+  const position = (id: string) => ({ id, title: 'Role', company: { id: 'c', name: 'Company' }, sourceUrl: 'https://example.test/' + id, firstObserved: '2026-11-01T12:00:00Z', locations: [], employmentTypes: [], salary: null });
+  const oversized = envelope();
+  assert.throws(() => decodeLiveSnapshot({ ...oversized, searches: [{ ...oversized.searches[0], items: Array.from({ length: 97 }, (_, i) => position(String(i))), reconciliation: { complete: false, retainedItemIds: [] } }] }, 's', 1));
+  assert.throws(() => decodeLiveSnapshot({ ...oversized, searches: [{ ...oversized.searches[0], items: [position('x')], reconciliation: { complete: true, retainedItemIds: [] } }] }, 's', 1));
+  assert.throws(() => decodeLiveSnapshot({ ...oversized, searches: [{ ...oversized.searches[0], reconciliation: { complete: false, retainedItemIds: ['x', 'x'] } }] }, 's', 1));
   assert.throws(() => decodeLiveUnavailable({ schemaVersion: 1, reason: 'zero', retryAfterMs: 1000 }));
   assert.equal(decodeLiveUnavailable({ schemaVersion: 1, reason: 'authority_lost', retryAfterMs: 1000 }), 'authority_lost');
 });

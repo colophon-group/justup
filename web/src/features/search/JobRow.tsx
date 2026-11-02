@@ -54,6 +54,7 @@ export function JobRow({
         ref={row}
         className={`job list-row clickable-row${viewed ? " viewed" : ""}${job.isNew && !viewed ? " is-new" : ""}`}
         data-job={job.id}
+        onFocusCapture={() => { for (const animation of row.current?.getAnimations() ?? []) animation.finish(); }}
         onClick={(event) => {
           if (
             !(event.target instanceof Element) ||

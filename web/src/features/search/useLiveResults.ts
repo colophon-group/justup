@@ -1,18 +1,22 @@
 // Own one resumable stream per admitted active search; old callbacks cannot cross scopes.
 import { useEffect, useRef, useState } from 'react';
-import type { ApiClient } from '../../api/client.ts';
+import { ApiError, type ApiClient } from '../../api/client.ts';
 import { decodeLiveSnapshot, decodeLiveUnavailable, validEventId, type LiveSnapshot, type LiveUnavailable } from '../../api/liveResults.ts';
 import type { InterfaceLocale } from '../../i18n/locales.ts';
 import type { SearchScope } from '../../api/types.ts';
 export function useLiveResults({ client, key, searchId, revision, scope, locale, enabled, receive, unavailable }:
   { client: ApiClient; key: string; searchId: string; revision: number; scope: SearchScope; locale: InterfaceLocale; enabled: boolean;
     receive: (event: LiveSnapshot) => void; unavailable: (reason: LiveUnavailable) => void }) {
+  const currentScope = useRef('');
+  const scopeKey = `${key}:${enabled}`; currentScope.current = scopeKey;
   const callbacks = useRef({ receive, unavailable }); callbacks.current = { receive, unavailable };
-  const resume = useRef<{ key: string; id: string | null; recent: Set<string> }>({ key: '', id: null, recent: new Set() });
+  const resume = useRef({ key: '', id: null as string | null, recent: new Set<string>(), failures: 0, blocked: false, retry: 0 });
   const [retry, setRetry] = useState(0), [status, setStatus] = useState<'connecting' | 'live' | 'paused'>('paused');
   useEffect(() => {
-    if (resume.current.key !== key) resume.current = { key, id: null, recent: new Set() };
-    let disposed = false, connection: AbortController | null = null, timer: ReturnType<typeof setTimeout> | undefined, failures = 0, blocked = false;
+    if (resume.current.key !== key) resume.current = { key, id: null, recent: new Set(), failures: 0, blocked: false, retry };
+    const state = resume.current;
+    if (state.retry !== retry) { state.retry = retry; state.failures = 0; state.blocked = false; }
+    let disposed = false, connection: AbortController | null = null, timer: ReturnType<typeof setTimeout> | undefined;
     let gesture = false, settling: ReturnType<typeof setTimeout> | undefined, pending: LiveSnapshot | null = null;
     const apply = (event: LiveSnapshot) => { if (gesture || settling) pending = event; else callbacks.current.receive(event); };
     const settle = () => {
@@ -21,8 +25,8 @@ export function useLiveResults({ client, key, searchId, revision, scope, locale,
     };
     const beginGesture = () => { gesture = true; };
     const endGesture = () => { gesture = false; settle(); };
-    const allowed = () => !disposed && enabled && !blocked && !client.isSessionSuspended() && !document.hidden && !document.querySelector('dialog[open]');
-    const stop = () => { connection?.abort(); connection = null; clearTimeout(timer); timer = undefined; };
+    const allowed = () => !disposed && currentScope.current === scopeKey && enabled && !state.blocked && !client.isSessionSuspended() && !document.hidden && !document.querySelector('dialog[open]');
+    const stop = () => { pending = null; connection?.abort(); connection = null; clearTimeout(timer); timer = undefined; };
     const connect = () => {
       if (!allowed() || connection || timer) return;
       const request = new AbortController(); connection = request; setStatus('connecting');
@@ -34,18 +38,25 @@ export function useLiveResults({ client, key, searchId, revision, scope, locale,
           if (resume.current.recent.has(frame.id)) return;
           resume.current.id = frame.id; resume.current.recent.add(frame.id);
           while (resume.current.recent.size > 64) resume.current.recent.delete(resume.current.recent.values().next().value!);
-          failures = 0; setStatus('live'); apply(event);
+          state.failures = 0; setStatus('live'); apply(event);
         } else if (frame.event === 'unavailable') {
           const reason = decodeLiveUnavailable(JSON.parse(frame.data));
-          if (reason !== 'reconnect') blocked = true;
+          if (reason !== 'reconnect') state.blocked = true;
           setStatus('paused'); callbacks.current.unavailable(reason); request.abort();
         } else throw new Error('Unknown live event');
-      }).catch(() => { if (!disposed && connection === request) setStatus('paused'); }).finally(() => {
+      }).catch(error => {
+        if (!disposed && connection === request && currentScope.current === scopeKey) {
+          setStatus('paused');
+          if (error instanceof ApiError && [401, 403, 409].includes(error.status)) {
+            state.blocked = true; callbacks.current.unavailable(error.status === 401 ? 'authority_lost' : error.status === 409 ? 'search_changed' : 'dependency_unavailable');
+          }
+        }
+      }).finally(() => {
         if (connection !== request) return;
         connection = null;
         if (!allowed()) return;
-        if (++failures > 8) { blocked = true; setStatus('paused'); return; }
-        timer = setTimeout(() => { timer = undefined; connect(); }, Math.min(failures, 8) * 1000);
+        if (++state.failures > 8) { state.blocked = true; setStatus('paused'); return; }
+        timer = setTimeout(() => { timer = undefined; connect(); }, Math.min(state.failures, 8) * 1000);
       });
     };
     const update = () => { if (allowed()) connect(); else { stop(); if (!disposed) setStatus('paused'); } };

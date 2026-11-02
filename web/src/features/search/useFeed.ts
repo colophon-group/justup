@@ -205,7 +205,6 @@ export function useFeed(
       const current = feedRef.current;
       if (current.key !== key) return;
       const reconciled = reconcileLive(current.jobs, event, baseline.current);
-      if (!reconciled) return;
       before.current();
       generation.current++; controller.current?.abort(); inFlight.current = false;
       baseline.current = reconciled.baseline;

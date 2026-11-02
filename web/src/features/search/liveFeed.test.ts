@@ -34,7 +34,8 @@ test('incomplete baseline and ordinary paginated rows cannot become false arriva
   assert.ok(next.jobs.every(job => !job.isNew));
   assert.deepEqual(next.arrivals, []);
 });
-test('older snapshots cannot restore removed or revised evidence', () => {
-  const current = reconcileLive([], event(['a']), null)!;
-  assert.equal(reconcileLive(current.jobs, event(['old'], ['old'], true, '2026-11-01T12:00:00Z'), current.baseline), null);
+test('authoritative recovery remains valid after a server clock correction', () => {
+  const current = reconcileLive([], event(['a']), null);
+  const recovered = reconcileLive(current.jobs, event(['replacement'], ['replacement'], true, '2026-11-01T12:00:00Z'), current.baseline);
+  assert.deepEqual(recovered.jobs.map(job => job.id), ['replacement']);
 });

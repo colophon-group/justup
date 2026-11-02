@@ -8,6 +8,8 @@ export async function liveFixture() {
   const assets = resolve('web/dist'), calls = [], connections = new Set(), streams = [];
   let activeSession = session({ capabilities: { ...session().capabilities, sse: true, viewed: true } }), searches = [search()], sequence = 0;
   const jobs = Array.from({ length: 24 }, (_, i) => ({ ...job(i + 1), firstObserved: new Date(Date.UTC(2026, 10, 1, 12, 0, -i)).toISOString() }));
+  let preference = { accountId: 'reader', revision: 0, interfaceLocale: null, supportedInterfaceLocales: ['en', 'de', 'fr', 'it', 'es'], defaultInterfaceLocale: 'en', resolvedInterfaceLocale: 'en' };
+  let streamFailure = null;
   let current = jobs, workspace = { revision: 0, state: { activeSearchId: 'search-1', drafts: {} }, viewed: [], recoveredDrafts: [] }, staleCursor = false;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -15,12 +17,17 @@ export async function liveFixture() {
     const call = { path: url.pathname, query: Object.fromEntries(url.searchParams), headers: req.headers, method: req.method, body: body.length ? JSON.parse(Buffer.concat(body)) : null }; calls.push(call);
     const json = (value, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); };
     if (url.pathname.endsWith('/workspace/events')) {
+      if (streamFailure) { const failure = streamFailure; if (!failure.repeat) streamFailure = null; return json({ error: { code: 'live_unavailable' } }, failure.status); }
       const stream = { res, call, closed: false }; streams.push(stream); connections.add(stream);
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.write('retry: 1000\n\n');
       res.on('close', () => { stream.closed = true; connections.delete(stream); }); return;
     }
     if (url.pathname === '/api/v1/session') return json(activeSession);
     if (url.pathname === '/api/v1/hiring-wire') return json({ state: 'unavailable', edition: null });
+    if (url.pathname === '/api/v1/preferences') {
+      if (req.method === 'PATCH') preference = { ...preference, revision: preference.revision + 1, interfaceLocale: call.body.interfaceLocale, resolvedInterfaceLocale: call.body.interfaceLocale || 'en' };
+      return json(preference);
+    }
     if (url.pathname === '/api/v1/searches') return json({ items: searches });
     if (url.pathname === '/api/v1/workspace') {
       if (req.method === 'PATCH') workspace = { ...workspace, revision: workspace.revision + 1, state: { activeSearchId: call.body.activeSearchId, drafts: call.body.drafts } };
@@ -30,7 +37,8 @@ export async function liveFixture() {
     if (url.pathname.endsWith('/results')) {
       if (staleCursor && url.searchParams.has('cursor')) { staleCursor = false; return json({ error: { code: 'stale_cursor', message: 'Import changed.' } }, 409); }
       const offset = Number(url.searchParams.get('cursor') || 0), items = current.slice(offset, offset + 12), more = offset + items.length < current.length;
-      return json({ searchId: 'search-1', revision: searches[0].revision, items, continuation: { state: more ? 'open' : 'exhausted', cursor: more ? String(offset + items.length) : null }, ai: { status: 'not_required' } });
+      const searchId = url.pathname.split('/').at(-2);
+      return json({ searchId, revision: searches.find(item => item.id === searchId)?.revision ?? 1, items, continuation: { state: more ? 'open' : 'exhausted', cursor: more ? String(offset + items.length) : null }, ai: { status: 'not_required' } });
     }
     if (url.pathname.startsWith('/api/')) return json({ items: [], nextCursor: null });
     let file = resolve(assets, '.' + url.pathname);
@@ -45,8 +53,9 @@ export async function liveFixture() {
     return { id, event };
   };
   return { origin: `http://127.0.0.1:${server.address().port}`, calls, streams, jobs, snapshot,
-    setJobs(value) { current = value; }, setSession(value) { activeSession = value; }, setSearch(value) { searches = [value]; }, staleCursor() { staleCursor = true; },
+    setJobs(value) { current = value; }, setSession(value) { activeSession = value; }, setSearch(value) { searches = Array.isArray(value) ? value : [value]; }, staleCursor() { staleCursor = true; },
     unavailable(reason) { for (const stream of connections) { stream.res.write(`event: unavailable\ndata: ${JSON.stringify({ schemaVersion: 1, reason, retryAfterMs: 1000 })}\n\n`); stream.res.end(); } },
+    rejectStreams(status, repeat = false) { streamFailure = { status, repeat }; },
     disconnect() { for (const stream of connections) stream.res.destroy(); },
     async close() { for (const stream of connections) stream.res.destroy(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); },
   };
