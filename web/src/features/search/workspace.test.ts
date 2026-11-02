@@ -235,3 +235,14 @@ test('option acknowledgements preserve newer text and invalidate only the target
   const newer = workspaceReducer(accepted, { type: 'optionsSaved', search: initial });
   assert.equal(newer.searches.find(s => s.id === 's')?.revision, 2);
 });
+
+test('unchanged canonical option reads preserve valid clarification and ignore deleted or newer searches', () => {
+  let state = workspaceReducer(emptyWorkspace(), { type: 'loaded', searches: [search()] });
+  const proposal = { proposalId: 'p', searchId: 's', expectedRevision: 1, query: 'Library jobs', title: 'Library', requirements: [], warnings: [] };
+  state = workspaceReducer(state, { type: 'proposal', proposal });
+  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: search() }).proposal, proposal);
+  const newer = workspaceReducer(state, { type: 'optionsSaved', search: search('s', 2) });
+  assert.equal(workspaceReducer(newer, { type: 'optionsSaved', search: search() }), newer);
+  const deleted = workspaceReducer(state, { type: 'deleted', id: 's' });
+  assert.equal(workspaceReducer(deleted, { type: 'optionsSaved', search: search() }), deleted);
+});

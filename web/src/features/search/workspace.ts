@@ -112,9 +112,14 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       } else if (drafts[key] === undefined) drafts[key] = action.search.query;
       return { ...state, searches: [...state.searches.filter(search => search.id !== action.search.id), action.search], selectedId: action.search.id, drafts };
     }
-    case "optionsSaved":
-      return { ...state, searches: state.searches.map(search => search.id === action.search.id && search.revision <= action.search.revision ? action.search : search),
-        proposal: state.selectedId === action.search.id ? null : state.proposal, status: state.selectedId === action.search.id ? "Posting languages saved." : state.status };
+    case "optionsSaved": {
+      const previous = state.searches.find(search => search.id === action.search.id);
+      if (!previous || previous.revision > action.search.revision) return state;
+      const invalidated = previous.revision !== action.search.revision;
+      return { ...state, searches: state.searches.map(search => search.id === action.search.id ? action.search : search),
+        proposal: state.selectedId === action.search.id && invalidated ? null : state.proposal,
+        status: state.selectedId === action.search.id ? "Posting languages saved." : state.status };
+    }
     case "taskFailed":
       return { ...state, searches: state.searches.map(search => search.id === action.id && search.draft
         ? { ...search, draft: { ...search.draft, status: "failed" } } : search) };

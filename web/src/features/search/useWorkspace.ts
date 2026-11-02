@@ -237,6 +237,10 @@ export function useWorkspace(
     const search = selectedSearch(current.current);
     if (!search) { setNewPostingLanguages(postingLanguages); return true; }
     if (!search.options || search.revision !== expectedRevision) return false;
+    const changed = JSON.stringify([...search.options.postingLanguages].sort()) !== JSON.stringify([...postingLanguages].sort());
+    // Closing an unchanged selection is not a mutation: existing task polling
+    // and clarification remain valid at the same accepted revision.
+    if (!changed) return true;
     cancel();
     const controller = new AbortController();
     optionsOperation.current = controller; setOptionsSaving(true);
@@ -244,7 +248,6 @@ export function useWorkspace(
     try {
       const updated = await client.updateSearchOptions(search.id, { ...search.options, postingLanguages, expectedRevision: search.revision }, controller.signal, scope);
       if (optionsOperation.current !== controller) return false;
-      const changed = JSON.stringify([...search.options.postingLanguages].sort()) !== JSON.stringify([...postingLanguages].sort());
       if (updated.id !== search.id || updated.revision !== search.revision + (changed ? 1 : 0) || !updated.options
         || updated.query !== search.query || updated.options.followedOnly !== search.options.followedOnly
         || JSON.stringify([...updated.options.postingLanguages].sort()) !== JSON.stringify([...postingLanguages].sort()))
