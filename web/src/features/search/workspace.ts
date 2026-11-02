@@ -117,7 +117,7 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       if (!previous || previous.revision > action.search.revision) return state;
       const candidate = action.search.proposal;
       const query = state.drafts[draftKey(action.search.id)] ?? action.search.query;
-      const proposal = candidate && candidate.expectedRevision === action.search.revision && candidate.query === query ? candidate : null;
+      const proposal = candidate && candidate.searchId === action.search.id && candidate.expectedRevision === action.search.revision && candidate.query === query ? candidate : null;
       return { ...state, searches: state.searches.map(search => search.id === action.search.id ? action.search : search),
         proposal: state.selectedId === action.search.id ? proposal : state.proposal,
         status: state.selectedId === action.search.id ? "Posting languages saved." : state.status };

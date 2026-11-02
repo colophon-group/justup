@@ -258,4 +258,5 @@ test('canonical options recovery installs a newly completed proposal only for th
   assert.equal(updated.proposal, null);
   assert.equal(queryText(updated), 'My newer unsent text  ');
   assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: { ...canonical, proposal: { ...proposal, expectedRevision: 2 } } }).proposal, null);
+  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: { ...canonical, proposal: { ...proposal, searchId: 'other' } } }).proposal, null);
 });
