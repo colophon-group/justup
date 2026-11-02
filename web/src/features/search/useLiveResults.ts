@@ -67,7 +67,7 @@ export function useLiveResults({ client, key, searchId, revision, scope, locale,
       });
     };
     const update = () => {
-      if (document.hidden || client.isSessionSuspended() || document.querySelector('dialog[open]')) gesture = false;
+      if (!canPublish()) { gesture = false; callbacks.current.defer(); }
       if (canPublish() && !gesture && settling === undefined) callbacks.current.flush();
       if (allowed()) connect(); else { stop(); if (!disposed) setStatus('paused'); }
     };

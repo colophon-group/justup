@@ -217,3 +217,26 @@ test('a held hidden metadata reply waits for pointer release and settling withou
       offset: Math.abs(window.hiddenAnchor.row.getBoundingClientRect().top - window.hiddenAnchor.top) }))).toEqual({ same: true, focus: true, offset: 0 });
   } finally { release(); }
 });
+
+test('keyboard opening the language picker stages an in-flight hidden reply until the dialog closes', async ({ page }) => {
+  await freezeClock(page); let reads = 0, release, reached;
+  const held = new Promise(resolve => { release = resolve; }), arrived = new Promise(resolve => { reached = resolve; });
+  await mockApi(page, {
+    'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
+    'GET /visitor/searches/search-1/results': async () => {
+      if (++reads === 2) { reached(); await held; }
+      return { ...completed([visibleJob(1)]), hiddenMatches: reads === 1 ? { status: 'pending', count: null } : { status: 'exact', count: 0 } };
+    },
+  });
+  try {
+    await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+    await page.clock.runFor(2000); await arrived;
+    await page.locator('#posting-languages').focus(); await page.locator('#posting-languages').press('Enter');
+    await expect(page.locator('#posting-language-dialog')).toBeVisible();
+    release(); await page.waitForLoadState('networkidle'); await page.clock.runFor(2000);
+    await expect(page.locator('#hidden-matches-title')).toHaveText('Checking recent hidden matches…');
+    await page.keyboard.press('Escape'); await page.clock.runFor(120);
+    await expect(page.locator('#hidden-matches')).toHaveCount(0);
+    await expect(page.locator('[data-job="job-1"]')).toBeVisible(); expect(reads).toBe(2);
+  } finally { release(); }
+});

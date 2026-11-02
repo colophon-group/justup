@@ -54,7 +54,7 @@ export function useFeed(
     seenCursors = useRef(new Set<string>());
   const hiddenChecks = useRef(0), liveConnected = useRef(false);
   const interrupted = useRef<{ cursor: string | null } | null>(null);
-  const feedRef = useRef(feed);
+  const feedRef = useRef(feed), publishedFeed = useRef(feed);
   // Canonical HTTP and SSE writes share one publication barrier. True arrivals
   // accumulate only until their rows commit, independently of later Viewed state.
   const deferredCommit = useRef(false), pendingArrivals = useRef(new Set<string>()), arrivalSequence = useRef(0);
@@ -66,7 +66,7 @@ export function useFeed(
       if (arrivals.length) updated = { ...updated, arrivalBatch: { sequence: ++arrivalSequence.current, count: arrivals.length } };
       pendingArrivals.current.clear();
       feedRef.current = updated;
-      setFeed(updated);
+      if (updated !== publishedFeed.current) { publishedFeed.current = updated; setFeed(updated); }
     } else feedRef.current = updated;
   }, []);
   const load = useCallback(
@@ -242,7 +242,9 @@ export function useFeed(
     void load(value.continuation.cursor);
   }, [key, load, updateFeed]);
   const publishDeferred = () => {
-    deferredCommit.current = false; before.current(); updateFeed(current => current);
+    deferredCommit.current = false;
+    if (feedRef.current === publishedFeed.current) return;
+    before.current(); updateFeed(current => current);
   };
   const retry = () => {
     hiddenChecks.current = 0;
