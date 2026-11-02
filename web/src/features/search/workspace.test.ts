@@ -240,9 +240,22 @@ test('unchanged canonical option reads preserve valid clarification and ignore d
   let state = workspaceReducer(emptyWorkspace(), { type: 'loaded', searches: [search()] });
   const proposal = { proposalId: 'p', searchId: 's', expectedRevision: 1, query: 'Library jobs', title: 'Library', requirements: [], warnings: [] };
   state = workspaceReducer(state, { type: 'proposal', proposal });
-  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: search() }).proposal, proposal);
+  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: { ...search(), proposal } }).proposal, proposal);
   const newer = workspaceReducer(state, { type: 'optionsSaved', search: search('s', 2) });
   assert.equal(workspaceReducer(newer, { type: 'optionsSaved', search: search() }), newer);
   const deleted = workspaceReducer(state, { type: 'deleted', id: 's' });
   assert.equal(workspaceReducer(deleted, { type: 'optionsSaved', search: search() }), deleted);
+});
+
+test('canonical options recovery installs a newly completed proposal only for the displayed query and revision', () => {
+  let state = workspaceReducer(emptyWorkspace(), { type: 'loaded', searches: [search()] });
+  const proposal = { proposalId: 'p', searchId: 's', expectedRevision: 1, query: 'My submitted refinement', title: 'Library', requirements: [], warnings: [] };
+  state = workspaceReducer(state, { type: 'query', value: proposal.query });
+  const canonical = { ...search(), proposal };
+  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: canonical }).proposal, proposal);
+  const newer = workspaceReducer(state, { type: 'query', value: 'My newer unsent text  ' });
+  const updated = workspaceReducer(newer, { type: 'optionsSaved', search: canonical });
+  assert.equal(updated.proposal, null);
+  assert.equal(queryText(updated), 'My newer unsent text  ');
+  assert.equal(workspaceReducer(state, { type: 'optionsSaved', search: { ...canonical, proposal: { ...proposal, expectedRevision: 2 } } }).proposal, null);
 });

@@ -153,3 +153,33 @@ test('a committed options revision never revives the invalidated recorded task a
   expect(calls.filter(call => call.key === 'POST /searches' || call.key === 'PATCH /searches/search-1')).toHaveLength(0);
   releaseFirst(task('recorded-task', 'succeeded', { search: { ...initial(), revision: 2, query: 'My submitted refinement' } }));
 });
+
+for (const newer of [false, true]) test(`failed options recovery ${newer ? 'does not show an older proposal over newer text' : 'shows a proposal completed while the poll was cancelled'}`, async ({ page }) => {
+  let releaseFirst;
+  const first = new Promise(resolve => { releaseFirst = resolve; });
+  const pending = proposal({ query: 'My submitted refinement' });
+  let saved = { ...initial(), draft: { query: pending.query, taskId: 'recorded-task', status: 'pending' } };
+  const calls = await mockApi(page, {
+    'GET /search-options': catalogue, 'GET /searches': () => ({ items: [saved] }), 'GET /searches/search-1/results': completed(),
+    'GET /tasks/recorded-task': () => first,
+    'PATCH /searches/search-1/options': () => {
+      saved = { ...saved, proposal: pending };
+      return { status: 503, body: { error: { code: 'dependency_unavailable', message: 'Write rejected before commit' } } };
+    },
+  });
+  await page.goto('/'); await expect.poll(() => calls.filter(call => call.key === 'GET /tasks/recorded-task').length).toBe(1);
+  const text = newer ? 'My newer unsent draft  ' : pending.query;
+  if (newer) await page.locator('#query').fill(text);
+  await page.locator('#posting-languages').click(); await page.locator('.language-options input[value="fr"]').check(); await page.locator('#apply-posting-languages').click();
+  await expect(page.locator('#posting-language-dialog')).toContainText('could not be confirmed');
+  if (newer) await expect(page.locator('#confirm-search-proposal')).toHaveCount(0);
+  else await expect(page.locator('#confirm-search-proposal')).toBeAttached();
+  await expect(page.locator('#query')).toHaveValue(text);
+  expect(calls.filter(call => call.key === 'GET /tasks/recorded-task')).toHaveLength(1);
+  expect(calls.filter(call => call.key === 'POST /searches' || call.key === 'PATCH /searches/search-1')).toHaveLength(0);
+  releaseFirst(task('recorded-task', 'warning', { proposal: pending }));
+  await page.keyboard.press('Escape');
+  if (newer) await expect(page.locator('#confirm-search-proposal')).toHaveCount(0);
+  else await expect(page.locator('#confirm-search-proposal')).toBeVisible();
+  await expect(page.locator('#query')).toHaveValue(text);
+});
