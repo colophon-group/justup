@@ -12,13 +12,21 @@ function multilingual() {
     firstObserved: new Date(at - 3 * 86400000 - index * 3600000).toISOString(), lastObserved: null, locales: locale ? [locale] : [], locations: [], employmentTypes: [], seniority: null, salary: null, bodyText: null,
     evidence: { source: 'jobseek_public', metadataFetchedAt: new Date(at).toISOString(), bodyFetchedAt: null, bodyUrl: null, bodySha256: null, textSha256: null, bodyBytes: 0, normalizationVersion: 1, truncated: false },
   }));
-  runtime.app.store.importSnapshot({ schemaVersion: 1, snapshotAt: new Date(at).toISOString(), verifiedAt: new Date(at).toISOString(), observations: [], unknownIds: [], jobs });
+  runtime.app.store.importSnapshot({ schemaVersion: 1, snapshotAt: new Date(at).toISOString(), verifiedAt: new Date(at).toISOString(), observations: [{ id: "assembled-engineer", active: false, observedAt: new Date(at).toISOString() }], unknownIds: [], jobs });
 }
 async function choose(page, ids) {
   await expect(page.locator('#posting-languages')).toBeEnabled(); await page.locator('#posting-languages').click();
-  for (const box of await page.locator('.language-options input:checked').all()) await box.uncheck();
+  await page.getByRole('button', { name: 'Any language', exact: true }).click();
   for (const id of ids) await page.locator(`.language-options input[value="${id}"]`).check();
   await page.locator('#apply-posting-languages').click();
+}
+async function revealAll(page, count) {
+  for (let attempt = 0; attempt < 8 && await page.locator('[data-job]').count() < count; attempt++) {
+    await page.locator('#feed-tail').scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
+    await page.waitForTimeout(480);
+  }
+  await expect(page.locator('[data-job]')).toHaveCount(count);
 }
 async function login(page) {
   await page.locator('#header-sign-in').click(); await page.locator('#auth-username').fill('assembled-reader');
@@ -44,12 +52,14 @@ test('real visitor catalogue allocates no owner; creation, filtering, handoff an
   expect(runtime.calls.some(call => call.method === 'PATCH' && /^\/api\/v1\/searches\/[^/]+\/options$/.test(call.path) && call.body.expectedRevision === 1)).toBe(true);
   await page.reload(); await expect(page.locator('#query')).toHaveValue(text);
   await choose(page, []); await expect(page.locator('#posting-language-dialog')).not.toBeVisible();
+  await revealAll(page, 4);
   await expect(page.locator('[data-job="language-unknown"]')).toBeVisible();
   expect(runtime.modelCalls()).toBe(1);
   expect(runtime.calls.filter(call => call.method === 'POST' && /\/searches$/.test(call.path))).toHaveLength(1);
 });
 test('lost real option acknowledgement reads committed canonical revision without interpreting again', async ({ page }) => {
   multilingual(); await page.goto(runtime.origin); await page.locator('#query').fill('Engineer'); await page.locator('#job-search button[type=submit]').click();
+  await revealAll(page, 4);
   await expect(page.locator('[data-job="language-unknown"]')).toBeVisible();
   const id = runtime.db.prepare('SELECT id FROM justup_searches').get().id;
   runtime.loseNext('PATCH', `/visitor/searches/${id}/options`);

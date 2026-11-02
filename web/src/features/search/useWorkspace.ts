@@ -244,7 +244,8 @@ export function useWorkspace(
     try {
       const updated = await client.updateSearchOptions(search.id, { ...search.options, postingLanguages, expectedRevision: search.revision }, controller.signal, scope);
       if (optionsOperation.current !== controller) return false;
-      if (updated.id !== search.id || updated.revision < search.revision || !updated.options
+      const changed = JSON.stringify([...search.options.postingLanguages].sort()) !== JSON.stringify([...postingLanguages].sort());
+      if (updated.id !== search.id || updated.revision !== search.revision + (changed ? 1 : 0) || !updated.options
         || updated.query !== search.query || updated.options.followedOnly !== search.options.followedOnly
         || JSON.stringify([...updated.options.postingLanguages].sort()) !== JSON.stringify([...postingLanguages].sort()))
         throw new ApiError(409, "unexpected_options", "Posting language changes could not be confirmed. Reconnect before retrying.");
