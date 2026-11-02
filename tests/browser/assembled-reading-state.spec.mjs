@@ -154,7 +154,7 @@ test('accepted known-company requests refresh shared follows and searches while 
     await page.locator('#request-query').fill('Assembled Company'); await page.locator('#request-scope').fill(scope);
     await page.locator('#request-form button[type=submit]').click();
     await page.locator('#accept-company').click(); await expect(page.locator('#request-page')).toContainText('On the record.');
-    await page.getByRole('link', { name: 'View company ↗', exact: true }).click();
+    await company(page); await page.locator('[data-company="assembled"] .company-name').click();
   };
   await requestCompany('First known-company scope');
   await expect(page.locator('#company-page').getByRole('button', { name: 'Unfollow Assembled Company', exact: true })).toBeEnabled();
