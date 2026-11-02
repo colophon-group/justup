@@ -347,3 +347,11 @@ input[type=checkbox]:checked::after { content: ''; width: 4px; height: 8px; bord
 .new-results-slot { min-height: 24px; }
 .new-edge { position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--cream); pointer-events: none; }
 #new-results { font-size: 11px; }
+
+/* Search posting-language controls share the compact editor's responsive width. */
+.posting-languages { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.language-trigger { border: 1.5px solid; background: var(--cream); padding: 10px 12px; min-height: 44px; font: inherit; font-size: 13px; font-weight: 700; }
+.language-options { max-height: min(38dvh, 330px); overflow: auto; border: 1px solid; padding: 8px; margin: 0; }
+.language-options label { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 7px; cursor: pointer; }
+.language-options input { width: 20px; height: 20px; flex-shrink: 0; }
+.language-options small { font-size: 11px; color: var(--muted); margin-inline-start: 6px; overflow-wrap: anywhere; }

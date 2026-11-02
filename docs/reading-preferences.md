@@ -7,7 +7,7 @@ read_when: Connecting account settings or search options, reviewing private-stat
 
 The composed API stores follows and interface preferences under the authenticated account. Search options belong to each saved search. Viewed positions continue to use the existing [visitor and account workspace](visitor-search.md); there is no second viewed-history store. The implementation uses the application SQLite database, built-in Node APIs and the existing compiler and matching queue.
 
-These backend contracts are implemented and tested with isolated SQLite and local HTTP. Browser journeys, real multilingual interpretation quality and the full deployed release gate still require qualification. No provider, mail, billing or crawler setup is activated by these routes.
+These backend contracts are implemented and tested with isolated SQLite and local HTTP. The browser wires posting-language selection to these routes. Real multilingual interpretation quality and the full deployed release gate still require qualification. No provider, mail, billing or crawler setup is activated by these routes.
 
 ## Follow companies
 
@@ -36,6 +36,12 @@ A reviewed import can include optional `companyIdentities:[{companyId,officialDo
 | `PATCH /searches/:id/options` | `{expectedRevision,followedOnly,postingLanguages}` → `200 {search}`. |
 
 Every Search DTO includes `options:{followedOnly:false,postingLanguages:[]}` by default. Visitor equivalents are `GET /visitor/search-options` and `PATCH /visitor/searches/:id/options`; visitor creation accepts the same options. Visitors may select languages, while `followedOnly:true` requires an account. Sign-in transfers options with the existing saved search, alongside its workspace and viewed observations.
+
+The browser offers a compact posting-language button next to the search editor, opening a searchable list of native checkboxes with explicit Apply and Cancel actions. The catalogue's English names and exact identifiers remain searchable in every interface locale. No language count limit is added. Empty selection means any; previously saved identifiers absent from a newer catalogue remain removable. The selector only enables after a valid catalogue response and, for saved searches, a Search DTO containing options. Missing service routes or malformed responses keep it unavailable; the browser does not manufacture a catalogue or a capability flag.
+
+Saved-search Apply preserves `followedOnly` and unsent query text, sends the captured search revision, and replaces only the acknowledged canonical search. It cancels local polling of an older interpretation; the server cancels incompatible queued work. A failed or lost mutation response triggers a canonical read and an explicit unconfirmed-change notice, without automatically retrying a write. Switching searches or accounts cannot apply a delayed response to a different search. The revised search drives the existing results and SSE revision boundary.
+
+For a new search, Apply stages choices in the mounted page until explicit Search creation sends them through the API. Choices are saved only when that search is actually created. The current workspace API persists text drafts, not options on unsubmitted searches: reloading, signing in or changing owners clears those unsaved choices. The dialog states this limitation. Ordinary navigation retains the mounted new-search choice. Existing saved-search options transfer with the actual visitor search on sign-in. Interface-language detection, overrides and policy metadata remain separate.
 
 Language IDs are validated BCP 47 identifiers from imported `locales` metadata. The options response gives the actual available identifiers and English display names. There is no selected-language count cap: the existing bounded JSON body and the finite validated catalogue bound the request. Previously selected identifiers can remain selected if they disappear from the latest import; new values must be present in the current catalogue. De-duplicate and sort selections for stable storage. Unsupported or malformed additions return 400.
 

@@ -2,6 +2,23 @@
 import type { InterfaceLocale } from './locales.ts';
 
 export const messages = {
+  "Close": ["Schließen", "Fermer", "Chiudi", "Cerrar"],
+  "Cancel": ["Abbrechen", "Annuler", "Annulla", "Cancelar"],
+  "Posting languages": ["Anzeigensprachen", "Langues des annonces", "Lingue degli annunci", "Idiomas de los anuncios"],
+  "Any language": ["Alle Sprachen", "Toutes les langues", "Qualsiasi lingua", "Cualquier idioma"],
+  "{count} selected": ["{count} ausgewählt", "{count} sélectionnées", "{count} selezionate", "{count} seleccionados"],
+  "Loading posting languages…": ["Anzeigensprachen werden geladen…", "Chargement des langues des annonces…", "Caricamento delle lingue degli annunci…", "Cargando idiomas de los anuncios…"],
+  "Posting language options are unavailable.": ["Die Auswahl der Anzeigensprachen ist nicht verfügbar.", "La sélection des langues des annonces est indisponible.", "La selezione delle lingue degli annunci non è disponibile.", "La selección de idiomas de los anuncios no está disponible."],
+  "SEARCH OPTIONS": ["SUCHOPTIONEN", "OPTIONS DE RECHERCHE", "OPZIONI DI RICERCA", "OPCIONES DE BÚSQUEDA"],
+  "Choose any languages. No selection means any language. These options also apply alongside your search text.": ["Wähle beliebig viele Sprachen. Ohne Auswahl sind alle Sprachen erlaubt. Diese Optionen gelten zusätzlich zu deinem Suchtext.", "Choisis les langues souhaitées. Sans sélection, toutes les langues sont admises. Ces options se combinent avec ton texte de recherche.", "Scegli tutte le lingue che vuoi. Senza selezione, sono ammesse tutte le lingue. Queste opzioni si combinano con il testo della ricerca.", "Elige los idiomas que quieras. Sin selección, se aceptan todos los idiomas. Estas opciones se combinan con el texto de tu búsqueda."],
+  "For a new search, language choices stay in this page until you submit Search. Reloading or signing in clears these unsaved choices.": ["Bei einer neuen Suche bleibt die Sprachauswahl auf dieser Seite, bis du die Suche sendest. Neuladen oder Anmelden löscht diese ungespeicherte Auswahl.", "Pour une nouvelle recherche, les langues restent sur cette page jusqu’à son envoi. Recharger la page ou se connecter efface ces choix non enregistrés.", "Per una nuova ricerca, le lingue restano in questa pagina fino all’invio. Ricaricare la pagina o accedere cancella le scelte non salvate.", "En una nueva búsqueda, los idiomas permanecen en esta página hasta que la envíes. Recargar o iniciar sesión borra estas opciones sin guardar."],
+  "Find a language": ["Sprache suchen", "Rechercher une langue", "Cerca una lingua", "Buscar un idioma"],
+  "No matching languages.": ["Keine passenden Sprachen.", "Aucune langue correspondante.", "Nessuna lingua corrispondente.", "No hay idiomas coincidentes."],
+  "Posting languages saved.": ["Anzeigensprachen gespeichert.", "Langues des annonces enregistrées.", "Lingue degli annunci salvate.", "Idiomas de los anuncios guardados."],
+  "Posting language changes could not be confirmed. Reconnect before retrying.": ["Die Änderung der Anzeigensprachen konnte nicht bestätigt werden. Verbinde dich vor einem erneuten Versuch neu.", "La modification des langues des annonces n’a pas pu être confirmée. Reconnecte-toi avant de réessayer.", "Non è stato possibile confermare le modifiche alle lingue degli annunci. Riconnettiti prima di riprovare.", "No se pudieron confirmar los cambios en los idiomas de los anuncios. Vuelve a conectarte antes de reintentarlo."],
+  "Apply": ["Anwenden", "Appliquer", "Applica", "Aplicar"],
+  "Saving…": ["Wird gespeichert…", "Enregistrement…", "Salvataggio…", "Guardando…"],
+
   "Connecting live results…": ["Live-Ergebnisse werden verbunden…", "Connexion aux résultats en direct…", "Connessione ai risultati in tempo reale…", "Conectando los resultados en directo…"],
   "Live results connected.": ["Live-Ergebnisse verbunden.", "Résultats en direct connectés.", "Risultati in tempo reale connessi.", "Resultados en directo conectados."],
   "Live results paused. Check again to reconnect.": ["Live-Ergebnisse pausiert. Prüfe erneut, um die Verbindung herzustellen.", "Résultats en direct en pause. Vérifie à nouveau pour te reconnecter.", "Risultati in tempo reale in pausa. Controlla di nuovo per riconnetterti.", "Resultados en directo en pausa. Comprueba de nuevo para reconectar."],

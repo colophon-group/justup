@@ -67,6 +67,7 @@ export type Action =
   | { type: "loaded"; searches: Search[] }
   | { type: "restored"; searches: Search[]; saved: SavedWorkspaceState; preserveLocal: boolean; defaultSelection?: boolean; authoritative?: boolean }
   | { type: "submitted"; search: Search; previousId: string | null }
+  | { type: "optionsSaved"; search: Search }
   | { type: "taskFailed"; id: string }
   | { type: "editing" }
   | { type: "query"; value: string }
@@ -111,6 +112,9 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       } else if (drafts[key] === undefined) drafts[key] = action.search.query;
       return { ...state, searches: [...state.searches.filter(search => search.id !== action.search.id), action.search], selectedId: action.search.id, drafts };
     }
+    case "optionsSaved":
+      return { ...state, searches: state.searches.map(search => search.id === action.search.id && search.revision <= action.search.revision ? action.search : search),
+        proposal: state.selectedId === action.search.id ? null : state.proposal, status: state.selectedId === action.search.id ? "Posting languages saved." : state.status };
     case "taskFailed":
       return { ...state, searches: state.searches.map(search => search.id === action.id && search.draft
         ? { ...search, draft: { ...search.draft, status: "failed" } } : search) };
