@@ -190,3 +190,40 @@ test('public source redirects are not followed with private ingress credentials'
   assert.equal(result.status, 503); assert.equal(calls, 1);
   assert.equal(result.headers.get('Location'), null);
 });
+
+test('direct GET and HEAD public metadata remains route-specific in both release modes without indexing errors or private input', async () => {
+  const handle = createPublicHandler(target => {
+    const path = new URL(target).pathname;
+    if (path.endsWith('/missing')) return json({}, 404);
+    if (path.endsWith('/unavailable')) return json({}, 503);
+    return json(path.endsWith('/companies') ? { items: [company], nextCursor: null } : path.endsWith('/report') ? {} : company);
+  });
+  for (const mode of ['preview', 'production']) {
+    const env = environment(mode);
+    for (const [path, title, description, status] of [
+      ['/', 'Fresh jobs. Clear sources.', 'Find fresh jobs first observed', 200],
+      ['/companies', 'Company catalogue', 'Browse the companies included', 200],
+      ['/companies/public-corp', 'Public &amp; Co — Hiring report', 'Public &amp; Co: Public company description.', 200],
+      ['/companies/missing', 'Page not found', 'Page not found', 404],
+      ['/companies/unavailable', 'Coverage temporarily unavailable', 'Coverage temporarily unavailable', 503],
+      ['/unknown', 'Page not found', 'Page not found', 404],
+    ]) {
+      const get = await handle(request(path), env); assert.equal(get.status, status);
+      const html = await get.text();
+      assert.ok(html.includes(`<title>${title} — Justup</title>`));
+      assert.ok(html.includes(`<meta name="description" content="${description}`));
+      assert.ok(html.includes(`<link rel="canonical" href="${origin}${path}">`));
+      assert.doesNotMatch(html, /PRIVATE_|MODEL_CANARY|csrfToken|savedSearches/);
+      if (mode === 'preview' || status !== 200) assert.match(get.headers.get('X-Robots-Tag'), /noindex/);
+      else assert.equal(get.headers.get('X-Robots-Tag'), null);
+      const head = await handle(new Request(origin + path, { method: 'HEAD', headers: request(path).headers }), env);
+      assert.equal(head.status, status); assert.equal(await head.text(), '');
+      for (const name of ['X-Robots-Tag', 'Content-Type', 'Cache-Control']) assert.equal(head.headers.get(name), get.headers.get(name));
+    }
+    for (const path of ['/?q=PRIVATE_QUERY', '/companies/public-corp?search=PRIVATE_SEARCH', '/companies?private=PRIVATE_ACCOUNT']) {
+      const response = await handle(request(path), env);
+      assert.equal(response.status, 308); assert.match(response.headers.get('X-Robots-Tag'), /noindex/);
+      assert.doesNotMatch(response.headers.get('Location'), /PRIVATE_/);
+    }
+  }
+});

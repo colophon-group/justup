@@ -2,20 +2,21 @@ import { pageHref } from '../../app/useRoute.ts';
 import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 // Reports render only supplied company facts and evidence, never fabricated analytics.
 import { useEffect, useState } from 'react';
-import { type ApiClient, errorText, isAbortError } from '../../api/client';
+import { ApiError, type ApiClient, errorText, isAbortError } from '../../api/client';
+import type { PublicDocumentState } from '../../public/metadata.ts';
 import type { Company, CompanyReport } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
 import { coverageLabel, reportDate } from './presentation';
 import { CompanyReportSamples } from './CompanyReportSamples';
 
-export interface CompanyPageProps { client: ApiClient; id: string; initialCompany?: Company | undefined; initialReport?: CompanyReport | undefined }
-export function CompanyPage({ client, id, initialCompany, initialReport }: CompanyPageProps) {
+export interface CompanyPageProps { client: ApiClient; id: string; initialCompany?: Company | undefined; initialReport?: CompanyReport | undefined; onDocumentState?: ((id: string, state: PublicDocumentState) => void) | undefined }
+export function CompanyPage({ client, id, initialCompany, initialReport, onDocumentState }: CompanyPageProps) {
   const { t, locale, notice } = useInterfaceLocale();
   const [company, setCompany] = useState<Company | null>(initialCompany ?? null);
   const [report, setReport] = useState<CompanyReport | null>(initialReport ?? null);
   const [reportError, setReportError] = useState(false);
   const [reportRetry, setReportRetry] = useState(0);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<{ message: string; missing: boolean } | null>(null);
   useEffect(() => {
     if (initialReport?.companyId === id && reportRetry === 0) return;
     const controller = new AbortController(); setReport(null); setReportError(false);
@@ -27,17 +28,14 @@ export function CompanyPage({ client, id, initialCompany, initialReport }: Compa
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     if (initialCompany?.id === id && retry === 0) return;
-    const controller = new AbortController(); setCompany(null); setError('');
-    client.getCompany(id, controller.signal).then(result => { if (!controller.signal.aborted) setCompany(result); }).catch(failure => { if (!isAbortError(failure) && !controller.signal.aborted) setError(errorText(failure)); });
+    const controller = new AbortController(); setCompany(null); setError(null);
+    client.getCompany(id, controller.signal).then(result => { if (!controller.signal.aborted) setCompany(result); }).catch(failure => { if (!isAbortError(failure) && !controller.signal.aborted) setError({ message: errorText(failure), missing: failure instanceof ApiError && failure.status === 404 }); });
     return () => controller.abort();
   }, [client, id, retry, initialCompany]);
   useEffect(() => {
-    if (!company) return;
-    document.title = `${company.name} — ${t('Hiring report')} — Justup`;
-    const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
-    if (description) description.content = `${company.name}: ${company.description || t('Hiring report')}`.slice(0, 300);
-  }, [company, t]);
-  if (error) return <section id="company-page" className="page"><a className="back" href={pageHref("jobs", locale)}>{t("← Back to search")}</a><h1>{t("Report unavailable.")}</h1><p role="status">{notice(error)}</p><button className="button outline" onClick={() => setRetry(value => value + 1)}>{t("Try again")}</button></section>;
+    onDocumentState?.(id, { outcome: error ? error.missing ? 'not-found' : 'unavailable' : company ? 'ready' : 'pending', company: company ?? undefined });
+  }, [id, company, error, onDocumentState]);
+  if (error) return <section id="company-page" className="page"><a className="back" href={pageHref("jobs", locale)}>{t("← Back to search")}</a><h1>{t(error.missing ? 'Page not found.' : 'Report unavailable.')}</h1>{!error.missing ? <p role="status">{notice(error.message)}</p> : null}{!error.missing ? <button className="button outline" onClick={() => setRetry(value => value + 1)}>{t("Try again")}</button> : null}</section>;
   if (!company) return <section id="company-page" className="page"><p role="status">{t("Opening the company report…")}</p></section>;
   const history = company.hiringHistory || [];
   const maximum = Math.max(1, ...history.map(point => point.count));

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockApi, search, completed, job } from './api-fixture.mjs';
+import { mockApi, search, completed, job, session } from './api-fixture.mjs';
 const origin = `http://127.0.0.1:${process.env.JUSTUP_PUBLIC_TEST_PORT || 4207}`;
 test.use({ baseURL: origin, timezoneId: 'Pacific/Kiritimati' });
 test('public company reports and catalogue work without JavaScript', async ({ browser }) => {
@@ -77,7 +77,16 @@ test('sample reports retain source occupation labels and stay readable in five l
   await page.setViewportSize({ width: 375, height: 812 });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   for (const locale of ['en', 'de', 'fr', 'it', 'es']) {
-    await page.goto(`${locale === 'en' ? '' : '/' + locale}/companies/library`);
+    const response = await page.goto(`${locale === 'en' ? '' : '/' + locale}/companies/library`);
+    const source = await response.text();
+    const readHead = html => {
+      const doc = html ? new DOMParser().parseFromString(html, 'text/html') : document;
+      return { title: doc.title, description: doc.querySelector('meta[name=description]').content,
+        canonical: new URL(doc.querySelector('link[rel=canonical]').href).pathname,
+        alternates: [...doc.querySelectorAll('link[rel=alternate][hreflang]')].map(link => [link.hreflang, new URL(link.href).pathname]) };
+    };
+    const httpMetadata = await page.evaluate(readHead, source);
+    await expect.poll(() => page.evaluate(readHead)).toEqual(httpMetadata);
     await expect(page.locator('.sample-roles li').first()).toContainText('Software developers');
     await expect(page.locator('.sample-roles li').last()).toContainText('Archivists & curators');
     await expect(page.locator('.sample-salaries li')).toHaveCount(3);
@@ -115,4 +124,116 @@ test('changing interface language preserves accepted catalogue criteria and curs
   expect(new URL(page.url()).searchParams.get('cursor')).toBe('public-next');
   await expect(page.locator('#company-query')).toHaveValue('Unsent company search');
   await page.reload(); await expect(page.locator('#company-query')).toHaveValue('Public');
+});
+
+for (const width of [1280, 375]) test(`public navigation resets metadata and moves keyboard focus through history and reload at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  const response = await page.goto('/companies');
+  expect(response.status()).toBe(200); expect(response.headers()['x-robots-tag']).toContain('noindex');
+  const catalogueDescription = await page.locator('meta[name=description]').getAttribute('content');
+  const company = page.getByRole('link', { name: 'Test Library', exact: true });
+  await company.focus(); await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Test Library', exact: true })).toBeVisible();
+  await expect(page.locator('#main')).toBeFocused();
+  await expect(page.locator('meta[name=description]')).toHaveAttribute('content', /Test Library: A test-only public library/);
+  await expect(page.locator('link[rel=alternate][hreflang=de]')).toHaveAttribute('href', `${origin}/de/companies/library`);
+  const companyDescription = await page.locator('meta[name=description]').getAttribute('content');
+  await page.reload();
+  await expect(page.locator('meta[name=description]')).toHaveAttribute('content', companyDescription);
+  const catalogueLink = page.getByRole('link', { name: 'Companies', exact: true });
+  await catalogueLink.focus(); await page.keyboard.press('Enter');
+  await expect(page.locator('#companies-page')).toBeVisible(); await expect(page.locator('#main')).toBeFocused();
+  await expect(page.locator('meta[name=description]')).toHaveAttribute('content', catalogueDescription);
+  await expect(page.locator('link[rel=alternate][hreflang=de]')).toHaveAttribute('href', `${origin}/de/companies`);
+  await page.goBack(); await expect(page.getByRole('heading', { name: 'Test Library', exact: true })).toBeVisible();
+  await page.goForward(); await expect(page.locator('meta[name=description]')).toHaveAttribute('content', catalogueDescription);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('private fragments, catalogue queries and account dialogs keep noindex through client history', async ({ page }) => {
+  await mockApi(page, { 'GET /searches': { items: [search()] }, 'GET /searches/search-1/results': completed([job(1)]) });
+  await page.goto('/companies/library');
+  await expect(page.locator('meta[name=robots]')).toHaveCount(0);
+  await page.getByRole('link', { name: '← Back to search' }).click();
+  await expect(page.locator('#query')).toBeVisible();
+  await page.locator('#query').fill('PRIVATE_QUERY_CANARY');
+  await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  await expect(page.locator('head')).not.toContainText('PRIVATE_QUERY_CANARY');
+  expect(await page.locator('head').innerHTML()).not.toContain('PRIVATE_QUERY_CANARY');
+  await page.goBack(); await expect(page.locator('meta[name=robots]')).toHaveCount(0);
+  await page.locator('#account-open').click(); await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  await page.keyboard.press('Escape'); await expect(page.locator('meta[name=robots]')).toHaveCount(0);
+  await page.getByRole('link', { name: 'Companies', exact: true }).click();
+  await page.locator('#company-query').fill('Public'); await page.locator('#company-search button[type=submit]').click();
+  await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', `${origin}/companies`);
+  await page.getByRole('link', { name: 'Request a company +' }).click();
+  await expect(page.locator('#request-page')).toBeVisible(); await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  await page.goBack(); await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  await page.goForward(); await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+});
+
+for (const status of [404, 503]) test(`a client company ${status} clears prior public metadata and survives direct reload`, async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await mockApi(page, { 'GET /companies/library': { status, body: { error: { code: status === 404 ? 'not_found' : 'unavailable', message: 'Company evidence missing.' } } } });
+  await page.goto('/companies');
+  await page.getByRole('link', { name: 'Test Library', exact: true }).click();
+  await expect(page.getByRole('heading', { name: status === 404 ? 'Page not found.' : 'Report unavailable.' })).toBeVisible();
+  await expect(page).toHaveTitle(status === 404 ? 'Page not found — Justup' : 'Coverage temporarily unavailable — Justup');
+  await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  await expect(page.locator('meta[name=description]')).not.toHaveAttribute('content', /Test Library/);
+  await expect(page.locator('link[rel=alternate]')).toHaveCount(0);
+  // The HTTP fixture still has this company: reload must recover real public facts,
+  // rather than treating a previous client failure as authoritative server state.
+  const response = await page.reload(); expect(response.status()).toBe(200);
+  await expect(page.getByRole('heading', { name: 'Test Library', exact: true })).toBeVisible();
+  await expect(page.locator('meta[name=robots]')).toHaveCount(0);
+  const missing = await page.goto('/companies/missing'); expect(missing.status()).toBe(404);
+  await expect(page.getByRole('heading', { name: 'Page not found.' })).toBeVisible();
+  await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+});
+
+test('a pending company navigation clears previous company facts before the source responds', async ({ page }) => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/v1/companies/company-1', async route => {
+    await held;
+    await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: { code: 'not_found', message: 'Not found.' } }) });
+  });
+  await page.goto('/companies/library');
+  await page.getByRole('link', { name: 'Companies', exact: true }).click();
+  await page.getByRole('link', { name: 'Public company 1', exact: true }).click();
+  await expect(page).toHaveTitle('Opening the company report… — Justup');
+  await expect(page.locator('meta[name=description]')).not.toHaveAttribute('content', /Test Library/);
+  await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  await expect(page.locator('link[rel=alternate]')).toHaveCount(0);
+  release();
+  await expect(page.getByRole('heading', { name: 'Page not found.' })).toBeVisible();
+});
+
+for (const allocated of [false, true]) test(`anonymous landing after session bootstrap is ${allocated ? 'private for an allocated visitor' : 'public before any private work'}`, async ({ page }) => {
+  await mockApi(page, { 'GET /session': session({ user: null, visitor: allocated ? { expiresAt: '2099-01-01T00:00:00Z' } : null }) });
+  await page.goto('/');
+  await expect(page.locator('#coverage-disclosure')).toContainText('Imported snapshot');
+  if (allocated) await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  else await expect(page.locator('meta[name=robots]')).toHaveCount(0);
+  await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', `${origin}/`);
+  await expect(page.locator('meta[name=description]')).toHaveAttribute('content', /Find fresh jobs first observed/);
+});
+
+test('a mismatched company identity cannot publish wrong facts under the requested canonical URL', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await mockApi(page, { 'GET /searches': { items: [search()] }, 'GET /searches/search-1/results': completed([job(1)]),
+    'GET /companies/library': { id: 'different-company', name: 'WRONG_COMPANY_CANARY', description: 'Wrong company facts.' } });
+  await page.goto('/fr/'); await page.locator('.job-company').click();
+  await expect(page.getByRole('heading', { name: 'Rapport indisponible.' })).toBeVisible();
+  await expect(page).toHaveTitle('Couverture temporairement indisponible — Justup');
+  await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', `${origin}/fr/companies/library`);
+  await expect(page.locator('#company-page [role=status]')).toHaveText('Le répertoire des entreprises n’a pas pu être vérifié. Réessaie dans un instant.');
+  expect(await page.content()).not.toContain('WRONG_COMPANY_CANARY');
+  expect(await page.locator('head').innerHTML()).not.toContain('Wrong company facts.');
 });
