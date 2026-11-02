@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ApiError, errorText, isAbortError } from "../../api/client.ts";
 import type { ApiClient } from "../../api/client.ts";
 import { pollTask, TaskFailure } from "../../api/tasks.ts";
-import type { Search, SearchScope, SearchSubmission, Session, TaskResult } from "../../api/types.ts";
+import type { Search, SearchOptions, SearchScope, SearchSubmission, Session, TaskResult } from "../../api/types.ts";
 import {
   emptyWorkspace,
   queryText,
@@ -31,7 +31,7 @@ export function useWorkspace(
   const current = useRef(state);
   current.current = state;
   const serial = useRef(0);
-  const [newPostingLanguages, setNewPostingLanguages] = useState<string[]>([]);
+  const [newOptions, setNewOptions] = useState<SearchOptions>({ followedOnly: false, postingLanguages: [] });
   const [optionsSaving, setOptionsSaving] = useState(false);
   const optionsOperation = useRef<AbortController | null>(null);
   const [accountSuggested, setAccountSuggested] = useState(false);
@@ -70,7 +70,7 @@ export function useWorkspace(
     optionsOperation.current?.abort();
     optionsOperation.current = null;
     setOptionsSaving(false);
-    setNewPostingLanguages([]);
+    setNewOptions({ followedOnly: false, postingLanguages: [] });
     mutations.current.clear();
     confirmationKeys.current.clear();
     resumedTasks.current.clear();
@@ -148,7 +148,7 @@ export function useWorkspace(
       search?.id ?? null,
       search?.revision ?? null,
       query,
-      search ? null : newPostingLanguages,
+      search ? null : newOptions,
     ]);
     const mutation = mutations.current.get(fingerprint) ?? {
       key: crypto.randomUUID(),
@@ -176,7 +176,7 @@ export function useWorkspace(
             scope,
           )
         : await client.createSearch(
-            { query, requestKey: mutation.key, ...(newPostingLanguages.length ? { options: { followedOnly: false, postingLanguages: newPostingLanguages } } : {}) },
+            { query, requestKey: mutation.key, ...(newOptions.followedOnly || newOptions.postingLanguages.length ? { options: newOptions } : {}) },
             active.controller.signal,
             scope,
           );
@@ -191,7 +191,7 @@ export function useWorkspace(
         mutations.current.set(JSON.stringify([mutation.submission.search.id, mutation.submission.search.revision, query, null]), mutation);
       }
       if (!search) {
-        setNewPostingLanguages([]);
+        setNewOptions({ followedOnly: false, postingLanguages: [] });
         if (!mutation.submission.task && mutation.submission.search.status === "ready") apply({ type: "submitted", search: mutation.submission.search, previousId: snapshot.selectedId });
         await persistence.refreshAfterCreate({ id: mutation.submission.search.id, submitted: mutation.submittedText ?? submittedText });
         if (active !== operation.current) return;
@@ -232,12 +232,13 @@ export function useWorkspace(
       }
     }
   };
-  const savePostingLanguages = async (postingLanguages: string[], expectedRevision?: number) => {
+  const saveOptions = async (change: Partial<SearchOptions>, expectedRevision?: number) => {
     if (optionsOperation.current || !scope) return false;
     const search = selectedSearch(current.current);
-    if (!search) { setNewPostingLanguages(postingLanguages); return true; }
+    if (!search) { setNewOptions(previous => ({ ...previous, ...change })); return true; }
     if (!search.options || search.revision !== expectedRevision) return false;
-    const changed = JSON.stringify([...search.options.postingLanguages].sort()) !== JSON.stringify([...postingLanguages].sort());
+    const options = { ...search.options, ...change };
+    const changed = options.followedOnly !== search.options.followedOnly || JSON.stringify([...search.options.postingLanguages].sort()) !== JSON.stringify([...options.postingLanguages].sort());
     // Closing an unchanged selection is not a mutation: existing task polling
     // and clarification remain valid at the same accepted revision.
     if (!changed) return true;
@@ -246,12 +247,12 @@ export function useWorkspace(
     optionsOperation.current = controller; setOptionsSaving(true);
     apply({ type: "busy", value: false });
     try {
-      const updated = await client.updateSearchOptions(search.id, { ...search.options, postingLanguages, expectedRevision: search.revision }, controller.signal, scope);
+      const updated = await client.updateSearchOptions(search.id, { ...options, expectedRevision: search.revision }, controller.signal, scope);
       if (optionsOperation.current !== controller) return false;
       if (updated.id !== search.id || updated.revision !== search.revision + (changed ? 1 : 0) || !updated.options
-        || updated.query !== search.query || updated.options.followedOnly !== search.options.followedOnly
-        || JSON.stringify([...updated.options.postingLanguages].sort()) !== JSON.stringify([...postingLanguages].sort()))
-        throw new ApiError(409, "unexpected_options", "Posting language changes could not be confirmed. Review the saved choices before trying again.");
+        || updated.query !== search.query || updated.options.followedOnly !== options.followedOnly
+        || JSON.stringify([...updated.options.postingLanguages].sort()) !== JSON.stringify([...options.postingLanguages].sort()))
+        throw new ApiError(409, "unexpected_options", "Search option changes could not be confirmed. Review the saved choices before trying again.");
       apply({ type: "optionsSaved", search: updated });
       return true;
     } catch (error) {
@@ -276,12 +277,24 @@ export function useWorkspace(
           }
         } catch { /* The explicit error keeps the uncertainty visible. */ }
       }
-      if (optionsOperation.current === controller) apply({ type: "status", text: "Posting language changes could not be confirmed. Review the saved choices before trying again.", busy: false });
+      if (optionsOperation.current === controller) apply({ type: "status", text: "Search option changes could not be confirmed. Review the saved choices before trying again.", busy: false });
       return false;
     } finally {
       if (optionsOperation.current === controller) { optionsOperation.current = null; setOptionsSaving(false); }
     }
   };
+  const refreshFollowedSearches = useCallback(async (ids: string[] | null, signal: AbortSignal) => {
+    if (scope !== 'account') return;
+    const searches = await client.listSearches(signal, scope);
+    if (signal.aborted) return;
+    for (const remote of searches) {
+      const local = current.current.searches.find(search => search.id === remote.id);
+      if (local && remote.revision > local.revision && (ids === null ? local.options?.followedOnly : ids.includes(remote.id))) {
+        if (current.current.selectedId === remote.id) cancel();
+        apply({ type: 'optionsSaved', search: remote });
+      }
+    }
+  }, [client, scope, cancel, apply]);
   const confirm = async () => {
     const proposal = current.current.proposal;
     if (!proposal || !scope) return;
@@ -368,8 +381,11 @@ export function useWorkspace(
     scope,
     accountSuggested,
     optionsSaving,
-    postingLanguages: selectedSearch(state) ? selectedSearch(state)?.options?.postingLanguages ?? [] : newPostingLanguages,
-    savePostingLanguages,
+    postingLanguages: selectedSearch(state) ? selectedSearch(state)?.options?.postingLanguages ?? [] : newOptions.postingLanguages,
+    followedOnly: selectedSearch(state)?.options?.followedOnly ?? newOptions.followedOnly,
+    savePostingLanguages: (postingLanguages: string[], revision?: number) => saveOptions({ postingLanguages }, revision),
+    saveFollowedOnly: (followedOnly: boolean, revision?: number) => saveOptions({ followedOnly }, revision),
+    refreshFollowedSearches,
     state,
     search: selectedSearch(state),
     query: queryText(state),

@@ -1,3 +1,4 @@
+import { useFollows } from "../features/companies/useFollows.ts";
 import { policyDocument } from "../i18n/policies.ts";
 import { useAccountLocale } from "../i18n/useAccountLocale.ts";
 import { useInterfaceLocale } from "../i18n/LocaleProvider.tsx";
@@ -251,6 +252,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
     if (route.page !== 'request' && (previous.page !== route.page || (route.page === 'company' && previous.page === 'company' && previous.id !== route.id))) focusMain();
   }, [route, focusMain]);
   const interfaceLanguage = useAccountLocale(client, session);
+  const follows = useFollows(client, session);
   const previousLocale = useRef({ locale, explicitRequestLocale });
   useEffect(() => {
     if (previousLocale.current.locale === locale && previousLocale.current.explicitRequestLocale === explicitRequestLocale) return;
@@ -354,6 +356,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
           <div id="session-private-surfaces" style={{ visibility: quarantined ? 'hidden' : undefined }} inert={quarantined || undefined} aria-busy={quarantined}>
           {interactive || route.page === "jobs" ? <SearchWorkspace
             key={`search-${epoch}-${searchGeneration}`}
+            followInvalidation={follows.invalidation}
             client={client}
             session={session}
             active={route.page === "jobs"}
@@ -368,6 +371,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
           /> : null}
           {interactive || route.page === "companies" ? <CompaniesPage
             key={`companies-${epoch}`}
+            follows={follows}
             client={client}
             active={route.page === "companies" && publicPage?.outcome !== "unavailable"}
             initialCompanies={publicPage?.companies}
@@ -376,6 +380,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
           {route.page === "company" && publicPage?.outcome !== "unavailable" && publicPage?.outcome !== "not-found" ? (
             <CompanyPage
               key={`${epoch}:${route.id}`}
+              follows={follows}
               client={client}
               id={route.id}
               initialCompany={initialPublicPage?.company?.id === route.id ? initialPublicPage.company : undefined}
@@ -385,6 +390,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
           ) : null}
           {interactive ? <CompanyRequestPage
             key={`request-${epoch}`}
+            onAccepted={follows.retry}
             client={client}
             session={session}
             active={route.page === "request"}

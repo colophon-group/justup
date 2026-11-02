@@ -2,6 +2,18 @@
 import type { InterfaceLocale } from './locales.ts';
 
 export const messages = {
+  "Follow": ["Folgen", "Suivre", "Segui", "Seguir"],
+  "Unfollow": ["Entfolgen", "Ne plus suivre", "Non seguire più", "Dejar de seguir"],
+  "Follow {company}": ["{company} folgen", "Suivre {company}", "Segui {company}", "Seguir {company}"],
+  "Unfollow {company}": ["{company} entfolgen", "Ne plus suivre {company}", "Non seguire più {company}", "Dejar de seguir {company}"],
+  "Reload follows": ["Gefolgte Unternehmen neu laden", "Recharger les abonnements", "Ricarica le aziende seguite", "Recargar empresas seguidas"],
+  "Company follows are unavailable. Reload follows to try again.": ["Gefolgte Unternehmen sind nicht verfügbar. Lade sie erneut, um es noch einmal zu versuchen.", "Les abonnements sont indisponibles. Recharge-les pour réessayer.", "Le aziende seguite non sono disponibili. Ricaricale per riprovare.", "Las empresas seguidas no están disponibles. Recárgalas para reintentarlo."],
+  "The follow change could not be confirmed. Reload follows before trying again.": ["Die Änderung konnte nicht bestätigt werden. Lade die gefolgten Unternehmen vor einem erneuten Versuch neu.", "La modification de l’abonnement n’a pas pu être confirmée. Recharge les abonnements avant de réessayer.", "Non è stato possibile confermare la modifica. Ricarica le aziende seguite prima di riprovare.", "No se pudo confirmar el cambio. Recarga las empresas seguidas antes de reintentarlo."],
+  "Followed companies only": ["Nur gefolgte Unternehmen", "Entreprises suivies uniquement", "Solo aziende seguite", "Solo empresas seguidas"],
+  "Unsaved options reset on reload or sign-out.": ["Ungespeicherte Optionen werden beim Neuladen oder Abmelden zurückgesetzt.", "Les options non enregistrées sont réinitialisées au rechargement ou à la déconnexion.", "Le opzioni non salvate si azzerano ricaricando la pagina o uscendo.", "Las opciones sin guardar se restablecen al recargar o cerrar sesión."],
+  "Followed searches could not be refreshed.": ["Suchen für gefolgte Unternehmen konnten nicht aktualisiert werden.", "Les recherches d’entreprises suivies n’ont pas pu être actualisées.", "Non è stato possibile aggiornare le ricerche delle aziende seguite.", "No se pudieron actualizar las búsquedas de empresas seguidas."],
+  "Search option changes could not be confirmed. Review the saved choices before trying again.": ["Die Änderung der Suchoptionen konnte nicht bestätigt werden. Prüfe die gespeicherte Auswahl vor einem erneuten Versuch.", "La modification des options de recherche n’a pas pu être confirmée. Examine les choix enregistrés avant de réessayer.", "Non è stato possibile confermare le modifiche alle opzioni di ricerca. Rivedi le scelte salvate prima di riprovare.", "No se pudieron confirmar los cambios en las opciones de búsqueda. Revisa las opciones guardadas antes de reintentarlo."],
+
   "Review saved choices": ["Gespeicherte Auswahl prüfen", "Examiner les choix enregistrés", "Rivedi le scelte salvate", "Revisar las opciones guardadas"],
   "Close": ["Schließen", "Fermer", "Chiudi", "Cerrar"],
   "Cancel": ["Abbrechen", "Annuler", "Annulla", "Cancelar"],
@@ -15,7 +27,7 @@ export const messages = {
   "For a new search, language choices stay in this page until you submit Search. Reloading or signing in clears these unsaved choices.": ["Bei einer neuen Suche bleibt die Sprachauswahl auf dieser Seite, bis du die Suche sendest. Neuladen oder Anmelden löscht diese ungespeicherte Auswahl.", "Pour une nouvelle recherche, les langues restent sur cette page jusqu’à son envoi. Recharger la page ou se connecter efface ces choix non enregistrés.", "Per una nuova ricerca, le lingue restano in questa pagina fino all’invio. Ricaricare la pagina o accedere cancella le scelte non salvate.", "En una nueva búsqueda, los idiomas permanecen en esta página hasta que la envíes. Recargar o iniciar sesión borra estas opciones sin guardar."],
   "Find a language": ["Sprache suchen", "Rechercher une langue", "Cerca una lingua", "Buscar un idioma"],
   "No matching languages.": ["Keine passenden Sprachen.", "Aucune langue correspondante.", "Nessuna lingua corrispondente.", "No hay idiomas coincidentes."],
-  "Posting languages saved.": ["Anzeigensprachen gespeichert.", "Langues des annonces enregistrées.", "Lingue degli annunci salvate.", "Idiomas de los anuncios guardados."],
+  "Search options saved.": ["Suchoptionen gespeichert.", "Options de recherche enregistrées.", "Opzioni di ricerca salvate.", "Opciones de búsqueda guardadas."],
   "Posting language changes could not be confirmed. Review the saved choices before trying again.": ["Die Änderung der Anzeigensprachen konnte nicht bestätigt werden. Prüfe die gespeicherte Auswahl vor einem erneuten Versuch.", "La modification des langues des annonces n’a pas pu être confirmée. Examine les choix enregistrés avant de réessayer.", "Non è stato possibile confermare le modifiche alle lingue degli annunci. Rivedi le scelte salvate prima di riprovare.", "No se pudieron confirmar los cambios en los idiomas de los anuncios. Revisa las opciones guardadas antes de reintentarlo."],
   "Apply": ["Anwenden", "Appliquer", "Applica", "Aplicar"],
   "Saving…": ["Wird gespeichert…", "Enregistrement…", "Salvataggio…", "Guardando…"],

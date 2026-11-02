@@ -120,7 +120,7 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       const proposal = candidate && candidate.searchId === action.search.id && candidate.expectedRevision === action.search.revision && candidate.query === query ? candidate : null;
       return { ...state, searches: state.searches.map(search => search.id === action.search.id ? action.search : search),
         proposal: state.selectedId === action.search.id ? proposal : state.proposal,
-        status: state.selectedId === action.search.id ? "Posting languages saved." : state.status };
+        status: state.selectedId === action.search.id ? "Search options saved." : state.status };
     }
     case "taskFailed":
       return { ...state, searches: state.searches.map(search => search.id === action.id && search.draft
