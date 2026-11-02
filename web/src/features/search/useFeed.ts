@@ -50,7 +50,11 @@ export function useFeed(
     seenCursors = useRef(new Set<string>());
   const interrupted = useRef<{ cursor: string | null } | null>(null);
   const feedRef = useRef(feed);
-  feedRef.current = feed;
+  const updateFeed = useCallback((change: (current: Feed) => Feed) => {
+    const updated = change(feedRef.current);
+    feedRef.current = updated;
+    setFeed(updated);
+  }, []);
   const load = useCallback(
     async (cursor: string | null, replace = false) => {
       if (!search || !key || inFlight.current) return;
@@ -60,7 +64,7 @@ export function useFeed(
       controller.current = request;
       inFlight.current = true;
       initialized.current = true;
-      setFeed((current) =>
+      updateFeed((current) =>
         current.key === key
           ? { ...current, loading: true, error: null }
           : { ...emptyFeed(key), loading: true },
@@ -84,7 +88,7 @@ export function useFeed(
         if (unavailable) {
           seenIds.current.clear();
           seenCursors.current.clear();
-          setFeed((current) =>
+          updateFeed((current) =>
             current.key === key
               ? {
                   ...current,
@@ -123,7 +127,7 @@ export function useFeed(
         });
         if (replace) seenIds.current = new Set(fresh.map(job => job.id));
         before.current();
-        setFeed((current) =>
+        updateFeed((current) =>
           current.key === key
             ? {
                 ...current,
@@ -143,7 +147,7 @@ export function useFeed(
         }
         if (isAbortError(error) && epoch === generation.current && !request.signal.aborted) interrupted.current = { cursor };
         if (epoch === generation.current && !isAbortError(error))
-          setFeed((current) =>
+          updateFeed((current) =>
             current.key === key
               ? { ...current, loading: false, error: errorText(error) }
               : current,
@@ -156,7 +160,7 @@ export function useFeed(
         }
       }
     },
-    [client, key, scope, search?.id, search?.revision],
+    [client, key, scope, search?.id, search?.revision, updateFeed],
   );
   useEffect(() => {
     generation.current++;
@@ -167,14 +171,14 @@ export function useFeed(
     seenIds.current.clear();
     seenCursors.current.clear();
     baseline.current = null;
-    setFeed(emptyFeed(key));
+    updateFeed(() => emptyFeed(key));
     if (active && key) void load(null);
     return () => {
       generation.current++;
       controller.current?.abort();
       inFlight.current = false;
     };
-  }, [key, load]);
+  }, [key, load, updateFeed]);
   useEffect(() => {
     if (active && key && !initialized.current) void load(null);
   }, [active, key, load]);
@@ -192,7 +196,7 @@ export function useFeed(
     )
       return;
     void load(value.continuation.cursor);
-  }, [key, load]);
+  }, [key, load, updateFeed]);
   const retry = () => {
     const value = feedRef.current;
     if (value.key === key) void load(value.continuation.cursor);
@@ -215,11 +219,11 @@ export function useFeed(
       const updated = { ...current, loading: false, jobs: unavailable ? [] : reconciled.jobs, immediateIds,
         continuation: { ...event.page.continuation, cursor: current.continuation.cursor }, ai: event.page.ai, coverage: event.page.coverage,
         hiddenMatches: unavailable ? { status: 'unavailable' as const, count: null } : event.page.hiddenMatches, error: null };
-      feedRef.current = updated; setFeed(updated);
+      updateFeed(() => updated);
     },
     invalidate: () => {
       generation.current++; controller.current?.abort(); inFlight.current = false;
-      setFeed({ ...emptyFeed(key), continuation: { state: 'paused', cursor: null, retryAfterMs: null } });
+      updateFeed(() => ({ ...emptyFeed(key), continuation: { state: 'paused', cursor: null, retryAfterMs: null } }));
     },
     refresh: (replace = false) => {
       generation.current++;

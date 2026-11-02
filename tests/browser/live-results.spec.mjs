@@ -193,3 +193,13 @@ test('consecutive unavailable reconnects stop after eight retries', async ({ pag
   await expect(page.locator('[data-job="job-1"]')).toHaveCount(1);
   await expect(page.locator('#live-status')).toContainText('Live results paused.');
 });
+
+test('arrivals keep the header position while the reader is above the results', async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0); });
+  const before = await page.locator('.topbar').evaluate(element => ({ top: element.getBoundingClientRect().top, y: scrollY }));
+  const fresh = { ...job(92), firstObserved: '2026-11-02T11:00:00Z' };
+  fixture.setJobs([fresh, ...fixture.jobs]); fixture.snapshot();
+  await expect(page.locator('[data-job="job-92"]')).toHaveCount(1);
+  expect(await page.locator('.topbar').evaluate(element => ({ top: element.getBoundingClientRect().top, y: scrollY }))).toEqual(before);
+});

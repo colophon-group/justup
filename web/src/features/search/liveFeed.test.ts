@@ -1,7 +1,7 @@
 // Pure canonical-prefix reconciliation; browser journeys own DOM and motion evidence.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { reconcileLive } from './liveFeed.ts';
+import { jobOrder, reconcileLive } from './liveFeed.ts';
 import { decodeLiveSnapshot } from '../../api/liveResults.ts';
 const job = (id: string, firstObserved = '2026-11-01T12:00:00Z') => ({ id, firstObserved, title: id, company: { id: 'c', name: 'Company' }, sourceUrl: 'https://example.test/jobs/' + id, locations: [], employmentTypes: [], salary: null });
 const event = (ids: string[], retained = ids, complete = true, asOf = '2026-11-02T12:00:00Z') => decodeLiveSnapshot({ schemaVersion: 1, scope: 'active_search', searchId: 's', revision: 1, asOf, reason: 'changed', searches: [{ searchId: 's', revision: 1, items: ids.map(id => job(id)), continuation: { state: 'open', cursor: null }, ai: { status: 'not_required' }, reconciliation: { complete, retainedItemIds: retained } }] }, 's', 1);
@@ -38,4 +38,9 @@ test('authoritative recovery remains valid after a server clock correction', () 
   const current = reconcileLive([], event(['a']), null);
   const recovered = reconcileLive(current.jobs, event(['replacement'], ['replacement'], true, '2026-11-01T12:00:00Z'), current.baseline);
   assert.deepEqual(recovered.jobs.map(job => job.id), ['replacement']);
+});
+
+test('first-observed order retains submillisecond precision and normalizes UTC spellings', () => {
+  const items = [job('a', '2026-11-01T12:00:00.000000001Z'), job('z', '2026-11-01T12:00:00.000000002+00:00'), job('same-b', '2026-11-01T12:00:00Z'), job('same-a', '2026-11-01T12:00:00.000Z')];
+  assert.deepEqual(items.sort(jobOrder).map(job => job.id), ['z', 'a', 'same-a', 'same-b']);
 });

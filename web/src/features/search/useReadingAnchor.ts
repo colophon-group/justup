@@ -3,8 +3,14 @@ import { useCallback, useLayoutEffect, useRef } from 'react';
 export function useReadingAnchor() {
   const held = useRef<{ element: HTMLElement; top: number }[]>([]);
   const capture = useCallback(() => {
-    // Header and editor contexts retain their document position.
-    if (document.activeElement?.closest('.search-workspace') || document.querySelector('dialog[open]')) return;
+    held.current = [];
+    // Header/editor controls retain their document position. Default body focus
+    // becomes a reading context only once the results reach the viewport top.
+    const focused = document.activeElement;
+    if (document.querySelector('dialog[open]') || focused && focused !== document.body && focused !== document.documentElement && !focused.closest('#feed')) return;
+    const selection = document.getSelection()?.anchorNode;
+    const interacting = focused?.closest('#feed') || selection && document.querySelector('#feed')?.contains(selection);
+    if (!interacting && (document.querySelector('#search-results')?.getBoundingClientRect().top ?? Infinity) > 0) return;
     const rows = [...document.querySelectorAll<HTMLElement>('#feed [data-job]')];
     held.current = rows.filter(element => { const box = element.getBoundingClientRect(); return box.top < innerHeight && box.bottom > 0; })
       .map(element => ({ element, top: element.getBoundingClientRect().top }));
