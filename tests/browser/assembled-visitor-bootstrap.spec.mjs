@@ -118,12 +118,12 @@ for (const recovered of [false, true]) for (const remaining of [false, true]) te
   await expect(page.getByRole('tab')).toHaveCount(remaining ? 1 : 0);
   if (remaining) await page.locator('#add-search').click();
   const newer = '  A fresh genuine new draft\nno night shifts  '; await page.locator('#query').fill(newer);
-  await page.clock.runFor(6500); await page.waitForLoadState('networkidle');
+  await page.clock.runFor(6500);
   await expect(page.locator('#query')).toHaveValue(newer);
   await expect.poll(() => runtime.workspaces()[0]?.drafts.new).toBe(newer);
   expect(Object.hasOwn(runtime.workspaces()[0].drafts, id)).toBe(false);
   expect(runtime.workspaces()[0].activeSearchId).toBeNull();
-  expect(runtime.calls.slice(callsBefore).filter(call => call.path === '/api/v1/visitor/workspace' && call.method === 'PATCH').every(call => call.status === 200)).toBe(true);
+  await expect.poll(() => runtime.calls.slice(callsBefore).filter(call => call.path === '/api/v1/visitor/workspace' && call.method === 'PATCH').every(call => call.status === 200)).toBe(true);
   expect(runtime.calls.filter(call => call.path === `/api/v1/visitor/searches/${id}` && call.method === 'DELETE' && call.status === 200)).toHaveLength(1);
   expect(runtime.modelCalls()).toBe(remaining ? 2 : 1); expect(runtime.count('justup_searches')).toBe(remaining ? 1 : 0);
 });
@@ -179,7 +179,9 @@ test('owned deletion retains a genuine remote conflict when newer local text pre
   held.release(); await expect(page.locator('#delete-search-dialog')).not.toBeVisible();
   await expect(page.locator('#workspace-conflict')).toBeVisible();
   await expect(page.locator('#query')).toHaveValue(local);
-  await page.clock.runFor(6500); await page.waitForLoadState('networkidle');
+  const writesBeforeConflict = runtime.calls.filter(call => call.path === '/api/v1/visitor/workspace' && call.method === 'PATCH').length;
+  await page.clock.runFor(6500);
+  expect(runtime.calls.filter(call => call.path === '/api/v1/visitor/workspace' && call.method === 'PATCH')).toHaveLength(writesBeforeConflict);
   expect(runtime.workspaces()[0].drafts[remainingId]).toBe(remote);
   await page.locator('#keep-local-drafts').click();
   await expect(page.locator('#workspace-conflict')).toHaveCount(0);

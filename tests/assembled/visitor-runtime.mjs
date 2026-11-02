@@ -12,6 +12,7 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
   const ingressSecret = 'A'.repeat(43);
   const dir = mkdtempSync(join(tmpdir(), 'justup-assembled-visitor-')), ref = process.env.JUSTUP_ASSEMBLED_API_REF;
   let app, server, heartbeatTimer, queue;
+  const liveConnections = new Set();
   try {
   const API_COMMIT = execFileSync('git', ['rev-parse', '--verify', `${ref || 'HEAD'}^{commit}`], { encoding: 'utf8' }).trim();
   let source = process.cwd();
@@ -64,7 +65,9 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
   const upstream = async (target, options) => {
     const url = new URL(target), path = url.pathname, method = options?.method || 'GET';
     const body = options?.body ? await new Response(options.body).text() : undefined;
-    const call = { path, method, body: body ? JSON.parse(body) : null, locale: new Headers(options?.headers).get('X-Justup-Locale') }; calls.push(call);
+    const headers = new Headers(options?.headers);
+    const call = { path, method, body: body ? JSON.parse(body) : null, locale: headers.get('X-Justup-Locale'),
+      ...(/\/workspace\/events$/.test(path) ? { lastEventId: headers.get('Last-Event-ID') } : {}) }; calls.push(call);
     const result = await fetch(api + path + url.search, { ...options, body, duplex: 'half' });
     call.status = result.status;
     if (path === '/api/v1/session') call.session = await result.clone().json();
@@ -74,25 +77,54 @@ export async function startVisitorRuntime({ now = Date.now } = {}) {
   const key = join(dir, 'tls.key'), cert = join(dir, 'tls.crt');
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
   server = createServer({ key: readFileSync(key), cert: readFileSync(cert) }, async (req, res) => {
+    const abort = new AbortController();
+    const disconnected = () => abort.abort();
+    res.once('close', disconnected);
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
       const incomingHeaders = new Headers(req.headers); incomingHeaders.set('CF-Connecting-IP', '203.0.113.25');
-      const request = new Request(origin + req.url, { method: req.method, headers: incomingHeaders, ...(['GET', 'HEAD'].includes(req.method) ? {} : { body: Buffer.concat(chunks) }) });
+      const request = new Request(origin + req.url, { method: req.method, headers: incomingHeaders, signal: abort.signal, ...(['GET', 'HEAD'].includes(req.method) ? {} : { body: Buffer.concat(chunks) }) });
       const result = await handle(request, { API_INGRESS_SECRET: ingressSecret, PUBLIC_ORIGIN: origin, API_ORIGIN: 'https://api.fixture.example', DEPLOYMENT_MODE: 'preview', RELEASE_JSON: JSON.stringify({ sourceSha: 'a'.repeat(40) }), RUNTIME_CONFIG_SHA256: 'f'.repeat(64), ASSETS: { fetch: async request => {
         const path = resolve(assetsRoot, '.' + new URL(request.url).pathname); if (!path.startsWith(assetsRoot + sep)) return new Response(null, { status: 404 });
         try { return new Response(readFileSync(path), { headers: { 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html' })[extname(path)] || 'application/octet-stream' } }); } catch { return new Response(null, { status: 404 }); }
       } } });
+      const headers = Object.fromEntries(result.headers); const cookies = result.headers.getSetCookie(); if (cookies.length) headers['set-cookie'] = cookies;
+      if (/^text\/event-stream(?:;|$)/i.test(result.headers.get('Content-Type') || '')) {
+        // Stream actual Worker/API frames immediately; JSON response fault injection
+        // below remains buffered so its existing committed-response semantics stay intact.
+        const reader = result.body?.getReader();
+        const cancel = () => { abort.abort(); void reader?.cancel().catch(() => {}); };
+        liveConnections.add(res); res.once('close', cancel);
+        res.writeHead(result.status, headers); res.flushHeaders();
+        try {
+          while (reader && !res.destroyed) {
+            const part = await reader.read(); if (part.done) break;
+            if (!res.write(Buffer.from(part.value))) await new Promise(resolve => {
+              const drained = () => { res.off('drain', drained); res.off('close', drained); resolve(); };
+              res.once('drain', drained); res.once('close', drained);
+              if (res.destroyed) drained();
+            });
+          }
+          if (!res.destroyed) res.end();
+        } finally {
+          liveConnections.delete(res); res.off('close', cancel);
+          await reader?.cancel().catch(() => {});
+        }
+        return;
+      }
       const bytes = Buffer.from(await result.arrayBuffer());
       const matched = fault => fault && req.method === fault.method && new URL(origin + req.url).pathname === '/api/v1' + fault.path && fault.when(chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null);
       if (matched(hold)) { const waiting = hold; hold = null; waiting.reached(); await waiting.wait; }
-      const headers = Object.fromEntries(result.headers); const cookies = result.headers.getSetCookie(); if (cookies.length) headers['set-cookie'] = cookies;
       if (matched(loss)) { loss = null; res.writeHead(result.status, { ...headers, 'Content-Length': bytes.length }); res.flushHeaders(); res.destroy(); return; }
       res.writeHead(result.status, headers); res.end(bytes);
-    } catch { if (!res.destroyed) { res.writeHead(500); res.end('Local assembled fixture failed'); } }
+    } catch { if (!res.destroyed) { if (res.headersSent) res.destroy(); else { res.writeHead(500); res.end('Local assembled fixture failed'); } } }
+    finally { res.off('close', disconnected); }
   });
   await new Promise(resolve => server.listen(Number(new URL(origin).port), '127.0.0.1', resolve));
   return { origin, calls, modelInputs, app, db, sourceCommit: API_COMMIT, modelCalls: () => modelCalls,
     refreshHeartbeat: heartbeat,
+    liveConnections: () => liveConnections.size,
+    dropLiveConnections() { for (const connection of liveConnections) connection.destroy(); },
     setAvailable(value) { available = value; heartbeat(); },
     loseNext(method, path, when = () => true) { loss = { method, path, when }; },
     holdNext(method, path, when = () => true) { let reached, release; const arrived = new Promise(resolve => { reached = resolve; }); const wait = new Promise(resolve => { release = resolve; }); hold = { method, path, when, reached, wait }; return { arrived, release }; },
