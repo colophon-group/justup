@@ -319,7 +319,10 @@ export function SearchWorkspace({
           session={session}
           onSignIn={onSignIn}
           onAccount={onAccount}
-          onLiveInvalidated={onLiveInvalidated}
+          onLiveInvalidated={reason => {
+            if (reason === 'search_changed') workspace.invalidateAcceptedSearch(search.id, search.revision);
+            onLiveInvalidated();
+          }}
           viewed={workspace.viewed}
           onViewed={session?.capabilities.viewed ? workspace.markViewed : undefined}
         />

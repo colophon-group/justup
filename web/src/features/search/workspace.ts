@@ -42,6 +42,26 @@ export function mergeWorkspaceEdits(base: SavedWorkspaceState, local: SavedWorks
   }
   return { activeSearchId: local.activeSearchId !== base.activeSearchId ? local.activeSearchId : remote.activeSearchId, drafts };
 }
+// A stream's invalid revision is reconciled canonically without dropping other
+// in-flight searches. Real edits to a deleted search stay in explicit recovery.
+export function reconcileInvalidatedSearch(state: Workspace, remote: Search[], invalidated: { id: string; revision: number } | null) {
+  const local = invalidated && state.searches.find(search => search.id === invalidated.id && search.revision <= invalidated.revision);
+  if (!local) return { searches: remote, authoritative: false, orphaned: false };
+  const byId = new Map(remote.map(search => [search.id, search]));
+  for (const search of state.searches) {
+    if (search.id === local.id) continue;
+    const saved = byId.get(search.id);
+    if (!saved || search.revision >= saved.revision) byId.set(search.id, search);
+  }
+  const orphaned = !byId.has(local.id) && state.drafts[local.id] !== undefined && state.drafts[local.id] !== local.query;
+  if (orphaned) {
+    const retained = { ...local, status: 'unavailable' };
+    delete retained.proposal;
+    if (retained.draft) retained.draft = { ...retained.draft, taskId: null, status: 'interrupted' };
+    byId.set(local.id, retained);
+  }
+  return { searches: [...byId.values()], authoritative: true, orphaned };
+}
 export type Action =
   | { type: "busy"; value: boolean }
   | { type: "loaded"; searches: Search[] }
@@ -81,7 +101,7 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       const proposal = selected?.proposal && selected.proposal.expectedRevision === selected.revision && selected.proposal.query === query
         ? selected.proposal : null;
       return { ...merged, drafts, selectedId: selected?.id ?? null,
-        proposal: action.preserveLocal && state.proposal?.query === query ? state.proposal : proposal };
+        proposal: action.preserveLocal && selected?.status !== "unavailable" && state.proposal?.query === query ? state.proposal : proposal };
     }
     case "submitted": {
       const drafts = { ...state.drafts }, key = draftKey(action.previousId);

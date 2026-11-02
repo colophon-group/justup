@@ -53,7 +53,11 @@ export async function liveFixture() {
     return { id, event };
   };
   return { origin: `http://127.0.0.1:${server.address().port}`, calls, streams, jobs, snapshot,
-    setJobs(value) { current = value; }, setSession(value) { activeSession = value; }, setSearch(value) { searches = Array.isArray(value) ? value : [value]; }, staleCursor() { staleCursor = true; },
+    setJobs(value) { current = value; }, setSession(value) { activeSession = value; }, setSearch(value) {
+      searches = Array.isArray(value) ? value : [value];
+      const ids = new Set(searches.map(item => item.id));
+      workspace = { ...workspace, revision: workspace.revision + 1, state: { activeSearchId: ids.has(workspace.state.activeSearchId) ? workspace.state.activeSearchId : null, drafts: Object.fromEntries(Object.entries(workspace.state.drafts).filter(([id]) => id === 'new' || ids.has(id))) } };
+    }, staleCursor() { staleCursor = true; },
     unavailable(reason) { for (const stream of connections) { stream.res.write(`event: unavailable\ndata: ${JSON.stringify({ schemaVersion: 1, reason, retryAfterMs: 1000 })}\n\n`); stream.res.end(); } },
     rejectStreams(status, repeat = false) { streamFailure = { status, repeat }; },
     disconnect() { for (const stream of connections) stream.res.destroy(); },

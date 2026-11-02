@@ -71,9 +71,9 @@ test('reconnect sends Last-Event-ID; dialog and hidden document cancel streams a
   await expect.poll(() => fixture.streams[1].closed).toBe(true);
   const count = await page.locator('[data-job]').count(); await page.waitForTimeout(700); expect(await page.locator('[data-job]').count()).toBe(count);
   await page.keyboard.press('Escape'); await expect.poll(() => fixture.streams.length).toBe(3);
-  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); });
   await expect.poll(() => fixture.streams[2].closed).toBe(true);
-  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); document.dispatchEvent(new Event('visibilitychange')); });
   await expect.poll(() => fixture.streams.length).toBeGreaterThanOrEqual(4);
   fixture.snapshot({ reason: 'recovery' }); await expect(page.locator('.is-new')).toHaveCount(0);
 });
@@ -249,11 +249,13 @@ test('interrupted pointer gestures recover after window blur and a hidden-docume
   fixture.setJobs([first, ...fixture.jobs]); fixture.snapshot();
   await expect(page.locator('[data-job="job-93"]')).toHaveCount(1);
   await page.locator('[data-job="job-4"] .posting-link').dispatchEvent('pointerdown');
-  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); });
   await expect.poll(() => fixture.streams.at(-1).closed).toBe(true);
   const streamCount = fixture.streams.length;
-  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); document.dispatchEvent(new Event('visibilitychange')); });
+  await expect(page.locator('#session-private-surfaces')).toHaveAttribute('aria-busy', 'false');
   await expect.poll(() => fixture.streams.length).toBeGreaterThan(streamCount);
+  await expect.poll(() => fixture.streams.at(-1).closed).toBe(false);
   const second = { ...job(94), firstObserved: '2026-11-02T11:30:00Z' };
   fixture.setJobs([second, first, ...fixture.jobs]); fixture.snapshot({ reason: 'recovery' });
   await expect(page.locator('[data-job="job-94"]')).toHaveCount(1);
@@ -263,5 +265,16 @@ test('HTTP404 on reconnect reloads a deleted accepted search without interpretat
   await expect(page.locator('[data-job]')).toHaveCount(0);
   await expect(page.getByRole('tab')).toHaveCount(0);
   expect(fixture.calls.filter(call => call.path === '/api/v1/searches').length).toBeGreaterThanOrEqual(2);
+  expect(fixture.calls.some(call => ['POST', 'PATCH'].includes(call.method) && /\/searches/.test(call.path))).toBe(false);
+});
+
+test('HTTP404 invalidation keeps a real orphan draft in explicit recovery without retaining accepted results', async ({ page }) => {
+  await open(page); await page.locator('#query').fill('My unsent museum draft');
+  fixture.setSearch([]); fixture.rejectStreams(404); fixture.disconnect();
+  await expect(page.locator('[data-job]')).toHaveCount(0);
+  await expect(page.locator('#workspace-conflict')).toBeVisible();
+  await expect(page.locator('#deleted-search-drafts')).toContainText('My unsent museum draft');
+  await expect(page.locator('#query')).toHaveValue('My unsent museum draft');
+  await expect(page.locator('#keep-local-drafts')).toBeDisabled();
   expect(fixture.calls.some(call => ['POST', 'PATCH'].includes(call.method) && /\/searches/.test(call.path))).toBe(false);
 });

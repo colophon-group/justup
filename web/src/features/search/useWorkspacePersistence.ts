@@ -4,7 +4,7 @@ import type { MutableRefObject } from "react";
 import { ApiError, errorText, isAbortError } from "../../api/client.ts";
 import type { ApiClient } from "../../api/client.ts";
 import type { SavedWorkspaceState, Search, SearchScope, WorkspaceSnapshot } from "../../api/types.ts";
-import { mergeWorkspaceEdits, savedWorkspace } from "./workspace.ts";
+import { mergeWorkspaceEdits, savedWorkspace, reconcileInvalidatedSearch } from "./workspace.ts";
 import type { Action, Workspace } from "./workspace.ts";
 
 interface Props {
@@ -46,6 +46,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
   const [viewed, setViewed] = useState<ReadonlySet<string>>(() => new Set());
   const guard = useRef({ generation: 0, controller: new AbortController() });
   const stored = useRef<WorkspaceSnapshot | null>(null), base = useRef<SavedWorkspaceState>({ activeSearchId: null, drafts: {} });
+  const invalidatedSearch = useRef<{ id: string; revision: number } | null>(null);
   const heldConflict = useRef<Conflict | null>(null), ready = useRef(false);
   const reading = useRef<Promise<void> | null>(null), saving = useRef<Promise<void> | null>(null);
   const pendingViewed = useRef(new Map<string, Promise<void> | null>());
@@ -84,19 +85,21 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
       const local = savedWorkspace(current.current);
       const projected = storedView(local, recoveredCreate.current);
       const edited = preserveCurrent || started !== serial.current || fingerprint(local) !== fingerprint(base.current);
-      const clashes = rebaseStored
+      const canonical = reconcileInvalidatedSearch(current.current, searches, invalidatedSearch.current);
+      const clashes = canonical.orphaned || (rebaseStored
         ? [...new Set([...Object.keys(projected.drafts), ...Object.keys(remote.state.drafts), ...Object.keys(initialStored.drafts)])]
           .some(id => projected.drafts[id] !== initialStored.drafts[id] && remote.state.drafts[id] !== initialStored.drafts[id] && projected.drafts[id] !== remote.state.drafts[id])
           || projected.activeSearchId !== initialStored.activeSearchId && remote.state.activeSearchId !== initialStored.activeSearchId && projected.activeSearchId !== remote.state.activeSearchId
         : edited && (Object.entries(local.drafts).some(([id, text]) => remote.state.drafts[id] !== undefined && remote.state.drafts[id] !== text
         && !(creation?.id === id && remote.state.drafts[id] === creation.submitted))
-        || !!creation && remote.state.activeSearchId !== null && remote.state.activeSearchId !== creation.id);
+        || !!creation && remote.state.activeSearchId !== null && remote.state.activeSearchId !== creation.id));
       // Merge actual saved-state deltas first, then retain only the transient
       // unresolved-request footprint that is still needed for same-key retry.
       const saved = rebaseStored && !clashes
         ? mergeWorkspaceEdits(projected, local, mergeWorkspaceEdits(initialStored, projected, remote.state)) : remote.state;
       noteSnapshot(remote); base.current = remote.state; ready.current = true;
-      apply({ type: "restored", searches, saved, preserveLocal: rebaseStored ? clashes : edited, defaultSelection: remote.revision === 0 });
+      apply({ type: "restored", searches: canonical.searches, saved, preserveLocal: rebaseStored ? clashes : edited, defaultSelection: remote.revision === 0, authoritative: canonical.authoritative });
+      invalidatedSearch.current = null;
       const held = clashes ? { remote, searches, base: rebaseStored ? initialStored : remote.state } : null;
       heldConflict.current = held; setConflict(held); setSyncError("");
     } catch (error) {
@@ -106,6 +109,7 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
   useEffect(() => {
     const controller = new AbortController(), generation = guard.current.generation + 1;
     guard.current = { generation, controller };
+    invalidatedSearch.current = null;
     stored.current = null; ready.current = false; saving.current = null;
     lastSaveAt.current = 0; base.current = { activeSearchId: null, drafts: {} };
     reclaimed.current = false;
@@ -359,6 +363,6 @@ export function useWorkspacePersistence({ client, scope, owner, hasVisitor, onVi
       recoveredCreate.current = { local: { ...local, drafts: { ...local.drafts, new: unresolvedSubmitted } }, remote: base.current };
     }
   };
-  return { flush, deleteOwnedSearch, refreshAfterCreate, syncError: syncError || viewError, conflict, deletedSearchDrafts: conflict ? deletedSearchDrafts(conflict, state) : [], resolveConflict, recoveredDrafts: snapshot?.recoveredDrafts ?? [], recover, recovering, loading, viewed, markViewed,
+  return { invalidateAcceptedSearch: (id: string, revision: number) => { invalidatedSearch.current = { id, revision }; }, flush, deleteOwnedSearch, refreshAfterCreate, syncError: syncError || viewError, conflict, deletedSearchDrafts: conflict ? deletedSearchDrafts(conflict, state) : [], resolveConflict, recoveredDrafts: snapshot?.recoveredDrafts ?? [], recover, recovering, loading, viewed, markViewed,
     retry: () => { if (pendingDeletion.current) void flush().catch(() => {}); else if (!ready.current) reading.current = read(); else void flush().catch(() => {}); } };
 }

@@ -20,7 +20,7 @@ interface Props {
   onSignIn: (reason?: string) => void;
   onAccount: () => void;
   viewed: ReadonlySet<string>;
-  onLiveInvalidated: () => void;
+  onLiveInvalidated: (reason: LiveUnavailable) => void;
   onViewed?: ((jobId: string) => void) | undefined;
 }
 export function ResultFeed({
@@ -45,7 +45,7 @@ export function ResultFeed({
     enabled: active && !paused && session?.capabilities.sse === true, receive, flush,
     unavailable: (reason: LiveUnavailable) => {
       if (reason === 'authority_lost' || reason === 'search_changed') invalidate();
-      if (reason !== 'reconnect') onLiveInvalidated();
+      if (reason !== 'reconnect') onLiveInvalidated(reason);
     } });
   const newJobs = feed.jobs.filter(job => job.isNew && !viewed.has(job.id) && !job.viewed);
   const canContinue =
