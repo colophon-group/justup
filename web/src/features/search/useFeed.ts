@@ -14,6 +14,7 @@ interface Feed {
   coverage: ResultPage["coverage"];
   bufferVersion: number;
   immediateIds: ReadonlySet<string>;
+  arrivalBatch: { sequence: number; count: number } | null;
   loading: boolean;
   error: string | null;
 }
@@ -26,6 +27,7 @@ const emptyFeed = (key: string): Feed => ({
   coverage: undefined,
   bufferVersion: 0,
   immediateIds: new Set(),
+  arrivalBatch: null,
   loading: false,
   error: null,
 });
@@ -50,10 +52,19 @@ export function useFeed(
     seenCursors = useRef(new Set<string>());
   const interrupted = useRef<{ cursor: string | null } | null>(null);
   const feedRef = useRef(feed);
+  // Canonical HTTP and SSE writes share one publication barrier. True arrivals
+  // accumulate only until their rows commit, independently of later Viewed state.
+  const deferredCommit = useRef(false), pendingArrivals = useRef(new Set<string>()), arrivalSequence = useRef(0);
   const updateFeed = useCallback((change: (current: Feed) => Feed, render = true) => {
-    const updated = change(feedRef.current);
-    feedRef.current = updated;
-    if (render) setFeed(updated);
+    let updated = change(feedRef.current);
+    if (render && !deferredCommit.current) {
+      const currentIds = new Set(updated.jobs.map(job => job.id));
+      const arrivals = [...pendingArrivals.current].filter(id => currentIds.has(id));
+      if (arrivals.length) updated = { ...updated, arrivalBatch: { sequence: ++arrivalSequence.current, count: arrivals.length } };
+      pendingArrivals.current.clear();
+      feedRef.current = updated;
+      setFeed(updated);
+    } else feedRef.current = updated;
   }, []);
   const load = useCallback(
     async (cursor: string | null, replace = false) => {
@@ -126,7 +137,7 @@ export function useFeed(
           return true;
         });
         if (replace) seenIds.current = new Set(fresh.map(job => job.id));
-        before.current();
+        if (!deferredCommit.current) before.current();
         updateFeed((current) =>
           current.key === key
             ? {
@@ -171,6 +182,7 @@ export function useFeed(
     seenIds.current.clear();
     seenCursors.current.clear();
     baseline.current = null;
+    deferredCommit.current = false; pendingArrivals.current.clear(); arrivalSequence.current = 0;
     updateFeed(() => emptyFeed(key));
     if (active && key) void load(null);
     return () => {
@@ -184,6 +196,7 @@ export function useFeed(
   }, [active, key, load]);
   useEffect(() => client.onSessionResumed(() => {
     if (!active || !interrupted.current) return;
+    deferredCommit.current = false;
     const pending = interrupted.current; interrupted.current = null;
     void load(pending.cursor);
   }), [client, active, load]);
@@ -197,7 +210,11 @@ export function useFeed(
       return;
     void load(value.continuation.cursor);
   }, [key, load, updateFeed]);
+  const publishDeferred = () => {
+    deferredCommit.current = false; before.current(); updateFeed(current => current);
+  };
   const retry = () => {
+    publishDeferred();
     const value = feedRef.current;
     if (value.key === key) void load(value.continuation.cursor);
   };
@@ -209,24 +226,29 @@ export function useFeed(
       const current = feedRef.current;
       if (current.key !== key) return;
       const reconciled = reconcileLive(current.jobs, event, baseline.current);
+      deferredCommit.current = deferred;
       if (!deferred) before.current();
       generation.current++; controller.current?.abort(); inFlight.current = false;
       baseline.current = reconciled.baseline;
       seenIds.current = new Set(reconciled.jobs.map(job => job.id));
       const unavailable = event.page.coverage?.stale === true || event.page.coverage?.state === 'import_unavailable';
+      for (const id of reconciled.arrivals) pendingArrivals.current.add(id);
       const currentIds = new Set(reconciled.jobs.map(job => job.id));
+      pendingArrivals.current = new Set([...pendingArrivals.current].filter(id => currentIds.has(id)));
       const immediateIds = new Set([...current.immediateIds, ...reconciled.arrivals].filter(id => currentIds.has(id)));
       const updated = { ...current, loading: false, jobs: unavailable ? [] : reconciled.jobs, immediateIds,
         continuation: { ...event.page.continuation, cursor: current.continuation.cursor }, ai: event.page.ai, coverage: event.page.coverage,
         hiddenMatches: unavailable ? { status: 'unavailable' as const, count: null } : event.page.hiddenMatches, error: null };
       updateFeed(() => updated, !deferred);
     },
-    flush: () => { before.current(); updateFeed(current => current); },
+    flush: publishDeferred,
     invalidate: () => {
+      deferredCommit.current = false; pendingArrivals.current.clear();
       generation.current++; controller.current?.abort(); inFlight.current = false;
       updateFeed(() => ({ ...emptyFeed(key), continuation: { state: 'paused', cursor: null, retryAfterMs: null } }));
     },
     refresh: (replace = false) => {
+      publishDeferred();
       generation.current++;
       controller.current?.abort();
       inFlight.current = false;

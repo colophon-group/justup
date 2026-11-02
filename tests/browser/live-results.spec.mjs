@@ -115,8 +115,10 @@ test('pointer selection gesture coalesces live arrivals; editor caret and scroll
   const fresh = { ...job(97), firstObserved: '2026-11-02T11:00:00Z' };
   fixture.setJobs([fresh, ...fixture.jobs]); fixture.snapshot();
   await page.waitForTimeout(300); await expect(page.locator('[data-job="job-97"]')).toHaveCount(0);
+  await expect(page.locator('#live-arrivals')).toBeEmpty();
   await page.locator('[data-job="job-4"] .posting-link').dispatchEvent('pointerup');
   await expect(page.locator('[data-job="job-97"]')).toHaveCount(1);
+  await expect(page.locator('#live-arrivals')).toHaveText('1 new matching position added.');
   await page.locator('#query').fill('Unsent reader text');
   await page.locator('#query').evaluate(input => { input.focus(); input.setSelectionRange(3, 9); window.editor = input; window.editorY = scrollY; });
   fixture.setJobs([{ ...job(96), firstObserved: '2026-11-02T11:30:00Z' }, fresh, ...fixture.jobs]); fixture.snapshot();
@@ -277,4 +279,65 @@ test('HTTP404 invalidation keeps a real orphan draft in explicit recovery withou
   await expect(page.locator('#query')).toHaveValue('My unsent museum draft');
   await expect(page.locator('#keep-local-drafts')).toBeDisabled();
   expect(fixture.calls.some(call => ['POST', 'PATCH'].includes(call.method) && /\/searches/.test(call.path))).toBe(false);
+});
+test('tail continuation cannot publish a deferred removal while a pointer gesture holds a drained page', async ({ page }) => {
+  await page.clock.install();
+  await page.goto(fixture.origin); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await expect.poll(() => fixture.streams.length).toBe(1);
+  fixture.snapshot({ reason: 'initial', items: fixture.jobs.slice(0, 12) });
+  await expect(page.locator('#live-status')).toContainText('Live results connected.');
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
+  for (let attempt = 0; attempt < 16 && await page.locator('[data-job]').count() < 12; attempt++) {
+    await page.locator('#feed-tail').scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
+    await page.clock.runFor(450);
+  }
+  await expect(page.locator('[data-job]')).toHaveCount(12);
+  await page.locator('#feed-tail').scrollIntoViewIfNeeded();
+  expect(await page.locator('#feed-tail').evaluate(element => { const box = element.getBoundingClientRect(); return box.top < innerHeight && box.bottom > 0; })).toBe(true);
+  const survivor = await page.locator('[data-job="job-12"]').elementHandle();
+  await page.locator('[data-job="job-12"] .posting-link').dispatchEvent('pointerdown');
+  const removed = fixture.jobs.filter(item => item.id !== 'job-11');
+  fixture.setJobs(removed); fixture.snapshot({ items: removed.slice(0, 12), retained: removed.map(item => item.id) });
+  // Let the real HTTP frame reach the paused browser before advancing its reveal clock.
+  await page.waitForTimeout(300);
+  await expect(page.locator('[data-job="job-11"]')).toHaveCount(1);
+  const response = page.waitForResponse(value => new URL(value.url()).pathname.endsWith('/results') && new URL(value.url()).searchParams.get('cursor') === '12');
+  await page.clock.runFor(450); await (await response).finished(); await page.clock.runFor(16);
+  expect(fixture.calls.filter(call => call.path.endsWith('/results'))).toHaveLength(2);
+  await expect(page.locator('[data-job="job-11"]')).toHaveCount(1);
+  await expect(page.locator('[data-job="job-13"]')).toHaveCount(0);
+  await page.locator('[data-job="job-12"] .posting-link').dispatchEvent('pointerup');
+  await page.clock.runFor(120);
+  await expect(page.locator('[data-job="job-11"]')).toHaveCount(0);
+  await expect(page.locator('#refresh-results')).toBeEnabled();
+  expect(await survivor.evaluate(element => element === document.querySelector('[data-job="job-12"]'))).toBe(true);
+  await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await page.clock.runFor(450);
+  await expect(page.locator('[data-job="job-13"]')).toHaveCount(1);
+});
+test('arrival announcements describe each committed batch and stay unchanged for Viewed, removals and recovery', async ({ page }) => {
+  await open(page);
+  const first = { ...job(88), firstObserved: '2026-11-02T11:00:00Z' };
+  fixture.setJobs([first, ...fixture.jobs]); fixture.snapshot();
+  await expect(page.locator('[data-job="job-88"]')).toHaveCount(1);
+  await expect(page.locator('#live-arrivals')).toHaveText('1 new matching position added.');
+  await page.locator('#live-arrivals').evaluate(element => { window.firstBatchNode = element.firstElementChild; });
+  const second = { ...job(89), firstObserved: '2026-11-02T11:30:00Z' };
+  fixture.setJobs([second, first, ...fixture.jobs]); fixture.snapshot();
+  await expect(page.locator('#new-results')).toHaveText('2 new ↑');
+  await expect(page.locator('#live-arrivals')).toHaveText('1 new matching position added.');
+  await page.locator('#live-arrivals').evaluate(element => {
+    window.batchNodeReplaced = element.firstElementChild !== window.firstBatchNode;
+    window.committedBatchNode = element.firstElementChild; window.arrivalMutations = [];
+    new MutationObserver(records => window.arrivalMutations.push(...records.map(record => record.type))).observe(element, { childList: true, subtree: true, characterData: true });
+  });
+  expect(await page.evaluate(() => window.batchNodeReplaced)).toBe(true);
+  const popup = page.waitForEvent('popup'); await page.locator('[data-job="job-88"] .posting-link').click(); await (await popup).close();
+  await expect(page.locator('#new-results')).toHaveText('1 new ↑');
+  const recovered = fixture.jobs.map((item, index) => index === 0 ? { ...item, title: 'Recovery acknowledged' } : item);
+  fixture.setJobs([first, ...recovered]); fixture.snapshot({ reason: 'recovery' });
+  await expect(page.locator('[data-job="job-1"] .job-title')).toHaveText('Recovery acknowledged');
+  await expect(page.locator('#new-results')).toHaveCount(0);
+  await expect(page.locator('#live-arrivals')).toHaveText('1 new matching position added.');
+  expect(await page.locator('#live-arrivals').evaluate(element => ({ same: element.firstElementChild === window.committedBatchNode, mutations: window.arrivalMutations.length }))).toEqual({ same: true, mutations: 0 });
 });
