@@ -244,3 +244,42 @@ test('keyboard opening the language picker stages an in-flight hidden reply unti
     await expect(page.locator('[data-job="job-1"]')).toBeVisible(); expect(reads).toBe(2);
   } finally { release(); }
 });
+
+test('same-owner resume keeps interrupted hidden reads metadata-only and within the original budget after multiple pages', async ({ page }) => {
+  await freezeClock(page); let reads = 0, metadataStarted = false, releaseMetadata, releaseSession, reachedSession;
+  const metadata = new Promise(resolve => { releaseMetadata = resolve; }), sessionHeld = new Promise(resolve => { releaseSession = resolve; });
+  const sessionStarted = new Promise(resolve => { reachedSession = resolve; }); let sessionReads = 0;
+  const calls = await mockApi(page, {
+    'GET /session': async () => { if (++sessionReads === 2) { reachedSession(); await sessionHeld; } return visitor(); },
+    'GET /visitor/searches': { items: [search()] },
+    'GET /visitor/searches/search-1/results': async call => {
+      reads++;
+      if (reads === 3) { metadataStarted = true; await metadata; }
+      const second = call.url.searchParams.get('cursor') === 'page-2';
+      return { ...completed(second ? [visibleJob(13), visibleJob(14)] : reads > 2 ? [visibleJob(999)] : Array.from({ length: 12 }, (_, index) => visibleJob(index + 1))),
+        continuation: { state: second ? 'exhausted' : 'open', cursor: second ? null : 'page-2', retryAfterMs: null }, hiddenMatches: { status: 'lower_bound', count: 0 } };
+    },
+  });
+  try {
+    await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+    for (let attempt = 0; attempt < 24 && !metadataStarted; attempt++) {
+      await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await page.clock.runFor(500); await page.evaluate(() => {});
+    }
+    await expect.poll(() => metadataStarted).toBe(true);
+    expect(calls.filter(call => call.key.endsWith('/results') && call.url.searchParams.get('cursor') === 'page-2')).toHaveLength(1);
+    await page.evaluate(() => { window.metadataRows = [...document.querySelectorAll('[data-job]')]; window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })); });
+    await sessionStarted; releaseMetadata(); releaseSession();
+    await expect(page.locator('#query')).toBeEditable(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+    expect(reads).toBe(3);
+    for (let count = 4; count <= 32; count++) {
+      const response = page.waitForResponse(response => response.url().includes('/visitor/searches/search-1/results'));
+      await page.clock.runFor(2000); await (await response).finished(); await page.evaluate(() => {});
+      expect(reads).toBe(count);
+    }
+    await page.clock.runFor(10_000); expect(reads).toBe(32);
+    await expect(page.locator('#feed-status')).toContainText('through the available matches');
+    await expect(page.locator('#feed-status')).not.toContainText('cursor'); await expect(page.locator('[data-job="job-999"]')).toHaveCount(0);
+    expect(await page.evaluate(() => window.metadataRows.every(row => row === document.querySelector(`[data-job="${row.dataset.job}"]`)))).toBe(true);
+    expect(calls.filter(call => /^(POST|PATCH) \/visitor\/searches/.test(call.key))).toHaveLength(0);
+  } finally { releaseMetadata(); releaseSession(); }
+});

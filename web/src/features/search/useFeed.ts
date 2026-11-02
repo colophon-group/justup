@@ -53,7 +53,7 @@ export function useFeed(
   const seenIds = useRef(new Set<string>()),
     seenCursors = useRef(new Set<string>());
   const hiddenChecks = useRef(0), liveConnected = useRef(false);
-  const interrupted = useRef<{ cursor: string | null } | null>(null);
+  const interrupted = useRef<{ cursor: string | null; replace: boolean; metadataOnly: boolean } | null>(null);
   const feedRef = useRef(feed), publishedFeed = useRef(feed);
   // Canonical HTTP and SSE writes share one publication barrier. True arrivals
   // accumulate only until their rows commit, independently of later Viewed state.
@@ -168,7 +168,7 @@ export function useFeed(
         if (epoch === generation.current && cursor && error instanceof ApiError && error.code === 'stale_cursor') {
           seenCursors.current.clear(); recoverCursor = true; return;
         }
-        if (isAbortError(error) && epoch === generation.current && !request.signal.aborted) interrupted.current = { cursor };
+        if (isAbortError(error) && epoch === generation.current && !request.signal.aborted) interrupted.current = { cursor, replace, metadataOnly };
         if (epoch === generation.current && !isAbortError(error)) {
           if (!deferredCommit.current) before.current();
           updateFeed((current) =>
@@ -211,9 +211,12 @@ export function useFeed(
   }, [active, key, load]);
   useEffect(() => client.onSessionResumed(() => {
     if (!active || !interrupted.current) return;
-    deferredCommit.current = false;
     const pending = interrupted.current; interrupted.current = null;
-    void load(pending.cursor);
+    // Metadata resumes only through the existing bounded timer. A reconnect
+    // cannot turn it into pagination or admit an uncounted extra read.
+    if (pending.metadataOnly) return;
+    deferredCommit.current = false;
+    void load(pending.cursor, pending.replace);
   }), [client, active, load]);
   // Hidden matching can outlive visible pagination. Canonical reads schedule
   // that work; SSE snapshots alone do not. Bound retries because insufficient
@@ -223,7 +226,7 @@ export function useFeed(
         feed.continuation.state !== "exhausted" ||
         !["pending", "lower_bound"].includes(feed.hiddenMatches.status)) return;
     const timer = window.setInterval(() => {
-      if (inFlight.current || document.hidden || document.querySelector("dialog[open]") || liveConnected.current && hiddenChecks.current > 0 ||
+      if (client.isSessionSuspended() || inFlight.current || document.hidden || document.querySelector("dialog[open]") || liveConnected.current && hiddenChecks.current > 0 ||
           !["pending", "lower_bound"].includes(feedRef.current.hiddenMatches.status)) return;
       if (hiddenChecks.current >= 30) { window.clearInterval(timer); return; }
       hiddenChecks.current++;
