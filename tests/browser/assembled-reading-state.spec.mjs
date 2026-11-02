@@ -92,6 +92,12 @@ test('a held previous-account follow reply cannot change the signed-out or next-
   try {
     await page.locator('[data-company="assembled"]').getByRole('button', { name: 'Follow Assembled Company', exact: true }).click(); await held.arrived;
     await logout(other); await expect(page.locator('#header-sign-in')).toBeVisible(); await expect(page.locator('.follow-company')).toHaveCount(0);
+    // Establish a canonical signed-out session before the next credentials.
+    // Concurrent guest-seed bootstraps have their own tracked recovery gap;
+    // this journey proves held follow replies across a genuine owner change.
+    await expect(page.locator('#live-label')).toHaveText('LIVE EDITION');
+    await expect(other.locator('#live-label')).toHaveText('LIVE EDITION');
+    await other.reload(); await expect(other.locator('#live-label')).toHaveText('LIVE EDITION');
     await login(other, 'second-reader'); await expect(page.locator('#header-sign-in')).toBeHidden();
     await expect(page.locator('[data-company="assembled"]').getByRole('button', { name: 'Follow Assembled Company', exact: true })).toBeEnabled();
     held.release();
