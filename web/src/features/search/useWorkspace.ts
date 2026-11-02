@@ -176,7 +176,7 @@ export function useWorkspace(
             scope,
           )
         : await client.createSearch(
-            { query, requestKey: mutation.key, options: { followedOnly: false, postingLanguages: newPostingLanguages } },
+            { query, requestKey: mutation.key, ...(newPostingLanguages.length ? { options: { followedOnly: false, postingLanguages: newPostingLanguages } } : {}) },
             active.controller.signal,
             scope,
           );

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve, extname, sep } from 'node:path';
 import { once } from 'node:events';
-import { session, search, job } from './api-fixture.mjs';
+import { session, search, job, postingLanguageCatalogue } from './api-fixture.mjs';
 export async function liveFixture() {
   const assets = resolve('web/dist'), calls = [], connections = new Set(), streams = [];
   let activeSession = session({ capabilities: { ...session().capabilities, sse: true, viewed: true } }), searches = [search()], sequence = 0;
@@ -23,6 +23,7 @@ export async function liveFixture() {
       res.on('close', () => { stream.closed = true; connections.delete(stream); }); return;
     }
     if (url.pathname === '/api/v1/session') return json(activeSession);
+    if (url.pathname === '/api/v1/search-options') return json(postingLanguageCatalogue);
     if (url.pathname === '/api/v1/hiring-wire') return json({ state: 'unavailable', edition: null });
     if (url.pathname === '/api/v1/preferences') {
       if (req.method === 'PATCH') preference = { ...preference, revision: preference.revision + 1, interfaceLocale: call.body.interfaceLocale, resolvedInterfaceLocale: call.body.interfaceLocale || 'en' };

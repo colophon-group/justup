@@ -1,5 +1,6 @@
 // Test-only minimal v1 contract fixtures. Never included in the deployed static tree.
-export const search = (revision = 1, query = 'Remote library jobs') => ({ id: 'search-1', revision, query, title: 'Library desk', description: 'Metadata only; not a visible summary.', configuration: {}, status: 'ready', requirements: [{ text: 'Remote work', handling: 'primary' }, { text: 'No night shifts', handling: 'residual_ai' }], warnings: [{ code: 'incomplete_salary_evidence', message: 'Salary evidence is not available for every posting.' }] });
+export const search = (revision = 1, query = 'Remote library jobs') => ({ id: 'search-1', revision, query, title: 'Library desk', description: 'Metadata only; not a visible summary.', configuration: {}, options: { followedOnly: false, postingLanguages: [] }, status: 'ready', requirements: [{ text: 'Remote work', handling: 'primary' }, { text: 'No night shifts', handling: 'residual_ai' }], warnings: [{ code: 'incomplete_salary_evidence', message: 'Salary evidence is not available for every posting.' }] });
+export const postingLanguageCatalogue = { postingLanguages: [{ id: 'en', name: 'English' }], emptySelection: 'any', selectionOperator: 'or', queryCombination: 'intersection' };
 export const company = { id: 'library', name: 'Test Library', description: 'A test-only public library.', coverage: { state: 'imported_snapshot' }, sources: [{ url: 'https://employer.test/careers' }] };
 export const job = index => ({ id: `job-${index}`, title: `Librarian ${index}`, company, sourceUrl: `https://employer.test/careers/${index}`, firstObserved: '2026-10-31T08:00:00Z', locations: [{ name: 'London', workplace: 'remote' }], employmentTypes: ['full_time'], postingLanguages: ['en'], salary: null });
 export const session = (overrides = {}) => {
@@ -29,6 +30,7 @@ export async function mockApi(page, handlers = {}) {
     let result = handlers[key]; if (typeof result === 'function') result = await result(call, calls);
     if (result === undefined) {
       if (key === 'GET /session') result = session();
+      else if (key === 'GET /search-options' || key === 'GET /visitor/search-options') result = postingLanguageCatalogue;
       else if (key === 'GET /searches' || key === 'GET /visitor/searches') result = { items: [] };
       else if (key === 'GET /workspace' || key === 'GET /visitor/workspace') result = structuredClone(currentWorkspace(path.startsWith('/visitor/') ? 'visitor' : owner));
       else if (key === 'PATCH /workspace' || key === 'PATCH /visitor/workspace') {

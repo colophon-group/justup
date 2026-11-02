@@ -356,6 +356,8 @@ test('sign-in restores transferred searches, latest draft and viewed state along
     'POST /session/logout': () => { signedIn = false; return {}; },
   });
   await page.goto('/'); await page.locator('#query').fill('Remote library jobs'); await page.locator('#job-search button[type=submit]').click();
+  // Enter the result viewport before exercising employer navigation/handoff.
+  await page.locator('#feed-tail').scrollIntoViewIfNeeded();
   await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   const opened = page.waitForEvent('popup'); await page.locator('.posting-link').click(); const source = await opened; await source.close(); await page.bringToFront();
   await page.locator('#query').fill('Remote library jobs without night shifts');

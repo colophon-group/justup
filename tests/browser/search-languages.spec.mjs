@@ -11,7 +11,10 @@ for (const [locale, label, find] of [['en', 'Posting languages', 'Find a languag
     'GET /searches/search-1/results': () => completed([], saved.revision),
     'PATCH /searches/search-1/options': call => { saved = { ...saved, revision: saved.revision + 1, options: { followedOnly: call.body.followedOnly, postingLanguages: call.body.postingLanguages } }; return { search: saved }; },
   });
-  await page.goto('/'); await expect(page.locator('#posting-languages')).toBeEnabled();
+  await page.goto('/');
+  // Exercise a wide fallback when the condensed display face is unavailable.
+  if (locale === 'de') await page.addStyleTag({ content: ':root { --display: monospace; }' });
+  await expect(page.locator('#posting-languages')).toBeEnabled();
   await page.locator('#query').fill('Exact unsent français text  ');
   await page.locator('#posting-languages').focus(); await page.keyboard.press('Enter');
   await expect(page.getByRole('dialog', { name: label })).toBeVisible();
@@ -182,4 +185,21 @@ for (const newer of [false, true]) test(`failed options recovery ${newer ? 'does
   if (newer) await expect(page.locator('#confirm-search-proposal')).toHaveCount(0);
   else await expect(page.locator('#confirm-search-proposal')).toBeVisible();
   await expect(page.locator('#query')).toHaveValue(text);
+});
+
+test('an unavailable catalogue leaves ordinary default-language search on the optional-options contract', async ({ page }) => {
+  const calls = await mockApi(page, {
+    'GET /visitor/search-options': { status: 503, body: { error: { code: 'dependency_unavailable', message: 'Options unavailable' } } },
+    'GET /search-options': { status: 503, body: { error: { code: 'dependency_unavailable', message: 'Options unavailable' } } },
+    'POST /searches': call => {
+      expect(Object.keys(call.body).sort()).toEqual(['query', 'requestKey']);
+      return { search: search() };
+    },
+    'GET /searches/search-1/results': completed(),
+  });
+  await page.goto('/'); await expect(page.locator('#posting-languages')).toBeDisabled();
+  await page.locator('#query').fill('Remote library jobs'); await page.locator('#job-search button[type=submit]').click();
+  await expect(page.getByRole('tab', { name: 'Library desk', exact: true })).toBeVisible();
+  expect(calls.filter(call => call.key === 'POST /searches')).toHaveLength(1);
+  expect(calls.filter(call => call.key === 'PATCH /searches/search-1/options')).toHaveLength(0);
 });

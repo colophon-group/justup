@@ -355,3 +355,5 @@ input[type=checkbox]:checked::after { content: ''; width: 4px; height: 8px; bord
 .language-options label { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 7px; cursor: pointer; }
 .language-options input { width: 20px; height: 20px; flex-shrink: 0; }
 .language-options small { font-size: 11px; color: var(--muted); margin-inline-start: 6px; overflow-wrap: anywhere; }
+
+#posting-language-dialog h2 { overflow-wrap: anywhere; }
