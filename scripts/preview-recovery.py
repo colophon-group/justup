@@ -27,6 +27,8 @@ import grp
 
 MAX_BACKUP = 256 * 1024 ** 2
 MAX_AGE = 7 * 86400
+MIN_FREE_AFTER_BACKUP = 64 * 1024 ** 2
+BACKUP_SPACE_MARGIN = 8 * 1024 ** 2
 APPLICATION_SCHEMA = 2
 BACKUP_NAME = re.compile(r'^backup-[0-9]{8}T[0-9]{6}Z-[a-f0-9-]{36}\.sqlite$')
 SCHEDULED_BASE = Path('/srv/justup_preview/state')
@@ -74,6 +76,11 @@ def file_digest(path):
         for block in iter(lambda: stream.read(1024 ** 2), b''):
             result.update(block)
     return result.hexdigest()
+
+
+def available_bytes(path):
+    free = os.statvfs(path)
+    return free.f_bavail * free.f_frsize
 
 
 def check_folder(folder):
@@ -153,6 +160,8 @@ def _backup_unlocked(database, folder, barrier, source_commit, build_identity, n
         raise ValueError('Backup needs the exact active source and build identity.')
     start_generation = stable_generation(barrier)
     discard_incomplete(folder)
+    if available_bytes(folder) < MAX_BACKUP + MIN_FREE_AFTER_BACKUP + BACKUP_SPACE_MARGIN:
+        raise ValueError('Preview filesystem lacks the backup and free-space reserve.')
     now = time.time() if now is None else now
     name = 'backup-' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(now)) + '-' + str(uuid.uuid4()) + '.sqlite'
     target = folder / name
@@ -200,8 +209,10 @@ def _backup_unlocked(database, folder, barrier, source_commit, build_identity, n
         # A deletion after this check purges these files under the core callback.
         if stable_generation(barrier) != start_generation:
             raise ValueError('Deletion generation changed before backup publication.')
-        _prune_unlocked(folder, now)
+        if available_bytes(folder) < MIN_FREE_AFTER_BACKUP:
+            raise ValueError('Backup would breach the preview free-space reserve.')
         completed = True
+        _prune_unlocked(folder, now)
         return {'backup': name, 'databaseSha256': report['databaseSha256'], 'bytes': report['bytes']}
     finally:
         if not completed:

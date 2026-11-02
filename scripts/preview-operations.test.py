@@ -1786,6 +1786,16 @@ class RecoveryContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'private deletion'):
                 recovery.validate_restore(snapshot, barrier, now=1001)
 
+    def test_backup_opens_clean_wal_source_without_existing_shm(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            with closing(sqlite3.connect(db)) as writer:
+                self.assertEqual(writer.execute('PRAGMA journal_mode=WAL').fetchone()[0], 'wal')
+            self.assertFalse(Path(str(db) + '-shm').exists())
+            snapshot = self.make_backup(db, folder, barrier)
+            recovery.validate_restore(snapshot, barrier, now=1001)
+
     def test_backup_refuses_rotated_generation_until_sql_deletion_commits(self):
         # Reproduce the real SQLite WAL timing: the barrier rotates before SQL
         # commit, so readers can still see the deleted record under the NEW UUID.
@@ -2044,6 +2054,37 @@ class RecoveryContracts(unittest.TestCase):
             self.assertEqual(recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64,
                                                     3600, now=2001)['snapshotCount'], 2)
 
+    def test_backup_preserves_published_snapshot_after_partial_prune_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            older = self.make_backup(db, folder, barrier, now=1000)
+            self.make_backup(db, folder, barrier, now=2000)
+            def partial_prune(_folder, _now):
+                older.unlink()
+                older.with_suffix('.json').unlink()
+                raise OSError('simulated prune failure')
+            with patch.object(recovery, '_prune_unlocked', side_effect=partial_prune):
+                with self.assertRaisesRegex(OSError, 'simulated prune failure'):
+                    self.make_backup(db, folder, barrier, now=3000)
+            newest = next(path for path in folder.glob('*.sqlite') if path.name.startswith('backup-19700101T005000Z-'))
+            self.assertEqual(len(list(folder.glob('*.sqlite'))), 2)
+            recovery.validate_restore(newest, barrier, now=3001)
+
+    def test_backup_requires_64_mib_reserve_before_and_after_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            floor = recovery.MAX_BACKUP + recovery.MIN_FREE_AFTER_BACKUP + recovery.BACKUP_SPACE_MARGIN
+            with patch.object(recovery, 'available_bytes', return_value=floor - 1):
+                with self.assertRaisesRegex(ValueError, 'free-space reserve'):
+                    self.make_backup(db, folder, barrier)
+            self.assertEqual(list(folder.iterdir()), [])
+            with patch.object(recovery, 'available_bytes', side_effect=[floor, recovery.MIN_FREE_AFTER_BACKUP - 1]):
+                with self.assertRaisesRegex(ValueError, 'free-space reserve'):
+                    self.make_backup(db, folder, barrier)
+            self.assertEqual(list(folder.iterdir()), [])
+
     def test_candidate_timer_has_one_bounded_run_without_missed_run_replay(self):
         service = (HERE.parent / 'deploy/justup-preview/justup-preview-backup.service').read_text()
         timer = (HERE.parent / 'deploy/justup-preview/justup-preview-backup.timer').read_text()
@@ -2051,7 +2092,7 @@ class RecoveryContracts(unittest.TestCase):
         self.assertIn('Slice=justup-preview.slice', service)
         self.assertIn('User=justup-preview-api', service)
         self.assertIn('TimeoutStartSec=90', service)
-        self.assertIn('ReadWritePaths=/srv/justup_preview/state/backups', service)
+        self.assertIn('ReadWritePaths=/srv/justup_preview/state', service)
         self.assertIn('OnCalendar=*-*-* 03:00:00 UTC', timer)
         self.assertIn('Persistent=false', timer)
         self.assertNotIn('OnBootSec=', timer)
