@@ -152,28 +152,52 @@ test('a failed restored task can be retried explicitly without repeatedly pollin
 });
 
 test('hidden refresh preserves loaded rows and pagination, pauses for dialogs and stops at its retry budget', async ({ page }) => {
-  await freezeClock(page); let reads = 0;
+  await freezeClock(page); let reads = 0, release;
+  const held = new Promise(resolve => { release = resolve; });
+  const title = count => count === 1 ? 'At least 1 recent match hidden' : `At least ${count} recent matches hidden`;
   const calls = await mockApi(page, {
     'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
-    'GET /visitor/searches/search-1/results': () => ({ ...completed([visibleJob(++reads === 1 ? 1 : 2)]), hiddenMatches: { status: 'lower_bound', count: 0 } }),
+    'GET /visitor/searches/search-1/results': async () => {
+      const read = ++reads;
+      if (read === 3) await held;
+      return { ...completed([visibleJob(read === 1 ? 1 : 2)]), hiddenMatches: { status: 'lower_bound', count: read - 1 } };
+    },
   });
-  await page.goto('/'); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
-  await page.locator('[data-job="job-1"]').evaluate(row => { window.originalHiddenRow = row; });
-  await page.locator('#header-sign-in').click(); await page.clock.runFor(10_000);
-  expect(reads).toBe(1); await page.keyboard.press('Escape');
-  await page.locator('#posting-languages').click(); await expect(page.locator('#posting-language-dialog')).toBeVisible();
-  await page.clock.runFor(10_000); expect(reads).toBe(1); await page.keyboard.press('Escape');
-  for (let count = 2; count <= 31; count++) {
-    await page.clock.runFor(2000); await expect.poll(() => reads).toBe(count);
-  }
-  await page.clock.runFor(10_000); expect(reads).toBe(31);
-  await expect(page.locator('[data-job="job-2"]')).toHaveCount(0);
-  expect(await page.locator('[data-job="job-1"]').evaluate(row => window.originalHiddenRow === row)).toBe(true);
-  await page.locator('#query').fill('Exact unsent text  '); await expect(page.locator('#query')).toHaveValue('Exact unsent text  ');
-  expect(calls.filter(call => /^(POST|PATCH) \/visitor\/searches/.test(call.key))).toHaveLength(0);
-  await page.locator('#refresh-results').click(); await expect.poll(() => reads).toBe(32);
-  await page.clock.runFor(120); await expect(page.locator('#refresh-results')).toBeEnabled();
-  await page.clock.runFor(2000); await expect.poll(() => reads).toBe(33);
+  try {
+    await page.goto('/'); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+    await page.locator('[data-job="job-1"]').evaluate(row => { window.originalHiddenRow = row; });
+    await page.locator('#header-sign-in').click(); await page.clock.runFor(10_000);
+    expect(reads).toBe(1); await page.keyboard.press('Escape');
+    await page.locator('#posting-languages').click(); await expect(page.locator('#posting-language-dialog')).toBeVisible();
+    await page.clock.runFor(10_000); expect(reads).toBe(1); await page.keyboard.press('Escape');
+    for (let count = 2; count <= 31; count++) {
+      const response = page.waitForResponse(response => response.url().includes('/visitor/searches/search-1/results'));
+      await page.clock.runFor(2000); await expect.poll(() => reads).toBe(count);
+      if (count === 3) {
+        // Route entry does not acknowledge consumption. Another timer tick must
+        // skip this deliberately held response without consuming another read.
+        await page.clock.runFor(2000); expect(reads).toBe(3);
+        await expect(page.locator('#hidden-matches-title')).toHaveText(title(1));
+        release();
+      }
+      await (await response).finished();
+      // A unique confirmed lower bound acknowledges application publication,
+      // including its in-flight cleanup, before advancing the next timer tick.
+      await expect(page.locator('#hidden-matches-title')).toHaveText(title(count - 1));
+    }
+    await page.clock.runFor(10_000); expect(reads).toBe(31);
+    await expect(page.locator('[data-job="job-2"]')).toHaveCount(0);
+    expect(await page.locator('[data-job="job-1"]').evaluate(row => window.originalHiddenRow === row)).toBe(true);
+    await page.locator('#query').fill('Exact unsent text  '); await expect(page.locator('#query')).toHaveValue('Exact unsent text  ');
+    expect(calls.filter(call => /^(POST|PATCH) \/visitor\/searches/.test(call.key))).toHaveLength(0);
+    const refresh = page.waitForResponse(response => response.url().includes('/visitor/searches/search-1/results'));
+    await page.locator('#refresh-results').click(); await (await refresh).finished();
+    await page.clock.runFor(120); await expect(page.locator('#hidden-matches-title')).toHaveText(title(31));
+    await expect(page.locator('#refresh-results')).toBeEnabled(); expect(reads).toBe(32);
+    const resumed = page.waitForResponse(response => response.url().includes('/visitor/searches/search-1/results'));
+    await page.clock.runFor(2000); await (await resumed).finished();
+    await expect(page.locator('#hidden-matches-title')).toHaveText(title(32)); expect(reads).toBe(33);
+  } finally { release(); }
 });
 
 test('a failed hidden metadata read keeps rows, reports unavailable and waits for explicit recovery', async ({ page }) => {
