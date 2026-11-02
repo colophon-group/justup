@@ -1,0 +1,43 @@
+# Candidate only: the current host plan does not install this unit.
+[Unit]
+Description=Create one deletion-safe Justup preview snapshot
+Requires=srv-justup_preview.mount
+After=srv-justup_preview.mount
+RequiresMountsFor=/srv/justup_preview
+
+[Service]
+Type=oneshot
+User=justup-preview-api
+Group=justup-preview-api
+Slice=justup-preview.slice
+ExecStartPre=/usr/bin/python3 /srv/justup_preview/ops/preview-host.py resource-guard
+ExecStart=/usr/bin/python3 /srv/justup_preview/ops/preview-recovery.py scheduled-backup
+TimeoutStartSec=90
+RuntimeMaxSec=90
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ReadWritePaths=/srv/justup_preview/state
+InaccessiblePaths=-/srv/justup_preview/queue -/srv/justup_preview/model -/srv/justup_preview/broker -/run/docker.sock -/var/run/docker.sock -/mnt/murmur -/root -/home
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+LimitCORE=0
+LimitNOFILE=256
+LimitNPROC=32
+StandardOutput=null
+StandardError=null

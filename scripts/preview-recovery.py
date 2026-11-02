@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager, closing
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -26,8 +27,11 @@ import grp
 
 MAX_BACKUP = 256 * 1024 ** 2
 MAX_AGE = 7 * 86400
+MIN_FREE_AFTER_BACKUP = 64 * 1024 ** 2
+BACKUP_SPACE_MARGIN = 8 * 1024 ** 2
 APPLICATION_SCHEMA = 2
 BACKUP_NAME = re.compile(r'^backup-[0-9]{8}T[0-9]{6}Z-[a-f0-9-]{36}\.sqlite$')
+SCHEDULED_BASE = Path('/srv/justup_preview/state')
 
 
 def generation(path):
@@ -74,6 +78,11 @@ def file_digest(path):
     return result.hexdigest()
 
 
+def available_bytes(path):
+    free = os.statvfs(path)
+    return free.f_bavail * free.f_frsize
+
+
 def check_folder(folder):
     folder = Path(folder)
     if folder.is_symlink() or not folder.is_dir():
@@ -92,8 +101,42 @@ def readonly(path):
         yield connection
 
 
-def prune(folder, now=None):
+@contextmanager
+def backup_lock(folder):
+    """Serialize backup publication and pruning without a persistent lock file."""
     folder = check_folder(folder)
+    fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('Another preview backup or prune is already running.') from None
+        yield folder
+    finally:
+        os.close(fd)
+
+
+def discard_incomplete(folder):
+    """Remove only owned, unpaired crash debris before another snapshot attempt."""
+    incomplete = []
+    for entry in folder.iterdir():
+        if entry.suffix == '.sqlite' and BACKUP_NAME.fullmatch(entry.name):
+            partner = entry.with_suffix('.json')
+        elif entry.suffix == '.json' and BACKUP_NAME.fullmatch(entry.with_suffix('.sqlite').name):
+            partner = entry.with_suffix('.sqlite')
+        else:
+            raise ValueError('Backup directory contains an unreviewed file.')
+        if not partner.exists():
+            incomplete.append(entry)
+    for entry in incomplete:
+        entry.unlink(missing_ok=True)
+    if incomplete:
+        fsync_directory(folder)
+
+
+def _prune_unlocked(folder, now=None):
+    folder = check_folder(folder)
+    discard_incomplete(folder)
     now = time.time() if now is None else now
     snapshots = sorted(folder.glob('backup-*.sqlite'), key=lambda p: p.stat().st_mtime, reverse=True)
     for index, snapshot in enumerate(snapshots):
@@ -106,11 +149,19 @@ def prune(folder, now=None):
     fsync_directory(folder)
 
 
-def backup(database, folder, barrier, source_commit, build_identity, now=None, schema_version=APPLICATION_SCHEMA):
+def prune(folder, now=None):
+    with backup_lock(folder) as locked:
+        return _prune_unlocked(locked, now)
+
+
+def _backup_unlocked(database, folder, barrier, source_commit, build_identity, now=None, schema_version=APPLICATION_SCHEMA):
     folder = check_folder(folder)
     if not re.fullmatch('[a-f0-9]{40}', source_commit) or not re.fullmatch('[a-f0-9]{64}', build_identity):
         raise ValueError('Backup needs the exact active source and build identity.')
     start_generation = stable_generation(barrier)
+    discard_incomplete(folder)
+    if available_bytes(folder) < MAX_BACKUP + MIN_FREE_AFTER_BACKUP + BACKUP_SPACE_MARGIN:
+        raise ValueError('Preview filesystem lacks the backup and free-space reserve.')
     now = time.time() if now is None else now
     name = 'backup-' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(now)) + '-' + str(uuid.uuid4()) + '.sqlite'
     target = folder / name
@@ -158,14 +209,21 @@ def backup(database, folder, barrier, source_commit, build_identity, now=None, s
         # A deletion after this check purges these files under the core callback.
         if stable_generation(barrier) != start_generation:
             raise ValueError('Deletion generation changed before backup publication.')
+        if available_bytes(folder) < MIN_FREE_AFTER_BACKUP:
+            raise ValueError('Backup would breach the preview free-space reserve.')
         completed = True
-        prune(folder, now)
+        _prune_unlocked(folder, now)
         return {'backup': name, 'databaseSha256': report['databaseSha256'], 'bytes': report['bytes']}
     finally:
         if not completed:
             target.unlink(missing_ok=True)
             metadata.unlink(missing_ok=True)
             fsync_directory(folder)
+
+
+def backup(database, folder, barrier, source_commit, build_identity, now=None, schema_version=APPLICATION_SCHEMA):
+    with backup_lock(folder) as locked:
+        return _backup_unlocked(database, locked, barrier, source_commit, build_identity, now, schema_version)
 
 
 def validate_restore(snapshot, barrier, now=None):
@@ -279,7 +337,7 @@ def restore(snapshot, barrier, destination, prepare_command, now=None, migrate_v
                 Path(str(destination) + suffix).unlink(missing_ok=True)
 
 
-def operational_context(paths, build_identity=None, *, cleanup_logs=True):
+def operational_context(paths, build_identity=None, *, cleanup_logs=True, resource_only=False):
     base = Path('/srv/justup_preview')
     state = base / 'state'
     expected = {state / 'preview.sqlite', state / 'private-generation', state / 'backups'}
@@ -292,7 +350,12 @@ def operational_context(paths, build_identity=None, *, cleanup_logs=True):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
-    load('preview-host').guard(cleanup_logs=cleanup_logs)
+    host = load('preview-host')
+    if resource_only:
+        host.verify_caps()
+        host.verify_storage()
+    else:
+        host.guard(cleanup_logs=cleanup_logs)
     if build_identity is not None and not re.fullmatch('[a-f0-9]{64}', build_identity):
         raise ValueError('Migration requires an exact retained target build identity.')
     release = (base / 'releases' / build_identity).resolve(strict=True) if build_identity else (base / 'current').resolve(strict=True)
@@ -362,6 +425,7 @@ def main():
     make.add_argument('--generation', type=Path, required=True)
     make.add_argument('--source-commit', required=True)
     make.add_argument('--build-identity', required=True)
+    sub.add_parser('scheduled-backup')
     check = sub.add_parser('check-restore')
     check.add_argument('--snapshot', type=Path, required=True)
     check.add_argument('--generation', type=Path, required=True)
@@ -384,14 +448,20 @@ def main():
     clean.add_argument('--backup-dir', type=Path, required=True)
     args = parser.parse_args()
     try:
-        paths = [getattr(args, key) for key in ('database', 'backup_dir', 'generation', 'snapshot', 'destination') if hasattr(args, key)]
+        paths = ([SCHEDULED_BASE / 'preview.sqlite', SCHEDULED_BASE / 'backups', SCHEDULED_BASE / 'private-generation']
+                 if args.command == 'scheduled-backup' else
+                 [getattr(args, key) for key in ('database', 'backup_dir', 'generation', 'snapshot', 'destination') if hasattr(args, key)])
         manifest, prepare_command = operational_context(
             paths, getattr(args, 'build_identity', None) if args.command in {'migrate', 'restore'} else None,
-            cleanup_logs=args.command != 'backup-status')
+            cleanup_logs=args.command not in {'backup-status', 'scheduled-backup'},
+            **({'resource_only': True} if args.command == 'scheduled-backup' else {}))
         if args.command == 'backup':
             if args.source_commit != manifest['sourceCommit'] or args.build_identity != manifest['buildIdentity']:
                 raise ValueError('Backup identity differs from the active immutable artifact.')
             result = backup(args.database, args.backup_dir, args.generation, args.source_commit, args.build_identity, schema_version=manifest['schemaVersion'])
+        elif args.command == 'scheduled-backup':
+            result = backup(*paths, manifest['sourceCommit'], manifest['buildIdentity'],
+                            schema_version=manifest['schemaVersion'])
         elif args.command == 'migrate':
             current, _ = operational_context(paths)
             spec = importlib.util.spec_from_file_location('migration_host', Path(__file__).with_name('preview-host.py'))
