@@ -40,8 +40,9 @@ test('follows filter real saved results; unfollow refreshes revisions without ch
   const posting = page.locator('[data-job="assembled-engineer"] .posting-link');
   await posting.evaluate(link => { window.readingHeld = { row: link.closest('[data-job]'), link, height: link.closest('[data-job]').getBoundingClientRect().height }; });
   // Real native target=_blank navigation opens a page while the same-origin POST records the outbound event.
+  await posting.focus(); await expect(posting).toBeFocused();
   const popupPromise = page.waitForEvent('popup'); await posting.click(); const popup = await popupPromise; await popup.close();
-  await page.bringToFront(); await expect(page.locator('[data-job="assembled-engineer"]')).toHaveClass(/viewed/);
+  await page.bringToFront(); await expect(page.locator('[data-job="assembled-engineer"]')).toHaveClass(/viewed/); await expect(posting).toBeFocused();
   expect(await posting.evaluate(link => ({ same: link === window.readingHeld.link, row: link.closest('[data-job]') === window.readingHeld.row, height: link.closest('[data-job]').getBoundingClientRect().height === window.readingHeld.height }))).toEqual({ same: true, row: true, height: true });
   await expect.poll(() => runtime.calls.filter(call => call.method === 'POST' && call.path === '/api/v1/viewed' && call.status === 200).length).toBe(1);
   await page.locator('[data-job="assembled-engineer"] .job-company').click();
@@ -61,7 +62,7 @@ test('follows filter real saved results; unfollow refreshes revisions without ch
     await company(other); await expect(other.locator('[data-company="assembled"]').getByRole('button', { name: 'Follow Assembled Company', exact: true })).toBeEnabled();
     await other.locator('[data-company="assembled"]').getByRole('button', { name: 'Follow Assembled Company', exact: true }).click();
     await positions(other); await expect(other.locator('[data-job="assembled-engineer"]')).toHaveClass(/viewed/);
-    await other.locator('#followed-only').uncheck(); await expect(other.locator('[data-job]')).toHaveCount(2);
+    await other.locator('#followed-only').click(); await expect(other.locator('#followed-only')).not.toBeChecked(); await expect(other.locator('[data-job]')).toHaveCount(2);
     expect(runtime.modelCalls()).toBe(1);
   } finally { await device.close(); }
 });
@@ -78,7 +79,7 @@ test('lost follow and option acknowledgements reconcile committed state without 
   await expect(page.locator('[data-job]')).toHaveCount(1);
   const id = runtime.db.prepare('SELECT id FROM justup_searches').get().id;
   runtime.loseNext('PATCH', `/searches/${id}/options`);
-  await page.locator('#query').fill('Exact unsent text  '); await page.locator('#followed-only').check();
+  await page.locator('#query').fill('Exact unsent text  '); await page.locator('#followed-only').click();
   await expect(page.locator('#search-status')).toContainText('could not be confirmed'); await expect(page.locator('#followed-only')).toBeChecked();
   await expect(page.locator('#query')).toHaveValue('Exact unsent text  ');
   expect(runtime.calls.filter(call => call.method === 'PATCH' && call.path.endsWith('/options'))).toHaveLength(1); expect(runtime.modelCalls()).toBe(1);
