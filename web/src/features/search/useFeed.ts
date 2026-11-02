@@ -52,7 +52,7 @@ export function useFeed(
   const before = useRef(beforeUpdate); before.current = beforeUpdate;
   const seenIds = useRef(new Set<string>()),
     seenCursors = useRef(new Set<string>());
-  const hiddenChecks = useRef(0);
+  const hiddenChecks = useRef(0), liveConnected = useRef(false);
   const interrupted = useRef<{ cursor: string | null } | null>(null);
   const feedRef = useRef(feed);
   // Canonical HTTP and SSE writes share one publication barrier. True arrivals
@@ -125,6 +125,7 @@ export function useFeed(
           return;
         }
         if (metadataOnly) {
+          if (!deferredCommit.current) before.current();
           updateFeed(current => current.key === key ? { ...current, received: true,
             hiddenMatches: page.hiddenMatches, coverage: page.coverage, loading: false, error: null } : current);
           return;
@@ -167,12 +168,14 @@ export function useFeed(
           seenCursors.current.clear(); recoverCursor = true; return;
         }
         if (isAbortError(error) && epoch === generation.current && !request.signal.aborted) interrupted.current = { cursor };
-        if (epoch === generation.current && !isAbortError(error))
+        if (epoch === generation.current && !isAbortError(error)) {
+          if (!deferredCommit.current) before.current();
           updateFeed((current) =>
             current.key === key
-              ? { ...current, loading: false, error: errorText(error) }
+              ? { ...current, loading: false, hiddenMatches: { status: "unavailable", count: null }, error: errorText(error) }
               : current,
           );
+        }
       } finally {
         if (epoch === generation.current) {
           inFlight.current = false;
@@ -219,7 +222,7 @@ export function useFeed(
         feed.continuation.state !== "exhausted" ||
         !["pending", "lower_bound"].includes(feed.hiddenMatches.status)) return;
     const timer = window.setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || document.querySelector("dialog[open]") || liveConnected.current && hiddenChecks.current > 0) return;
       if (hiddenChecks.current >= 30) { window.clearInterval(timer); return; }
       hiddenChecks.current++;
       void load(null, false, true);
@@ -244,10 +247,12 @@ export function useFeed(
     const value = feedRef.current;
     if (value.key === key) void load(value.continuation.cursor);
   };
+  const setLiveConnected = useCallback((connected: boolean) => { liveConnected.current = connected; }, []);
   return {
     feed: feed.key === key ? feed : emptyFeed(key),
     next,
     retry,
+    setLiveConnected,
     receive: (event: LiveSnapshot, deferred = false) => {
       const current = feedRef.current;
       if (current.key !== key) return;

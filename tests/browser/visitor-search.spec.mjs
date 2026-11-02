@@ -38,7 +38,7 @@ test('visitor refinements keep accepted rows until their exact warning is confir
       return { ...completed([visibleJob(revision)], revision), hiddenMatches: { status: 'lower_bound', count: 2 } };
     },
   });
-  await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.goto('/'); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   await submit(page, query); await expect(page.locator('#confirm-search-proposal')).toBeVisible();
   await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   await expect(page.locator('#hidden-matches-title')).toHaveText('At least 2 recent matches hidden');
@@ -58,7 +58,7 @@ test('a visitor interpretation limit preserves the accepted search and unsent ed
     'GET /visitor/searches/search-1/results': completed([visibleJob(1)]),
     'PATCH /visitor/searches/search-1': { status: 429, body: { error: { code: 'task_limit', message: 'Your visitor search limit has been reached.' } } },
   });
-  await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.goto('/'); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   await submit(page, 'Library jobs without night shifts');
   await expect(page.locator('#search-status')).toContainText('visitor search limit');
   await expect(page.locator('#search-status')).toContainText('last accepted revision');
@@ -75,7 +75,7 @@ test('a shared request-rate pause never suggests that signing in bypasses it', a
     'GET /visitor/searches/search-1/results': completed([visibleJob(1)]),
     'PATCH /visitor/searches/search-1': { status: 429, body: { error: { code: 'rate_limit', message: 'Please wait before trying again.' } } },
   });
-  await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.goto('/'); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   await submit(page, 'Library jobs without night shifts');
   await expect(page.locator('#search-status')).toContainText('Please wait');
   await expect(page.locator('#visitor-sign-in')).toHaveCount(0);
@@ -92,7 +92,7 @@ test('restored warnings require explicit confirmation without restarting interpr
     'GET /visitor/searches/search-1/results': call => completed([visibleJob(Number(call.url.searchParams.get('revision')))], Number(call.url.searchParams.get('revision'))),
     'POST /visitor/searches/search-1/confirm': { search: search(2, query) },
   });
-  await page.goto('/'); await expect(page.locator('#confirm-search-proposal')).toBeVisible();
+  await page.goto('/'); await expect(page.locator('#confirm-search-proposal')).toBeVisible(); await page.locator('#feed-tail').scrollIntoViewIfNeeded();
   await expect(page.locator('#query')).toHaveValue(query);
   await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   expect(calls.some(call => call.key === 'POST /visitor/searches' || call.key === 'PATCH /visitor/searches/search-1' || call.key.startsWith('GET /visitor/tasks'))).toBe(false);
@@ -110,7 +110,7 @@ test('restoring a pending search resumes its existing task instead of spending a
     'GET /visitor/tasks/restored-task': task('restored-task', 'succeeded', { search: search() }),
     'GET /visitor/searches/search-1/results': completed([visibleJob(1)]),
   });
-  await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.goto('/'); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   expect(calls.filter(call => call.key === 'GET /visitor/tasks/restored-task')).toHaveLength(1);
   expect(calls.some(call => call.key === 'POST /visitor/searches' || call.key === 'PATCH /visitor/searches/search-1')).toBe(false);
 });
@@ -127,9 +127,9 @@ test('an interrupted handoff stays an unsent edit until the user explicitly retr
     'GET /visitor/searches/search-1/results': call => completed([visibleJob(Number(call.url.searchParams.get('revision')))], Number(call.url.searchParams.get('revision'))),
   });
   await page.goto('/'); await expect(page.locator('#search-status')).toContainText('interrupted');
-  await expect(page.locator('#query')).toHaveValue(query); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await expect(page.locator('#query')).toHaveValue(query); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   expect(calls.some(call => /^(POST|PATCH) \/visitor\/searches/.test(call.key) || call.key.startsWith('GET /visitor/tasks/'))).toBe(false);
-  await page.locator('#job-search button[type=submit]').click(); await expect(page.locator('[data-job="job-2"]')).toBeVisible();
+  await page.locator('#job-search button[type=submit]').click(); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-2"]')).toBeVisible();
   expect(calls.filter(call => call.key === 'PATCH /visitor/searches/search-1')).toHaveLength(1);
 });
 
@@ -145,7 +145,7 @@ test('a failed restored task can be retried explicitly without repeatedly pollin
     'GET /visitor/searches/search-1/results': completed([visibleJob(1)]),
   });
   await page.goto('/'); await expect(page.locator('#search-status')).toContainText('Interpretation is unavailable');
-  await page.locator('#job-search button[type=submit]').click(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.locator('#job-search button[type=submit]').click(); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   expect(calls.filter(call => call.key === 'GET /visitor/tasks/failed-task')).toHaveLength(1);
   expect(calls.filter(call => call.key === 'PATCH /visitor/searches/search-1')).toHaveLength(1);
 });
@@ -160,7 +160,7 @@ for (const [hiddenMatches, title] of [
     'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
     'GET /visitor/searches/search-1/results': { ...completed([visibleJob(1)]), hiddenMatches },
   });
-  await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.goto('/'); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   if (title) await expect(page.locator('#hidden-matches-title')).toHaveText(title);
   else await expect(page.locator('#hidden-matches')).toHaveCount(0);
 });
@@ -171,10 +171,12 @@ test('hidden refresh preserves loaded rows and pagination, pauses for dialogs an
     'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
     'GET /visitor/searches/search-1/results': () => ({ ...completed([visibleJob(++reads === 1 ? 1 : 2)]), hiddenMatches: { status: 'lower_bound', count: 0 } }),
   });
-  await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.goto('/'); await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
   await page.locator('[data-job="job-1"]').evaluate(row => { window.originalHiddenRow = row; });
   await page.locator('#header-sign-in').click(); await page.clock.runFor(10_000);
   expect(reads).toBe(1); await page.keyboard.press('Escape');
+  await page.locator('#posting-languages').click(); await expect(page.locator('#posting-language-dialog')).toBeVisible();
+  await page.clock.runFor(10_000); expect(reads).toBe(1); await page.keyboard.press('Escape');
   for (let count = 2; count <= 31; count++) {
     await page.clock.runFor(2000); await expect.poll(() => reads).toBe(count);
   }
@@ -185,4 +187,18 @@ test('hidden refresh preserves loaded rows and pagination, pauses for dialogs an
   expect(calls.filter(call => /^(POST|PATCH) \/visitor\/searches/.test(call.key))).toHaveLength(0);
   await page.locator('#refresh-results').click(); await expect.poll(() => reads).toBe(32);
   await page.clock.runFor(2000); await expect.poll(() => reads).toBe(33);
+});
+
+test('a failed hidden metadata read keeps rows, reports unavailable and waits for explicit recovery', async ({ page }) => {
+  await page.clock.install(); let reads = 0;
+  await mockApi(page, {
+    'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
+    'GET /visitor/searches/search-1/results': () => ++reads === 2 ? { abort: true } : { ...completed([visibleJob(1)]), hiddenMatches: reads === 1 ? { status: 'pending', count: null } : { status: 'exact', count: 0 } },
+  });
+  await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.clock.runFor(2000); await expect(page.locator('#hidden-matches-title')).toHaveText('The recent hidden-match count is unavailable.');
+  await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await page.clock.runFor(10_000); expect(reads).toBe(2);
+  await page.locator('#retry-results').click(); await expect(page.locator('#hidden-matches')).toHaveCount(0);
+  expect(reads).toBe(3); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
 });

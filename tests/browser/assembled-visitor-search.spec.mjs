@@ -1,4 +1,5 @@
 // Real visitor/account HTTP, SQLite and queue transitions; only local model output is synthetic.
+import { createHash } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { startVisitorRuntime } from '../assembled/visitor-runtime.mjs';
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 1100 } });
@@ -14,14 +15,17 @@ function interpretation(residual = false) {
       ...(residual ? [{ id: 'week', text: 'A documented four day working week.', handling: 'ai', reason: 'Needs posting evidence.', bindings: [], companyReference: null }] : [])] };
 }
 function importCohorts(at) {
-  const jobs = [['withheld-private', DAY], ['boundary', 2 * DAY], ['too-old', 15 * DAY]].map(([id, age]) => ({
+  const jobs = [['assembled-engineer', 3 * DAY], ['withheld-private', DAY], ['boundary', 2 * DAY], ['too-old', 15 * DAY]].map(([id, age]) => {
+    const bodyText = ('Synthetic documented four day working week with full compensation. ').repeat(5);
+    return ({
     id, companyId: 'assembled', companyName: 'Assembled Company', companySlug: 'assembled', title: `Engineer ${id}`,
     sourceUrl: `https://example.org/careers/${id}`, active: true, reserved: false, hasContent: true,
     firstObserved: new Date(at - age).toISOString(), lastObserved: null, locales: ['en'], locations: [], employmentTypes: [], seniority: null,
-    salary: null, bodyText: null, evidence: { source: 'jobseek_public', metadataFetchedAt: new Date(at).toISOString(),
-      bodyFetchedAt: null, bodyUrl: null, bodySha256: null, textSha256: null, bodyBytes: 0, normalizationVersion: 1, truncated: false },
-  }));
-  runtime.app.store.importSnapshot({ schemaVersion: 1, snapshotAt: new Date(at).toISOString(), verifiedAt: new Date(at).toISOString(), observations: [], unknownIds: [], jobs });
+    salary: null, bodyText, evidence: { source: 'jobseek_public', metadataFetchedAt: new Date(at).toISOString(),
+      bodyFetchedAt: new Date(at).toISOString(), bodyUrl: `https://example.org/careers/${id}`, bodySha256: null, textSha256: createHash('sha256').update(bodyText).digest('hex'), bodyBytes: Buffer.byteLength(bodyText), normalizationVersion: 1, truncated: false, aiEligible: true },
+  }); });
+  runtime.app.store.importSnapshot({ schemaVersion: 1, snapshotAt: new Date(at - 2 * DAY).toISOString(), verifiedAt: new Date(at).toISOString(), observations: [], unknownIds: [], jobs: jobs.filter(job => job.id === 'too-old') });
+  runtime.app.store.importSnapshot({ schemaVersion: 1, snapshotAt: new Date(at).toISOString(), verifiedAt: new Date(at).toISOString(), observations: [], unknownIds: [], jobs: jobs.filter(job => job.id !== 'too-old') });
 }
 async function submit(page, text = 'Engineer') {
   await page.locator('#query').fill(text); await page.locator('#job-search button[type=submit]').click();
