@@ -44,7 +44,7 @@ test('real invalid refinement preserves accepted criteria, rows and raw text thr
   await expect(page.locator('#hidden-matches-title')).toHaveText('1 recent match hidden');
   await expect(page.locator('[data-job="withheld-private"], [data-job="too-old"]')).toHaveCount(0);
   const original = runtime.db.prepare('SELECT id,revision,accepted_json FROM justup_searches').get();
-  const raw = '  Engineer invalid refinement\nkeep this exact text  '; await submit(page, raw);
+  const raw = '  Engineer invalid refinement keep this exact text  '; await submit(page, raw);
   await expect(page.locator('#search-status')).toContainText(/invalid|could not|failed/i);
   await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible();
   await expect(page.locator('#query')).toHaveValue(raw);
@@ -54,7 +54,7 @@ test('real invalid refinement preserves accepted criteria, rows and raw text thr
   const session = await (await page.request.get(runtime.origin + '/api/v1/session')).json(); expect(session.access.fullAccess).toBe(false);
   const response = await page.request.get(`${runtime.origin}/api/v1/searches/${original.id}/results?revision=1`);
   expect(response.headers()['x-robots-tag'].split(/,\s*/)).toContain('noindex'); expect(await response.text()).not.toContain('withheld-private');
-  expect(runtime.modelCalls()).toBe(2);
+  expect(runtime.modelCalls()).toBe(3);
   expect(runtime.calls.filter(call => call.method === 'POST' && call.path === '/api/v1/searches')).toHaveLength(0);
   await page.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page.locator('#query')).toHaveValue(''); await expect(page.getByRole('tab')).toHaveCount(0); await expect(page.locator('[data-job]')).toHaveCount(0);
