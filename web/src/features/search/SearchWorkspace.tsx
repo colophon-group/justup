@@ -234,19 +234,21 @@ export function SearchWorkspace({
                 </button>
               </div>
             </form>
-            {session?.user && session.capabilities.follows ? <div className="followed-search-option" aria-busy={workspace.optionsSaving}>
-              <label><input id="followed-only" type="checkbox" checked={workspace.followedOnly}
-                disabled={workspace.loading || workspace.recovering || !!workspace.conflict || (!search && state.busy) || (!!search && !search.options) || search?.status === 'unavailable'}
-                aria-disabled={workspace.optionsSaving}
-                onClick={event => { if (workspace.optionsSaving) event.preventDefault(); }}
-                onChange={event => { if (!workspace.optionsSaving) void workspace.saveFollowedOnly(event.target.checked, search?.revision); }} /> {t("Followed companies only")}</label>
-              {!search && workspace.followedOnly ? <p className="helper">{t("This choice is saved when you submit Search. Reloading or signing out clears the unsaved choice.")}</p> : null}
-              {followError ? <p role="status">{t("Followed searches could not be refreshed.")} <button type="button" className="text-link" onClick={() => setFollowRefresh(value => value + 1)}>{t("Try again")}</button></p> : null}
-            </div> : null}
-            <PostingLanguages key={search?.id ?? "new"} client={client} scope={workspace.scope}
-              selected={workspace.postingLanguages} revision={search?.revision} supported={!search || !!search.options}
-              disabled={(!search && state.busy) || workspace.loading || workspace.recovering || !!workspace.conflict || search?.status === "unavailable"}
-              saving={workspace.optionsSaving} active={active} onSave={workspace.savePostingLanguages} />
+            <div className="search-options" role="group" aria-label={t("SEARCH OPTIONS")}>
+              <PostingLanguages key={search?.id ?? "new"} client={client} scope={workspace.scope}
+                selected={workspace.postingLanguages} revision={search?.revision} supported={!search || !!search.options}
+                disabled={(!search && state.busy) || workspace.loading || workspace.recovering || !!workspace.conflict || search?.status === "unavailable"}
+                saving={workspace.optionsSaving} active={active} onSave={workspace.savePostingLanguages} />
+              {session?.user && session.capabilities.follows ? <div className="followed-search-option" aria-busy={workspace.optionsSaving}>
+                <label><input id="followed-only" type="checkbox" checked={workspace.followedOnly}
+                  disabled={workspace.loading || workspace.recovering || !!workspace.conflict || (!search && state.busy) || (!!search && !search.options) || search?.status === 'unavailable'}
+                  aria-disabled={workspace.optionsSaving}
+                  onClick={event => { if (workspace.optionsSaving) event.preventDefault(); }}
+                  onChange={event => { if (!workspace.optionsSaving) void workspace.saveFollowedOnly(event.target.checked, search?.revision); }} /> {t("Followed companies only")}</label>
+              </div> : null}
+            </div>
+            {session?.user && !search && (workspace.followedOnly || workspace.postingLanguages.length > 0) ? <p className="helper">{t("Unsaved options reset on reload or sign-out.")}</p> : null}
+            {followError ? <p role="status">{t("Followed searches could not be refreshed.")} <button type="button" className="text-link" onClick={() => setFollowRefresh(value => value + 1)}>{t("Try again")}</button></p> : null}
             <p className="search-guidance" id="search-guidance">{t("Be as specific as you need. We’ll show how your requirements are handled.")}</p>
           </div>
           <div id="search-status" className="helper" role="status">
