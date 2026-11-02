@@ -110,7 +110,7 @@ test('a held previous-account follow reply cannot change the signed-out or next-
   } finally { held.release(); await other.close(); }
 });
 
-test('a stale same-choice success reconciles another session’s invalidated followed search', async ({ page }) => {
+test('a stale same-choice success reconciles another session’s invalidated followed search', async ({ page, browser }) => {
   await page.goto(runtime.origin); await login(page);
   await page.locator('#followed-only').check(); await page.locator('#query').fill('Engineer');
   await page.locator('#job-search button[type=submit]').click();
@@ -123,9 +123,19 @@ test('a stale same-choice success reconciles another session’s invalidated fol
   await expect(follow).toBeEnabled();
   // Another real HTTP client makes the same choice while this tab retains
   // revision zero. The second idempotent success returns an empty ID list.
-  const remote = await page.request.patch(runtime.origin + '/api/v1/follows/assembled', { headers: { Origin: runtime.origin, 'X-CSRF-Token': (await (await page.request.get(runtime.origin + '/api/v1/session')).json()).csrfToken }, data: { followed: true, expectedRevision: 0 } });
-  expect(remote.status()).toBe(200); expect((await remote.json()).invalidatedSearchIds).toEqual([id]);
-  await follow.click(); await expect(page.locator('[data-company="assembled"]').getByRole('button', { name: 'Unfollow Assembled Company', exact: true })).toBeEnabled();
+  const device = await browser.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const bootstrap = await (await device.request.get(runtime.origin + '/api/v1/session')).json();
+    const signedIn = await device.request.post(runtime.origin + '/api/v1/auth/login', { headers: { Origin: runtime.origin, 'X-CSRF-Token': bootstrap.csrfToken }, data: { username: 'assembled-reader', password } });
+    expect(signedIn.status()).toBe(200);
+    const session = await (await device.request.get(runtime.origin + '/api/v1/session')).json();
+    const remote = await device.request.patch(runtime.origin + '/api/v1/follows/assembled', { headers: { Origin: runtime.origin, 'X-CSRF-Token': session.csrfToken }, data: { followed: true, expectedRevision: 0 } });
+    expect(remote.status()).toBe(200); expect((await remote.json()).invalidatedSearchIds).toEqual([id]);
+  } finally { await device.close(); }
+  const acknowledged = page.waitForResponse(response => response.request().method() === 'PATCH' && response.url().endsWith('/follows/assembled'));
+  await follow.click();
+  const sameChoice = await (await acknowledged).json(); expect(sameChoice.revision).toBe(1); expect(sameChoice.invalidatedSearchIds).toEqual([]);
+ await expect(page.locator('[data-company="assembled"]').getByRole('button', { name: 'Unfollow Assembled Company', exact: true })).toBeEnabled();
   await positions(page); await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible(); await expect(page.locator('#query')).toHaveValue(raw);
   const writes = runtime.calls.filter(call => call.method === 'PATCH' && call.path.endsWith('/follows/assembled'));
   expect(writes.map(call => call.body.expectedRevision)).toEqual([0, 0]);
