@@ -251,7 +251,7 @@ export function useWorkspace(
       if (updated.id !== search.id || updated.revision !== search.revision + (changed ? 1 : 0) || !updated.options
         || updated.query !== search.query || updated.options.followedOnly !== search.options.followedOnly
         || JSON.stringify([...updated.options.postingLanguages].sort()) !== JSON.stringify([...postingLanguages].sort()))
-        throw new ApiError(409, "unexpected_options", "Posting language changes could not be confirmed. Reconnect before retrying.");
+        throw new ApiError(409, "unexpected_options", "Posting language changes could not be confirmed. Review the saved choices before trying again.");
       apply({ type: "optionsSaved", search: updated });
       return true;
     } catch (error) {
@@ -266,7 +266,7 @@ export function useWorkspace(
           if (remote) apply({ type: "optionsSaved", search: remote });
         } catch { /* The explicit error keeps the uncertainty visible. */ }
       }
-      if (optionsOperation.current === controller) apply({ type: "status", text: "Posting language changes could not be confirmed. Reconnect before retrying.", busy: false });
+      if (optionsOperation.current === controller) apply({ type: "status", text: "Posting language changes could not be confirmed. Review the saved choices before trying again.", busy: false });
       return false;
     } finally {
       if (optionsOperation.current === controller) { optionsOperation.current = null; setOptionsSaving(false); }

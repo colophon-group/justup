@@ -70,11 +70,16 @@ export function PostingLanguages({ client, scope, selected, revision, supported,
         </label>)}
         {!visible.length ? <p>{t("No matching languages.")}</p> : null}
       </fieldset>
-      <p role="status">{failed ? t("Posting language changes could not be confirmed. Reconnect before retrying.") : t("{count} selected", { count: draft.length })}</p>
+      <p role="status">{failed ? t("Posting language changes could not be confirmed. Review the saved choices before trying again.") : t("{count} selected", { count: draft.length })}</p>
       <div className="dialog-actions">
+        {failed ? <button type="button" id="review-posting-languages" className="button outline" disabled={saving} onClick={() => {
+          // An explicit review replaces staged choices with the last canonical
+          // snapshot. A concurrent revision still needs a new CAS acknowledgement.
+          setDraft([...selected]); setBaseRevision(revision); setFilter(""); setFailed(false);
+        }}>{t("Review saved choices")}</button> : null}
         <button type="button" className="text-link" disabled={saving} onClick={() => setDraft([])}>{t("Any language")}</button>
         <button type="button" className="button outline" disabled={saving} onClick={close}>{t("Cancel")}</button>
-        <button type="button" id="apply-posting-languages" className="button" disabled={saving || disabled || !catalogue || !supported} onClick={async () => {
+        <button type="button" id="apply-posting-languages" className="button" disabled={failed || saving || disabled || !catalogue || !supported} onClick={async () => {
           const success = await onSave([...draft].sort(), baseRevision);
           if (success) { setOpen(false); trigger.current?.focus(); } else setFailed(true);
         }}>{t(saving ? "Saving…" : "Apply")}</button>

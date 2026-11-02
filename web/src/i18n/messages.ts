@@ -2,6 +2,7 @@
 import type { InterfaceLocale } from './locales.ts';
 
 export const messages = {
+  "Review saved choices": ["Gespeicherte Auswahl prüfen", "Examiner les choix enregistrés", "Rivedi le scelte salvate", "Revisar las opciones guardadas"],
   "Close": ["Schließen", "Fermer", "Chiudi", "Cerrar"],
   "Cancel": ["Abbrechen", "Annuler", "Annulla", "Cancelar"],
   "Posting languages": ["Anzeigensprachen", "Langues des annonces", "Lingue degli annunci", "Idiomas de los anuncios"],
@@ -15,7 +16,7 @@ export const messages = {
   "Find a language": ["Sprache suchen", "Rechercher une langue", "Cerca una lingua", "Buscar un idioma"],
   "No matching languages.": ["Keine passenden Sprachen.", "Aucune langue correspondante.", "Nessuna lingua corrispondente.", "No hay idiomas coincidentes."],
   "Posting languages saved.": ["Anzeigensprachen gespeichert.", "Langues des annonces enregistrées.", "Lingue degli annunci salvate.", "Idiomas de los anuncios guardados."],
-  "Posting language changes could not be confirmed. Reconnect before retrying.": ["Die Änderung der Anzeigensprachen konnte nicht bestätigt werden. Verbinde dich vor einem erneuten Versuch neu.", "La modification des langues des annonces n’a pas pu être confirmée. Reconnecte-toi avant de réessayer.", "Non è stato possibile confermare le modifiche alle lingue degli annunci. Riconnettiti prima di riprovare.", "No se pudieron confirmar los cambios en los idiomas de los anuncios. Vuelve a conectarte antes de reintentarlo."],
+  "Posting language changes could not be confirmed. Review the saved choices before trying again.": ["Die Änderung der Anzeigensprachen konnte nicht bestätigt werden. Prüfe die gespeicherte Auswahl vor einem erneuten Versuch.", "La modification des langues des annonces n’a pas pu être confirmée. Examine les choix enregistrés avant de réessayer.", "Non è stato possibile confermare le modifiche alle lingue degli annunci. Rivedi le scelte salvate prima di riprovare.", "No se pudieron confirmar los cambios en los idiomas de los anuncios. Revisa las opciones guardadas antes de reintentarlo."],
   "Apply": ["Anwenden", "Appliquer", "Applica", "Aplicar"],
   "Saving…": ["Wird gespeichert…", "Enregistrement…", "Salvataggio…", "Guardando…"],
 
@@ -492,8 +493,8 @@ export const messages = {
   ],
   "Please reconnect before trying again.": [
     "Bitte verbinde dich erneut, bevor du es noch einmal versuchst.",
-    "Reconnecte-toi avant de réessayer.",
-    "Riconnettiti prima di riprovare.",
+    "Examine les choix enregistrés avant de réessayer.",
+    "Rivedi le scelte salvate prima di riprovare.",
     "Reconecta antes de intentarlo de nuevo."
   ],
   "The request timed out. Please try again.": [

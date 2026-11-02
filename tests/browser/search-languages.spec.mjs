@@ -46,17 +46,28 @@ test('a revision conflict reads canonical options, keeps unsent text and require
   let saved = initial();
   const calls = await mockApi(page, {
     'GET /search-options': catalogue, 'GET /searches': () => ({ items: [saved] }), 'GET /searches/search-1/results': () => completed([], saved.revision),
-    'PATCH /searches/search-1/options': () => { saved = { ...saved, revision: 2, options: { followedOnly: true, postingLanguages: ['fr'] } }; return { status: 409, body: { error: { code: 'revision_conflict', message: 'Changed elsewhere' } } }; },
+    'PATCH /searches/search-1/options': call => {
+      if (saved.revision === 1) { saved = { ...saved, revision: 2, options: { followedOnly: true, postingLanguages: ['fr'] } }; return { status: 409, body: { error: { code: 'revision_conflict', message: 'Changed elsewhere' } } }; }
+      expect(call.body.expectedRevision).toBe(2);
+      saved = { ...saved, revision: 3, options: { followedOnly: call.body.followedOnly, postingLanguages: call.body.postingLanguages } }; return { search: saved };
+    },
   });
   await page.goto('/'); await expect(page.locator('#posting-languages')).toBeEnabled();
   await page.locator('#query').fill('My still unsent text'); await page.locator('#posting-languages').click();
   await page.locator('.language-options input[value="de-CH"]').check(); await page.locator('#apply-posting-languages').click();
   await expect(page.locator('#posting-language-dialog')).toContainText('could not be confirmed');
   await expect(page.locator('#query')).toHaveValue('My still unsent text');
-  await page.keyboard.press('Escape'); await page.locator('#posting-languages').click();
+  await expect(page.locator('#apply-posting-languages')).toBeDisabled();
+  await page.locator('#review-posting-languages').click();
   await expect(page.locator('.language-options input[value="fr"]')).toBeChecked();
   await expect(page.locator('.language-options input[value="de-CH"]')).not.toBeChecked();
-  expect(calls.filter(call => call.key === 'PATCH /searches/search-1/options')).toHaveLength(1);
+  await page.locator('.language-options input[value="fr"]').uncheck();
+  await page.locator('.language-options input[value="de-CH"]').check();
+  await page.locator('#apply-posting-languages').click();
+  await expect(page.locator('#posting-language-dialog')).not.toBeVisible();
+  await expect(page.locator('#query')).toHaveValue('My still unsent text');
+  expect(saved.options).toEqual({ followedOnly: true, postingLanguages: ['de-CH'] });
+  expect(calls.filter(call => call.key === 'PATCH /searches/search-1/options')).toHaveLength(2);
   expect(calls.filter(call => call.key === 'POST /searches' || call.key === 'PATCH /searches/search-1')).toHaveLength(0);
 });
 
