@@ -2,6 +2,12 @@
 import type { InterfaceLocale } from './locales.ts';
 
 export const messages = {
+  "Connecting live results…": ["Live-Ergebnisse werden verbunden…", "Connexion aux résultats en direct…", "Connessione ai risultati in tempo reale…", "Conectando los resultados en directo…"],
+  "Live results connected.": ["Live-Ergebnisse verbunden.", "Résultats en direct connectés.", "Risultati in tempo reale connessi.", "Resultados en directo conectados."],
+  "Live results paused. Check again to reconnect.": ["Live-Ergebnisse pausiert. Prüfe erneut, um die Verbindung herzustellen.", "Résultats en direct en pause. Vérifie à nouveau pour te reconnecter.", "Risultati in tempo reale in pausa. Controlla di nuovo per riconnetterti.", "Resultados en directo en pausa. Comprueba de nuevo para reconectar."],
+  "{count} new matching position added.": ["{count} neue passende Stelle hinzugefügt.", "{count} nouvelle offre correspondante ajoutée.", "{count} nuova posizione corrispondente aggiunta.", "Se añadió {count} nueva oferta coincidente."],
+  "{count} new matching positions added.": ["{count} neue passende Stellen hinzugefügt.", "{count} nouvelles offres correspondantes ajoutées.", "{count} nuove posizioni corrispondenti aggiunte.", "Se añadieron {count} nuevas ofertas coincidentes."],
+  "{count} new ↑": ["{count} neu ↑", "Nouveautés : {count} ↑", "Novità: {count} ↑", "Novedades: {count} ↑"],
   "{current} newly observed listing, compared with {previous} the previous week": [
     "{current} neu erfasste Stellenanzeige, gegenüber {previous} in der Vorwoche",
     "{current} nouvelle offre repérée, contre {previous} la semaine précédente",

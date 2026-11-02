@@ -7,12 +7,14 @@ import { ageText, salaryText, metadataText } from "./format.ts";
 export function JobRow({
   job,
   animated,
+  liveArrival = false,
   reducedMotion,
   viewed,
   onViewed,
 }: {
   job: Job;
   animated: boolean;
+  liveArrival?: boolean;
   reducedMotion: boolean;
   viewed: boolean;
   onViewed?: ((jobId: string) => void) | undefined;
@@ -21,6 +23,13 @@ export function JobRow({
   const row = useRef<HTMLElement>(null),
     animate = useRef(animated && !reducedMotion);
   useEffect(() => {
+    if (liveArrival && !reducedMotion) {
+      const box = row.current?.getBoundingClientRect();
+      if (!box || box.top >= innerHeight || box.bottom <= 0) return;
+      const edgeMotion = row.current?.querySelector(".new-edge")?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180 });
+      const motion = row.current?.animate([{ opacity: .35, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 220, easing: 'cubic-bezier(.2,.7,.3,1)' });
+      return () => { motion?.cancel(); edgeMotion?.cancel(); };
+    }
     if (!animate.current) return;
     const motion = row.current?.animate(
       [
@@ -45,6 +54,7 @@ export function JobRow({
         ref={row}
         className={`job list-row clickable-row${viewed ? " viewed" : ""}${job.isNew && !viewed ? " is-new" : ""}`}
         data-job={job.id}
+        onFocusCapture={() => { for (const animation of row.current?.getAnimations() ?? []) animation.finish(); }}
         onClick={(event) => {
           if (
             !(event.target instanceof Element) ||
@@ -54,8 +64,9 @@ export function JobRow({
           posting.current?.click();
         }}
       >
+        {job.isNew && !viewed ? <span className="new-edge" aria-hidden="true" /> : null}
         <div className="job-age">
-          {job.isNew ? <span className="new-badge" aria-hidden={viewed} style={{ visibility: viewed ? "hidden" : "visible" }}>{t("New")}</span> : null}
+          <span className="new-badge" aria-hidden={!job.isNew || viewed} style={{ visibility: job.isNew && !viewed ? "visible" : "hidden" }}>{t("New")}</span>
           <time
             dateTime={job.firstObserved}
             title={t("First observed {date}", { date: new Date(job.firstObserved).toLocaleDateString(locale) })}

@@ -138,7 +138,7 @@ form label { display: block; font-size: 12px; font-weight: 600; line-height: 1.5
 .job.viewed { color: var(--muted); }
 .job.viewed .mark { opacity: .55; }
 .new-badge { display: block; width: max-content; color: var(--ink); background: var(--cream); padding: 1px 5px; font-size: 9px; font-weight: 700; line-height: 1.6; margin-bottom: 7px; text-transform: uppercase; }
-#feed-tail, #company-tail { min-height: 164px; display: flex; align-items: center; justify-content: center; border-top: 1px solid var(--rule); text-align: center; padding: 25px 16px; }
+#feed-tail, #company-tail { overflow-anchor: none; min-height: 164px; display: flex; align-items: center; justify-content: center; border-top: 1px solid var(--rule); text-align: center; padding: 25px 16px; }
 #search-results > #feed-tail { border-top: 0; }
 #feed-status, #company-scroll-status { font-size: 12px; font-weight: 600; line-height: 1.7; }
 .end-note { display: block; font-size: 11px; font-weight: 500; margin-top: 4px; }
@@ -342,3 +342,8 @@ input[type=checkbox]:checked::after { content: ''; width: 4px; height: 8px; bord
 
 .settings-language { display: grid; gap: 8px; margin: 22px 0; font-weight: 600; }
 .settings-language select { width: min(100%, 320px); min-height: 44px; border: 1.5px solid; background: var(--cream); color: var(--ink); font: inherit; padding: 10px; }
+
+/* Live arrivals retain a navigation slot and do not reflow existing indicator columns. */
+.new-results-slot { min-height: 24px; }
+.new-edge { position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--cream); pointer-events: none; }
+#new-results { font-size: 11px; }

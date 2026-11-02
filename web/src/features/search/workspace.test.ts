@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { emptyWorkspace, queryText, workspaceReducer, mergeWorkspaceEdits, savedWorkspace } from "./workspace.ts";
+import { emptyWorkspace, queryText, workspaceReducer, mergeWorkspaceEdits, savedWorkspace, reconcileInvalidatedSearch } from "./workspace.ts";
 import { salaryText } from "./format.ts";
 import type { Search } from "../../api/types.ts";
 const search = (id = "s", revision = 1, query = "Library jobs"): Search => ({
@@ -199,4 +199,19 @@ test("pending creation preserves later typing and interrupted proposals restore 
   const proposal = { proposalId: "p", searchId: "s", expectedRevision: 1, query: "Visa support", title: "Library", requirements: [], warnings: [] };
   const restored = workspaceReducer(emptyWorkspace(), { type: "restored", searches: [{ ...search(), proposal }], saved: { activeSearchId: "s", drafts: { s: "Visa support" } }, preserveLocal: false });
   assert.deepEqual(restored.proposal, proposal);
+});
+test('a canonically invalidated search is removed while other in-flight searches and orphan edits stay recoverable', () => {
+  const state = workspaceReducer(emptyWorkspace(), { type: 'loaded', searches: [search('deleted'), search('other')] });
+  const invalidated = { id: 'deleted', revision: 1 };
+  const removed = reconcileInvalidatedSearch(state, [], invalidated);
+  assert.equal(removed.authoritative, true);
+  assert.deepEqual(removed.searches.map(item => item.id), ['other']);
+  assert.equal(removed.orphaned, false);
+  const edited = workspaceReducer(state, { type: 'query', value: 'Unsent museum draft' });
+  const recoverable = reconcileInvalidatedSearch(edited, [], invalidated);
+  assert.equal(recoverable.orphaned, true);
+  assert.equal(recoverable.searches.find(item => item.id === 'deleted')?.status, 'unavailable');
+  assert.equal(queryText(edited), 'Unsent museum draft');
+  const newer = { ...state, searches: [search('deleted', 2), search('other')] };
+  assert.equal(reconcileInvalidatedSearch(newer, [search('deleted')], invalidated).authoritative, false);
 });

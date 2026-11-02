@@ -1,5 +1,6 @@
 // Reveal from a ready buffer only when the real next slot is visible.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { retainRevealedIds } from "./revealState.ts";
 import type { RefObject } from "react";
 interface Options<T> {
   items: readonly T[];
@@ -11,6 +12,8 @@ interface Options<T> {
   onNeedMore?: () => void;
   delayMs?: number;
   prerenderedCount?: number;
+  itemKey?: (item: T) => string;
+  immediateIds?: ReadonlySet<string>;
 }
 export function useViewportReveal<T>({
   items,
@@ -22,10 +25,24 @@ export function useViewportReveal<T>({
   onNeedMore,
   delayMs = 450,
   prerenderedCount = 0,
+  itemKey,
+  immediateIds,
 }: Options<T>): { visible: T[]; revealing: boolean; initialCount: number } {
+  const [admitted, setAdmitted] = useState<ReadonlySet<string>>(new Set());
+  const retainedAdmitted = itemKey ? retainRevealedIds(admitted, new Set(items.map(itemKey))) : admitted;
+  useLayoutEffect(() => {
+    if (retainedAdmitted !== admitted) setAdmitted(retainedAdmitted);
+  }, [admitted, retainedAdmitted]);
+  const pending = itemKey ? items.filter(item => !retainedAdmitted.has(itemKey(item)) && !immediateIds?.has(itemKey(item))) : [];
+  const pendingKey = pending.length && itemKey ? itemKey(pending[0]!) : null;
+  const disclose = () => {
+    if (itemKey && pendingKey !== null) setAdmitted(current => new Set([...current, pendingKey]));
+    else setCount(value => Math.min(value + 1, items.length));
+  };
   const [count, setCount] = useState(prerenderedCount),
     [revealing, setRevealing] = useState(false);
   const [initialCount, setInitialCount] = useState(Number.POSITIVE_INFINITY);
+  const hasBuffered = itemKey ? pending.length > 0 : count < items.length;
   const hydrated = useRef(false);
   const initial = useRef(true),
     key = useRef(resetKey);
@@ -60,19 +77,20 @@ export function useViewportReveal<T>({
       key.current = resetKey;
       initial.current = true;
       setCount(0);
+      setAdmitted(new Set());
       setRevealing(false);
       setInitialCount(Number.POSITIVE_INFINITY);
     }
   }, [resetKey]);
   useLayoutEffect(() => {
     if (!active || loading || key.current !== resetKey) return;
-    if (initial.current && count < items.length && isVisible()) {
-      setCount((value) => Math.min(value + 1, items.length));
+    if (initial.current && hasBuffered && isVisible()) {
+      disclose();
       return;
     }
     if (items.length && initial.current) {
       initial.current = false;
-      setInitialCount(count);
+      setInitialCount(itemKey ? admitted.size : count);
     }
   });
   useEffect(() => {
@@ -82,7 +100,7 @@ export function useViewportReveal<T>({
         timer ||
         loading ||
         !isVisible() ||
-        (count >= items.length && !hasMore)
+        (!hasBuffered && !hasMore)
       )
         return;
       setRevealing(true);
@@ -91,8 +109,7 @@ export function useViewportReveal<T>({
           timer = undefined;
           setRevealing(false);
           if (!isVisible()) return;
-          if (count < items.length)
-            setCount((value) => Math.min(value + 1, items.length));
+          if (hasBuffered) disclose();
           else onNeedMore?.();
         },
         Math.max(450, delayMs),
@@ -116,6 +133,8 @@ export function useViewportReveal<T>({
   }, [
     active,
     count,
+    pendingKey,
+    hasBuffered,
     items.length,
     loading,
     hasMore,
@@ -124,7 +143,7 @@ export function useViewportReveal<T>({
     resetKey,
   ]);
   return {
-    visible: items.slice(0, key.current === resetKey ? count : 0),
+    visible: key.current !== resetKey ? [] : itemKey ? items.filter(item => retainedAdmitted.has(itemKey(item)) || immediateIds?.has(itemKey(item))) : items.slice(0, count),
     revealing,
     initialCount,
   };

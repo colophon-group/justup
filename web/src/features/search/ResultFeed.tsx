@@ -1,5 +1,9 @@
 import { translateCount } from "../../i18n/messages.ts";
 import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
+import { sessionOwner } from "../../api/sessionOwner.ts";
+import type { LiveUnavailable } from "../../api/liveResults.ts";
+import { useLiveResults } from "./useLiveResults.ts";
+import { useReadingAnchor } from "./useReadingAnchor.ts";
 import { useRef } from "react";
 import type { ApiClient } from "../../api/client.ts";
 import type { Search, Session } from "../../api/types.ts";
@@ -16,6 +20,7 @@ interface Props {
   onSignIn: (reason?: string) => void;
   onAccount: () => void;
   viewed: ReadonlySet<string>;
+  onLiveInvalidated: (reason: LiveUnavailable) => void;
   onViewed?: ((jobId: string) => void) | undefined;
 }
 export function ResultFeed({
@@ -29,16 +34,27 @@ export function ResultFeed({
   onAccount,
   viewed,
   onViewed,
+  onLiveInvalidated,
 }: Props) {
   const { t, locale, notice } = useInterfaceLocale();
-  const { feed, next, retry, refresh } = useFeed(client, search, active && !paused, session?.user ? "account" : "visitor"),
+  const capture = useReadingAnchor();
+  const scope = session?.user ? "account" : "visitor";
+  const { feed, next, retry, refresh, receive, flush, invalidate } = useFeed(client, search, active && !paused, scope, sessionOwner(session) ?? "", capture),
     tailRef = useRef<HTMLDivElement>(null);
+  const stream = useLiveResults({ client, key: `${feed.key}:${locale}`, searchId: search.id, revision: search.revision, scope, locale,
+    enabled: active && !paused && session?.capabilities.sse === true, receive, flush,
+    unavailable: (reason: LiveUnavailable) => {
+      if (reason === 'authority_lost' || reason === 'search_changed') invalidate();
+      if (reason !== 'reconnect') onLiveInvalidated(reason);
+    } });
+  const newJobs = feed.jobs.filter(job => job.isNew && !viewed.has(job.id) && !job.viewed);
   const canContinue =
     !feed.error &&
-    !!feed.continuation.cursor &&
     ["open", "pending"].includes(feed.continuation.state);
   const { visible, initialCount } = useViewportReveal({
     items: feed.jobs,
+    itemKey: job => job.id,
+    immediateIds: feed.immediateIds,
     resetKey: `${feed.key}:${feed.bufferVersion}`,
     tailRef,
     active: active && !paused,
@@ -95,9 +111,15 @@ export function ResultFeed({
   return (
     <>
       <p id="live-status" className="small-print" role="status">
-        {t("Check the latest results without changing your search.")}{" "}
-        <button className="text-link" id="refresh-results" disabled={feed.loading || paused} onClick={refresh}>{t("Check for new positions")}</button>
+        {session?.capabilities.sse ? t(stream.status === "live" ? "Live results connected." : stream.status === "connecting" ? "Connecting live results…" : "Live results paused. Check again to reconnect.") : t("Check the latest results without changing your search.")}{" "}
+        <button className="text-link" id="refresh-results" disabled={feed.loading || paused} onClick={() => { capture(); refresh(!session?.capabilities.sse); stream.reconnect(); }}>{t("Check for new positions")}</button>
       </p>
+      <p id="live-arrivals" className="sr-only" role="status" aria-live="polite">{feed.arrivalBatch ? <span key={feed.arrivalBatch.sequence}>{translateCount(locale, feed.arrivalBatch.count, { one: "{count} new matching position added.", other: "{count} new matching positions added." })}</span> : ''}</p>
+      <div className="new-results-slot">{newJobs.length ? <button id="new-results" className="text-link" onClick={() => {
+        const row = document.querySelector<HTMLElement>(`#feed [data-job="${CSS.escape(newJobs[0]!.id)}"]`);
+        row?.scrollIntoView({ behavior: reducedMotion ? 'instant' : 'smooth', block: 'start' });
+        row?.querySelector<HTMLElement>('.posting-link')?.focus({ preventScroll: true });
+      }}>{t("{count} new ↑", { count: newJobs.length })}</button> : null}</div>
       <div id="search-results">
         <div className="section-heading feed-heading">
           <h1>{t("Just in.")}</h1>
@@ -132,7 +154,8 @@ export function ResultFeed({
               job={job}
               viewed={viewed.has(job.id) || job.viewed === true}
               onViewed={onViewed}
-              animated={index >= initialCount}
+              animated={!feed.immediateIds.has(job.id) && index >= initialCount}
+              liveArrival={feed.immediateIds.has(job.id)}
               reducedMotion={reducedMotion}
             />
           ))}

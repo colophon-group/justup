@@ -92,11 +92,23 @@ test('visitor locale cookie persists only a manual override and browser/default 
 test('saved account override outranks visitor choice and null follows ordered browser settings', async ({page}) => {
   await page.context().addCookies([{name:'justup_interface_locale',value:'es',url:'http://127.0.0.1:4203'}]);
   await page.addInitScript(() => Object.defineProperty(navigator,'languages',{value:['nl','fr-CA','de-CH']}));
-  await mockApi(page, {'GET /session':preferenceSession(),'GET /preferences':preferences('de'), 'PATCH /preferences':preferences(null,1)});
+  let saved=preferences('de');
+  const calls=await mockApi(page, {'GET /session':preferenceSession(),'GET /preferences':() => saved,
+    'PATCH /preferences':call => {
+      expect(call.body).toEqual({expectedRevision:0,interfaceLocale:null});
+      saved=preferences(null,1);return saved;
+    },
+  });
   await page.goto('/'); await expect(page.locator('html')).toHaveAttribute('lang','de');
   await page.locator('#account-open').click();await page.locator('#interface-language').selectOption('');
   await expect(page.locator('html')).toHaveAttribute('lang','fr');
   expect((await page.context().cookies()).find(cookie => cookie.name==='justup_interface_locale').value).toBe('es');
+  await page.reload();await page.locator('#account-open').click();
+  await expect(page.locator('#interface-language')).toBeEnabled();
+  await expect(page.locator('#interface-language')).toHaveValue('');
+  await expect(page.locator('html')).toHaveAttribute('lang','fr');
+  expect(calls.filter(call => call.key==='PATCH /preferences')).toHaveLength(1);
+  expect(calls.filter(call => /^(POST|PATCH) \/search/.test(call.key))).toEqual([]);
 });
 
 test('failed preference writes keep the accepted language and user text', async ({page}) => {
@@ -131,22 +143,34 @@ test('account changes discard prior account preferences and late writes', async 
 });
 
 test('preference revision conflicts preserve the accepted language and visible error during reload', async ({page}) => {
-  let reads=0, release;
+  let conflicted=false, reloadStarted=false, release;
   const pending=new Promise(resolve => {release=resolve});
-  await mockApi(page, {'GET /session':preferenceSession(),
-    'GET /preferences':async () => {if (++reads>1) {await pending;return preferences('it',2)}return preferences('de',1)},
-    'PATCH /preferences':{status:409,body:{error:{code:'revision_conflict',message:'This search changed. Reload it and try again.'}}},
+  const calls=await mockApi(page, {'GET /session':preferenceSession(),
+    // Locale/session reconciliation may reread before the write. Only hold the conflict reload.
+    'GET /preferences':async () => {
+      if (!conflicted) return preferences('de',1);
+      reloadStarted=true;await pending;return preferences('it',2);
+    },
+    'PATCH /preferences':call => {
+      expect(call.body).toEqual({expectedRevision:1,interfaceLocale:'es'});
+      conflicted=true;
+      return {status:409,body:{error:{code:'revision_conflict',message:'This search changed. Reload it and try again.'}}};
+    },
   });
   await page.goto('/');await expect(page.locator('html')).toHaveAttribute('lang','de');
   await page.locator('#query').fill('My unchanged unsent query');
   await page.locator('#account-open').click();await page.locator('#interface-language').selectOption('es');
-  await expect.poll(() => reads).toBe(2);
+  await expect.poll(() => reloadStarted).toBe(true);
   await expect(page.locator('#settings-dialog')).toContainText('Deine Spracheinstellung wurde anderswo geändert.');
   await expect(page.locator('html')).toHaveAttribute('lang','de');
   await expect(page.locator('#interface-language')).toHaveValue('de');
+  await expect(page.locator('#interface-language')).toBeDisabled();
+  await expect(page.locator('#query')).toHaveValue('My unchanged unsent query');
   release();await expect(page.locator('html')).toHaveAttribute('lang','it');
   await expect(page.locator('#settings-dialog')).toContainText('La preferenza di lingua è cambiata altrove.');
   await expect(page.locator('#query')).toHaveValue('My unchanged unsent query');
+  expect(calls.filter(call => call.key==='PATCH /preferences')).toHaveLength(1);
+  expect(calls.filter(call => /^(POST|PATCH) \/search/.test(call.key))).toEqual([]);
 });
 
 for (const locale of ['de','fr','it','es']) {

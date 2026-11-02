@@ -32,7 +32,7 @@ The production build runs TypeScript checking, emits hashed client assets and te
 | Area | Location |
 | --- | --- |
 | Session bootstrap, application layout and routes | `src/app/` |
-| Validated public models, JSON transport and bounded task polling | `src/api/` |
+| Validated public models, JSON/SSE transport and bounded task polling | `src/api/` |
 | Search text, saved tabs, proposals, results and typing hints | `src/features/search/` |
 | Settings, credentials, logout and password-confirmed deletion | `src/features/account/` |
 | Company catalogue, source reports and identity requests | `src/features/companies/` |
@@ -80,7 +80,7 @@ A manual visitor override uses only the presentation cookie `justup_interface_lo
 
 Presentation links select the matching static Privacy and Usage documents: `/privacy.html` and `/usage.html` for English, or `/privacy.{locale}.html` and `/usage.{locale}.html` for the other four languages. Authentication separately requires the server’s reviewed policy metadata to match the current interface language, canonical same-origin paths, version and exact reviewed locale. An explicit approved fallback uses the server’s reviewed URLs and identifies their language before sign-in. Missing, invalid or mismatched approval never enables account access. Locale changes refresh session policy metadata; successful rendering never approves a document.
 
- The typing examples are decorative and never become input values or submit searches. Posting-language selection, followed-company filters, live result streaming and subscription controls require supported service/UI contracts before they can be offered. These are product-readiness requirements. Until live streaming is supported, the explicit results action checks new data for the accepted revision without a model call.
+ The typing examples are decorative and never become input values or submit searches. Posting-language selection, followed-company filters and subscription controls require supported service/UI contracts before they can be offered. These are product-readiness requirements. Live result streaming is capability-gated and uses the accepted active revision, with reader-stable reconciliation and bounded reconnect; see [live results](../docs/live-results.md). The explicit results action remains recovery for the accepted revision without a model call. This browser implementation does not establish deployed stream delivery or complete the release gate.
 
 Hiring Wire reads published weekly editions from the public API. The cream strip keeps moving past pointer hover and click; keyboard reading and reduced motion provide static access to the original links. Visual repeats are not additional keyboard or screen-reader content. An expired, malformed or unavailable edition is hidden while its reserved space stays stable. There are no sample headlines or inferred history. A compatible publication service and verified comparable source history remain required before a real edition can appear.
 

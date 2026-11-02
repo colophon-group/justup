@@ -5,7 +5,7 @@ read_when: Changing result arrivals, scrolling, reduced motion or the news ribbo
 
 # Justup motion language
 
-The current lists reveal rows at a 450 ms cadence with an ink reveal. The arrival, reading-position and Hiring Wire rules below define product behavior to implement and verify as their services become available.
+The lists reveal older rows at a 450 ms cadence with an ink reveal. Capability-gated live search snapshots insert accepted arrivals while retaining keyed rows and reading position. Local contracts verify this browser behavior; deployed stream acceptance remains required.
 
 ## Visual baseline
 
@@ -17,7 +17,7 @@ Result lists have no footer or appended coverage panel, so reaching an end does 
 
 Use a small cream **New** label in the publication-age column and a narrow cream leading edge on the position. The label supplies the meaning; the edge helps scanning. The timestamp continues to mean when the server first observed the posting.
 
-Newness is relative to the current search, while Viewed belongs to the user and posting across searches. A newly created search starts with its initial result set; live arrivals are marked New. Proposed return-visit behavior is to mark positions delivered since the previous visit, retaining that cohort throughout the current visit. Define and persist the search visit boundary before implementation so reloads and tab changes cannot accidentally clear the cohort or mark all old matches New.
+Newness is relative to the current search, while Viewed belongs to the user and posting across searches. A newly mounted search starts with its initial result set; only later accepted prefix arrivals absent from a complete preceding accepted-ID enumeration are marked New. The in-memory cohort belongs to the current owner and mounted search revision. Initial snapshots, reconnect duplicates and older pagination do not mark jobs New. Persistent return-visit newness still requires a saved visit boundary and is not offered by this consumer.
 
 The entrance ends; the marker remains. Do not remove New merely because the animation completed or the position entered the viewport. Opening the company posting changes the position to Viewed and removes its New treatment. Existing positions that receive metadata updates do not replay an arrival animation. Reconnecting or receiving the same event twice does not replay it either.
 
