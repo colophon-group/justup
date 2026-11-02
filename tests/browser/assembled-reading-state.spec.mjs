@@ -104,7 +104,7 @@ for(const order of [[0,1],[1,0]])test(`competing logout bootstraps in order ${or
     await Promise.all(bootstraps.map(hold=>hold.arrived));
     await expect(page.locator('.follow-company')).toBeHidden();
     await expect(page.locator('#session-private-surfaces')).toHaveAttribute('aria-busy','true');
-    await expect(other.locator('#session-private-surfaces')).toHaveAttribute('aria-busy','true');
+    await expect(other.locator('#header-sign-in')).toBeVisible();
     bootstraps[order[0]].release(); const first=await Promise.race(responses); await first.finished();
     bootstraps[order[1]].release(); const delivered=await Promise.all(responses); await Promise.all(delivered.map(response=>response.finished()));
     const metadata=await Promise.all(delivered.map(response=>response.json()));

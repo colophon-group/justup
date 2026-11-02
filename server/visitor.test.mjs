@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 import { randomBytes,createHash } from 'node:crypto';
 import { createApplication } from './main.mjs';
+import { createAuth } from './auth.mjs';
 import { createIntentService } from './intent.mjs';
 import { createCompanyService } from './companies.mjs';
 import { createMatchingService } from './matching.mjs';
@@ -122,6 +123,18 @@ test('concurrent and repeated logout publish one guest authority after body cons
   for(const item of winner.cookies){const [name,value]=item.split(';')[0].split('=');c.jar.set(name,value);}
   const guest=await c.session();assert.equal(guest.body.user,null);assert.equal(guest.body.visitor,null);assert.equal(guest.res.headers.getSetCookie().length,0);
   assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+});
+
+test('logout cannot publish cookies when another SQLite connection wins revocation after its authority check',async t=>{
+  const s=await setup(t,{realAuth:true,runtime:diskRuntime(t)}),c=s.client(),password='Synthetic-local-account-password';
+  await s.app.auth.register({username:'competing-reader',password});await c.session();
+  assert.equal((await c.request('/auth/login',{method:'POST',body:{username:'competing-reader',password}})).status,200);
+  const db=new DatabaseSync(s.config.dbPath);t.after(()=>db.close());
+  const peer=createAuth({db,config:s.config,now:s.time}),logout=s.app.auth.logout;
+  s.app.auth.logout=token=>{assert.equal(peer.logout(token),true);return logout(token);};
+  const reply=await c.request('/session/logout',{method:'POST',body:{}});
+  assert.equal(reply.status,401);assert.equal(reply.res.headers.getSetCookie().length,0);
+  assert.equal((await c.session()).body.user,null);
 });
 
 test('session repairs a lost allocation cookie to the fixed live-visitor deadline without rewriting its CSRF seed',async t=>{
