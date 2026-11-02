@@ -196,7 +196,7 @@ test('deletion during provider reconciliation cannot recreate account access', a
   assert.equal(f.db.prepare('SELECT count(*) n FROM access_billing_events').get().n, 0);
 });
 
-test('competing verified claims cannot assign one former-user proof to two accounts', async (t) => {
+test('competing verified claims cannot activate overlapping welcome periods', async (t) => {
   const f = fixture(t);
   const first = await f.register('first');
   const second = await f.register('second');
@@ -208,6 +208,17 @@ test('competing verified claims cannot assign one former-user proof to two accou
   assert.equal(claims.filter((result) => result.status === 'rejected'
     && result.reason.code === 'verification_conflict').length, 1);
   assert.equal(f.db.prepare('SELECT count(*) n FROM access_identities').get().n, 1);
+  const owners = [first, second];
+  const winner = owners[claims.findIndex((result) => result.status === 'fulfilled')];
+  const loser = owners.find((owner) => owner !== winner);
+  assert.equal(f.auth.activateFreePeriod(winner.token).legacy, true);
+  const original = f.db.prepare('SELECT * FROM access_free_periods').get();
+  f.advance(DAY);
+  assert.equal(f.auth.activateFreePeriod(winner.token).until, new Date(original.ends_at).toISOString());
+  assert.deepEqual(f.db.prepare('SELECT * FROM access_free_periods').get(), original);
+  assert.throws(() => f.auth.activateFreePeriod(loser.token), { code: 'identity_unverified' });
+  assert.equal(f.auth.session(loser.token).access.fullAccess, false);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_free_periods').get().n, 1);
 });
 
 test('unverified adapters cannot award access, while an authoritative end revokes paid access', async (t) => {
@@ -239,21 +250,53 @@ test('unverified adapters cannot award access, while an authoritative end revoke
   assert.equal(g.auth.session(buyer.token).access.kind, 'expired');
 });
 
-test('deletion removes identity, free-period and billing records; restore revokes sessions only', async (t) => {
+for (const legacy of [false, true]) test(`${legacy ? 'welcome' : 'ordinary'} redemption survives restore, rolls back failed deletion and permits fresh registration after erasure`, async (t) => {
   const f = fixture(t);
   const { account, token } = await f.register();
-  await f.verify(account.id);
+  const subject = 'person-subject-0001', legacyProof = legacy ? 'old-jobseek-account-0001' : null;
+  await f.verify(account.id, subject, legacyProof);
   f.auth.activateFreePeriod(token);
   await f.event(account.id);
+  const tables = ['access_identities','access_free_periods','access_subscriptions','access_billing_events'];
+  const original = Object.fromEntries(tables.map((table) => [table, f.db.prepare(`SELECT * FROM ${table}`).get()]));
+  assert.equal(Boolean(original.access_identities.legacy_hash), legacy);
+  assert.equal(original.access_free_periods.kind, legacy ? 'legacy' : 'standard');
   assert.deepEqual(f.auth.invalidateAllSessions(), { sessionsDeleted: 1 });
   assert.equal(f.auth.session(token), null);
   const signedIn = await f.auth.login({ username: 'tester', password: PASSWORD });
   assert.equal(f.auth.session(signedIn.token).access.kind, 'paid');
+  f.auth.activateFreePeriod(signedIn.token);
+  for (const table of tables) assert.deepEqual(f.db.prepare(`SELECT * FROM ${table}`).get(), original[table]);
+
+  f.db.exec(`CREATE TRIGGER interrupt_account_delete BEFORE DELETE ON auth_accounts
+    BEGIN SELECT RAISE(ABORT, 'test deletion interrupted'); END;`);
+  await assert.rejects(f.auth.deleteAccount(signedIn.token, PASSWORD), /test deletion interrupted/);
+  assert.equal(f.auth.session(signedIn.token).access.kind, 'paid');
+  for (const table of tables) assert.deepEqual(f.db.prepare(`SELECT * FROM ${table}`).get(), original[table]);
+  f.db.exec('DROP TRIGGER interrupt_account_delete');
+
   assert.deepEqual(await f.auth.deleteAccount(signedIn.token, PASSWORD), { deleted: true });
   assert.equal(f.auth.accessForAccount(account.id), null);
-  for (const table of ['access_identities','access_free_periods','access_subscriptions','access_billing_events']) {
+  assert.equal(f.auth.session(signedIn.token), null);
+  for (const table of tables) {
     assert.equal(f.db.prepare(`SELECT count(*) n FROM ${table}`).get().n, 0);
   }
+
+  f.advance(DAY);
+  const fresh = await f.register();
+  assert.notEqual(fresh.account.id, account.id);
+  assert.equal(f.auth.session(fresh.token).access.kind, 'limited');
+  assert.throws(() => f.auth.activateFreePeriod(fresh.token), { code: 'identity_unverified' });
+  await f.verify(fresh.account.id, subject, legacyProof);
+  assert.equal(f.auth.session(fresh.token).access.kind, 'ready');
+  const activated = f.auth.activateFreePeriod(fresh.token);
+  assert.equal(activated.kind, 'free');
+  assert.equal(activated.legacy, legacy);
+  const period = f.db.prepare('SELECT * FROM access_free_periods').get();
+  assert.equal(period.account_id, fresh.account.id);
+  assert.equal(period.started_at, f.now());
+  assert.ok(period.ends_at > original.access_free_periods.ends_at);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_identities').get().n, 1);
 });
 
 test('a temporary account deadline removes entitlement rows through ordinary cleanup', async (t) => {
