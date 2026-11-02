@@ -1,5 +1,6 @@
+import type { FollowControl } from "../companies/useFollows.ts";
 import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { errorText } from "../../api/client.ts";
 import type { ApiClient } from "../../api/client.ts";
 import type { CompanyRequestPrefill, Session } from "../../api/types.ts";
@@ -11,6 +12,7 @@ import { PostingLanguages } from "./PostingLanguages.tsx";
 import { SearchWarning } from "./SearchWarning.tsx";
 import { useWorkspace } from "./useWorkspace.ts";
 interface Props {
+  followInvalidation: FollowControl["invalidation"];
   client: ApiClient;
   session: Session | null;
   active: boolean;
@@ -25,6 +27,7 @@ interface Props {
 }
 export function SearchWorkspace({
   client,
+  followInvalidation,
   session,
   active,
   reducedMotion,
@@ -39,6 +42,13 @@ export function SearchWorkspace({
   const { t, notice, locale } = useInterfaceLocale();
   const workspace = useWorkspace(client, session, onVisitorRebootstrap);
   const { state, search, query } = workspace;
+  const [followRefresh, setFollowRefresh] = useState(0), [followError, setFollowError] = useState(false);
+  useEffect(() => {
+    if (!followInvalidation.sequence) return;
+    const controller = new AbortController(); setFollowError(false);
+    workspace.refreshFollowedSearches(followInvalidation.ids, controller.signal).catch(() => { if (!controller.signal.aborted) setFollowError(true); });
+    return () => controller.abort();
+  }, [followInvalidation, followRefresh, workspace.refreshFollowedSearches]);
   useLayoutEffect(() => {
     onPersistenceReady({ flush: workspace.flush });
     return () => onPersistenceReady(null);
@@ -224,6 +234,13 @@ export function SearchWorkspace({
                 </button>
               </div>
             </form>
+            {session?.user && session.capabilities.follows ? <div className="followed-search-option">
+              <label><input id="followed-only" type="checkbox" checked={workspace.followedOnly}
+                disabled={workspace.loading || workspace.recovering || !!workspace.conflict || workspace.optionsSaving || (!search && state.busy) || (!!search && !search.options) || search?.status === 'unavailable'}
+                onChange={event => void workspace.saveFollowedOnly(event.target.checked, search?.revision)} /> {t("Followed companies only")}</label>
+              {!search && workspace.followedOnly ? <p className="helper">{t("This choice is saved when you submit Search. Reloading or signing out clears the unsaved choice.")}</p> : null}
+              {followError ? <p role="status">{t("Followed searches could not be refreshed.")} <button type="button" className="text-link" onClick={() => setFollowRefresh(value => value + 1)}>{t("Try again")}</button></p> : null}
+            </div> : null}
             <PostingLanguages key={search?.id ?? "new"} client={client} scope={workspace.scope}
               selected={workspace.postingLanguages} revision={search?.revision} supported={!search || !!search.options}
               disabled={(!search && state.busy) || workspace.loading || workspace.recovering || !!workspace.conflict || search?.status === "unavailable"}

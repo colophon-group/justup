@@ -75,6 +75,12 @@ export interface Warning {
   message: string;
   companyRequestPrefill?: CompanyRequestPrefill;
 }
+export interface FollowSnapshot {
+  accountId: string;
+  revision: number;
+  items: { companyId: string; followedAt: string }[];
+  invalidatedSearchIds: string[];
+}
 export interface SearchOptions {
   followedOnly: boolean;
   postingLanguages: string[];

@@ -2,6 +2,7 @@ import { safePublicCompanyURL, safePublicCompanyDomain } from './publicCompanyUr
 import { parseInterfaceLocale } from "../i18n/locales.ts";
 // Validate public response shapes at the network boundary; ignore unrequested private fields.
 import type {
+  FollowSnapshot,
   Company,
   CompanyCataloguePage,
   CompanyReport,
@@ -693,4 +694,20 @@ export function decodeCompanyCataloguePage(value: unknown): CompanyCataloguePage
   const nextCursor = o.nextCursor === null ? null : text(o.nextCursor, 'company catalogue continuation');
   if (nextCursor && (nextCursor.length > 4096 || !items.length)) return fail('bounded company catalogue continuation');
   return { items, nextCursor, ...(o.coverage == null ? {} : { coverage: decodeCoverage(o.coverage) }) };
+}
+
+// Follow snapshots carry their owner and compare-and-set revision, never client identity.
+export function decodeFollows(value: unknown): FollowSnapshot {
+  const o = record(value, "company follows");
+  const bounded = (value: unknown, label: string, maximum: number) => {
+    const result = text(value, label);
+    return result.length > 0 && result.length <= maximum ? result : fail(label);
+  };
+  const items = list(o.items, value => {
+    const item = record(value, "company follow");
+    return { companyId: bounded(item.companyId, "company identity", 128), followedAt: date(item.followedAt) };
+  }, "company follows");
+  const invalidatedSearchIds = list(o.invalidatedSearchIds, value => bounded(value, "search identity", 128), "invalidated searches");
+  if (new Set(items.map(item => item.companyId)).size !== items.length || new Set(invalidatedSearchIds).size !== invalidatedSearchIds.length) fail("company follows");
+  return { accountId: bounded(o.accountId, "follow owner", 128), revision: count(o.revision, "follow revision"), items, invalidatedSearchIds };
 }

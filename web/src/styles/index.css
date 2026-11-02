@@ -357,3 +357,15 @@ input[type=checkbox]:checked::after { content: ''; width: 4px; height: 8px; bord
 .language-options small { font-size: 11px; color: var(--muted); margin-inline-start: 6px; overflow-wrap: anywhere; }
 
 #posting-language-dialog h2 { overflow-wrap: anywhere; }
+
+/* Keep independent follow actions compact without covering company links. */
+.company-row:has(.follow-company) { grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1fr) auto 20px; }
+.follow-company { min-width: 6.5rem; position: relative; z-index: 2; padding: 6px 10px; }
+.followed-search-option { font-size: 13px; margin-top: 10px; }
+.followed-search-option label { display: inline-flex; align-items: center; gap: 5px; }
+@media (max-width: 700px) {
+  .company-row:has(.follow-company) { grid-template-columns: minmax(0, 1fr) auto 20px; }
+  .company-row:has(.follow-company) .company-state { grid-column: 1; grid-row: 3; }
+  .company-row .follow-company { grid-column: 2; grid-row: 1 / span 3; }
+  .company-row:has(.follow-company) .company-open { grid-column: 3; grid-row: 1 / span 3; }
+}

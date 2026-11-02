@@ -64,3 +64,5 @@ including a callback that never resolves. The callbacks produce model
 output only: routes, leases, validation, result projection and ownership remain
 real. A zero lower bound from insufficient evidence stays distinct from exact
 zero, and restricted posting identities never enter the browser result JSON.
+
+`assembled-reading-state.spec.mjs` owns retained-browser follow/viewed/filter journeys through current production routes and real SQLite. It covers native employer navigation and stable viewed rows, catalogue/report follow actions, canonical revision invalidation with exact unsent text, independent new-session persistence, lost acknowledgements without repeated writes, and a held prior-owner reply across sign-out/account switch. Synthetic accounts and catalogue evidence remain local; deployed cross-device and complete-deletion proof is still required for release.

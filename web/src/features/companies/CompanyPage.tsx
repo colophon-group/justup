@@ -1,3 +1,5 @@
+import { FollowButton, FollowNotice } from "./FollowButton.tsx";
+import type { FollowControl } from "./useFollows.ts";
 import { pageHref } from '../../app/useRoute.ts';
 import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 // Reports render only supplied company facts and evidence, never fabricated analytics.
@@ -9,8 +11,8 @@ import { CompanyMark } from '../../shared/CompanyMark';
 import { coverageLabel, reportDate } from './presentation';
 import { CompanyReportSamples } from './CompanyReportSamples';
 
-export interface CompanyPageProps { client: ApiClient; id: string; initialCompany?: Company | undefined; initialReport?: CompanyReport | undefined; onDocumentState?: ((id: string, state: PublicDocumentState) => void) | undefined }
-export function CompanyPage({ client, id, initialCompany, initialReport, onDocumentState }: CompanyPageProps) {
+export interface CompanyPageProps { follows?: FollowControl | undefined; client: ApiClient; id: string; initialCompany?: Company | undefined; initialReport?: CompanyReport | undefined; onDocumentState?: ((id: string, state: PublicDocumentState) => void) | undefined }
+export function CompanyPage({ client, id, initialCompany, initialReport, onDocumentState, follows }: CompanyPageProps) {
   const { t, locale, notice } = useInterfaceLocale();
   const [company, setCompany] = useState<Company | null>(initialCompany ?? null);
   const [report, setReport] = useState<CompanyReport | null>(initialReport ?? null);
@@ -42,7 +44,8 @@ export function CompanyPage({ client, id, initialCompany, initialReport, onDocum
   return <section id="company-page" className="page">
     <a className="back" href={pageHref("jobs", locale)}>{t("← Back to search")}</a>
     <div className="section-heading"><h1>{company.name}</h1><span className="eyebrow">{t("Hiring report")}</span></div>
-    <div className="detail-actions report-subtitle"><CompanyMark company={company} /></div>
+    <div className="detail-actions report-subtitle"><CompanyMark company={company} /><FollowButton companyId={company.id} name={company.name} follows={follows} /></div>
+    <FollowNotice follows={follows} />
     {company.description ? <p className="detail-description">{company.description}</p> : null}
     <div className="report-facts">{company.monitoringSince ? <p>{t("Monitoring since")}{" "}<time dateTime={company.monitoringSince}>{reportDate(company.monitoringSince, locale)}</time></p> : null}<p>{coverageLabel(company.coverage?.state, locale)}</p></div>
     {history.length ? <section aria-label={t("Historical hiring")}><h2>{t("Hiring over time.")}</h2><p className="small-print">{t("Listing activity reported by the source data.")}</p><ol className="hiring-history">{history.map((point, index) => <li key={`${point.date}:${index}`}><span className="history-bar" style={{ height: `${Math.max(2, point.count / maximum * 100)}%` }} aria-hidden="true" /><b>{point.count.toLocaleString(locale)}</b><small>{reportDate(point.date, locale)}</small></li>)}</ol></section> : null}

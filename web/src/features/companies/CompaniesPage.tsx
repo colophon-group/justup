@@ -1,3 +1,5 @@
+import { FollowButton, FollowNotice } from "./FollowButton.tsx";
+import type { FollowControl } from "./useFollows.ts";
 // Public catalogue pages share bounded continuation with non-JavaScript documents.
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { type ApiClient, errorText, isAbortError } from '../../api/client.ts';
@@ -9,11 +11,12 @@ import { CompanyMark } from '../../shared/CompanyMark.tsx';
 import { useViewportReveal } from '../../shared/useViewportReveal.ts';
 import { coverageLabel } from './presentation.ts';
 export interface CompaniesPageProps {
+  follows?: FollowControl | undefined;
   client: ApiClient; active: boolean; connected?: boolean;
   initialCompanies?: Company[] | undefined;
   initialCatalogue?: PublicBootstrap['catalogue'];
 }
-export function CompaniesPage({ client, active, connected = true, initialCompanies, initialCatalogue }: CompaniesPageProps) {
+export function CompaniesPage({ client, active, connected = true, initialCompanies, initialCatalogue, follows }: CompaniesPageProps) {
   const { locale, t, notice } = useInterfaceLocale();
   const [query, setQuery] = useState(initialCatalogue?.query ?? '');
   const [search, setSearch] = useState({ query: initialCatalogue?.query ?? '', revision: 0 });
@@ -74,10 +77,12 @@ export function CompaniesPage({ client, active, connected = true, initialCompani
     </form>
     <div className="section-heading"><h1>{t('The sources.')}</h1><a className="button dark" href={pageHref('request', locale)}>{t('Request a company +')}</a></div>
     <div className="catalogue-toolbar"><span className="eyebrow">{t('All companies')}</span></div>
+    <FollowNotice follows={follows} />
     <div id="company-list">{visible.map((company, index) => <article key={company.id} className={`company-row list-row${index >= initialCount ? ' is-revealed' : ''}`} data-company={company.id}>
       <div className="company-info"><a className="company-name row-link" href={pageHref('company', locale, company.id)}><CompanyMark company={company} /><span>{company.name}</span></a></div>
       <div className="company-industry">{company.industry || company.description || ''}</div>
       <div className="company-state"><span className="status">{coverageLabel(company.coverage?.state, locale)}</span></div>
+      <FollowButton companyId={company.id} name={company.name} follows={follows} />
       <span className="company-open row-arrow" aria-hidden="true">↗</span>
     </article>)}</div>
     <div id="company-tail" ref={tail}><div id="company-scroll-status" role="status" aria-live="polite">
