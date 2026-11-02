@@ -102,8 +102,9 @@ for(const order of [[0,1],[1,0]])test(`competing logout bootstraps in order ${or
     const before=runtime.calls.filter(call=>call.path==='/api/v1/session').length;
     await other.locator('#account-open').click(); await other.getByRole('button',{name:'Sign out',exact:true}).click();
     await Promise.all(bootstraps.map(hold=>hold.arrived));
-    await expect(page.locator('.follow-company')).toHaveCount(0);
-    await expect(page.locator('#account-open')).toHaveCount(0); await expect(other.locator('#account-open')).toHaveCount(0);
+    await expect(page.locator('.follow-company')).toBeHidden();
+    await expect(page.locator('#session-private-surfaces')).toHaveAttribute('aria-busy','true');
+    await expect(other.locator('#session-private-surfaces')).toHaveAttribute('aria-busy','true');
     bootstraps[order[0]].release(); const first=await Promise.race(responses); await first.finished();
     bootstraps[order[1]].release(); const delivered=await Promise.all(responses); await Promise.all(delivered.map(response=>response.finished()));
     const metadata=await Promise.all(delivered.map(response=>response.json()));
@@ -129,12 +130,18 @@ for(const order of [[0,1],[1,0]])test(`competing logout bootstraps in order ${or
   } finally { held.release(); for(const hold of bootstraps)hold.release(); await other.close(); }
 });
 
-for(const releasing of ['logout','next-login'])test(`an unseeded session reply canceled by account invalidation cannot publish cookies after ${releasing}`,async ({page,context})=>{
+for(const seeded of [false,true])for(const releasing of ['logout','next-login'])test(`a ${seeded?'live-visitor':'unseeded'} session reply canceled by account invalidation cannot publish cookies after ${releasing}`,async ({page,context})=>{
   await runtime.app.auth.register({username:'second-reader',password});
-  const held=runtime.holdNext('GET','/session');
+  let held;
   const other=await context.newPage();
   try {
-    await page.goto(runtime.origin);await held.arrived;
+    if(seeded){
+      await page.goto(runtime.origin);await expect(page.locator('#live-label')).toHaveText('LIVE EDITION');
+      await page.locator('#query').fill('Prior visitor private draft');await expect.poll(()=>runtime.count('justup_visitors')).toBe(1);
+      held=runtime.holdNext('GET','/session');
+      await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));
+    }else{held=runtime.holdNext('GET','/session');await page.goto(runtime.origin);}
+    await held.arrived;
     const canceled=page.waitForEvent('requestfailed',{predicate:request=>request.url()===runtime.origin+'/api/v1/session'});
     await other.goto(runtime.origin);await login(other);await canceled;
     await expect(page.locator('#header-sign-in')).toBeHidden();
@@ -148,8 +155,9 @@ for(const releasing of ['logout','next-login'])test(`an unseeded session reply c
     if(releasing==='logout'){await login(other,'second-reader');await expect(page.locator('#header-sign-in')).toBeHidden();}
     const current=await (await other.request.get(runtime.origin+'/api/v1/session')).json();expect(current.user.username).toBe('second-reader');
     expect(runtime.calls.filter(call=>call.path==='/api/v1/auth/login').map(call=>call.status)).toEqual([200,200]);
-    expect(runtime.count('justup_visitors')).toBe(0);expect(runtime.modelCalls()).toBe(0);
-  } finally {held.release();await other.close();}
+    expect(runtime.db.prepare('SELECT count(*) n FROM justup_visitors WHERE handed_to IS NULL').get().n).toBe(0);expect(runtime.modelCalls()).toBe(0);
+    expect(JSON.stringify((await (await other.request.get(runtime.origin+'/api/v1/workspace')).json()).state.drafts)).not.toContain('Prior visitor');
+  } finally {held?.release();await other.close();}
 });
 
 test('a stale same-choice success reconciles another session’s invalidated followed search', async ({ page, browser }) => {

@@ -208,9 +208,10 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
           // not overwrite a newer login/logout cookie transition.
           const nextCookies=parsedCookies[csrfCookie]===guestToken?[]:[cookie(csrfCookie, guestToken, now() + 3_600_000)];
           // This opaque ownership hint is stateless until an admitted search.
+          // Repair lost allocation-cookie replies to the fixed owner deadline.
           // Keep live ownership across epoch changes; replace unknown hints only
           // here, never during a POST whose entire response could be lost.
-          if(visitorService){const hint=liveOwner?visitorToken:epoch==null?null:visitorHint(guestToken,epoch);if(hint!==visitorToken)nextCookies.push(cookie(visitorCookie,hint??'',hint==null?now():visitor?.expiresAt??now()+86_400_000));}
+          if(visitorService){const hint=liveOwner?visitorToken:epoch==null?null:visitorHint(guestToken,epoch);if(liveOwner||hint!==visitorToken)nextCookies.push(cookie(visitorCookie,hint??'',hint==null?now():visitor?.expiresAt??now()+86_400_000));}
           if(nextCookies.length)res.setHeader('Set-Cookie',nextCookies);
         }
         return finish(200, sessionBody(viewer, sessionToken, guestToken,visitor,interfaceLocale));

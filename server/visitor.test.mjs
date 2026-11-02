@@ -124,6 +124,22 @@ test('concurrent and repeated logout publish one guest authority after body cons
   assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
 });
 
+test('session repairs a lost allocation cookie to the fixed live-visitor deadline without rewriting its CSRF seed',async t=>{
+  for(const ttlMs of [DAY,7*DAY])await t.test(`${ttlMs/DAY} day lifetime`,async t=>{
+    const s=await setup(t,{visitor:{ttlMs}}),c=s.client();await c.session();const unallocated=c.snapshot();
+    s.advance(12*3_600_000);
+    assert.equal((await c.request('/visitor/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Retain this private draft'}}})).status,200);
+    // The entire first write acknowledgement was lost, including Set-Cookie.
+    c.restore(unallocated);const atCreation=s.time(),read=await c.session();
+    assert.equal(read.status,200);assert.equal(Date.parse(read.body.visitor.expiresAt),atCreation+ttlMs);
+    assert.equal(read.res.headers.getSetCookie().length,1);assert.ok(read.res.headers.getSetCookie()[0].startsWith('__Host-justup_visitor='));
+    assert.ok(read.res.headers.getSetCookie()[0].endsWith(`Max-Age=${ttlMs/1000}`));
+    s.advance(3_600_000);const again=await c.session();
+    assert.equal(Date.parse(again.body.visitor.expiresAt),atCreation+ttlMs);assert.ok(again.res.headers.getSetCookie()[0].endsWith(`Max-Age=${ttlMs/1000-3600}`));
+    assert.equal((await c.request('/visitor/workspace')).body.state.drafts.new,'Retain this private draft');
+  });
+});
+
 test('fresh workspace and search hydration plus empty or invalid saves allocate no private state',async t=>{
   const s=await setup(t),c=s.client(),session=await c.session();assert.equal(session.body.visitor,null);assert.equal(session.body.user,null);assert.equal(session.body.capabilities.visitorSearch,true);
   await assertEmptyBootstrap(c);
