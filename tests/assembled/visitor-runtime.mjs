@@ -12,7 +12,15 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
   const ingressSecret = 'A'.repeat(43);
   const dir = mkdtempSync(join(tmpdir(), 'justup-assembled-visitor-')), ref = process.env.JUSTUP_ASSEMBLED_API_REF;
   let app, server, heartbeatTimer, queue, closing = false, closePromise;
-  let queueWork = Promise.resolve();
+  let queueWork = Promise.resolve(), activeTask;
+  const modelAbort = new AbortController();
+  const invokeModel = async (callback, input) => {
+    modelAbort.signal.throwIfAborted();
+    let cancel;
+    const cancelled = new Promise((_, reject) => { cancel = () => reject(modelAbort.signal.reason); modelAbort.signal.addEventListener('abort', cancel, { once: true }); });
+    try { return await Promise.race([Promise.resolve().then(() => callback(input)), cancelled]); }
+    finally { modelAbort.signal.removeEventListener('abort', cancel); }
+  };
   const liveConnections = new Set(), frontendSockets = new Set(), apiSockets = new Set();
   const controllers = new Set(), heldReplies = new Set();
   const trackSockets = (listener, sockets) => listener.on('connection', socket => {
@@ -30,6 +38,8 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
   };
   const close = () => closePromise ??= (async () => {
     closing = true;
+    if (activeTask) app.tasks.cancel(activeTask.ownerId, activeTask.id);
+    modelAbort.abort(new Error('Local synthetic model cancelled during fixture shutdown'));
     clearInterval(queue); clearInterval(heartbeatTimer);
     // Stop each listener before destroying its accepted sockets; waiting on only
     // the frontend would leave service streams or pre-TLS connections alive.
@@ -80,10 +90,10 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
   const filters = ['companyInclude', 'companyExclude', 'titleAny', 'bodyAll', 'bodyNone', 'locations', 'workplaces', 'employmentTypes', 'postingLanguages', 'seniority'];
   const ownership = { ownerAuthority: identity.principal, visitorIdentity: identity, taskAdmission: identity.admitMatching };
   const matching = createMatchingService({ db, feed: app.feed, tasks: app.tasks, now, ...ownership, readingPreferences: reading, records,
-    provider: { available: () => matchingAvailable, classify: input => classify(input) } });
+    provider: { available: () => matchingAvailable, classify: input => invokeModel(classify, input) } });
   const worker = createIntentService({ db, feed: app.feed, tasks: app.tasks, now, ...ownership, matching, readingPreferences: reading, records,
     model: { interpretIntent: async input => { modelCalls++; modelInputs.push(input); records.onModelMetric({ kind: 'search_intent', model: 'gpt-6-luna', usage: { inputTokens: 10, outputTokens: 3 } });
-      if (interpretIntent) return interpretIntent(input);
+      if (interpretIntent) return invokeModel(interpretIntent, input);
       return { title: 'Engineering', configuration: { schemaVersion: 1, filters: { ...Object.fromEntries(filters.map(key => [key, null])), titleAny: ['engineer'] }, residualAi: null }, requirements: [{ id: 'role', text: 'Engineer', handling: 'primary', reason: 'Synthetic title evidence.', bindings: [{ field: 'titleAny', values: ['engineer'] }], companyReference: null }] };
     } },
   });
@@ -91,8 +101,8 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
     if (busy || !available || closing) return;
     busy = true;
     queueWork = (async () => {
-      try { const task = app.tasks.claim({ workerId: 'assembled-local', kinds: matchingAvailable ? ['search_intent', 'ai_match'] : ['search_intent'] }); if (task) { const result = await records.runTask(task, task.kind === 'ai_match' ? matching.runTask : worker.runTask); if (!result.committed) app.tasks.complete(task.id, task.leaseToken, result); records.taskFinished(task); } }
-      finally { busy = false; }
+      try { const task = app.tasks.claim({ workerId: 'assembled-local', kinds: matchingAvailable ? ['search_intent', 'ai_match'] : ['search_intent'] }); if (task) { activeTask = task; const result = await records.runTask(task, task.kind === 'ai_match' ? matching.runTask : worker.runTask); if (!result.committed) app.tasks.complete(task.id, task.leaseToken, result); records.taskFinished(task); } }
+      finally { activeTask = undefined; busy = false; }
     })();
   }, 20);
   const at = now();

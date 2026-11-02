@@ -78,7 +78,7 @@ export function useFeed(
       controller.current = request;
       inFlight.current = true;
       initialized.current = true;
-      updateFeed((current) =>
+      if (!metadataOnly) updateFeed((current) =>
         current.key === key
           ? { ...current, loading: true, error: null }
           : { ...emptyFeed(key), loading: true },
@@ -164,6 +164,7 @@ export function useFeed(
             : current,
         );
       } catch (error) {
+        if (epoch === generation.current && !isAbortError(error)) hiddenChecks.current = 30;
         if (epoch === generation.current && cursor && error instanceof ApiError && error.code === 'stale_cursor') {
           seenCursors.current.clear(); recoverCursor = true; return;
         }
@@ -222,7 +223,7 @@ export function useFeed(
         feed.continuation.state !== "exhausted" ||
         !["pending", "lower_bound"].includes(feed.hiddenMatches.status)) return;
     const timer = window.setInterval(() => {
-      if (document.hidden || document.querySelector("dialog[open]") || liveConnected.current && hiddenChecks.current > 0) return;
+      if (inFlight.current || document.hidden || document.querySelector("dialog[open]") || liveConnected.current && hiddenChecks.current > 0) return;
       if (hiddenChecks.current >= 30) { window.clearInterval(timer); return; }
       hiddenChecks.current++;
       void load(null, false, true);
@@ -243,6 +244,7 @@ export function useFeed(
     deferredCommit.current = false; before.current(); updateFeed(current => current);
   };
   const retry = () => {
+    hiddenChecks.current = 0;
     publishDeferred();
     const value = feedRef.current;
     if (value.key === key) void load(value.continuation.cursor);
@@ -253,6 +255,7 @@ export function useFeed(
     next,
     retry,
     setLiveConnected,
+    defer: () => { deferredCommit.current = true; },
     receive: (event: LiveSnapshot, deferred = false) => {
       const current = feedRef.current;
       if (current.key !== key) return;

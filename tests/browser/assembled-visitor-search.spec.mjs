@@ -38,7 +38,7 @@ async function login(page) {
 test('real invalid refinement preserves accepted criteria, rows and raw text through limited-account handoff and logout', async ({ page }) => {
   const at = Date.now();
   runtime = await startVisitorRuntime({ now: () => at, interpretIntent: input => input.query.includes('invalid') ? { invalid: true } : interpretation() });
-  importCohorts(at); await page.goto(runtime.origin); await submit(page);
+  importCohorts(at); await page.goto(runtime.origin); await submit(page); await page.locator('#feed-tail').scrollIntoViewIfNeeded();
   await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible();
   await expect(page.locator('[data-job="boundary"]')).toBeVisible();
   await expect(page.locator('#hidden-matches-title')).toHaveText('1 recent match hidden');
@@ -73,6 +73,7 @@ for (const decision of ['accepted', 'insufficient_evidence']) test(`real hidden 
     await expect(page.locator('#feed-status')).toContainText('through the available matches');
     await page.locator('#query').fill('Unsent exact refinement  ');
     await page.locator('[data-job="assembled-engineer"]').evaluate(row => { window.heldVisitorRow = row; });
+    const readsBeforeCompletion = runtime.calls.filter(call => call.path.endsWith('/results')).length;
     release();
     await expect(page.locator('#hidden-matches-title')).toHaveText(decision === 'accepted' ? '1 recent match hidden' : 'No recent hidden matches confirmed yet.', { timeout: 10_000 });
     expect(await page.locator('[data-job="assembled-engineer"]').evaluate(row => window.heldVisitorRow === row)).toBe(true);
@@ -83,5 +84,27 @@ for (const decision of ['accepted', 'insufficient_evidence']) test(`real hidden 
     const body = await result.json(); expect(body.continuation.state).toBe('exhausted');
     expect(body.hiddenMatches).toEqual(decision === 'accepted' ? { status: 'exact', count: 1 } : { status: 'lower_bound', count: 0 });
     expect(JSON.stringify(body)).not.toContain('withheld-private'); expect(runtime.modelCalls()).toBe(1);
+    if (decision === 'insufficient_evidence') {
+      await expect(page.locator('#live-status')).toContainText('Live results connected.');
+      await page.waitForTimeout(6500);
+      // At most one canonical read admits waiting hidden work; a healthy stream
+      // then owns the stable lower bound instead of spending the fallback budget.
+      expect(runtime.calls.filter(call => call.path.endsWith('/results')).length).toBeLessThanOrEqual(readsBeforeCompletion + 1);
+    }
   } finally { release(); }
+});
+
+for (const kind of ['interpretation', 'classification']) test(`shutdown cancels an unreleased synthetic ${kind} callback before storage closes`, async ({ page }) => {
+  const at = Date.now(); let reached, deadline;
+  const arrived = new Promise(resolve => { reached = resolve; });
+  const never = () => { reached(); return new Promise(() => {}); };
+  runtime = await startVisitorRuntime({ now: () => at,
+    interpretIntent: kind === 'interpretation' ? never : () => interpretation(true),
+    ...(kind === 'classification' ? { classify: never } : {}),
+  });
+  importCohorts(at); await page.goto(runtime.origin); await submit(page); await arrived;
+  try {
+    await Promise.race([runtime.close(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Synthetic callback stranded fixture shutdown')), 2000); })]);
+    await runtime.close();
+  } finally { clearTimeout(deadline); }
 });

@@ -202,3 +202,32 @@ test('a failed hidden metadata read keeps rows, reports unavailable and waits fo
   await page.locator('#retry-results').click(); await expect(page.locator('#hidden-matches')).toHaveCount(0);
   expect(reads).toBe(3); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
 });
+
+test('a held hidden metadata reply waits for pointer release and settling without an SSE frame', async ({ page }) => {
+  await page.clock.install(); let reads = 0, release, reached;
+  const held = new Promise(resolve => { release = resolve; }), arrived = new Promise(resolve => { reached = resolve; });
+  await mockApi(page, {
+    'GET /session': visitor(), 'GET /visitor/searches': { items: [search()] },
+    'GET /visitor/searches/search-1/results': async () => {
+      if (++reads === 2) { reached(); await held; }
+      return { ...completed([visibleJob(1)]), hiddenMatches: reads === 1 ? { status: 'pending', count: null } : { status: 'exact', count: 0 } };
+    },
+  });
+  try {
+    await page.goto('/'); await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+    await page.clock.runFor(2200); await arrived;
+    await page.locator('[data-job="job-1"]').evaluate(row => {
+      row.scrollIntoView({ block: 'start' }); row.querySelector('.posting-link').focus({ preventScroll: true });
+      window.hiddenAnchor = { row, top: row.getBoundingClientRect().top, link: document.activeElement };
+      document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    });
+    release(); await page.waitForLoadState('networkidle');
+    await expect(page.locator('#hidden-matches-title')).toHaveText('Checking recent hidden matches…');
+    await page.clock.runFor(2000); await expect(page.locator('#hidden-matches')).toBeVisible();
+    await page.evaluate(() => document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })));
+    await page.clock.runFor(119); await expect(page.locator('#hidden-matches')).toBeVisible();
+    await page.clock.runFor(1); await expect(page.locator('#hidden-matches')).toHaveCount(0);
+    expect(await page.evaluate(() => ({ same: window.hiddenAnchor.row === document.querySelector('[data-job="job-1"]'), focus: window.hiddenAnchor.link === document.activeElement,
+      offset: Math.abs(window.hiddenAnchor.row.getBoundingClientRect().top - window.hiddenAnchor.top) }))).toEqual({ same: true, focus: true, offset: 0 });
+  } finally { release(); }
+});

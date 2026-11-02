@@ -39,10 +39,10 @@ export function ResultFeed({
   const { t, locale, notice } = useInterfaceLocale();
   const capture = useReadingAnchor();
   const scope = session?.user ? "account" : "visitor";
-  const { feed, next, retry, refresh, receive, flush, invalidate, setLiveConnected } = useFeed(client, search, active && !paused, scope, sessionOwner(session) ?? "", capture),
+  const { feed, next, retry, refresh, receive, defer, flush, invalidate, setLiveConnected } = useFeed(client, search, active && !paused, scope, sessionOwner(session) ?? "", capture),
     tailRef = useRef<HTMLDivElement>(null);
-  const stream = useLiveResults({ client, key: `${feed.key}:${locale}`, searchId: search.id, revision: search.revision, scope, locale,
-    enabled: active && !paused && session?.capabilities.sse === true, receive, flush,
+  const stream = useLiveResults({ client, key: `${feed.key}:${locale}`, searchId: search.id, revision: search.revision, scope, locale, active: active && !paused,
+    enabled: active && !paused && session?.capabilities.sse === true, receive, defer, flush,
     unavailable: (reason: LiveUnavailable) => {
       if (reason === 'authority_lost' || reason === 'search_changed') invalidate();
       if (reason !== 'reconnect') onLiveInvalidated(reason);
