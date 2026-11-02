@@ -114,7 +114,7 @@ export function ResultFeed({
         {session?.capabilities.sse ? t(stream.status === "live" ? "Live results connected." : stream.status === "connecting" ? "Connecting live results…" : "Live results paused. Check again to reconnect.") : t("Check the latest results without changing your search.")}{" "}
         <button className="text-link" id="refresh-results" disabled={feed.loading || paused} onClick={() => { capture(); refresh(!session?.capabilities.sse); stream.reconnect(); }}>{t("Check for new positions")}</button>
       </p>
-      <p id="live-arrivals" className="sr-only" role="status" aria-live="polite">{newJobs.length ? t("{count} new matching positions added.", { count: newJobs.length }) : ''}</p>
+      <p id="live-arrivals" className="sr-only" role="status" aria-live="polite">{newJobs.length ? translateCount(locale, newJobs.length, { one: "{count} new matching position added.", other: "{count} new matching positions added." }) : ''}</p>
       <div className="new-results-slot">{newJobs.length ? <button id="new-results" className="text-link" onClick={() => {
         const row = document.querySelector<HTMLElement>(`#feed [data-job="${CSS.escape(newJobs[0]!.id)}"]`);
         row?.scrollIntoView({ behavior: reducedMotion ? 'instant' : 'smooth', block: 'start' });

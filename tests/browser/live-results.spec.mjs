@@ -29,6 +29,7 @@ test('live insertion preserves keyed nodes, anchor, focused link and selected te
   fixture.setJobs([fresh, ...fixture.jobs]); const delivered = fixture.snapshot();
   await expect(page.locator('[data-job="job-99"]')).toHaveCount(1);
   await expect(page.locator('#new-results')).toHaveText('1 new ↑');
+  await expect(page.locator('#live-arrivals')).toHaveText('1 new matching position added.');
   expect(await page.evaluate(() => ({ row: window.heldRow === document.querySelector('[data-job="job-6"]'), link: window.heldLink === document.activeElement, selection: getSelection().toString() === window.heldText, offset: Math.abs(window.heldRow.getBoundingClientRect().top - window.heldTop), animations: window.heldRow.getAnimations().length }))).toEqual({ row: true, link: true, selection: true, offset: 0, animations: 0 });
   fixture.snapshot({ id: delivered.id }); fixture.snapshot({ reason: 'resumed' });
   await expect(page.locator('[data-job="job-99"]')).toHaveCount(1);
