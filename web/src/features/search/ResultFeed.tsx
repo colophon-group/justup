@@ -4,7 +4,7 @@ import { sessionOwner } from "../../api/sessionOwner.ts";
 import type { LiveUnavailable } from "../../api/liveResults.ts";
 import { useLiveResults } from "./useLiveResults.ts";
 import { useReadingAnchor } from "./useReadingAnchor.ts";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { ApiClient } from "../../api/client.ts";
 import type { Search, Session } from "../../api/types.ts";
 import { useViewportReveal } from "../../shared/useViewportReveal.ts";
@@ -39,14 +39,21 @@ export function ResultFeed({
   const { t, locale, notice } = useInterfaceLocale();
   const capture = useReadingAnchor();
   const scope = session?.user ? "account" : "visitor";
-  const { feed, next, retry, refresh, receive, flush, invalidate } = useFeed(client, search, active && !paused, scope, sessionOwner(session) ?? "", capture),
+  const { feed, next, retry, refresh, receive, defer, flush, invalidate, setLiveConnected } = useFeed(client, search, active && !paused, scope, sessionOwner(session) ?? "", capture),
     tailRef = useRef<HTMLDivElement>(null);
-  const stream = useLiveResults({ client, key: `${feed.key}:${locale}`, searchId: search.id, revision: search.revision, scope, locale,
-    enabled: active && !paused && session?.capabilities.sse === true, receive, flush,
+  const stream = useLiveResults({ client, key: `${feed.key}:${locale}`, searchId: search.id, revision: search.revision, scope, locale, active: active && !paused,
+    enabled: active && !paused && session?.capabilities.sse === true, receive, defer, flush,
     unavailable: (reason: LiveUnavailable) => {
       if (reason === 'authority_lost' || reason === 'search_changed') invalidate();
       if (reason !== 'reconnect') onLiveInvalidated(reason);
     } });
+  useEffect(() => { setLiveConnected(stream.status === 'live'); }, [stream.status, setLiveConnected]);
+  const hidden = feed.hiddenMatches;
+  const hiddenTitle = hidden.status === "pending" ? t("Checking recent hidden matches…")
+    : hidden.status === "unavailable" ? t("The recent hidden-match count is unavailable.")
+    : hidden.count === 0 ? t("No recent hidden matches confirmed yet.")
+    : t(hidden.status === "exact" ? hidden.count === 1 ? "{count} recent match hidden" : "{count} recent matches hidden"
+      : hidden.count === 1 ? "At least {count} recent match hidden" : "At least {count} recent matches hidden", { count: (hidden.count ?? 0).toLocaleString(locale) });
   const newJobs = feed.jobs.filter(job => job.isNew && !viewed.has(job.id) && !job.viewed);
   const canContinue =
     !feed.error &&
@@ -126,21 +133,21 @@ export function ResultFeed({
           <span className="eyebrow">{t("Last 14 days")}</span>
           <span className="feed-order">{t("Newest first")}</span>
         </div>
-        {feed.hiddenMatches.count !== null && feed.hiddenMatches.count > 0 ? (
+        {feed.received && session?.access.fullAccess !== true && (hidden.status !== "exact" || hidden.count > 0) ? hidden.count !== null && hidden.count > 0 ? (
           <section id="hidden-matches" className="hidden-matches" aria-labelledby="hidden-matches-title">
             <div className="compressed-matches" aria-hidden="true"><i /><i /><i /></div>
             <div className="hidden-matches-prompt">
               <div>
                 <span className="eyebrow">{t("More in this edition")}</span>
-                <h2 id="hidden-matches-title">{t(feed.hiddenMatches.status === "exact" ? feed.hiddenMatches.count === 1 ? "{count} recent match hidden" : "{count} recent matches hidden" : feed.hiddenMatches.count === 1 ? "At least {count} recent match hidden" : "At least {count} recent matches hidden", { count: feed.hiddenMatches.count.toLocaleString(locale) })}</h2>
-                <p>{session?.user ? t("Your current account access does not include these matches.") : t("Sign in to see the newest matches.")}</p>
+                <h2 id="hidden-matches-title" role="status" aria-live="polite">{hiddenTitle}</h2>
+                <p>{session?.user ? t("Your current account access does not include these matches.") : t("Sign in to keep your search and review account access.")}</p>
               </div>
-              <button className="button dark" onClick={() => session?.user ? onAccount() : onSignIn('Sign in to see the newest matches.')}>
+              <button className="button dark" onClick={() => session?.user ? onAccount() : onSignIn('Sign in to keep your search and review account access.')}>
                 {session?.user ? t("Account access ↗") : t("Sign in ↗")}
               </button>
             </div>
           </section>
-        ) : null}
+        ) : <p id="hidden-matches" className="small-print" role="status" aria-live="polite"><span id="hidden-matches-title">{hiddenTitle}</span></p> : null}
         <div className="column-labels" aria-hidden="true">
           <span>{t("First seen")}</span>
           <span>{t("Position")}</span>

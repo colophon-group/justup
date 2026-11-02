@@ -55,3 +55,12 @@ transport sockets, including sockets that never reached HTTP. It drains the
 in-flight deterministic queue task before closing services and SQLite. Repeated
 close calls share the same cleanup; startup failures use that cleanup too. This
 is test isolation, not a production shutdown or deployment contract.
+
+`assembled-visitor-search.spec.mjs` uses optional synthetic interpreter/classifier
+callbacks in this same runtime to verify invalid refinement, retained accepted
+criteria, the exact 48-hour boundary, limited-account handoff/logout and residual
+hidden-count completion after visible exhaustion. Shutdown cancels an in-flight callback and its task before draining the queue,
+including a callback that never resolves. The callbacks produce model
+output only: routes, leases, validation, result projection and ownership remain
+real. A zero lower bound from insufficient evidence stays distinct from exact
+zero, and restricted posting identities never enter the browser result JSON.

@@ -341,3 +341,23 @@ test('arrival announcements describe each committed batch and stay unchanged for
   await expect(page.locator('#live-arrivals')).toHaveText('1 new matching position added.');
   expect(await page.locator('#live-arrivals').evaluate(element => ({ same: element.firstElementChild === window.committedBatchNode, mutations: window.arrivalMutations.length }))).toEqual({ same: true, mutations: 0 });
 });
+
+test('a quiet stream scroll settlement cannot leave an anchor that undoes a later scroll during row reveal', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-02T08:00:00Z') }); await page.clock.pauseAt(new Date('2026-11-02T08:01:00Z'));
+  await open(page);
+  for (let attempt = 0; attempt < 12 && await page.locator('[data-job]').count() < 8; attempt++) {
+    await page.locator('#feed-tail').scrollIntoViewIfNeeded(); await page.clock.runFor(500);
+  }
+  await expect.poll(() => page.locator('[data-job]').count()).toBeGreaterThanOrEqual(8);
+  await page.evaluate(() => { window.scrollTo(0, 0); window.dispatchEvent(new Event('scroll')); });
+  await page.clock.runFor(1000);
+  await page.locator('#feed-tail').scrollIntoViewIfNeeded();
+  await page.locator('[data-job]').last().locator('.posting-link').focus();
+  await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
+  const before = await page.locator('[data-job]').count();
+  await page.clock.runFor(400);
+  await page.evaluate(() => { window.scrollBy(0, -10); window.dispatchEvent(new Event('scroll')); window.quietScroll = window.scrollY; });
+  await page.clock.runFor(50);
+  await expect.poll(() => page.locator('[data-job]').count()).toBeGreaterThan(before);
+  expect(await page.evaluate(() => window.scrollY)).toBe(await page.evaluate(() => window.quietScroll));
+});

@@ -4,12 +4,12 @@ import { ApiError, type ApiClient } from '../../api/client.ts';
 import { decodeLiveSnapshot, decodeLiveUnavailable, validEventId, type LiveSnapshot, type LiveUnavailable } from '../../api/liveResults.ts';
 import type { InterfaceLocale } from '../../i18n/locales.ts';
 import type { SearchScope } from '../../api/types.ts';
-export function useLiveResults({ client, key, searchId, revision, scope, locale, enabled, receive, flush, unavailable }:
-  { client: ApiClient; key: string; searchId: string; revision: number; scope: SearchScope; locale: InterfaceLocale; enabled: boolean;
-    receive: (event: LiveSnapshot, deferred: boolean) => void; flush: () => void; unavailable: (reason: LiveUnavailable) => void }) {
+export function useLiveResults({ client, key, searchId, revision, scope, locale, active, enabled, receive, defer, flush, unavailable }:
+  { client: ApiClient; key: string; searchId: string; revision: number; scope: SearchScope; locale: InterfaceLocale; active: boolean; enabled: boolean;
+    receive: (event: LiveSnapshot, deferred: boolean) => void; defer: () => void; flush: () => void; unavailable: (reason: LiveUnavailable) => void }) {
   const currentScope = useRef('');
-  const scopeKey = `${key}:${enabled}`; currentScope.current = scopeKey;
-  const callbacks = useRef({ receive, flush, unavailable }); callbacks.current = { receive, flush, unavailable };
+  const scopeKey = `${key}:${active}:${enabled}`; currentScope.current = scopeKey;
+  const callbacks = useRef({ receive, defer, flush, unavailable }); callbacks.current = { receive, defer, flush, unavailable };
   const resume = useRef({ key: '', id: null as string | null, recent: new Set<string>(), failures: 0, blocked: false, retry: 0 });
   const [retry, setRetry] = useState(0), [status, setStatus] = useState<'connecting' | 'live' | 'paused'>('paused');
   useEffect(() => {
@@ -24,12 +24,15 @@ export function useLiveResults({ client, key, searchId, revision, scope, locale,
       callbacks.current.receive(event, deferred); pending = deferred;
     };
     const settle = () => {
+      if (!canPublish()) return;
+      callbacks.current.defer(); pending = true;
       clearTimeout(settling);
-      settling = setTimeout(() => { settling = undefined; if (!gesture && pending && allowed()) { pending = false; callbacks.current.flush(); } }, 120);
+      settling = setTimeout(() => { settling = undefined; if (!gesture && pending && canPublish()) { pending = false; callbacks.current.flush(); } }, 120);
     };
-    const beginGesture = () => { gesture = true; };
+    const beginGesture = () => { if (!canPublish()) return; gesture = true; callbacks.current.defer(); pending = true; };
     const endGesture = () => { gesture = false; settle(); };
-    const allowed = () => !disposed && currentScope.current === scopeKey && enabled && !state.blocked && !client.isSessionSuspended() && !document.hidden && !document.querySelector('dialog[open]');
+    const canPublish = () => !disposed && currentScope.current === scopeKey && active && !client.isSessionSuspended() && !document.hidden && !document.querySelector('dialog[open]');
+    const allowed = () => canPublish() && enabled && !state.blocked;
     const stop = () => { pending = false; connection?.abort(); connection = null; clearTimeout(timer); timer = undefined; };
     const connect = () => {
       if (!allowed() || connection || timer) return;
@@ -64,7 +67,8 @@ export function useLiveResults({ client, key, searchId, revision, scope, locale,
       });
     };
     const update = () => {
-      if (document.hidden || client.isSessionSuspended() || document.querySelector('dialog[open]')) gesture = false;
+      if (!canPublish()) { gesture = false; callbacks.current.defer(); }
+      if (canPublish() && !gesture && settling === undefined) callbacks.current.flush();
       if (allowed()) connect(); else { stop(); if (!disposed) setStatus('paused'); }
     };
     const interruptedGesture = () => { gesture = false; settle(); };
@@ -84,6 +88,6 @@ export function useLiveResults({ client, key, searchId, revision, scope, locale,
       document.removeEventListener('touchstart', beginGesture); document.removeEventListener('touchend', endGesture); document.removeEventListener('touchcancel', endGesture); window.removeEventListener('scroll', settle); window.removeEventListener('blur', interruptedGesture);
       window.removeEventListener('pointerup', endGesture); window.removeEventListener('pointercancel', endGesture);
       disposed = true; stop(); suspended(); resumed(); observer.disconnect(); document.removeEventListener('visibilitychange', update); document.removeEventListener('toggle', update, true); };
-  }, [client, key, searchId, revision, scope, locale, enabled, retry]);
+  }, [client, key, searchId, revision, scope, locale, active, enabled, retry]);
   return { status, reconnect: () => setRetry(value => value + 1) };
 }

@@ -15,6 +15,7 @@ interface Feed {
   bufferVersion: number;
   immediateIds: ReadonlySet<string>;
   arrivalBatch: { sequence: number; count: number } | null;
+  received: boolean;
   loading: boolean;
   error: string | null;
 }
@@ -28,6 +29,7 @@ const emptyFeed = (key: string): Feed => ({
   bufferVersion: 0,
   immediateIds: new Set(),
   arrivalBatch: null,
+  received: false,
   loading: false,
   error: null,
 });
@@ -50,8 +52,9 @@ export function useFeed(
   const before = useRef(beforeUpdate); before.current = beforeUpdate;
   const seenIds = useRef(new Set<string>()),
     seenCursors = useRef(new Set<string>());
-  const interrupted = useRef<{ cursor: string | null } | null>(null);
-  const feedRef = useRef(feed);
+  const hiddenChecks = useRef(0), liveConnected = useRef(false);
+  const interrupted = useRef<{ cursor: string | null; replace: boolean; metadataOnly: boolean } | null>(null);
+  const feedRef = useRef(feed), publishedFeed = useRef(feed);
   // Canonical HTTP and SSE writes share one publication barrier. True arrivals
   // accumulate only until their rows commit, independently of later Viewed state.
   const deferredCommit = useRef(false), pendingArrivals = useRef(new Set<string>()), arrivalSequence = useRef(0);
@@ -63,11 +66,11 @@ export function useFeed(
       if (arrivals.length) updated = { ...updated, arrivalBatch: { sequence: ++arrivalSequence.current, count: arrivals.length } };
       pendingArrivals.current.clear();
       feedRef.current = updated;
-      setFeed(updated);
+      if (updated !== publishedFeed.current) { publishedFeed.current = updated; setFeed(updated); }
     } else feedRef.current = updated;
   }, []);
   const load = useCallback(
-    async (cursor: string | null, replace = false) => {
+    async (cursor: string | null, replace = false, metadataOnly = false) => {
       if (!search || !key || inFlight.current) return;
       let recoverCursor = false;
       const epoch = generation.current,
@@ -75,7 +78,7 @@ export function useFeed(
       controller.current = request;
       inFlight.current = true;
       initialized.current = true;
-      updateFeed((current) =>
+      if (!metadataOnly) updateFeed((current) =>
         current.key === key
           ? { ...current, loading: true, error: null }
           : { ...emptyFeed(key), loading: true },
@@ -103,6 +106,7 @@ export function useFeed(
             current.key === key
               ? {
                   ...current,
+                  received: true,
                   jobs: [],
                   hiddenMatches: { status: "unavailable", count: null },
                   coverage: page.coverage,
@@ -118,6 +122,12 @@ export function useFeed(
                 }
               : current,
           );
+          return;
+        }
+        if (metadataOnly) {
+          if (!deferredCommit.current) before.current();
+          updateFeed(current => current.key === key ? { ...current, received: true,
+            hiddenMatches: page.hiddenMatches, coverage: page.coverage, loading: false, error: null } : current);
           return;
         }
         const next = page.continuation.cursor;
@@ -142,6 +152,7 @@ export function useFeed(
           current.key === key
             ? {
                 ...current,
+                received: true,
                 jobs: [...(replace ? [] : current.jobs), ...fresh.map(job => ({ ...job, isNew: current.jobs.find(existing => existing.id === job.id)?.isNew ?? false }))].sort(jobOrder),
                 continuation: page.continuation,
                 ai: page.ai,
@@ -153,16 +164,19 @@ export function useFeed(
             : current,
         );
       } catch (error) {
+        if (epoch === generation.current && !isAbortError(error)) hiddenChecks.current = 30;
         if (epoch === generation.current && cursor && error instanceof ApiError && error.code === 'stale_cursor') {
           seenCursors.current.clear(); recoverCursor = true; return;
         }
-        if (isAbortError(error) && epoch === generation.current && !request.signal.aborted) interrupted.current = { cursor };
-        if (epoch === generation.current && !isAbortError(error))
+        if (isAbortError(error) && epoch === generation.current && !request.signal.aborted) interrupted.current = { cursor, replace, metadataOnly };
+        if (epoch === generation.current && !isAbortError(error)) {
+          if (!deferredCommit.current) before.current();
           updateFeed((current) =>
             current.key === key
-              ? { ...current, loading: false, error: errorText(error) }
+              ? { ...current, loading: false, hiddenMatches: { status: "unavailable", count: null }, error: errorText(error) }
               : current,
           );
+        }
       } finally {
         if (epoch === generation.current) {
           inFlight.current = false;
@@ -178,6 +192,7 @@ export function useFeed(
     controller.current?.abort();
     inFlight.current = false;
     initialized.current = false;
+    hiddenChecks.current = 0;
     interrupted.current = null;
     seenIds.current.clear();
     seenCursors.current.clear();
@@ -196,10 +211,29 @@ export function useFeed(
   }, [active, key, load]);
   useEffect(() => client.onSessionResumed(() => {
     if (!active || !interrupted.current) return;
-    deferredCommit.current = false;
     const pending = interrupted.current; interrupted.current = null;
-    void load(pending.cursor);
+    // Metadata resumes only through the existing bounded timer. A reconnect
+    // cannot turn it into pagination or admit an uncounted extra read.
+    if (pending.metadataOnly) return;
+    deferredCommit.current = false;
+    void load(pending.cursor, pending.replace);
   }), [client, active, load]);
+  // Hidden matching can outlive visible pagination. Canonical reads schedule
+  // that work; SSE snapshots alone do not. Bound retries because insufficient
+  // evidence can leave a lower bound permanently unfinished.
+  useEffect(() => {
+    if (!active || !key || feed.key !== key || feed.loading || feed.error ||
+        feed.continuation.state !== "exhausted" ||
+        !["pending", "lower_bound"].includes(feed.hiddenMatches.status)) return;
+    const timer = window.setInterval(() => {
+      if (client.isSessionSuspended() || inFlight.current || document.hidden || document.querySelector("dialog[open]") || liveConnected.current && hiddenChecks.current > 0 ||
+          !["pending", "lower_bound"].includes(feedRef.current.hiddenMatches.status)) return;
+      if (hiddenChecks.current >= 30) { window.clearInterval(timer); return; }
+      hiddenChecks.current++;
+      void load(null, false, true);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [active, key, feed.key, feed.loading, feed.error, feed.continuation.state, feed.hiddenMatches.status, load]);
   const next = useCallback(() => {
     const value = feedRef.current;
     if (
@@ -209,19 +243,27 @@ export function useFeed(
     )
       return;
     void load(value.continuation.cursor);
-  }, [key, load, updateFeed]);
+  // Re-arm viewport continuation after cursor recovery even when publication
+  // coalesces loading transitions and the loaded rows stay identical.
+  }, [key, load, feed.continuation.cursor]);
   const publishDeferred = () => {
-    deferredCommit.current = false; before.current(); updateFeed(current => current);
+    deferredCommit.current = false;
+    if (feedRef.current === publishedFeed.current) return;
+    before.current(); updateFeed(current => current);
   };
   const retry = () => {
+    hiddenChecks.current = 0;
     publishDeferred();
     const value = feedRef.current;
     if (value.key === key) void load(value.continuation.cursor);
   };
+  const setLiveConnected = useCallback((connected: boolean) => { liveConnected.current = connected; }, []);
   return {
     feed: feed.key === key ? feed : emptyFeed(key),
     next,
     retry,
+    setLiveConnected,
+    defer: () => { deferredCommit.current = true; },
     receive: (event: LiveSnapshot, deferred = false) => {
       const current = feedRef.current;
       if (current.key !== key) return;
@@ -236,7 +278,7 @@ export function useFeed(
       const currentIds = new Set(reconciled.jobs.map(job => job.id));
       pendingArrivals.current = new Set([...pendingArrivals.current].filter(id => currentIds.has(id)));
       const immediateIds = new Set([...current.immediateIds, ...reconciled.arrivals].filter(id => currentIds.has(id)));
-      const updated = { ...current, loading: false, jobs: unavailable ? [] : reconciled.jobs, immediateIds,
+      const updated = { ...current, received: true, loading: false, jobs: unavailable ? [] : reconciled.jobs, immediateIds,
         continuation: { ...event.page.continuation, cursor: current.continuation.cursor }, ai: event.page.ai, coverage: event.page.coverage,
         hiddenMatches: unavailable ? { status: 'unavailable' as const, count: null } : event.page.hiddenMatches, error: null };
       updateFeed(() => updated, !deferred);
@@ -248,6 +290,7 @@ export function useFeed(
       updateFeed(() => ({ ...emptyFeed(key), continuation: { state: 'paused', cursor: null, retryAfterMs: null } }));
     },
     refresh: (replace = false) => {
+      hiddenChecks.current = 0;
       publishDeferred();
       generation.current++;
       controller.current?.abort();
