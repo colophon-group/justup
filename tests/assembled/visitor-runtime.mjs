@@ -65,7 +65,8 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
   const origin = `https://127.0.0.1:${process.env.JUSTUP_ASSEMBLED_TEST_PORT || 4204}`;
   const generation = join(dir, 'private-generation'), backups = join(dir, 'backups'), status = join(dir, 'runner-status.json');
   mkdirSync(backups); writeFileSync(generation, '00000000-0000-4000-8000-000000000000\n');
-  let available = true, matchingAvailable = typeof classify === 'function', modelCalls = 0, busy = false, loss = null, hold = null;
+  let available = true, matchingAvailable = typeof classify === 'function', modelCalls = 0, busy = false, loss = null;
+  const holds = [];
   const calls = [], modelInputs = [];
   const locales = ['en', 'de', 'fr', 'it', 'es'], version = 'synthetic-reviewed';
   const policyLocales = Object.fromEntries(locales.map(locale => { const suffix = locale === 'en' ? '' : `.${locale}`; return [locale, { reviewed: true, version, privacyUrl: `${origin}/privacy${suffix}.html`, usageUrl: `${origin}/usage${suffix}.html` }]; }));
@@ -131,6 +132,7 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
   server = createServer({ key: readFileSync(key), cert: readFileSync(cert) }, async (req, res) => {
     if (closing) { req.socket.destroy(); return; }
     const abort = new AbortController();
+    let heldReply;
     controllers.add(abort);
     const disconnected = () => abort.abort();
     res.once('close', disconnected);
@@ -168,11 +170,12 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
       }
       const bytes = Buffer.from(await result.arrayBuffer());
       const matched = fault => fault && req.method === fault.method && new URL(origin + req.url).pathname === '/api/v1' + fault.path && fault.when(chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null);
-      if (matched(hold)) { const waiting = hold; hold = null; heldReplies.add(waiting); waiting.reached(); try { await waiting.wait; } finally { heldReplies.delete(waiting); } }
+      const holdIndex=holds.findIndex(matched);
+      if (holdIndex!==-1) { const [waiting]=holds.splice(holdIndex,1); heldReply=waiting; heldReplies.add(waiting); waiting.reached(); try { await waiting.wait; } finally { heldReplies.delete(waiting); } }
       if (matched(loss)) { loss = null; res.writeHead(result.status, { ...headers, 'Content-Length': bytes.length }); res.flushHeaders(); res.destroy(); return; }
       res.writeHead(result.status, headers); res.end(bytes);
     } catch { if (!res.destroyed) { if (res.headersSent) res.destroy(); else { res.writeHead(500); res.end('Local assembled fixture failed'); } } }
-    finally { res.off('close', disconnected); controllers.delete(abort); }
+    finally { res.off('close', disconnected); controllers.delete(abort); heldReply?.complete(); }
   });
   trackSockets(server, frontendSockets);
   await new Promise(resolve => server.listen(Number(new URL(origin).port), '127.0.0.1', resolve));
@@ -183,7 +186,7 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
     setMatchingAvailable(value) { matchingAvailable = value; heartbeat(); },
     setAvailable(value) { available = value; heartbeat(); },
     loseNext(method, path, when = () => true) { loss = { method, path, when }; },
-    holdNext(method, path, when = () => true) { let reached, release; const arrived = new Promise(resolve => { reached = resolve; }); const wait = new Promise(resolve => { release = resolve; }); hold = { method, path, when, reached, wait, release }; return { arrived, release }; },
+    holdNext(method, path, when = () => true) { let reached, release, complete; const arrived = new Promise(resolve => { reached = resolve; }); const wait = new Promise(resolve => { release = resolve; }); const finished = new Promise(resolve => { complete = resolve; }); holds.push({ method, path, when, reached, wait, release, complete }); return { arrived, release, finished }; },
     count: table => db.prepare(`SELECT count(*) n FROM ${table}`).get().n,
     workspaces: () => db.prepare('SELECT state_json,revision FROM justup_workspaces').all().map(row => ({ revision: row.revision, ...JSON.parse(row.state_json) })),
     close,

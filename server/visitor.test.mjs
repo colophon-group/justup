@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { createProductRecords } from './product-records.mjs';
 import { createAccessReader } from './entitlements.mjs';
 import { DatabaseSync } from 'node:sqlite';
+import { request as httpRequest } from 'node:http';
 
 const START=Date.parse('2026-10-31T12:00:00Z'),DAY=86_400_000,ORIGIN='https://preview.example.org';
 const EMPTY_WORKSPACE={revision:0,state:{activeSearchId:null,drafts:{}},viewed:[],recoveredDrafts:[]};
@@ -59,6 +60,69 @@ async function setup(t,{model,modelAvailable=true,companyModel,provider,residual
   const results=(c,id,suffix='')=>c.request(`/visitor/searches/${id}/results?revision=1${suffix}`);
   return {app,config,client,work,create,results,time:()=>time,identity,intent,matching,visitor,records,accounts,sessions,advance:ms=>time+=ms,modelCalls:()=>modelCalls,providerCalls:()=>providerCalls,companyCalls:()=>companyCalls,failHandoff:()=>failNextHandoff=true};
 }
+
+// Two page-local CSRF snapshots share one browser cookie jar. Consume the real
+// replies first, then publish their cookies in a deliberate transport order.
+for(const order of [[0,1],[1,0]])test(`logout guest bootstraps converge in reply order ${order.join('-')} without replaying credentials`,async t=>{
+  const s=await setup(t,{realAuth:true,runtime:{...diskRuntime(t),rateLimits:{auth:30,read:200,mutation:100}}});
+  const password='Synthetic-local-account-password';
+  for(const username of ['first-reader','second-reader'])await s.app.auth.register({username,password});
+  const browser=s.client();await browser.session();
+  const signIn=(client,username,passwordValue=password,headers={})=>client.request('/auth/login',{method:'POST',body:{username,password:passwordValue},headers});
+  const first=await signIn(browser,'first-reader');assert.equal(first.status,200);
+  const signedIn=browser.snapshot();
+  assert.equal((await browser.request('/workspace',{method:'PATCH',body:{expectedRevision:0,activeSearchId:null,drafts:{new:'Account A private draft'}}})).status,200);
+  assert.equal((await browser.request('/session/logout',{method:'POST',body:{}})).status,200);
+  const afterLogout=browser.snapshot(),pages=[s.client(),s.client()];
+  for(const page of pages)page.restore(afterLogout);
+  const replies=await Promise.all(pages.map(page=>page.session()));
+  for(const reply of replies){assert.equal(reply.status,200);assert.equal(reply.body.user,null);assert.equal(reply.body.visitor,null);}
+  assert.ok(replies[0].body.csrfToken===replies[1].body.csrfToken,'competing session JSON must agree before either reply wins the shared cookie jar');
+  let sharedJar=afterLogout.jar;
+  for(const index of order)sharedJar=pages[index].snapshot().jar;
+  for(let i=0;i<pages.length;i++)pages[i].restore({jar:sharedJar,csrf:replies[i].body.csrfToken});
+  assert.equal((await signIn(pages[order[0]],'second-reader','Wrong synthetic password')).status,401);
+  assert.equal((await signIn(pages[order[0]],'second-reader',password,{'X-CSRF-Token':signedIn.csrf})).status,403);
+  assert.equal((await signIn(pages[order[0]],'second-reader',password,{Origin:'https://other.example'})).status,403);
+  const second=await signIn(pages[order[0]],'second-reader');assert.equal(second.status,200);assert.equal(second.body.user.username,'second-reader');
+  // A late guest reply can change guest cookies, never the authenticated cookie
+  // or account-derived CSRF authority. Nor can an old account token read data.
+  const accountB=pages[order[0]].snapshot(),sessionCookie=accountB.jar.find(([name])=>name==='__Host-justup_session');
+  pages[order[0]].restore({jar:[...sharedJar.filter(([name])=>name!==sessionCookie[0]),sessionCookie],csrf:accountB.csrf});
+  assert.equal((await pages[order[0]].session()).body.user.username,'second-reader');
+  assert.deepEqual((await pages[order[0]].request('/workspace')).body.state.drafts,{});
+  browser.restore(signedIn);assert.equal((await browser.request('/workspace')).status,401);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+  // A second sign-out establishes a distinct empty authority; subsequent reads
+  // keep its pair without allocating or copying either account's workspace.
+  assert.equal((await pages[order[0]].request('/session/logout',{method:'POST',body:{}})).status,200);
+  const next=await pages[order[0]].session();assert.notEqual(next.body.csrfToken,replies[0].body.csrfToken);
+  assert.equal((await pages[order[0]].session()).body.csrfToken,next.body.csrfToken);
+  await assertEmptyBootstrap(pages[order[0]]);assert.equal(s.modelCalls(),0);
+});
+
+test('concurrent and repeated logout publish one guest authority after body consumption',async t=>{
+  const s=await setup(t,{realAuth:true,runtime:diskRuntime(t)}),c=s.client(),password='Synthetic-local-account-password';
+  await s.app.auth.register({username:'logout-reader',password});await c.session();
+  assert.equal((await c.request('/auth/login',{method:'POST',body:{username:'logout-reader',password}})).status,200);
+  const snapshot=c.snapshot(),token=c.jar.get('__Host-justup_session'),session=s.app.auth.session;
+  let count=0,reached;const bothRead=new Promise(resolve=>reached=resolve);
+  s.app.auth.session=value=>{if(value===token&&++count===2)reached();return session(value);};
+  function pendingLogout(){let consume;const result=new Promise(resolve=>consume=resolve);
+    const req=httpRequest({hostname:'127.0.0.1',port:s.app.server.address().port,path:'/api/v1/session/logout',method:'POST',headers:{Cookie:snapshot.jar.map(([k,v])=>`${k}=${v}`).join('; '),Origin:ORIGIN,'X-CSRF-Token':snapshot.csrf,'Content-Type':'application/json','Content-Length':'2'}},res=>{
+      const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>consume({status:res.statusCode,cookies:res.headers['set-cookie']??[],body:JSON.parse(Buffer.concat(chunks))}));
+    });req.on('error',error=>{throw error;});req.write('{');return {req,result};
+  }
+  const pending=[pendingLogout(),pendingLogout()];t.after(()=>pending.forEach(item=>item.req.destroy()));
+  await bothRead;pending[0].req.end('}');const winner=await pending[0].result;
+  pending[1].req.end('}');const loser=await pending[1].result;
+  assert.equal(winner.status,200);assert.equal(winner.cookies.length,3);
+  assert.equal(loser.status,401);assert.equal(loser.cookies.length,0);
+  const repeated=await c.request('/session/logout',{method:'POST',body:{}});assert.equal(repeated.status,401);assert.equal(repeated.res.headers.getSetCookie().length,0);
+  for(const item of winner.cookies){const [name,value]=item.split(';')[0].split('=');c.jar.set(name,value);}
+  const guest=await c.session();assert.equal(guest.body.user,null);assert.equal(guest.body.visitor,null);assert.equal(guest.res.headers.getSetCookie().length,0);
+  assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
+});
 
 test('fresh workspace and search hydration plus empty or invalid saves allocate no private state',async t=>{
   const s=await setup(t),c=s.client(),session=await c.session();assert.equal(session.body.visitor,null);assert.equal(session.body.user,null);assert.equal(session.body.capabilities.visitorSearch,true);
@@ -381,7 +445,7 @@ test('deleted and reclaimed ownership cookies cannot recreate or read a future p
 
 test('a valid unallocated hint is stable across session reads and a live owner stays bound to its cookie when its CSRF seed changes',async t=>{
   const s=await setup(t),c=s.client();await c.session();const initial=c.snapshot();
-  for(let i=0;i<3;i++){assert.equal((await c.session()).body.visitor,null);assert.deepEqual(c.snapshot(),initial);}
+  for(let i=0;i<3;i++){const read=await c.session();assert.equal(read.body.visitor,null);assert.equal(read.res.headers.getSetCookie().length,0);assert.deepEqual(c.snapshot(),initial);}
   assert.equal(s.app.store.db.prepare('SELECT count(*) n FROM justup_visitors').get().n,0);
   const id=await s.create(c),liveHint=c.jar.get('__Host-justup_visitor');
   const other=s.client();await other.session();c.jar.set('__Host-justup_csrf',other.jar.get('__Host-justup_csrf'));

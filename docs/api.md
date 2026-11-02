@@ -50,7 +50,7 @@ Keep registration, login and private processing disabled until the exact effecti
 | `GET /session` | Viewer or null, server time, access rules, CSRF token, authentication availability, capabilities, policy URLs/version and import freshness. |
 | `POST /auth/register` | `{username,password,inviteCode?,acceptance:{usageVersion,locale,adultAndCapable:true}}` → account/session; current admitted version and resolved request locale required. The explicit action accepts Usage and attests 18+/legal capacity. Invitation remains backend-controlled. |
 | `POST /auth/login` | `{username,password}` → account/session; same policy gate. |
-| `POST /session/logout` | Revoke the current session and clear its cookie. |
+| `POST /session/logout` | Revoke the current session, clear its cookie and establish fresh stateless guest authority before tab revalidation. A competing or repeated revoked-session request returns 401 without cookies. |
 | `DELETE /account` | `{password}` → confirmed deletion only after any required provider termination; pending/unavailable termination retains the account. Successful deletion erases sessions, registration acceptance, private searches, requests, tasks, billing and redemption evidence. |
 | `GET /follows` | `{accountId,revision,items:[{companyId,followedAt}],invalidatedSearchIds:[]}`. |
 | `PATCH /follows/:companyId` | `{followed,expectedRevision}` → current owner-bound follow snapshot; canonical catalogue ID required. |

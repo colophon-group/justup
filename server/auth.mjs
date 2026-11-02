@@ -272,7 +272,8 @@ export function createAuth({ db, config = {}, now = Date.now, deleteAccountData 
 
   function logout(token) {
     const hash = tokenHash(token);
-    if (hash) removeSession.run(hash);
+    // SQLite chooses the one successful revocation across API processes.
+    return hash ? removeSession.run(hash).changes === 1 : false;
   }
 
   // The caller owns any filesystem privacy barrier. It must run in this hook

@@ -204,12 +204,14 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
           // future owner in two browsers. Only a live owner or valid current
           // unallocated hint may retain its prior CSRF seed.
           if(visitorService&&!liveOwner&&!validHint)guestToken=randomBytes(32).toString('base64url');
-          const nextCookies=[cookie(csrfCookie, guestToken, now() + 3_600_000)];
+          // Unchanged reads publish metadata only. A held seeded response must
+          // not overwrite a newer login/logout cookie transition.
+          const nextCookies=parsedCookies[csrfCookie]===guestToken?[]:[cookie(csrfCookie, guestToken, now() + 3_600_000)];
           // This opaque ownership hint is stateless until an admitted search.
           // Keep live ownership across epoch changes; replace unknown hints only
           // here, never during a POST whose entire response could be lost.
-          if(visitorService){const hint=liveOwner?visitorToken:epoch==null?null:visitorHint(guestToken,epoch);nextCookies.push(cookie(visitorCookie,hint??'',hint==null?now():visitor?.expiresAt??now()+86_400_000));}
-          res.setHeader('Set-Cookie',nextCookies);
+          if(visitorService){const hint=liveOwner?visitorToken:epoch==null?null:visitorHint(guestToken,epoch);if(hint!==visitorToken)nextCookies.push(cookie(visitorCookie,hint??'',hint==null?now():visitor?.expiresAt??now()+86_400_000));}
+          if(nextCookies.length)res.setHeader('Set-Cookie',nextCookies);
         }
         return finish(200, sessionBody(viewer, sessionToken, guestToken,visitor,interfaceLocale));
       }
@@ -255,7 +257,15 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         return finish(200,sessionBody(auth.session(sessionToken),sessionToken,guestToken,null,interfaceLocale));
       }
       if (method === 'POST' && path === '/session/logout') {
-        auth.logout(token); res.setHeader('Set-Cookie', [cookie(cookieName, '', now()),cookie(visitorCookie,'',now()),cookie(csrfCookie,'',now())]);
+        // Body consumption yields: a competing logout may already have revoked
+        // this session. Only its first live transition may publish cookies.
+        if(!auth.session(sessionToken))throw problem('unauthenticated',401);
+        if(auth.logout(sessionToken)===false)throw problem('unauthenticated',401);
+        const seed=randomBytes(32).toString('base64url'),epoch=visitorService?.issuanceEpoch();
+        const hint=epoch==null?null:visitorHint(seed,epoch);
+        // Establish shared guest authority before either tab revalidates. Reads
+        // then retain this pair rather than racing to publish independent seeds.
+        res.setHeader('Set-Cookie',[cookie(cookieName,'',now()),cookie(csrfCookie,seed,now()+3_600_000),cookie(visitorCookie,hint??'',hint==null?now():now()+86_400_000)]);
         return finish(200, { loggedOut: true });
       }
       if (method === 'DELETE' && path === '/account') {
