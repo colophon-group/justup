@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockApi, search, completed, job } from './api-fixture.mjs';
+import { mockApi, search, completed, job, session } from './api-fixture.mjs';
 const origin = `http://127.0.0.1:${process.env.JUSTUP_PUBLIC_TEST_PORT || 4207}`;
 test.use({ baseURL: origin, timezoneId: 'Pacific/Kiritimati' });
 test('public company reports and catalogue work without JavaScript', async ({ browser }) => {
@@ -168,6 +168,7 @@ test('private fragments, catalogue queries and account dialogs keep noindex thro
 });
 
 for (const status of [404, 503]) test(`a client company ${status} clears prior public metadata and survives direct reload`, async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1100 });
   await mockApi(page, { 'GET /companies/library': { status, body: { error: { code: status === 404 ? 'not_found' : 'unavailable', message: 'Company evidence missing.' } } } });
   await page.goto('/companies');
   await page.getByRole('link', { name: 'Test Library', exact: true }).click();
@@ -202,4 +203,14 @@ test('a pending company navigation clears previous company facts before the sour
   await expect(page.locator('link[rel=alternate]')).toHaveCount(0);
   release();
   await expect(page.getByRole('heading', { name: 'Page not found.' })).toBeVisible();
+});
+
+for (const allocated of [false, true]) test(`anonymous landing after session bootstrap is ${allocated ? 'private for an allocated visitor' : 'public before any private work'}`, async ({ page }) => {
+  await mockApi(page, { 'GET /session': session({ user: null, visitor: allocated ? { expiresAt: '2099-01-01T00:00:00Z' } : null }) });
+  await page.goto('/');
+  await expect(page.locator('#coverage-disclosure')).toContainText('Imported snapshot');
+  if (allocated) await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', /noindex/);
+  else await expect(page.locator('meta[name=robots]')).toHaveCount(0);
+  await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', `${origin}/`);
+  await expect(page.locator('meta[name=description]')).toHaveAttribute('content', /Find fresh jobs first observed/);
 });

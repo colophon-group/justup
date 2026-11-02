@@ -240,7 +240,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
     const state: PublicDocumentState = route.page === 'company'
       ? companyDocument?.id === route.id ? companyDocument.state : publicPage ?? { outcome: 'pending' }
       : publicPage ?? { outcome: route.page === 'invalid' ? 'not-found' : 'ready' };
-    const privateSurface = !!(location.search || location.hash || dialog || (route.page === 'jobs' && sessionOwner(session)));
+    const privateSurface = !!(location.search || location.hash || dialog || (route.page === 'jobs' && (session?.user || session?.visitor)));
     applyPublicMetadata(publicMetadata(route, state, location.origin, location.pathname, privateSurface, locale));
   }, [route, publicPage, companyDocument, locale, dialog, session]);
   const previousPage = useRef(route);
