@@ -148,7 +148,13 @@ test('a pending company task resumes after polling failure without a duplicate s
 });
 
 test('editing a warned query invalidates its old confirmation action', async ({ page }) => {
-  await mockApi(page, { ...saved, 'PATCH /searches/search-1': { search: search(), task: task('warning-task') }, 'GET /tasks/warning-task': task('warning-task', 'warning', { proposal: proposal({ message: 'Cannot check this.' }) }) }); await page.goto('/'); await submit(page, 'Warned request'); await expect(page.locator('#confirm-search-proposal')).toBeVisible(); await page.locator('#query').fill('A different query'); await expect(page.locator('#confirm-search-proposal')).toHaveCount(0);
+  await mockApi(page, { ...saved, 'PATCH /searches/search-1': { search: search(), task: task('warning-task') }, 'GET /tasks/warning-task': task('warning-task', 'warning', { proposal: proposal({ message: 'Cannot check this.' }) }) });
+  await page.goto('/');
+  await expect(page.locator('[data-job]')).toHaveCount(1);
+  await submit(page, 'Warned request');
+  await expect(page.locator('#confirm-search-proposal')).toBeVisible();
+  await page.locator('#query').fill('A different query');
+  await expect(page.locator('#confirm-search-proposal')).toHaveCount(0);
 });
 
 test('an older save finishing cannot release the busy state of a newer tab submission', async ({ page }) => {
