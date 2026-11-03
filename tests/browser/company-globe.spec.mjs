@@ -16,6 +16,15 @@ async function open(page) {
   return errors;
 }
 async function center(page) { const box = await globe(page).boundingBox(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; }
+async function pinchWithTwoContacts(page, cdp, at, secondY = at.y) {
+  const contacts = radius => [{ x: at.x - radius, y: at.y, id: 1 }, { x: at.x + radius, y: secondY, id: 2 }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: contacts(35) });
+  for (let step = 1; step <= 12; step++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: contacts(35 + step * 5) });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+}
 async function capture(page, name) {
   if (!process.env.JUSTUP_GLOBE_QA_DIR) return;
   await mkdir(process.env.JUSTUP_GLOBE_QA_DIR, { recursive: true });
@@ -136,9 +145,23 @@ test('narrow touch horizontal rotation preserves native vertical scrolling, pinc
   expect(pinch.y).toBeGreaterThan(100); expect(pinch.y).toBeLessThan(viewport.height - 100);
   const diagnostics = await target.evaluate(element => ({ scrollY, sphere: element.getBoundingClientRect().toJSON(),
     viewport: { width: visualViewport.width, height: visualViewport.height, scale: visualViewport.scale, offsetTop: visualViewport.offsetTop } }));
-  await cdp.send('Input.synthesizePinchGesture', { x: pinch.x, y: pinch.y, scaleFactor: 1.4, relativeSpeed: 800, gestureSourceType: 'touch' });
+  await pinchWithTwoContacts(page, cdp, pinch);
   await expect.poll(() => page.evaluate(() => visualViewport.scale), { message: `Native pinch at ${JSON.stringify({ pinch, ...diagnostics })}` }).toBeGreaterThan(zoom);
   await expect(land).toHaveAttribute('d', initial);
   await page.clock.install(); await page.clock.runFor(5000); await expect(land).toHaveAttribute('d', initial);
+  expect(errors).toEqual([]); await context.close();
+});
+
+test('a second pinch contact outside the globe stops rotation while preserving native browser zoom', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
+  const page = await context.newPage(); const errors = await open(page), target = globe(page), land = coast(page);
+  await target.scrollIntoViewIfNeeded(); await expect(target).toBeInViewport({ ratio: 1 });
+  const box = await target.boundingBox(), at = await center(page), secondY = box.y - 24;
+  expect(secondY).toBeGreaterThan(0);
+  const initial = await land.getAttribute('d'), zoom = await page.evaluate(() => visualViewport.scale);
+  const cdp = await context.newCDPSession(page);
+  await pinchWithTwoContacts(page, cdp, at, secondY);
+  await expect.poll(() => page.evaluate(() => visualViewport.scale)).toBeGreaterThan(zoom);
+  await expect(land).toHaveAttribute('d', initial);
   expect(errors).toEqual([]); await context.close();
 });

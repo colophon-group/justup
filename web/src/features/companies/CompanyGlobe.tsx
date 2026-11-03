@@ -11,6 +11,7 @@ export function CompanyGlobe() {
   const orientation = useRef(home);
   const frame = useRef<number | null>(null);
   const drag = useRef<{ id: number; x: number; y: number; touch: boolean; locked: boolean } | null>(null);
+  const touchObserver = useRef<{ document: Document; listener: (event: globalThis.PointerEvent) => void } | null>(null);
   const [view, setView] = useState(home);
   const paths = useMemo(() => globePaths(view), [view]);
   function update(longitude: number, latitude = 0, reset = false) {
@@ -23,17 +24,31 @@ export function CompanyGlobe() {
     const bounds = sphere.current?.getBoundingClientRect();
     return bounds && Math.hypot(x - bounds.left - bounds.width / 2, y - bounds.top - bounds.height / 2) <= bounds.width * 100 / 220;
   }
+  function cancelDrag() {
+    const active = drag.current; drag.current = null;
+    const observer = touchObserver.current; touchObserver.current = null;
+    observer?.document.removeEventListener('pointerdown', observer.listener, true);
+    if (active && sphere.current?.hasPointerCapture(active.id)) sphere.current.releasePointerCapture(active.id);
+  }
   useEffect(() => {
     const target = sphere.current!;
     const wheel = (event: WheelEvent) => { if (onSphere(event.clientX, event.clientY)) update(wheelRotation(event)); };
     // Native scrolling and Ctrl/pinch browser zoom remain available over the sphere.
     target.addEventListener('wheel', wheel, { passive: true });
-    return () => { target.removeEventListener('wheel', wheel); if (frame.current !== null) cancelAnimationFrame(frame.current); };
+    return () => { target.removeEventListener('wheel', wheel); cancelDrag(); if (frame.current !== null) cancelAnimationFrame(frame.current); };
   }, []);
   function start(event: PointerEvent<HTMLDivElement>) {
     if (!event.isPrimary || event.button !== 0 || !onSphere(event.clientX, event.clientY)) return;
+    if (drag.current) return;
     drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, touch: event.pointerType === 'touch', locked: false };
     event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.pointerType === 'touch') {
+      // A second contact can start outside the globe, before native pinch cancellation.
+      const document = event.currentTarget.ownerDocument;
+      const listener = (event: globalThis.PointerEvent) => { if (event.pointerType === 'touch' && !event.isPrimary) cancelDrag(); };
+      touchObserver.current = { document, listener };
+      document.addEventListener('pointerdown', listener, { passive: true, capture: true });
+    }
   }
   function move(event: PointerEvent<HTMLDivElement>) {
     const previous = drag.current;
@@ -49,8 +64,7 @@ export function CompanyGlobe() {
   }
   function end(event: PointerEvent<HTMLDivElement>) {
     if (drag.current?.id !== event.pointerId) return;
-    drag.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    cancelDrag();
   }
   function key(event: KeyboardEvent<HTMLDivElement>) {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
