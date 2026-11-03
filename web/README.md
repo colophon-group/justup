@@ -36,6 +36,7 @@ The production build runs TypeScript checking, emits hashed client assets and te
 | Search text, saved tabs, proposals, results and typing hints | `src/features/search/` |
 | Settings, credentials, logout and password-confirmed deletion | `src/features/account/` |
 | Company catalogue, source reports and identity requests | `src/features/companies/` |
+| Neutral globe controls, projection and local geography/license | `src/features/companies/CompanyGlobe.tsx`, `globe.ts` and [geography provenance](src/features/companies/geography.md) |
 | Dialog, company mark and measured viewport reveal behavior | `src/shared/` |
 | Coral, cream and ink tokens and component styling | `src/styles/` |
 | Public documents readable without JavaScript | `src/public/` shared App rendering; `policies/` generated notices and `public/policies.css` |

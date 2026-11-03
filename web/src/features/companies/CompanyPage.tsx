@@ -10,6 +10,7 @@ import type { Company, CompanyReport } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
 import { coverageLabel, reportDate } from './presentation';
 import { CompanyReportSamples } from './CompanyReportSamples';
+import { CompanyGlobe } from './CompanyGlobe';
 
 export interface CompanyPageProps { follows?: FollowControl | undefined; client: ApiClient; id: string; initialCompany?: Company | undefined; initialReport?: CompanyReport | undefined; onDocumentState?: ((id: string, state: PublicDocumentState) => void) | undefined }
 export function CompanyPage({ client, id, initialCompany, initialReport, onDocumentState, follows }: CompanyPageProps) {
@@ -48,6 +49,7 @@ export function CompanyPage({ client, id, initialCompany, initialReport, onDocum
     <FollowNotice follows={follows} />
     {company.description ? <p className="detail-description">{company.description}</p> : null}
     <div className="report-facts">{company.monitoringSince ? <p>{t("Monitoring since")}{" "}<time dateTime={company.monitoringSince}>{reportDate(company.monitoringSince, locale)}</time></p> : null}<p>{coverageLabel(company.coverage?.state, locale)}</p></div>
+    <CompanyGlobe key={id} />
     {history.length ? <section aria-label={t("Historical hiring")}><h2>{t("Hiring over time.")}</h2><p className="small-print">{t("Listing activity reported by the source data.")}</p><ol className="hiring-history">{history.map((point, index) => <li key={`${point.date}:${index}`}><span className="history-bar" style={{ height: `${Math.max(2, point.count / maximum * 100)}%` }} aria-hidden="true" /><b>{point.count.toLocaleString(locale)}</b><small>{reportDate(point.date, locale)}</small></li>)}</ol></section> : null}
     {report?.companyId === id ? <CompanyReportSamples report={report} /> : null}
     {report?.companyId === id && report.sourceChecks.items.some(item => item.publicLink) ? <section className="tracked-sources"><h2>{t("At the source.")}</h2>

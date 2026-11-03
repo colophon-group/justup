@@ -2,6 +2,13 @@
 import type { InterfaceLocale } from './locales.ts';
 
 export const messages = {
+  "Worldwide footprint.": ["Weltweite Präsenz.", "Présence mondiale.", "Presenza mondiale.", "Presencia mundial."],
+  "UNKNOWN": ["UNBEKANNT", "INCONNU", "SCONOSCIUTO", "DESCONOCIDO"],
+  "Hiring countries are unknown.": ["Die Einstellungsländer sind unbekannt.", "Les pays de recrutement sont inconnus.", "I paesi di assunzione sono sconosciuti.", "Se desconocen los países de contratación."],
+  "Drag or scroll to rotate.": ["Zum Drehen ziehen oder scrollen.", "Fais glisser ou défiler pour tourner.", "Trascina o scorri per ruotare.", "Arrastra o desplázate para girar."],
+  "Use arrow keys to rotate and Home to reset. On touch screens, drag horizontally to rotate or vertically to scroll the page. Scrolling over the globe also scrolls the page. Browser zoom stays available.": ["Mit den Pfeiltasten drehen, mit Pos1 zurücksetzen. Auf Touchscreens horizontal ziehen, um zu drehen, oder vertikal, um die Seite zu scrollen. Scrollen über dem Globus scrollt auch die Seite. Der Browser-Zoom bleibt verfügbar.", "Utilise les flèches pour tourner et Début pour réinitialiser. Sur écran tactile, glisse horizontalement pour tourner ou verticalement pour faire défiler la page. Faire défiler sur le globe fait aussi défiler la page. Le zoom du navigateur reste disponible.", "Usa le frecce per ruotare e Home per ripristinare. Sugli schermi tattili, trascina in orizzontale per ruotare o in verticale per scorrere la pagina. Scorrere sul globo fa scorrere anche la pagina. Lo zoom del browser resta disponibile.", "Usa las flechas para girar e Inicio para restablecer. En pantallas táctiles, arrastra horizontalmente para girar o verticalmente para desplazar la página. Desplazarse sobre el globo también desplaza la página. El zoom del navegador sigue disponible."],
+  "Reset view": ["Ansicht zurücksetzen", "Réinitialiser la vue", "Ripristina vista", "Restablecer vista"],
+  "Neutral world globe": ["Neutraler Globus", "Globe terrestre neutre", "Globo terrestre neutro", "Globo terrestre neutro"],
   "Follow": ["Folgen", "Suivre", "Segui", "Seguir"],
   "Unfollow": ["Entfolgen", "Ne plus suivre", "Non seguire più", "Dejar de seguir"],
   "Follow {company}": ["{company} folgen", "Suivre {company}", "Segui {company}", "Seguir {company}"],

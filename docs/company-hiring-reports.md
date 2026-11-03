@@ -5,6 +5,34 @@ read_when: Integrating company reports, reviewing source gaps or verifying the p
 
 # Company hiring reports
 
+## Read the globe
+
+Company pages include a circular, interactive neutral world globe with a visible
+unknown state and an accessible textual equivalent. No hiring-country contract
+exists in the report below, so no geography is highlighted. Headquarters, company
+locations, career-page locales and posting languages cannot establish hiring
+countries. Factual shading requires reviewed posting hiring-location country
+codes with scope, time, provenance and explicit unknown evidence; that dependency
+and deployed first-release proof remain open in
+[#110](https://github.com/colophon-group/justup/issues/110).
+
+Pointer dragging, wheel input, arrow keys and Home rotate or reset a fixed-scale
+orthographic view. Horizontal touch dragging rotates; vertical touch gestures
+and wheel input preserve native page scrolling. Browser zoom remains available.
+There is no automatic movement, inertia, zoom or reduced-motion animation. The
+same unknown text is present in public HTML without JavaScript. See
+[motion controls](motion-design.md#company-globe) and the local
+[geography provenance](../web/src/features/companies/geography.md).
+
+The company interface owns `tests/browser/company-globe.spec.mjs` for native
+pointer/touch/wheel/keyboard controls, unknown public HTML, reduced motion and
+page scroll/zoom preservation. It runs in the browser CI lane against compiled
+assets with local API fixtures and no provider calls (expected under 20 seconds).
+`globe.test.ts` owns pure projection, geography and input-bound contracts in the
+web lane. Existing web/browser impact rules select both for globe source changes.
+
+## Read the public projection
+
 `GET /api/v1/companies/:id/report` is a public, keyless, read-only projection.
 It requires an existing public catalogue identity and returns its canonical
 `companyId`. Unknown identities return 404. The route accepts no query parameters;
@@ -127,7 +155,7 @@ headcount. No raw source scope IDs/revisions or posting IDs/bodies are public.
 
 Public company HTML and client navigation read the report’s `sourceChecks` through a bounded, validated projection. Only approved public HTTPS career links appear. Each link retains its supplied last-check date; an absent date produces no invented check status. A missing report leaves company identity readable, and a failed browser report read offers a separate retry. Legacy identity-source URLs never substitute for approved report links.
 
-The browser integration currently consumes this source-link projection only. Report history, sampled roles and salary units still need the complete report presentation and deployed source qualification described below.
+The browser integration consumes approved source links and the fresh structured role and salary samples above. The globe remains neutral because no reviewed hiring-country projection exists. Report history still needs its complete presentation, and all factual sections require the deployed source qualification described below.
 
 ## Verify source identity and release readiness
 
