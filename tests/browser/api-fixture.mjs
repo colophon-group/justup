@@ -6,7 +6,8 @@ export const job = index => ({ id: `job-${index}`, title: `Librarian ${index}`, 
 export const session = (overrides = {}) => {
   const result = { user: { id: 'reader', username: 'tester' }, visitor: null, csrfToken: 'test-only-csrf', access: { kind: 'account', fullAccess: true, billingEnabled: false, legacy: false, until: null }, capabilities: { search: true, companyRequests: true, follows: false, viewed: false, preferences: false, sse: false, hiddenMatchCounts: false }, authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true, reason: null }, policies: { locale:'en', reviewedLocale:'en', fallback:false, reviewed: true, version: 'test-v1', privacyUrl: '/privacy.html', usageUrl: '/usage.html' }, coverage: { kind: 'imported_snapshot', verifiedAt: '2026-10-31T08:00:00Z', stale: false }, ...overrides };
   if (result.user === null && result.policies.reviewed) {
-    if (!Object.hasOwn(overrides, 'visitor')) result.visitor = { expiresAt: '2026-11-02T12:00:00.000Z' };
+    // Most browser journeys use the real clock; deadline behavior has its own clock-controlled tests.
+    if (!Object.hasOwn(overrides, 'visitor')) result.visitor = { expiresAt: '9999-12-31T23:59:59.000Z' };
     result.capabilities = { ...result.capabilities, visitorSearch: overrides.capabilities?.visitorSearch ?? result.visitor !== null };
   }
   return result;

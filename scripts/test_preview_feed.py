@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -43,6 +44,124 @@ def source_files(directory, *, complete=False, body=b'{"schemaVersion":1,"rows":
     path.write_text(json.dumps(manifest, separators=(',', ':')))
     path.chmod(0o600)
     return path, part, manifest
+
+
+class PrepareTests(unittest.TestCase):
+    def prepare(self, inbox, receipts):
+        uid, gid = os.geteuid(), os.getegid()
+
+        def identity(name):
+            if name == 'justup-preview-api':
+                return SimpleNamespace(pw_uid=uid, pw_gid=gid)
+            if name == 'justup-deploy':
+                return SimpleNamespace(pw_uid=uid + 1, pw_gid=gid)
+            raise AssertionError(name)
+
+        host = SimpleNamespace(verify_caps=lambda: None, verify_storage=lambda: None)
+        with patch.object(FEED.os, 'geteuid', return_value=0), \
+                patch.object(FEED.pwd, 'getpwnam', side_effect=identity), \
+                patch.object(FEED, 'host_module', return_value=host), \
+                patch.object(FEED, 'RECEIPTS', receipts):
+            return FEED.prepare(inbox)
+
+    def test_new_inbox_clears_inherited_sgid_without_changing_parent(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root).resolve()
+            state, config = base / 'state', base / 'config'
+            state.mkdir(mode=0o700)
+            state.chmod(0o2700)
+            config.mkdir(mode=0o700)
+            inbox, receipts = state / 'feed-inbox', config / 'feed-receipts'
+            original_mkdir = Path.mkdir
+
+            def inherit_sgid(path, *args, **kwargs):
+                original_mkdir(path, *args, **kwargs)
+                if path == inbox:
+                    path.chmod(0o2700)
+
+            def same_owner_chown(path, uid, gid):
+                self.assertEqual(Path(path), inbox)
+                self.assertEqual((uid, gid), (inbox.stat().st_uid, inbox.stat().st_gid))
+
+            def same_owner_fchown(fd, uid, gid):
+                self.assertEqual(os.fstat(fd).st_ino, inbox.stat().st_ino)
+                self.assertEqual((uid, gid), (inbox.stat().st_uid, inbox.stat().st_gid))
+
+            # macOS clears SGID even for same-owner chown; preserve the inherited
+            # bit here to reproduce the observed host result after ownership setup.
+            with patch.object(Path, 'mkdir', new=inherit_sgid), \
+                    patch.object(FEED.os, 'chown', side_effect=same_owner_chown), \
+                    patch.object(FEED.os, 'fchown', side_effect=same_owner_fchown):
+                self.assertEqual(self.prepare(inbox, receipts), {'prepared': True, 'created': True})
+            self.assertEqual(stat.S_IMODE(inbox.lstat().st_mode), 0o700)
+            self.assertEqual(inbox.lstat().st_uid, os.geteuid())
+            self.assertEqual(inbox.lstat().st_gid, os.getegid())
+            self.assertEqual(stat.S_IMODE(state.lstat().st_mode), 0o2700)
+            receipts.rmdir()
+            self.assertEqual(self.prepare(inbox, receipts), {'prepared': True, 'created': False})
+
+    def test_existing_unsafe_inbox_is_not_repaired(self):
+        for kind in ('mode', 'owner', 'symlink'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as root:
+                base = Path(root).resolve()
+                state, config = base / 'state', base / 'config'
+                state.mkdir(mode=0o700)
+                config.mkdir(mode=0o700)
+                inbox, receipts = state / 'feed-inbox', config / 'feed-receipts'
+                target = base / 'target'
+                target.mkdir(mode=0o700)
+                if kind == 'symlink':
+                    inbox.symlink_to(target, target_is_directory=True)
+                else:
+                    inbox.mkdir(mode=0o700)
+                if kind == 'mode':
+                    inbox.chmod(0o2700)
+                original_lstat = Path.lstat
+
+                def wrong_owner(path):
+                    meta = original_lstat(path)
+                    if kind == 'owner' and path == inbox:
+                        return SimpleNamespace(st_mode=meta.st_mode, st_uid=meta.st_uid + 1)
+                    return meta
+
+                with patch.object(Path, 'lstat', new=wrong_owner), \
+                        patch.object(FEED.os, 'fchmod', side_effect=AssertionError('must not repair existing inbox')):
+                    with self.assertRaises(FEED.FeedStageError):
+                        self.prepare(inbox, receipts)
+                self.assertFalse(receipts.exists())
+                if kind == 'mode':
+                    self.assertEqual(stat.S_IMODE(inbox.lstat().st_mode), 0o2700)
+                if kind == 'symlink':
+                    self.assertTrue(inbox.is_symlink())
+                    self.assertEqual(stat.S_IMODE(target.lstat().st_mode), 0o700)
+
+    def test_partial_creation_and_missing_parent_fail_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root).resolve()
+            config = base / 'config'
+            config.mkdir(mode=0o700)
+            inbox, receipts = base / 'state/feed-inbox', config / 'feed-receipts'
+            with self.assertRaises(FEED.FeedStageError):
+                self.prepare(inbox, receipts)
+            self.assertFalse(inbox.exists())
+            state = inbox.parent
+            state.mkdir(mode=0o700)
+            original_mkdir = Path.mkdir
+
+            def inherit_sgid(path, *args, **kwargs):
+                original_mkdir(path, *args, **kwargs)
+                if path == inbox:
+                    path.chmod(0o2700)
+
+            with patch.object(Path, 'mkdir', new=inherit_sgid), \
+                    patch.object(FEED.os, 'fchown'), \
+                    patch.object(FEED.os, 'fchmod', side_effect=OSError('synthetic chmod failure')):
+                with self.assertRaises(OSError):
+                    self.prepare(inbox, receipts)
+            self.assertEqual(stat.S_IMODE(inbox.lstat().st_mode), 0o2700)
+            with self.assertRaises(FEED.FeedStageError):
+                self.prepare(inbox, receipts)
+            self.assertFalse(receipts.exists())
 
 
 class TransportTests(unittest.TestCase):

@@ -1,7 +1,7 @@
 // These synthetic public DTOs stay outside the compiled application and exercise explicit visitor ownership.
 import { expect, test } from '@playwright/test';
 import { mockApi, session, search, job, completed, task, proposal } from './api-fixture.mjs';
-const visitor = () => session({ user: null, visitor: { expiresAt: '2026-11-02T12:00:00.000Z' }, access: { kind: 'guest', fullAccess: false, billingEnabled: false }, capabilities: { search: true, visitorSearch: true, viewed: true, companyRequests: false } });
+const visitor = () => session({ user: null, access: { kind: 'guest', fullAccess: false, billingEnabled: false }, capabilities: { search: true, visitorSearch: true, viewed: true, companyRequests: false } });
 const freezeClock = async page => { await page.clock.install({ time: new Date('2026-11-02T08:00:00Z') }); await page.clock.pauseAt(new Date('2026-11-02T08:01:00Z')); };
 const visibleJob = index => ({ ...job(index), firstObserved: '2026-10-29T08:00:00.000Z' });
 const submit = async (page, query) => { await page.locator('#query').fill(query); await page.locator('#job-search button[type=submit]').click(); };
