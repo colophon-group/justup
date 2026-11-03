@@ -48,6 +48,9 @@ test('pointer drag, release, arrows and Home rotate a square globe with keyboard
   await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab'); await expect(target).toBeFocused();
   await expect(target).toHaveCSS('outline-style', 'solid');
   for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) { const before = await land.getAttribute('d'); await target.press(key); await expect(land).not.toHaveAttribute('d', before); }
+  const beforeModifiers = await land.getAttribute('d');
+  const shortcuts = await target.evaluate(element => ['ctrlKey', 'metaKey', 'altKey'].map(modifier => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', [modifier]: true, bubbles: true, cancelable: true }))));
+  expect(shortcuts).toEqual([true, true, true]); await expect(land).toHaveAttribute('d', beforeModifiers);
   await target.press('Home'); await expect(land).toHaveAttribute('d', initial);
   await page.clock.install(); await page.clock.runFor(5000); await expect(land).toHaveAttribute('d', initial);
   await capture(page, 'desktop-keyboard-focus');
@@ -55,18 +58,35 @@ test('pointer drag, release, arrows and Home rotate a square globe with keyboard
   await capture(page, 'desktop-neutral-globe');
   for (let i = 0; i < 12; i++) await target.press('ArrowRight');
   await page.mouse.click(at.x, at.y); await capture(page, 'desktop-opposite-hemisphere');
+  // A synchronous input burst schedules one frame rather than one render per event.
+  const beforeBurst = await land.getAttribute('d');
+  const frames = await target.evaluate(element => {
+    const original = window.requestAnimationFrame; let scheduled = 0;
+    window.requestAnimationFrame = callback => { scheduled++; return original.call(window, callback); };
+    const box = element.getBoundingClientRect();
+    try { for (let i = 0; i < 50; i++) element.dispatchEvent(new WheelEvent('wheel', { deltaY: 10, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 })); }
+    finally { window.requestAnimationFrame = original; }
+    return scheduled;
+  });
+  expect(frames).toBe(1); await page.clock.runFor(20); await expect(land).not.toHaveAttribute('d', beforeBurst);
+  await target.evaluate(element => element.addEventListener('pointerdown', event => { element.dataset.testPointerId = String(event.pointerId); }, { once: true }));
+  await page.mouse.move(at.x, at.y); await page.mouse.down();
+  const pointerId = Number(await target.getAttribute('data-test-pointer-id'));
+  await target.dispatchEvent('pointercancel', { pointerId });
+  await target.evaluate(element => delete element.dataset.testPointerId);
+  const cancelled = await land.getAttribute('d'); await page.mouse.move(at.x + 40, at.y); await page.mouse.up(); await page.clock.runFor(20); await expect(land).toHaveAttribute('d', cancelled);
   expect(errors).toEqual([]);
 });
 
 test('native wheel rotates without zoom or a scroll trap and leaves outside input and Ctrl zoom available', async ({ page }) => {
   await open(page); const target = globe(page), land = coast(page), at = await center(page);
   const initial = await land.getAttribute('d'), size = await target.boundingBox(), beforeScroll = await page.evaluate(() => scrollY);
-  const focused = await page.evaluate(() => document.activeElement?.outerHTML);
+  const focused = await page.evaluateHandle(() => document.activeElement);
   await page.mouse.move(at.x, at.y); await page.mouse.wheel(0, 90);
   await expect(land).not.toHaveAttribute('d', initial);
   await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(beforeScroll);
   expect((await target.boundingBox()).width).toBe(size.width);
-  expect(await page.evaluate(() => document.activeElement?.outerHTML)).toBe(focused);
+  expect(await page.evaluate(element => document.activeElement === element, focused)).toBe(true); await focused.dispose();
   await target.scrollIntoViewIfNeeded();
   await page.getByRole('button', { name: 'Reset view' }).click(); await expect(land).toHaveAttribute('d', initial);
   const next = await center(page); await page.mouse.move(next.x, next.y); await page.mouse.wheel(50, 0); await expect(land).not.toHaveAttribute('d', initial);
