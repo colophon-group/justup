@@ -116,13 +116,29 @@ test('narrow touch horizontal rotation preserves native vertical scrolling, pinc
   await swipe(vertical, { x: vertical.x, y: vertical.y - 100 });
   await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(before); await expect(land).toHaveAttribute('d', initial);
   await target.focus(); await target.press('ArrowRight'); await expect(land).not.toHaveAttribute('d', initial); await target.press('Home'); await expect(land).toHaveAttribute('d', initial);
-  await page.clock.install(); await page.clock.runFor(5000); await expect(land).toHaveAttribute('d', initial);
   await expect(page.locator('.company-footprint')).toContainText('Hiring countries are unknown.');
   await target.blur(); await capture(page, 'narrow-neutral-globe');
-  // A real browser gesture proves that touch-action leaves native pinch zoom open.
+  // Native touch scrolling runs on the compositor, independently of mocked JS time.
+  // Settle it and keep the whole sphere visible before choosing pinch contacts.
+  await target.scrollIntoViewIfNeeded(); await expect(target).toBeInViewport({ ratio: 1 });
+  await expect.poll(() => target.evaluate(async element => {
+    const positions = [];
+    for (let i = 0; i < 4; i++) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const rect = element.getBoundingClientRect(); positions.push([scrollY, rect.x, rect.y].join(','));
+    }
+    return positions.every(position => position === positions[0]);
+  })).toBe(true);
+  // Keep the real pinch and its scale assertion outside the mocked clock.
   const zoom = await page.evaluate(() => visualViewport.scale), pinch = await center(page);
+  const viewport = page.viewportSize();
+  expect(pinch.x).toBeGreaterThan(100); expect(pinch.x).toBeLessThan(viewport.width - 100);
+  expect(pinch.y).toBeGreaterThan(100); expect(pinch.y).toBeLessThan(viewport.height - 100);
+  const diagnostics = await target.evaluate(element => ({ scrollY, sphere: element.getBoundingClientRect().toJSON(),
+    viewport: { width: visualViewport.width, height: visualViewport.height, scale: visualViewport.scale, offsetTop: visualViewport.offsetTop } }));
   await cdp.send('Input.synthesizePinchGesture', { x: pinch.x, y: pinch.y, scaleFactor: 1.4, relativeSpeed: 800, gestureSourceType: 'touch' });
-  await expect.poll(() => page.evaluate(() => visualViewport.scale)).toBeGreaterThan(zoom);
+  await expect.poll(() => page.evaluate(() => visualViewport.scale), { message: `Native pinch at ${JSON.stringify({ pinch, ...diagnostics })}` }).toBeGreaterThan(zoom);
   await expect(land).toHaveAttribute('d', initial);
+  await page.clock.install(); await page.clock.runFor(5000); await expect(land).toHaveAttribute('d', initial);
   expect(errors).toEqual([]); await context.close();
 });
