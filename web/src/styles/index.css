@@ -191,6 +191,24 @@ form label { display: block; font-size: 12px; font-weight: 600; line-height: 1.5
 .report-subtitle { margin: 22px 0; display: flex; align-items: center; }
 .report-subtitle .mark { width: 24px; height: 24px; }
 .report-facts { font-size: 12px; line-height: 1.7; margin-block: 30px; }
+.company-footprint { display: grid; grid-template-columns: 1fr minmax(0, 390px); align-items: center; gap: 20px 36px; }
+.footprint-copy h2 { margin: 0 0 24px; font: 900 clamp(34px, 5vw, 56px)/1.05 var(--display); }
+.footprint-copy p { font-size: 12px; line-height: 1.7; }
+.footprint-copy .globe-hint { margin-top: 24px; font-size: 10px; }
+.globe-reset { margin-top: 8px; }
+.company-globe { width: 100%; aspect-ratio: 1; border-radius: 50%; cursor: grab; touch-action: pan-y pinch-zoom; user-select: none; outline: none; }
+.company-globe:active { cursor: grabbing; }
+.company-globe:focus-visible { outline: 3px solid var(--ink); outline-offset: 1px; }
+.company-globe svg { display: block; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+.globe-ocean { fill: var(--cream); stroke: var(--ink); stroke-width: .8; }
+.globe-grid, .globe-land { fill: none; stroke: var(--ink); }
+.globe-grid { stroke-width: .35; opacity: .18; }
+.globe-land { stroke-width: .65; stroke-linejoin: round; stroke-linecap: round; }
+@media (max-width: 620px) {
+  .company-footprint { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .company-globe { max-width: 350px; justify-self: center; }
+  .footprint-copy h2 { margin-bottom: 16px; }
+}
 #company-page section { margin-block: 30px; }
 #company-page section > h2 { font: 900 34px/1.05 var(--display); }
 .company-samples { margin-block: 32px; }
