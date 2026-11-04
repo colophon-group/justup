@@ -125,7 +125,9 @@ const percentile95=values=>values.length?[...values].sort((a,b)=>a-b)[Math.ceil(
 function aggregate(records,kind,section,repeatCaseId){
   const values=records.filter(record=>record.kind===kind&&record.repeatIndex===0),accuracy=values.filter(record=>record.correct).length/section.minimumCases;
   const repeats=records.filter(record=>record.kind===kind&&record.repeatIndex>0),base=values.find(record=>record.id===repeatCaseId);
-  const repeatConsistent=Boolean(base?.correct)&&repeats.length===2&&repeats.every(record=>record.id===repeatCaseId&&record.correct&&record.normalization===base.normalization&&record.metricObserved&&record.webStarts!==null);
+  const repeatConsistent=Boolean(base?.correct)&&(!base.discoveryRequired||base.webStarts>=1)&&repeats.length===2
+    &&repeats.every(record=>record.id===repeatCaseId&&record.correct&&record.normalization===base.normalization
+      &&record.metricObserved&&record.webStarts!==null&&(!record.discoveryRequired||record.webStarts>=1));
   const repeatDurations=[base,...repeats].filter(Boolean).map(record=>record.durationMs);
   const repeatLatencyRangeMs=repeatDurations.length===3?Math.max(...repeatDurations)-Math.min(...repeatDurations):null;
   const usage=Object.fromEntries(['inputTokens','cachedInputTokens','outputTokens','reasoningOutputTokens'].map(key=>[key,values.reduce((sum,record)=>sum+(record.usage?.[key]??0),0)]));

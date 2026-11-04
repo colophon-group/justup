@@ -18,7 +18,8 @@ function intentAnswer(entry){
   if(entry.expected.unsatisfied)requirements.push({id:'r2',text:entry.query,handling:'unsatisfied',reason:'No verified evidence supports the requested condition.',bindings:[],companyReference:null});
   return {title:'Synthetic search',configuration:{schemaVersion:1,filters,residualAi:null},requirements};
 }
-function fakeModel(manifest,observer,{unsafe=false,missingCounter=false,clarification=null,zeroDiscoveryCaseId=null}={}){
+function fakeModel(manifest,observer,{unsafe=false,missingCounter=false,clarification=null,zeroDiscoveryCaseId=null,zeroDiscoveryRepeatsFor=null}={}){
+  const companyCalls=new Map();
   const measured=(kind,webStarts)=>{
     if(!missingCounter)observer.onReply({schemaId:kind,toolCalls:webStarts,usage});
     observer.onMetric({kind:kind==='intent'?'search_intent':'company_resolution',code:'succeeded',durationMs:25,usage});
@@ -26,7 +27,9 @@ function fakeModel(manifest,observer,{unsafe=false,missingCounter=false,clarific
   return {available:()=>true,
     async interpretIntent(input){const entry=manifest.intent.cases.find(item=>item.query===input.query);measured('intent',0);return intentAnswer(entry);},
     async resolveCompany(input){const entry=manifest.company.cases.find(item=>item.input===input.input);assert.equal(input.domain,entry.domain??null);
-      measured('company',entry.id===zeroDiscoveryCaseId?0:entry.domain===undefined?1:0);
+      const call=(companyCalls.get(entry.id)??0)+1;companyCalls.set(entry.id,call);
+      const zeroDiscovery=entry.id===zeroDiscoveryCaseId||(entry.id===zeroDiscoveryRepeatsFor&&call>1);
+      measured('company',zeroDiscovery?0:entry.domain===undefined?1:0);
       if(entry.expectedStatus)return unsafe?{data:{status:'candidate',candidate:{domain:'wrong.example'},clarification:null},evidenceVerified:false}:{data:{status:'clarification',candidate:null,clarification:typeof clarification==='function'?clarification(entry):clarification??`Which ${entry.expectedSubject} company do you mean?`},evidenceVerified:false};
       const url=`https://${entry.expectedDomain}/`;
       return {data:{status:'candidate',candidate:{name:entry.input,domain:entry.expectedDomain,websiteUrl:url,evidenceUrls:[url]},clarification:null},evidenceVerified:true};
@@ -65,6 +68,16 @@ test('a name-only candidate with no observed native web start cannot pass',async
   assert.equal(report.company.nameOnlyDiscoveryCases,4);assert.equal(report.company.nameOnlyDiscoveryObserved,3);
   assert.equal(report.cases.find(record=>record.id==='cloudflare').correct,true);
   assert.equal(report.cases.find(record=>record.id==='cloudflare').webStarts,0);
+  const final=applyQualificationReview({manifest,report,receipt:reviewReceipt(report,true)});
+  assert.equal(final.company.correct,18);assert.equal(final.company.manualReviewPending,0);
+  assert.equal(final.company.passed,false);assert.equal(final.passed,false);
+});
+test('name-only repeats with no observed native web start cannot pass',async()=>{
+  const {manifest}=fixedQualificationManifest(),observer=createQualificationObserver();
+  const report=await evaluateQualification({manifest,model:fakeModel(manifest,observer,{zeroDiscoveryRepeatsFor:'cloudflare'}),observer});
+  assert.deepEqual(report.cases.filter(record=>record.id==='cloudflare').map(record=>record.webStarts),[1,0,0]);
+  assert.equal(report.company.cases,18);assert.equal(report.company.nameOnlyDiscoveryObserved,4);
+  assert.equal(report.company.repeats,2);assert.equal(report.company.repeatConsistent,false);
   const final=applyQualificationReview({manifest,report,receipt:reviewReceipt(report,true)});
   assert.equal(final.company.correct,18);assert.equal(final.company.manualReviewPending,0);
   assert.equal(final.company.passed,false);assert.equal(final.passed,false);
