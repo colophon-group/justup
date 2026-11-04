@@ -1673,6 +1673,21 @@ process.stdout.write('actual_node_policy_configuration_matches\n');
         self.assertEqual(env['JUSTUP_BUILD_ID'], manifest['buildIdentity'])
         self.assertEqual(env['JUSTUP_HOST_PLAN_SHA256'], 'f' * 64)
 
+    def test_luna_qualification_requires_complete_artifact_and_dedicated_queue_uid(self):
+        manifest, _ = payload()
+        for name in artifact.QUALIFICATION_FILES:
+            self.assertTrue(artifact.allowed(name))
+        incomplete = deepcopy(manifest)
+        incomplete['files']['app/server/evals/luna-qualification-cli.mjs'] = 'a' * 64
+        with patch.dict(artifact.CODEX_FILES, {name: artifact.sha(data) for name, data in CODEX_FIXTURES.items()}):
+            with self.assertRaisesRegex(ValueError, 'complete fixed evaluator'):
+                artifact.validate_manifest(incomplete)
+        with patch.object(sys, 'argv', ['preview-queue-run.py', '--unknown']):
+            self.assertEqual(queue.main(), 1)
+        with patch.object(sys, 'argv', ['preview-queue-run.py', '--qualify-model']), \
+                patch.object(queue.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='another-user')):
+            self.assertEqual(queue.main(), 1)
+
     def test_queue_requires_existing_private_ledger_and_never_creates_or_repairs_it(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()

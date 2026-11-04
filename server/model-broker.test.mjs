@@ -25,6 +25,25 @@ test('fixed registry socket returns validated data/usage without raw tool traces
   assert.deepEqual(result.data,data());assert.deepEqual(result.usage,usage);assert.equal(JSON.stringify(result).includes('trace'),false);
   assert.equal(input.stdin,'untrusted query');assert.ok(input.args.includes('--sandbox'));assert.ok(input.args.includes('read-only'));assert.equal(input.executable,undefined);assert.equal(input.env,undefined);assert.equal(input.maxToolCalls,0);
 });
+test('opt-in qualification observer receives only validated numeric broker counters',async t=>{
+  const f=await fixture(t,async()=>({data:data(),usage,toolCalls:0,privateTrace:'must not cross'}));
+  const observed=[],execute=createBrokerExecutor({socketPath:f.socketPath,onReply:reply=>observed.push(reply)});
+  const result=await execute({schemaId:'intent',stdin:'synthetic query',timeoutMs:1000});
+  assert.deepEqual(observed,[{schemaId:'intent',toolCalls:0,usage}]);
+  assert.equal(Object.hasOwn(result,'toolCalls'),false);
+  assert.equal(JSON.stringify(observed).includes('privateTrace'),false);
+  assert.throws(()=>createBrokerExecutor({socketPath:f.socketPath,onReply:'not a function'}),TypeError);
+});
+test('qualification observer records the broker aggregate for company native web starts',async t=>{
+  const f=await fixture(t,async args=>args.args.some(value=>value.includes('company-discovery.schema.json'))
+    ?{data:{status:'discovered_domain',domain:'acme.com',sourceUrls:['https://acme.com/'],clarification:null},usage,toolCalls:1}
+    :{data:companyCandidate(),usage,toolCalls:0},{fetchPage:async url=>page(url)});
+  const observed=[],execute=createBrokerExecutor({socketPath:f.socketPath,onReply:reply=>observed.push(reply)});
+  const result=await execute({schemaId:'company',stdin:JSON.stringify(companyTask({domain:null})),timeoutMs:1000});
+  assert.equal(result.evidenceVerified,true);
+  assert.deepEqual(observed.map(reply=>[reply.schemaId,reply.toolCalls]),[['company',1]]);
+  assert.equal(Object.hasOwn(result,'toolCalls'),false);
+});
 test('wire rejects arbitrary schemas, commands, trailing frames and oversized input before executing',async t=>{
   let calls=0;const f=await fixture(t,async()=>{calls++;return {data:data(),usage,toolCalls:0};});
   for(const input of [JSON.stringify({schemaId:'../../schema',prompt:'hello',timeoutMs:1000})+'\n',JSON.stringify({schemaId:'web_discovery',prompt:'hello',timeoutMs:1000})+'\n',JSON.stringify({schemaId:'intent',prompt:'hello',timeoutMs:1000,command:'ls'})+'\n','{}\n{}\n',JSON.stringify({schemaId:'intent',prompt:'x'.repeat(25000),timeoutMs:1000})+'\n'])assert.equal((await wire(f.socketPath,input)).error.code,'invalid_input');
