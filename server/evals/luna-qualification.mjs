@@ -99,15 +99,16 @@ function scoreIntent(raw,entry,caps){
 function scoreCompany(value,entry){
   const data=value?.data,evidenceVerified=value?.evidenceVerified===true;
   if(entry.expectedStatus==='clarification'){
-    // A refusal or unrelated question is not a useful disambiguation. Require
-    // the exact ambiguous name, an identity cue and a request for more detail.
-    const clarification=typeof data?.clarification==='string'?fold(data.clarification):'';
+    // Subject matching is a safety precondition, not semantic approval. The
+    // redacted digest binds a separate manual review to this exact reply.
+    const rawClarification=typeof data?.clarification==='string'?data.clarification:'';
+    const clarification=rawClarification.trim();
     const subject=fold(entry.expectedSubject);
-    const namesSubject=new RegExp(`(?:^|[^\\p{L}\\p{N}])${subject}(?=$|[^\\p{L}\\p{N}])`,'u').test(clarification);
-    const asksForIdentity=/\b(which|what|specify|identify|name|provide|tell|clarify)\b/u.test(clarification)
-      &&/\b(company|organisation|organization|business|domain|website|site)\b/u.test(clarification);
-    const correct=data?.status==='clarification'&&data?.candidate===null&&namesSubject&&asksForIdentity;
-    return {correct,guessedAmbiguous:data?.status==='candidate',unverifiedCandidate:data?.status==='candidate'&&!evidenceVerified,normalization:correct?'clarification':'incorrect',feedback:[]};
+    const namesSubject=new RegExp(`(?:^|[^\\p{L}\\p{N}])${subject}(?=$|[^\\p{L}\\p{N}])`,'u').test(fold(clarification));
+    const manualReviewPending=data?.status==='clarification'&&data?.candidate===null&&namesSubject&&clarification.length<=300;
+    return {correct:false,manualReviewPending,clarificationSha256:manualReviewPending?sha(Buffer.from(rawClarification)):null,
+      guessedAmbiguous:data?.status==='candidate',unverifiedCandidate:data?.status==='candidate'&&!evidenceVerified,
+      normalization:manualReviewPending?'manual_required':'incorrect',feedback:[]};
   }
   const correct=data?.status==='candidate'&&evidenceVerified&&data?.candidate?.domain===entry.expectedDomain;
   return {correct,guessedAmbiguous:false,unverifiedCandidate:data?.status==='candidate'&&!evidenceVerified,normalization:correct?'candidate':'incorrect',feedback:[]};
@@ -123,10 +124,11 @@ function aggregate(records,kind,section,repeatCaseId){
   const p95LatencyMs=percentile95(values.map(record=>record.durationMs).filter(Number.isSafeInteger));
   const unsafeAcceptance=values.filter(record=>record.unsafeAcceptance).length,droppedRequirements=values.filter(record=>record.droppedRequirements).length;
   const guessedAmbiguous=values.filter(record=>record.guessedAmbiguous).length,unverifiedCandidate=values.filter(record=>record.unverifiedCandidate).length;
+  const manualReviewPending=values.filter(record=>record.manualReviewPending).length;
   const countersComplete=values.every(record=>record.metricObserved&&record.webStarts!==null&&record.usage!==null);
-  const passed=values.length===section.minimumCases&&accuracy>=section.minimumAccuracy&&p95LatencyMs!==null&&p95LatencyMs<=section.maximumP95LatencyMs&&countersComplete&&repeatConsistent&&
+  const passed=values.length===section.minimumCases&&accuracy>=section.minimumAccuracy&&manualReviewPending===0&&p95LatencyMs!==null&&p95LatencyMs<=section.maximumP95LatencyMs&&countersComplete&&repeatConsistent&&
     (kind==='intent'?unsafeAcceptance===0&&droppedRequirements===0&&values.every(record=>record.webStarts===0):guessedAmbiguous===0&&unverifiedCandidate===0&&values.every(record=>record.webStarts<=2));
-  return {cases:values.length,correct:values.filter(record=>record.correct).length,accuracy,p95LatencyMs,unsafeAcceptance,droppedRequirements,guessedAmbiguous,unverifiedCandidate,countersComplete,
+  return {cases:values.length,correct:values.filter(record=>record.correct).length,accuracy,p95LatencyMs,unsafeAcceptance,droppedRequirements,guessedAmbiguous,unverifiedCandidate,manualReviewPending,countersComplete,
     repeats:repeats.length,repeatConsistent,repeatLatencyRangeMs,usage,cost:null,passed};
 }
 
@@ -151,7 +153,8 @@ export async function evaluateQualification({manifest,model,observer,onCase=()=>
     }catch(error){score={correct:false,unsafeAcceptance:false,droppedRequirements:kind==='intent',guessedAmbiguous:false,unverifiedCandidate:false,normalization:'failed',feedback:[]};code=SAFE_CODES.has(error?.code)?error.code:'provider_unavailable';}
     const observed=observer.end(),durationMs=observed.durationMs??Math.max(0,Math.round(now()-started));
     const record={id:entry.id,kind,repeatIndex,code,correct:score.correct,unsafeAcceptance:score.unsafeAcceptance??false,droppedRequirements:score.droppedRequirements??false,
-      guessedAmbiguous:score.guessedAmbiguous??false,unverifiedCandidate:score.unverifiedCandidate??false,normalization:score.normalization,feedback:score.feedback,
+      guessedAmbiguous:score.guessedAmbiguous??false,unverifiedCandidate:score.unverifiedCandidate??false,manualReviewPending:score.manualReviewPending??false,
+      clarificationSha256:score.clarificationSha256??null,normalization:score.normalization,feedback:score.feedback,
       durationMs,attempts:observed.attempts,webStarts:observed.webStarts,metricObserved:observed.metricObserved,usage:observed.usage??null};
     records.push(record);await onCase(record);
     return code==='succeeded'&&observed.metricObserved&&observed.webStarts!==null&&observed.usage!==null&&record.normalization!=='rejected'&&!record.unsafeAcceptance&&!record.droppedRequirements&&!record.guessedAmbiguous&&!record.unverifiedCandidate;
@@ -167,4 +170,31 @@ export async function evaluateQualification({manifest,model,observer,onCase=()=>
   const totals={calls:records.reduce((sum,record)=>sum+record.attempts,0),durationMs:records.reduce((sum,record)=>sum+record.durationMs,0),
     webStarts:records.every(record=>record.webStarts!==null)?records.reduce((sum,record)=>sum+record.webStarts,0):null,usage,cost:null};
   return {version:1,kind:'luna_qualification',passed:intent.passed&&company.passed,intent,company,totals,cases:records};
+}
+
+// A protected, independent reviewer must see the exact transient reply before
+// issuing this receipt. This pure function never reads or stores reply text.
+export function applyQualificationReview({manifest,report,receipt}){
+  validateQualificationManifest(manifest);
+  if(!plain(report)||report.version!==1||report.kind!=='luna_qualification'||!Array.isArray(report.cases)
+    ||!plain(receipt)||Object.keys(receipt).sort().join(',')!=='cases,kind,reportSha256,version'
+    ||receipt.kind!=='luna_qualification_manual_review'||receipt.version!==1
+    ||receipt.reportSha256!==sha(Buffer.from(JSON.stringify(report)))||!Array.isArray(receipt.cases))fail();
+  const pending=report.cases.filter(record=>record.kind==='company'&&record.repeatIndex===0&&record.manualReviewPending);
+  const expected=manifest.company.cases.filter(entry=>entry.expectedStatus==='clarification');
+  if(pending.length!==expected.length||receipt.cases.length!==expected.length
+    ||expected.some(entry=>!pending.some(record=>record.id===entry.id)))fail();
+  const reviewed=new Map();
+  for(const item of receipt.cases){
+    const record=pending.find(candidate=>candidate.id===item?.id);
+    if(!plain(item)||Object.keys(item).sort().join(',')!=='approved,clarificationSha256,id'||!record
+      ||reviewed.has(item.id)||item.clarificationSha256!==record.clarificationSha256||typeof item.approved!=='boolean')fail();
+    reviewed.set(item.id,item.approved);
+  }
+  const cases=report.cases.map(record=>record.kind==='company'&&record.repeatIndex===0&&reviewed.has(record.id)
+    ?{...record,correct:reviewed.get(record.id),manualReviewPending:false,normalization:reviewed.get(record.id)?'clarification':'incorrect'}
+    :record);
+  const intent=aggregate(cases,'intent',manifest.intent,manifest.repeats.intentCaseId);
+  const company=aggregate(cases,'company',manifest.company,manifest.repeats.companyCaseId);
+  return {...report,cases,intent,company,passed:intent.passed&&company.passed,manualReviewSha256:sha(Buffer.from(JSON.stringify(receipt)))};
 }

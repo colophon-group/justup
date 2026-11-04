@@ -1,10 +1,16 @@
 // Provider-free qualification contracts. No socket, credentials or host calls.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createQualificationObserver,evaluateQualification,fixedQualificationManifest,validateQualificationManifest } from './luna-qualification.mjs';
+import { createHash } from 'node:crypto';
+import { applyQualificationReview,createQualificationObserver,evaluateQualification,fixedQualificationManifest,validateQualificationManifest } from './luna-qualification.mjs';
 import { runQualificationCli,validateQualificationGrant } from './luna-qualification-cli.mjs';
 
 const usage={inputTokens:12,cachedInputTokens:0,outputTokens:8,reasoningOutputTokens:2};
+const sha=value=>createHash('sha256').update(value).digest('hex');
+function reviewReceipt(report,approved){
+  return {version:1,kind:'luna_qualification_manual_review',reportSha256:sha(JSON.stringify(report)),
+    cases:report.cases.filter(record=>record.kind==='company'&&record.manualReviewPending).map(record=>({id:record.id,clarificationSha256:record.clarificationSha256,approved}))};
+}
 const FILTERS=['companyInclude','companyExclude','titleAny','bodyAll','bodyNone','locations','workplaces','employmentTypes','postingLanguages','seniority'];
 function intentAnswer(entry){
   const entries=Object.entries(entry.expected.filters),filters=Object.fromEntries(FILTERS.map(key=>[key,entry.expected.filters[key]??null]));
@@ -20,7 +26,7 @@ function fakeModel(manifest,observer,{unsafe=false,missingCounter=false,clarific
   return {available:()=>true,
     async interpretIntent(input){const entry=manifest.intent.cases.find(item=>item.query===input.query);measured('intent',0);return intentAnswer(entry);},
     async resolveCompany(input){const entry=manifest.company.cases.find(item=>item.input===input.input);measured('company',entry.expectedStatus?1:0);
-      if(entry.expectedStatus)return unsafe?{data:{status:'candidate',candidate:{domain:'wrong.example'},clarification:null},evidenceVerified:false}:{data:{status:'clarification',candidate:null,clarification:clarification??`Which ${entry.expectedSubject} company do you mean?`},evidenceVerified:false};
+      if(entry.expectedStatus)return unsafe?{data:{status:'candidate',candidate:{domain:'wrong.example'},clarification:null},evidenceVerified:false}:{data:{status:'clarification',candidate:null,clarification:typeof clarification==='function'?clarification(entry):clarification??`Which ${entry.expectedSubject} company do you mean?`},evidenceVerified:false};
       const url=`https://${entry.expectedDomain}/`;
       return {data:{status:'candidate',candidate:{name:entry.input,domain:entry.expectedDomain,websiteUrl:url,evidenceUrls:[url]},clarification:null},evidenceVerified:true};
     }};
@@ -35,11 +41,14 @@ test('fixed held-out manifest has 20 synthetic intent and 18 public-company case
 test('fake product-model path scores exact requirements and emits only redacted counters',async()=>{
   const {manifest}=fixedQualificationManifest(),observer=createQualificationObserver();
   const records=[],report=await evaluateQualification({manifest,model:fakeModel(manifest,observer),observer,onCase:record=>records.push(record)});
-  assert.equal(report.passed,true);assert.equal(report.intent.cases,20);assert.equal(report.company.cases,18);
-  assert.equal(report.intent.correct,20);assert.equal(report.company.correct,18);
+  assert.equal(report.passed,false);assert.equal(report.intent.cases,20);assert.equal(report.company.cases,18);
+  assert.equal(report.intent.correct,20);assert.equal(report.company.correct,16);assert.equal(report.company.manualReviewPending,2);
+  const final=applyQualificationReview({manifest,report,receipt:reviewReceipt(report,true)});
+  assert.equal(final.passed,true);assert.equal(final.company.correct,18);assert.equal(final.company.manualReviewPending,0);
+  assert.match(final.manualReviewSha256,/^[a-f0-9]{64}$/);
   assert.equal(report.intent.usage.outputTokens,160);assert.equal(report.company.usage.outputTokens,144);
   assert.equal(records.length,42);assert.equal(JSON.stringify(report).includes('Jobs at Acme Labs'),false);
-  assert.equal(JSON.stringify(report).includes('Which organization do you mean?'),false);
+  assert.equal(JSON.stringify(report).includes('Which Mercury company do you mean?'),false);
   assert.equal(report.intent.cost,null);assert.equal(report.company.cost,null);
   assert.equal(report.intent.repeats,2);assert.equal(report.company.repeats,2);
 });
@@ -56,7 +65,8 @@ test('intent normalization gets one bounded service-style repair and aggregates 
     return base.interpretIntent(input);
   }};
   const report=await evaluateQualification({manifest,model,observer});
-  assert.equal(report.passed,true);assert.equal(repairObserved,true);
+  assert.equal(report.passed,false);assert.equal(repairObserved,true);
+  assert.equal(applyQualificationReview({manifest,report,receipt:reviewReceipt(report,true)}).passed,true);
   assert.equal(report.cases[0].attempts,2);assert.equal(report.cases[0].usage.outputTokens,16);
 });
 test('unsafe identity or missing numeric broker reply fails the qualification gate',async()=>{
@@ -71,16 +81,34 @@ test('unsafe identity or missing numeric broker reply fails the qualification ga
   assert.throws(()=>malformed.onReply({schemaId:'company',toolCalls:3,usage}),/unavailable/);
   assert.equal(malformed.end().webStarts,null);
 });
-test('unrelated or wrong-subject clarification cannot pass ambiguous identity cases',async()=>{
+test('ambiguous replies need independent review; declarative and irrelevant replies never auto-pass',async()=>{
   const {manifest}=fixedQualificationManifest();
-  for(const clarification of ['Please try again tomorrow.','Which company do you mean?','Which Other company do you mean?']){
+  for(const clarification of [
+    ()=>'Please try again tomorrow.',
+    entry=>`I will tell the ${entry.expectedSubject} company tomorrow.`,
+    entry=>`What is the ${entry.expectedSubject} company doing tomorrow?`,
+    ()=>'Which company do you mean?',
+    ()=>'Which Other company do you mean?'
+  ]){
     const observer=createQualificationObserver();
     const report=await evaluateQualification({manifest,model:fakeModel(manifest,observer,{clarification}),observer});
-    assert.equal(report.passed,false,clarification);
-    assert.equal(report.company.correct,16,clarification);
-    assert.equal(report.company.cases,18,clarification);
-    assert.deepEqual(report.cases.filter(record=>record.kind==='company'&&!record.correct).map(record=>record.id),['ambiguous-mercury','ambiguous-atlas']);
+    assert.equal(report.passed,false,clarification.toString());
+    assert.equal(report.company.correct,16,clarification.toString());
+    assert.equal(report.company.cases,18,clarification.toString());
+    const ambiguous=report.cases.filter(record=>record.kind==='company'&&!record.correct);
+    assert.deepEqual(ambiguous.map(record=>record.id),['ambiguous-mercury','ambiguous-atlas']);
+    if(report.company.manualReviewPending===2){
+      const final=applyQualificationReview({manifest,report,receipt:reviewReceipt(report,false)});
+      assert.equal(final.passed,false);assert.equal(final.company.correct,16);assert.equal(final.company.manualReviewPending,0);
+    }else assert.equal(report.company.manualReviewPending,0);
   }
+  const observer=createQualificationObserver();
+  const report=await evaluateQualification({manifest,model:fakeModel(manifest,observer,{clarification:entry=>`Could you share the official website for the ${entry.expectedSubject} company you mean?`}),observer});
+  assert.equal(report.passed,false);assert.equal(report.company.correct,16);assert.equal(report.company.manualReviewPending,2);
+  const receipt=reviewReceipt(report,true);
+  assert.equal(applyQualificationReview({manifest,report,receipt}).passed,true);
+  assert.throws(()=>applyQualificationReview({manifest,report,receipt:{...receipt,reportSha256:'a'.repeat(64)}}),/unavailable/);
+  assert.throws(()=>applyQualificationReview({manifest,report,receipt:{...receipt,cases:[{...receipt.cases[0],clarificationSha256:'a'.repeat(64)},receipt.cases[1]]}}),/unavailable/);
 });
 test('one-use grant binds exact identity, manifest and a five-minute start window',()=>{
   const identity={sourceCommit:'a'.repeat(40),buildIdentity:'b'.repeat(64),hostPlanSha256:'c'.repeat(64),manifestSha256:'d'.repeat(64)};
