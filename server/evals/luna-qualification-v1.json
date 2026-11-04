@@ -54,8 +54,8 @@
       {"id":"red-hat","input":"Red Hat","domain":"redhat.com","expectedDomain":"redhat.com"},
       {"id":"canonical","input":"Canonical","domain":"canonical.com","expectedDomain":"canonical.com"},
       {"id":"automattic","input":"Automattic","domain":"automattic.com","expectedDomain":"automattic.com"},
-      {"id":"ambiguous-mercury","input":"Mercury","expectedStatus":"clarification"},
-      {"id":"ambiguous-atlas","input":"Atlas","expectedStatus":"clarification"}
+      {"id":"ambiguous-mercury","input":"Mercury","expectedStatus":"clarification","expectedSubject":"Mercury"},
+      {"id":"ambiguous-atlas","input":"Atlas","expectedStatus":"clarification","expectedSubject":"Atlas"}
     ]
   }
 }

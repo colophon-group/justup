@@ -1,5 +1,5 @@
-// One-use, queue-UID-only Luna qualification. The trusted queue launcher supplies
-// exact artifact/host identity; this entrypoint never handles provider credentials.
+// Prepared one-use Luna qualification path. Live entry is blocked until a
+// reviewed fixed systemd unit installs the queue sandbox for this command.
 import { constants,closeSync,fsyncSync,fstatSync,lstatSync,openSync,readFileSync,realpathSync,writeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import { readRunnerConfig } from '../runner-adapter.mjs';
 import { createQualificationObserver,evaluateQualification,fixedQualificationManifest } from './luna-qualification.mjs';
 
 const BASE='/srv/justup_preview',GRANT=BASE+'/queue/config/luna-qualification.json',WORK=BASE+'/queue/work';
+const QUALIFICATION_SOURCE_ONLY=true;
 const SHA=/^[a-f0-9]{64}$/,OID=/^[a-f0-9]{40}$/,RUN=/^[a-f0-9]{32}$/;
 const plain=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype;
 const unavailable=()=>new Error('Luna qualification is unavailable.');
@@ -69,6 +70,9 @@ function qualificationModelConfig(base,identity){
     taskProfiles:Object.fromEntries(Object.entries(MODEL_PROFILES).map(([kind,profile])=>[kind,{enabled:true,toolPolicySha256:profile.toolPolicySha256,modelCatalogueSha256:MODEL_CATALOGUE_SHA256}]))};
 }
 export async function runQualificationCli(){
+  // A queue UID alone does not prove the systemd sandbox. Remove this source
+  // gate only with the fixed installed service and its host-plan review.
+  if(QUALIFICATION_SOURCE_ONLY)throw unavailable();
   queueUid();
   const config=readRunnerConfig(),identity={sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity,hostPlanSha256:config.hostPlanSha256};
   const {manifest,sha256:manifestSha256}=fixedQualificationManifest();

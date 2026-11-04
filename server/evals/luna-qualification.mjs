@@ -36,7 +36,7 @@ export function validateQualificationManifest(manifest){
         if(Object.keys(entry).sort().join(',')!=='expected,id,query'||typeof entry.query!=='string'||!entry.query.trim()||entry.query.length>300||!plain(entry.expected)||!plain(entry.expected.filters)||!Array.isArray(entry.expected.terms)||!entry.expected.terms.length||entry.expected.terms.some(term=>typeof term!=='string'||!term.trim()||term.length>80)||Object.keys(entry.expected).some(key=>!['filters','terms','unsatisfied'].includes(key))||entry.expected.unsatisfied!==undefined&&entry.expected.unsatisfied!==true)fail();
         for(const [key,values] of Object.entries(entry.expected.filters))if(!FILTERS.has(key)||!Array.isArray(values)||!values.length||values.length>8||values.some(value=>typeof value!=='string'||!value.trim()||value.length>100))fail();
       }else{
-        if(typeof entry.input!=='string'||!entry.input.trim()||entry.input.length>300||Object.keys(entry).some(key=>!['id','input','domain','expectedDomain','expectedStatus'].includes(key))||Boolean(entry.expectedDomain)===Boolean(entry.expectedStatus)||entry.expectedDomain!==undefined&&(entry.domain!==entry.expectedDomain||!/^[a-z0-9.-]+$/.test(entry.domain))||entry.expectedStatus!==undefined&&(entry.expectedStatus!=='clarification'||entry.domain!==undefined))fail();
+        if(typeof entry.input!=='string'||!entry.input.trim()||entry.input.length>300||Object.keys(entry).some(key=>!['id','input','domain','expectedDomain','expectedStatus','expectedSubject'].includes(key))||Boolean(entry.expectedDomain)===Boolean(entry.expectedStatus)||entry.expectedDomain!==undefined&&(entry.domain!==entry.expectedDomain||entry.expectedSubject!==undefined||!/^[a-z0-9.-]+$/.test(entry.domain))||entry.expectedStatus!==undefined&&(entry.expectedStatus!=='clarification'||entry.domain!==undefined||entry.expectedSubject!==entry.input||!/^[A-Za-z]{3,40}$/.test(entry.expectedSubject)))fail();
       }
     }
   }
@@ -99,7 +99,14 @@ function scoreIntent(raw,entry,caps){
 function scoreCompany(value,entry){
   const data=value?.data,evidenceVerified=value?.evidenceVerified===true;
   if(entry.expectedStatus==='clarification'){
-    const correct=data?.status==='clarification'&&data?.candidate===null&&typeof data?.clarification==='string'&&data.clarification.trim().length>0;
+    // A refusal or unrelated question is not a useful disambiguation. Require
+    // the exact ambiguous name, an identity cue and a request for more detail.
+    const clarification=typeof data?.clarification==='string'?fold(data.clarification):'';
+    const subject=fold(entry.expectedSubject);
+    const namesSubject=new RegExp(`(?:^|[^\\p{L}\\p{N}])${subject}(?=$|[^\\p{L}\\p{N}])`,'u').test(clarification);
+    const asksForIdentity=/\b(which|what|specify|identify|name|provide|tell|clarify)\b/u.test(clarification)
+      &&/\b(company|organisation|organization|business|domain|website|site)\b/u.test(clarification);
+    const correct=data?.status==='clarification'&&data?.candidate===null&&namesSubject&&asksForIdentity;
     return {correct,guessedAmbiguous:data?.status==='candidate',unverifiedCandidate:data?.status==='candidate'&&!evidenceVerified,normalization:correct?'clarification':'incorrect',feedback:[]};
   }
   const correct=data?.status==='candidate'&&evidenceVerified&&data?.candidate?.domain===entry.expectedDomain;
