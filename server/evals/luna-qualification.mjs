@@ -36,14 +36,22 @@ export function validateQualificationManifest(manifest){
         if(Object.keys(entry).sort().join(',')!=='expected,id,query'||typeof entry.query!=='string'||!entry.query.trim()||entry.query.length>300||!plain(entry.expected)||!plain(entry.expected.filters)||!Array.isArray(entry.expected.terms)||!entry.expected.terms.length||entry.expected.terms.some(term=>typeof term!=='string'||!term.trim()||term.length>80)||Object.keys(entry.expected).some(key=>!['filters','terms','unsatisfied'].includes(key))||entry.expected.unsatisfied!==undefined&&entry.expected.unsatisfied!==true)fail();
         for(const [key,values] of Object.entries(entry.expected.filters))if(!FILTERS.has(key)||!Array.isArray(values)||!values.length||values.length>8||values.some(value=>typeof value!=='string'||!value.trim()||value.length>100))fail();
       }else{
-        if(typeof entry.input!=='string'||!entry.input.trim()||entry.input.length>300||Object.keys(entry).some(key=>!['id','input','domain','expectedDomain','expectedStatus','expectedSubject'].includes(key))||Boolean(entry.expectedDomain)===Boolean(entry.expectedStatus)||entry.expectedDomain!==undefined&&(entry.domain!==entry.expectedDomain||entry.expectedSubject!==undefined||!/^[a-z0-9.-]+$/.test(entry.domain))||entry.expectedStatus!==undefined&&(entry.expectedStatus!=='clarification'||entry.domain!==undefined||entry.expectedSubject!==entry.input||!/^[A-Za-z]{3,40}$/.test(entry.expectedSubject)))fail();
+        const positive=typeof entry.expectedDomain==='string'&&/^[a-z0-9.-]+$/.test(entry.expectedDomain)
+          &&(entry.domain===undefined||entry.domain===entry.expectedDomain)&&entry.expectedStatus===undefined&&entry.expectedSubject===undefined;
+        const ambiguous=entry.expectedStatus==='clarification'&&entry.expectedDomain===undefined&&entry.domain===undefined
+          &&entry.expectedSubject===entry.input&&/^[A-Za-z]{3,40}$/.test(entry.expectedSubject);
+        if(typeof entry.input!=='string'||!entry.input.trim()||entry.input.length>300
+          ||Object.keys(entry).some(key=>!['id','input','domain','expectedDomain','expectedStatus','expectedSubject'].includes(key))
+          ||!positive&&!ambiguous)fail();
       }
     }
   }
+  const nameOnly=manifest.company.cases.filter(entry=>entry.expectedDomain&&entry.domain===undefined);
+  if(manifest.company.minimumNameOnlyDiscoveryCases!==4||nameOnly.length<manifest.company.minimumNameOnlyDiscoveryCases)fail();
   if(manifest.intent.maximumUnsafeAcceptance!==0||manifest.intent.maximumDroppedRequirements!==0||manifest.company.maximumGuessedAmbiguous!==0||manifest.company.maximumUnverifiedCandidate!==0)fail();
   if(Object.keys(manifest.repeats).sort().join(',')!=='additionalRuns,companyCaseId,intentCaseId'||manifest.repeats.additionalRuns!==2
     ||!manifest.intent.cases.some(entry=>entry.id===manifest.repeats.intentCaseId)
-    ||!manifest.company.cases.some(entry=>entry.id===manifest.repeats.companyCaseId))fail();
+    ||!nameOnly.some(entry=>entry.id===manifest.repeats.companyCaseId))fail();
   return manifest;
 }
 
@@ -125,11 +133,13 @@ function aggregate(records,kind,section,repeatCaseId){
   const unsafeAcceptance=values.filter(record=>record.unsafeAcceptance).length,droppedRequirements=values.filter(record=>record.droppedRequirements).length;
   const guessedAmbiguous=values.filter(record=>record.guessedAmbiguous).length,unverifiedCandidate=values.filter(record=>record.unverifiedCandidate).length;
   const manualReviewPending=values.filter(record=>record.manualReviewPending).length;
+  const nameOnly=values.filter(record=>record.discoveryRequired),nameOnlyDiscoveryObserved=nameOnly.filter(record=>record.webStarts>=1).length;
   const countersComplete=values.every(record=>record.metricObserved&&record.webStarts!==null&&record.usage!==null);
   const passed=values.length===section.minimumCases&&accuracy>=section.minimumAccuracy&&manualReviewPending===0&&p95LatencyMs!==null&&p95LatencyMs<=section.maximumP95LatencyMs&&countersComplete&&repeatConsistent&&
-    (kind==='intent'?unsafeAcceptance===0&&droppedRequirements===0&&values.every(record=>record.webStarts===0):guessedAmbiguous===0&&unverifiedCandidate===0&&values.every(record=>record.webStarts<=2));
+    (kind==='intent'?unsafeAcceptance===0&&droppedRequirements===0&&values.every(record=>record.webStarts===0):guessedAmbiguous===0&&unverifiedCandidate===0&&values.every(record=>record.webStarts<=2)
+      &&nameOnly.length>=section.minimumNameOnlyDiscoveryCases&&nameOnlyDiscoveryObserved===nameOnly.length);
   return {cases:values.length,correct:values.filter(record=>record.correct).length,accuracy,p95LatencyMs,unsafeAcceptance,droppedRequirements,guessedAmbiguous,unverifiedCandidate,manualReviewPending,countersComplete,
-    repeats:repeats.length,repeatConsistent,repeatLatencyRangeMs,usage,cost:null,passed};
+    nameOnlyDiscoveryCases:nameOnly.length,nameOnlyDiscoveryObserved,repeats:repeats.length,repeatConsistent,repeatLatencyRangeMs,usage,cost:null,passed};
 }
 
 export async function evaluateQualification({manifest,model,observer,onCase=()=>{},now=()=>performance.now()}){
@@ -152,9 +162,10 @@ export async function evaluateQualification({manifest,model,observer,onCase=()=>
       code='succeeded';
     }catch(error){score={correct:false,unsafeAcceptance:false,droppedRequirements:kind==='intent',guessedAmbiguous:false,unverifiedCandidate:false,normalization:'failed',feedback:[]};code=SAFE_CODES.has(error?.code)?error.code:'provider_unavailable';}
     const observed=observer.end(),durationMs=observed.durationMs??Math.max(0,Math.round(now()-started));
+    const discoveryRequired=kind==='company'&&entry.expectedDomain!==undefined&&entry.domain===undefined;
     const record={id:entry.id,kind,repeatIndex,code,correct:score.correct,unsafeAcceptance:score.unsafeAcceptance??false,droppedRequirements:score.droppedRequirements??false,
       guessedAmbiguous:score.guessedAmbiguous??false,unverifiedCandidate:score.unverifiedCandidate??false,manualReviewPending:score.manualReviewPending??false,
-      clarificationSha256:score.clarificationSha256??null,normalization:score.normalization,feedback:score.feedback,
+      clarificationSha256:score.clarificationSha256??null,discoveryRequired,normalization:score.normalization,feedback:score.feedback,
       durationMs,attempts:observed.attempts,webStarts:observed.webStarts,metricObserved:observed.metricObserved,usage:observed.usage??null};
     records.push(record);await onCase(record);
     return code==='succeeded'&&observed.metricObserved&&observed.webStarts!==null&&observed.usage!==null&&record.normalization!=='rejected'&&!record.unsafeAcceptance&&!record.droppedRequirements&&!record.guessedAmbiguous&&!record.unverifiedCandidate;

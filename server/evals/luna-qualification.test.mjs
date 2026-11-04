@@ -18,14 +18,15 @@ function intentAnswer(entry){
   if(entry.expected.unsatisfied)requirements.push({id:'r2',text:entry.query,handling:'unsatisfied',reason:'No verified evidence supports the requested condition.',bindings:[],companyReference:null});
   return {title:'Synthetic search',configuration:{schemaVersion:1,filters,residualAi:null},requirements};
 }
-function fakeModel(manifest,observer,{unsafe=false,missingCounter=false,clarification=null}={}){
+function fakeModel(manifest,observer,{unsafe=false,missingCounter=false,clarification=null,zeroDiscoveryCaseId=null}={}){
   const measured=(kind,webStarts)=>{
     if(!missingCounter)observer.onReply({schemaId:kind,toolCalls:webStarts,usage});
     observer.onMetric({kind:kind==='intent'?'search_intent':'company_resolution',code:'succeeded',durationMs:25,usage});
   };
   return {available:()=>true,
     async interpretIntent(input){const entry=manifest.intent.cases.find(item=>item.query===input.query);measured('intent',0);return intentAnswer(entry);},
-    async resolveCompany(input){const entry=manifest.company.cases.find(item=>item.input===input.input);measured('company',entry.expectedStatus?1:0);
+    async resolveCompany(input){const entry=manifest.company.cases.find(item=>item.input===input.input);assert.equal(input.domain,entry.domain??null);
+      measured('company',entry.id===zeroDiscoveryCaseId?0:entry.domain===undefined?1:0);
       if(entry.expectedStatus)return unsafe?{data:{status:'candidate',candidate:{domain:'wrong.example'},clarification:null},evidenceVerified:false}:{data:{status:'clarification',candidate:null,clarification:typeof clarification==='function'?clarification(entry):clarification??`Which ${entry.expectedSubject} company do you mean?`},evidenceVerified:false};
       const url=`https://${entry.expectedDomain}/`;
       return {data:{status:'candidate',candidate:{name:entry.input,domain:entry.expectedDomain,websiteUrl:url,evidenceUrls:[url]},clarification:null},evidenceVerified:true};
@@ -35,14 +36,19 @@ test('fixed held-out manifest has 20 synthetic intent and 18 public-company case
   const {manifest,sha256}=fixedQualificationManifest();
   assert.equal(manifest.intent.cases.length,20);assert.equal(manifest.company.cases.length,18);assert.match(sha256,/^[a-f0-9]{64}$/);
   assert.equal(manifest.company.cases.filter(entry=>entry.expectedStatus==='clarification').length,2);
+  assert.equal(manifest.company.cases.filter(entry=>entry.expectedDomain&&entry.domain===undefined).length,4);
   const altered=structuredClone(manifest);altered.company.cases[1].id=altered.company.cases[0].id;
   assert.throws(()=>validateQualificationManifest(altered),/unavailable/);
+  const noDiscovery=structuredClone(manifest);noDiscovery.company.cases.find(entry=>entry.id==='shopify').domain='shopify.com';
+  assert.throws(()=>validateQualificationManifest(noDiscovery),/unavailable/);
 });
 test('fake product-model path scores exact requirements and emits only redacted counters',async()=>{
   const {manifest}=fixedQualificationManifest(),observer=createQualificationObserver();
   const records=[],report=await evaluateQualification({manifest,model:fakeModel(manifest,observer),observer,onCase:record=>records.push(record)});
   assert.equal(report.passed,false);assert.equal(report.intent.cases,20);assert.equal(report.company.cases,18);
   assert.equal(report.intent.correct,20);assert.equal(report.company.correct,16);assert.equal(report.company.manualReviewPending,2);
+  assert.equal(report.company.nameOnlyDiscoveryCases,4);assert.equal(report.company.nameOnlyDiscoveryObserved,4);
+  assert.equal(report.cases.find(record=>record.id==='cloudflare'&&record.repeatIndex===0).webStarts,1);
   const final=applyQualificationReview({manifest,report,receipt:reviewReceipt(report,true)});
   assert.equal(final.passed,true);assert.equal(final.company.correct,18);assert.equal(final.company.manualReviewPending,0);
   assert.match(final.manualReviewSha256,/^[a-f0-9]{64}$/);
@@ -51,6 +57,17 @@ test('fake product-model path scores exact requirements and emits only redacted 
   assert.equal(JSON.stringify(report).includes('Which Mercury company do you mean?'),false);
   assert.equal(report.intent.cost,null);assert.equal(report.company.cost,null);
   assert.equal(report.intent.repeats,2);assert.equal(report.company.repeats,2);
+});
+test('a name-only candidate with no observed native web start cannot pass',async()=>{
+  const {manifest}=fixedQualificationManifest(),observer=createQualificationObserver();
+  const report=await evaluateQualification({manifest,model:fakeModel(manifest,observer,{zeroDiscoveryCaseId:'cloudflare'}),observer});
+  assert.equal(report.passed,false);assert.equal(report.company.cases,18);
+  assert.equal(report.company.nameOnlyDiscoveryCases,4);assert.equal(report.company.nameOnlyDiscoveryObserved,3);
+  assert.equal(report.cases.find(record=>record.id==='cloudflare').correct,true);
+  assert.equal(report.cases.find(record=>record.id==='cloudflare').webStarts,0);
+  const final=applyQualificationReview({manifest,report,receipt:reviewReceipt(report,true)});
+  assert.equal(final.company.correct,18);assert.equal(final.company.manualReviewPending,0);
+  assert.equal(final.company.passed,false);assert.equal(final.passed,false);
 });
 test('intent normalization gets one bounded service-style repair and aggregates both attempts',async()=>{
   const {manifest}=fixedQualificationManifest(),observer=createQualificationObserver(),base=fakeModel(manifest,observer);

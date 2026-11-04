@@ -1,7 +1,7 @@
 {
   "version": 1,
   "purpose": "Fixed synthetic search requests and public official-site identity requests for a separately authorized Luna qualification run.",
-  "repeats": {"additionalRuns": 2, "intentCaseId": "title-backend", "companyCaseId": "mozilla"},
+  "repeats": {"additionalRuns": 2, "intentCaseId": "title-backend", "companyCaseId": "cloudflare"},
   "intent": {
     "minimumCases": 20,
     "minimumAccuracy": 0.95,
@@ -34,6 +34,7 @@
   "company": {
     "minimumCases": 18,
     "minimumAccuracy": 0.95,
+    "minimumNameOnlyDiscoveryCases": 4,
     "maximumGuessedAmbiguous": 0,
     "maximumUnverifiedCandidate": 0,
     "maximumP95LatencyMs": 60000,
@@ -41,10 +42,10 @@
       {"id":"mozilla","input":"Mozilla","domain":"mozilla.org","expectedDomain":"mozilla.org"},
       {"id":"dropbox","input":"Dropbox","domain":"dropbox.com","expectedDomain":"dropbox.com"},
       {"id":"wikimedia-foundation","input":"Wikimedia Foundation","domain":"wikimediafoundation.org","expectedDomain":"wikimediafoundation.org"},
-      {"id":"cloudflare","input":"Cloudflare","domain":"cloudflare.com","expectedDomain":"cloudflare.com"},
-      {"id":"stripe","input":"Stripe","domain":"stripe.com","expectedDomain":"stripe.com"},
-      {"id":"github","input":"GitHub","domain":"github.com","expectedDomain":"github.com"},
-      {"id":"shopify","input":"Shopify","domain":"shopify.com","expectedDomain":"shopify.com"},
+      {"id":"cloudflare","input":"Cloudflare","expectedDomain":"cloudflare.com"},
+      {"id":"stripe","input":"Stripe","expectedDomain":"stripe.com"},
+      {"id":"github","input":"GitHub","expectedDomain":"github.com"},
+      {"id":"shopify","input":"Shopify","expectedDomain":"shopify.com"},
       {"id":"microsoft","input":"Microsoft","domain":"microsoft.com","expectedDomain":"microsoft.com"},
       {"id":"apple","input":"Apple","domain":"apple.com","expectedDomain":"apple.com"},
       {"id":"google","input":"Google","domain":"google.com","expectedDomain":"google.com"},
