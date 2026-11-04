@@ -7,13 +7,16 @@ mark a preview shareable or satisfy the complete release gate.
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timezone, timedelta
 import hashlib
 from html.parser import HTMLParser
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -40,6 +43,61 @@ def get(url, as_json=True, headers=None):
             raise ValueError('Candidate response is oversized or unsuccessful.')
         headers = {key.lower(): value for key, value in response.headers.items()}
         return (json.loads(data) if as_json else data.decode('utf8')), headers
+
+
+def read_ingress_secret(path):
+    """Read only the fixed private token file used for a loopback process check."""
+    path = Path(path)
+    if not path.is_absolute() or path.resolve(strict=True) != path:
+        raise ValueError('Ingress secret file must have a canonical absolute path.')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        meta = os.fstat(fd)
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1
+                or stat.S_IMODE(meta.st_mode) != 0o600
+                or meta.st_uid not in {0, os.geteuid()} or not 43 <= meta.st_size <= 44):
+            raise ValueError('Ingress secret file must be a private regular file.')
+        raw = os.read(fd, 45)
+    finally:
+        os.close(fd)
+    token = raw.removesuffix(b'\n')
+    if len(raw) != meta.st_size or not re.fullmatch(rb'[A-Za-z0-9_-]{43}', token):
+        raise ValueError('Ingress secret file contains an invalid token.')
+    decoded = base64.urlsafe_b64decode(token + b'=')
+    if len(decoded) != 32 or base64.urlsafe_b64encode(decoded).rstrip(b'=') != token:
+        raise ValueError('Ingress secret file contains an invalid token.')
+    return token.decode('ascii')
+
+
+def process_fetch(base_url, secret_file, fetch=None):
+    """Probe the private ingress guard, then authenticate only fixed API reads."""
+    if base_url != 'http://127.0.0.1:8787':
+        raise ValueError('Private process verification requires the fixed loopback origin.')
+    fetch = get if fetch is None else fetch
+    secret = read_ingress_secret(secret_file)
+    health = base_url + '/api/v1/health'
+    invalid = ('A' if secret[0] != 'A' else 'B') + secret[1:]
+    for headers in ({'X-Justup-Client-IP': '127.0.0.1'},
+                    {'X-Justup-Ingress': invalid, 'X-Justup-Client-IP': '127.0.0.1'}):
+        try:
+            fetch(health, headers=headers)
+        except HTTPError as error:
+            try:
+                if error.code != 403:
+                    raise ValueError('Private ingress guard did not reject a control request.')
+            finally:
+                error.close()
+        else:
+            raise ValueError('Private ingress guard accepted a control request.')
+
+    def authenticated(url, as_json=True, headers=None):
+        if not url.startswith(base_url + '/api/v1/'):
+            raise ValueError('Private process verifier requested a non-API path.')
+        return fetch(url, as_json, headers={**(headers or {}),
+                                            'X-Justup-Ingress': secret,
+                                            'X-Justup-Client-IP': '127.0.0.1'})
+
+    return authenticated
 
 
 def timestamp(value):
@@ -236,11 +294,20 @@ def verify(base_url, manifest, mode, runner_identity=None, import_generation=Non
             'shareable': False}
 
 
+def load_manifest(path):
+    spec = importlib.util.spec_from_file_location('preview_artifact', Path(__file__).with_name('preview-artifact.py'))
+    artifact = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(artifact)
+    return artifact.validate_manifest(json.loads(path.read_text()))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-url', required=True)
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--mode', choices=['process', 'policies', 'preview'], required=True)
+    parser.add_argument('--ingress-secret-file', type=Path,
+                        help='Canonical private 0600 token file; required only for fixed loopback process mode.')
     parser.add_argument('--expected-runner-identity')
     parser.add_argument('--expected-import-generation')
     parser.add_argument('--approved-policy-version')
@@ -250,15 +317,23 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     try:
-        spec = importlib.util.spec_from_file_location('preview_artifact', Path(__file__).with_name('preview-artifact.py'))
-        artifact = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(artifact)
-        manifest = artifact.validate_manifest(json.loads(args.manifest.read_text()))
+        if args.mode != 'process' and args.ingress_secret_file is not None:
+            raise ValueError('Ingress secret file is only accepted for private process verification.')
+        manifest = load_manifest(args.manifest)
+        if args.mode == 'process':
+            if args.ingress_secret_file is None:
+                raise ValueError('Private process verification requires the ingress secret file.')
+            fetch = process_fetch(args.base_url, args.ingress_secret_file)
+        else:
+            fetch = get
         report = verify(args.base_url, manifest, args.mode, args.expected_runner_identity,
                         args.expected_import_generation, args.approved_policy_version,
+                        fetch=fetch,
                         frontend_release=json.loads(args.frontend_release.read_text()) if args.frontend_release else None,
                         frontend_config=json.loads(args.frontend_config.read_text()) if args.frontend_config else None,
                         policy_asset_proof=json.loads(args.policy_asset_proof.read_text()) if args.policy_asset_proof else None)
+        if args.mode == 'process':
+            report['checks'].append('private_ingress_rejects_missing_and_wrong_token')
         status = 0
     except (ValueError, OSError, KeyError, TypeError, UnicodeError, HTTPError, URLError):
         report = {'formatVersion': 1, 'scope': args.mode, 'passed': False, 'shareable': False,

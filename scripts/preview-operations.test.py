@@ -2,6 +2,7 @@
 """Observable artifact, boundary, privacy and recovery contracts; no remote writes."""
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
 from contextlib import contextmanager, ExitStack, closing
 from datetime import datetime, timezone
@@ -2253,6 +2254,13 @@ class SchemaOperationsContracts(unittest.TestCase):
 
 
 class HTTPVerificationContracts(unittest.TestCase):
+    def process_secret(self, directory):
+        path = Path(directory).resolve() / 'ingress-token'
+        token = base64.urlsafe_b64encode(bytes(range(32))).rstrip(b'=').decode('ascii')
+        path.write_text(token + '\n')
+        path.chmod(0o600)
+        return path, token
+
     def policy_assets(self, manifest, locales=('en',)):
         pages, entries = {}, {}
         for locale in locales:
@@ -2325,6 +2333,84 @@ class HTTPVerificationContracts(unittest.TestCase):
         values['/api/v1/version']['buildIdentity'] = 'different'
         with self.assertRaisesRegex(ValueError, 'identity differs'):
             http.verify('http://127.0.0.1:8787', manifest, 'process', fetch=fetch)
+
+    def test_private_process_cli_checks_ingress_without_disclosing_the_token(self):
+        manifest, values, _ = self.responses()
+        with tempfile.TemporaryDirectory() as directory:
+            secret_file, secret = self.process_secret(directory)
+            manifest_file, report_file = Path(directory) / 'manifest.json', Path(directory) / 'report.json'
+            manifest_file.write_text(json.dumps(manifest))
+            calls = []
+            def transport(url, as_json=True, headers=None):
+                calls.append(headers or {})
+                if (headers or {}).get('X-Justup-Ingress') != secret:
+                    raise http.HTTPError(url, 403, 'Forbidden', {}, io.BytesIO())
+                path = url.removeprefix('http://127.0.0.1:8787')
+                return deepcopy(values[path]), {'cache-control': 'private, no-store', 'x-robots-tag': 'noindex'}
+            arguments = ['preview-verify.py', '--base-url', 'http://127.0.0.1:8787',
+                         '--mode', 'process', '--manifest', str(manifest_file),
+                         '--ingress-secret-file', str(secret_file), '--report', str(report_file)]
+            with patch.object(sys, 'argv', arguments), patch.object(http, 'get', side_effect=transport), \
+                 patch.object(http, 'load_manifest', return_value=manifest), \
+                 patch('sys.stdout', new_callable=io.StringIO) as output:
+                self.assertEqual(http.main(), 0)
+            report = json.loads(report_file.read_text())
+            self.assertTrue(report['passed'])
+            self.assertFalse(report['shareable'])
+            self.assertIn('private_ingress_rejects_missing_and_wrong_token', report['checks'])
+            self.assertEqual(len(calls), 5)
+            self.assertEqual(calls[0], {'X-Justup-Client-IP': '127.0.0.1'})
+            self.assertNotEqual(calls[1]['X-Justup-Ingress'], secret)
+            self.assertTrue(all(call.get('X-Justup-Ingress') == secret and
+                                call.get('X-Justup-Client-IP') == '127.0.0.1' for call in calls[2:]))
+            self.assertNotIn(secret, report_file.read_text())
+            self.assertNotIn(secret, output.getvalue())
+
+    def test_private_process_controls_fail_if_missing_or_wrong_token_is_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            secret_file, secret = self.process_secret(directory)
+            for accepted in ('missing', 'wrong'):
+                def transport(url, as_json=True, headers=None):
+                    supplied = (headers or {}).get('X-Justup-Ingress')
+                    if (headers or {}).get('X-Justup-Client-IP') != '127.0.0.1':
+                        raise http.HTTPError(url, 403, 'Forbidden', {}, io.BytesIO())
+                    if ((supplied is None and accepted == 'missing')
+                            or (supplied not in {None, secret} and accepted == 'wrong')):
+                        return {}, {}
+                    raise http.HTTPError(url, 403, 'Forbidden', {}, io.BytesIO())
+                with self.subTest(accepted=accepted), self.assertRaisesRegex(ValueError, 'accepted'):
+                    http.process_fetch('http://127.0.0.1:8787', secret_file, fetch=transport)
+            with self.assertRaisesRegex(ValueError, 'fixed loopback'):
+                http.process_fetch('http://localhost:8787', secret_file, fetch=transport)
+
+    def test_private_process_secret_must_be_a_single_canonical_private_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            secret_file, _ = self.process_secret(directory)
+            self.assertEqual(len(http.read_ingress_secret(secret_file)), 43)
+            secret_file.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, 'private regular'):
+                http.read_ingress_secret(secret_file)
+            secret_file.chmod(0o600)
+            alias = Path(directory) / 'alias'
+            alias.symlink_to(secret_file)
+            with self.assertRaises(ValueError):
+                http.read_ingress_secret(alias)
+
+    def test_preview_cli_rejects_private_ingress_file_before_any_request(self):
+        manifest, _ = payload()
+        with tempfile.TemporaryDirectory() as directory:
+            secret_file, secret = self.process_secret(directory)
+            manifest_file, report_file = Path(directory) / 'manifest.json', Path(directory) / 'report.json'
+            manifest_file.write_text(json.dumps(manifest))
+            arguments = ['preview-verify.py', '--base-url', 'https://preview.example',
+                         '--mode', 'preview', '--manifest', str(manifest_file),
+                         '--ingress-secret-file', str(secret_file), '--report', str(report_file)]
+            with patch.object(sys, 'argv', arguments), patch.object(http, 'get', side_effect=AssertionError('no request')), \
+                 patch('sys.stdout', new_callable=io.StringIO) as output:
+                self.assertEqual(http.main(), 1)
+            self.assertFalse(json.loads(report_file.read_text())['passed'])
+            self.assertNotIn(secret, report_file.read_text())
+            self.assertNotIn(secret, output.getvalue())
 
     def test_missing_real_runner_blocks_preview_even_when_process_passes(self):
         manifest, values, fetch = self.responses()
