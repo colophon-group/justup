@@ -2359,7 +2359,7 @@ class HTTPVerificationContracts(unittest.TestCase):
             self.assertFalse(report['shareable'])
             self.assertIn('private_ingress_rejects_missing_and_wrong_token', report['checks'])
             self.assertEqual(len(calls), 5)
-            self.assertEqual(calls[0], {})
+            self.assertEqual(calls[0], {'X-Justup-Client-IP': '127.0.0.1'})
             self.assertNotEqual(calls[1]['X-Justup-Ingress'], secret)
             self.assertTrue(all(call.get('X-Justup-Ingress') == secret and
                                 call.get('X-Justup-Client-IP') == '127.0.0.1' for call in calls[2:]))
@@ -2372,6 +2372,8 @@ class HTTPVerificationContracts(unittest.TestCase):
             for accepted in ('missing', 'wrong'):
                 def transport(url, as_json=True, headers=None):
                     supplied = (headers or {}).get('X-Justup-Ingress')
+                    if (headers or {}).get('X-Justup-Client-IP') != '127.0.0.1':
+                        raise http.HTTPError(url, 403, 'Forbidden', {}, io.BytesIO())
                     if ((supplied is None and accepted == 'missing')
                             or (supplied not in {None, secret} and accepted == 'wrong')):
                         return {}, {}

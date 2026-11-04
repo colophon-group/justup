@@ -77,7 +77,8 @@ def process_fetch(base_url, secret_file, fetch=None):
     secret = read_ingress_secret(secret_file)
     health = base_url + '/api/v1/health'
     invalid = ('A' if secret[0] != 'A' else 'B') + secret[1:]
-    for headers in ({}, {'X-Justup-Ingress': invalid, 'X-Justup-Client-IP': '127.0.0.1'}):
+    for headers in ({'X-Justup-Client-IP': '127.0.0.1'},
+                    {'X-Justup-Ingress': invalid, 'X-Justup-Client-IP': '127.0.0.1'}):
         try:
             fetch(health, headers=headers)
         except HTTPError as error:
