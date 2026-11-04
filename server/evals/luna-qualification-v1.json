@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "purpose": "Fixed synthetic search requests and public official-site identity requests for a separately authorized Luna qualification run.",
+  "repeats": {"additionalRuns": 2, "intentCaseId": "title-backend", "companyCaseId": "mozilla"},
+  "intent": {
+    "minimumCases": 20,
+    "minimumAccuracy": 0.95,
+    "maximumUnsafeAcceptance": 0,
+    "maximumDroppedRequirements": 0,
+    "maximumP95LatencyMs": 30000,
+    "cases": [
+      {"id":"title-backend","query":"Backend roles","expected":{"filters":{"titleAny":["backend"]},"terms":["backend"]}},
+      {"id":"title-frontend","query":"Frontend roles","expected":{"filters":{"titleAny":["frontend"]},"terms":["frontend"]}},
+      {"id":"remote-workplace","query":"Remote jobs","expected":{"filters":{"workplaces":["remote"]},"terms":["remote"]}},
+      {"id":"hybrid-workplace","query":"Hybrid jobs","expected":{"filters":{"workplaces":["hybrid"]},"terms":["hybrid"]}},
+      {"id":"zurich-location","query":"Jobs in Zurich, Switzerland","expected":{"filters":{"locations":["Zurich, Switzerland"]},"terms":["zurich"]}},
+      {"id":"berlin-location","query":"Jobs in Berlin, Germany","expected":{"filters":{"locations":["Berlin, Germany"]},"terms":["berlin"]}},
+      {"id":"german-postings","query":"Jobs posted in German","expected":{"filters":{"postingLanguages":["de"]},"terms":["german"]}},
+      {"id":"english-postings","query":"Jobs posted in English","expected":{"filters":{"postingLanguages":["en"]},"terms":["english"]}},
+      {"id":"full-time","query":"Full-time jobs","expected":{"filters":{"employmentTypes":["full-time"]},"terms":["full-time"]}},
+      {"id":"contract","query":"Contract jobs","expected":{"filters":{"employmentTypes":["contract"]},"terms":["contract"]}},
+      {"id":"company-include","query":"Jobs at Acme Labs","expected":{"filters":{"companyInclude":["acme-labs"]},"terms":["acme labs"]}},
+      {"id":"company-exclude","query":"Jobs except Acme Labs","expected":{"filters":{"companyExclude":["acme-labs"]},"terms":["acme labs"]}},
+      {"id":"senior","query":"Senior roles","expected":{"filters":{"seniority":["senior"]},"terms":["senior"]}},
+      {"id":"junior","query":"Junior roles","expected":{"filters":{"seniority":["junior"]},"terms":["junior"]}},
+      {"id":"body-python","query":"Jobs whose description mentions Python","expected":{"filters":{"bodyAll":["python"]},"terms":["python"]}},
+      {"id":"body-exclude-recruiter","query":"Jobs whose description does not mention recruiter","expected":{"filters":{"bodyNone":["recruiter"]},"terms":["recruiter"]}},
+      {"id":"remote-backend","query":"Remote backend roles","expected":{"filters":{"titleAny":["backend"],"workplaces":["remote"]},"terms":["remote","backend"]}},
+      {"id":"acme-frontend-berlin","query":"Frontend jobs at Acme Labs in Berlin, Germany","expected":{"filters":{"companyInclude":["acme-labs"],"titleAny":["frontend"],"locations":["Berlin, Germany"]},"terms":["frontend","acme labs","berlin"]}},
+      {"id":"unsupported-visa","query":"Jobs that sponsor a visa","expected":{"filters":{},"terms":["visa"],"unsatisfied":true}},
+      {"id":"global-remote-eligibility","query":"Remote roles where I can work from any country","expected":{"filters":{"workplaces":["remote"]},"terms":["remote","any country"],"unsatisfied":true}}
+    ]
+  },
+  "company": {
+    "minimumCases": 18,
+    "minimumAccuracy": 0.95,
+    "maximumGuessedAmbiguous": 0,
+    "maximumUnverifiedCandidate": 0,
+    "maximumP95LatencyMs": 60000,
+    "cases": [
+      {"id":"mozilla","input":"Mozilla","domain":"mozilla.org","expectedDomain":"mozilla.org"},
+      {"id":"dropbox","input":"Dropbox","domain":"dropbox.com","expectedDomain":"dropbox.com"},
+      {"id":"wikimedia-foundation","input":"Wikimedia Foundation","domain":"wikimediafoundation.org","expectedDomain":"wikimediafoundation.org"},
+      {"id":"cloudflare","input":"Cloudflare","domain":"cloudflare.com","expectedDomain":"cloudflare.com"},
+      {"id":"stripe","input":"Stripe","domain":"stripe.com","expectedDomain":"stripe.com"},
+      {"id":"github","input":"GitHub","domain":"github.com","expectedDomain":"github.com"},
+      {"id":"shopify","input":"Shopify","domain":"shopify.com","expectedDomain":"shopify.com"},
+      {"id":"microsoft","input":"Microsoft","domain":"microsoft.com","expectedDomain":"microsoft.com"},
+      {"id":"apple","input":"Apple","domain":"apple.com","expectedDomain":"apple.com"},
+      {"id":"google","input":"Google","domain":"google.com","expectedDomain":"google.com"},
+      {"id":"adobe","input":"Adobe","domain":"adobe.com","expectedDomain":"adobe.com"},
+      {"id":"intel","input":"Intel","domain":"intel.com","expectedDomain":"intel.com"},
+      {"id":"nvidia","input":"NVIDIA","domain":"nvidia.com","expectedDomain":"nvidia.com"},
+      {"id":"red-hat","input":"Red Hat","domain":"redhat.com","expectedDomain":"redhat.com"},
+      {"id":"canonical","input":"Canonical","domain":"canonical.com","expectedDomain":"canonical.com"},
+      {"id":"automattic","input":"Automattic","domain":"automattic.com","expectedDomain":"automattic.com"},
+      {"id":"ambiguous-mercury","input":"Mercury","expectedStatus":"clarification"},
+      {"id":"ambiguous-atlas","input":"Atlas","expectedStatus":"clarification"}
+    ]
+  }
+}

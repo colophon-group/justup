@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import pwd
 import stat
+import sys
 
 BASE = Path('/srv/justup_preview')
 CONFIG_PATH = BASE / 'queue/config/runner.json'
@@ -152,6 +153,11 @@ def artifact_module():
 
 def main():
     try:
+        qualification = sys.argv[1:] == ['--qualify-model']
+        if sys.argv[1:] and not qualification:
+            raise ValueError('Unsupported queue launcher operation.')
+        if qualification and pwd.getpwuid(os.getuid()).pw_name != 'justup-preview-runner':
+            raise ValueError('Qualification requires the dedicated queue UID.')
         if os.getuid() == 0 or os.umask(0o007) & 0o070:
             raise ValueError('Queue requires a dedicated UID and group-readable state mask.')
         release = (BASE / 'current').resolve(strict=True)
@@ -165,6 +171,11 @@ def main():
                     'intent', 'companies', 'matching', 'jev', 'jev-budget'}
         if not {f'app/server/{name}.mjs' for name in required} <= manifest['files'].keys():
             raise ValueError('This release has no complete fixed queue composition.')
+        if qualification and not {
+                'app/server/evals/luna-qualification.mjs',
+                'app/server/evals/luna-qualification-cli.mjs',
+                'app/server/evals/luna-qualification-v1.json'} <= manifest['files'].keys():
+            raise ValueError('This release has no fixed Luna qualification entrypoint.')
         meta = CONFIG_PATH.lstat()
         if (CONFIG_PATH.resolve(strict=True) != CONFIG_PATH or not stat.S_ISREG(meta.st_mode)
                 or meta.st_uid != 0 or meta.st_gid != os.getgid() or stat.S_IMODE(meta.st_mode) != 0o640
@@ -178,7 +189,9 @@ def main():
         if config.get('jev', {}).get('enabled') is True:
             validate_ledger(expected_identity=budget_identity(config['jev']['cumulativeBudget']))
         node = str(release / 'runtime/bin/node')
-        os.execve(node, [node, str(release / 'app/server/runner.mjs')], child_environment(manifest, host_plan))
+        entrypoint = ('app/server/evals/luna-qualification-cli.mjs'
+                      if qualification else 'app/server/runner.mjs')
+        os.execve(node, [node, str(release / entrypoint)], child_environment(manifest, host_plan))
     except (ValueError, OSError, KeyError, json.JSONDecodeError):
         return 1
 

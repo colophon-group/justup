@@ -291,8 +291,8 @@ export function createModelBroker({config={},execute=executeCodex,fetchPage=fetc
   return {listen,close,ready:()=>!busy&&brokerConfigurationReady(config)};
 }
 
-export function createBrokerExecutor({socketPath}={}){
-  if(!isAbsolute(socketPath))throw new TypeError('An absolute broker socket is required.');
+export function createBrokerExecutor({socketPath,onReply}={}){
+  if(!isAbsolute(socketPath)||onReply!==undefined&&typeof onReply!=='function')throw new TypeError('An absolute broker socket and optional numeric reply observer are required.');
   return function execute({schemaId,stdin,timeoutMs,signal}={}){
     let input;try{input=requestData({schemaId,prompt:stdin,timeoutMs});}catch(error){return Promise.reject(error);}
     return new Promise((resolveReply,reject)=>{
@@ -305,7 +305,13 @@ export function createBrokerExecutor({socketPath}={}){
       socket.on('error',()=>finish(problem('dependency_unavailable')));socket.once('end',()=>{if(!settled)finish(problem('invalid_output'));});
       socket.on('data',chunk=>{
         bytes+=chunk.length;if(bytes>75_000)return finish(problem('output_limit'));buffer+=decoder.write(chunk);const end=buffer.indexOf('\n');if(end<0)return;
-        try{if(buffer.slice(end+1).trim())throw problem('invalid_output');const r=JSON.parse(buffer.slice(0,end));if(!plain(r)||typeof r.ok!=='boolean')throw problem('invalid_output');if(!r.ok)throw problem(r.error?.code);if(validateModelData(r.data,schema(schemaId)).length)throw problem('invalid_output');const usage=usageData(r.usage);finish(null,{data:r.data,usage,evidenceVerified:r.evidenceVerified===true,evidenceProvenance:r.evidenceProvenance??[]});}catch(error){finish(problem(code(error)));}
+        try{if(buffer.slice(end+1).trim())throw problem('invalid_output');const r=JSON.parse(buffer.slice(0,end));if(!plain(r)||typeof r.ok!=='boolean')throw problem('invalid_output');if(!r.ok)throw problem(r.error?.code);if(validateModelData(r.data,schema(schemaId)).length)throw problem('invalid_output');const usage=usageData(r.usage);
+          // The qualification observer receives only validated numeric counters.
+          // A successful intent reply implies zero starts: its broker execution
+          // rejects the first native tool start and does not send a count.
+          // Ordinary product callers omit the observer and retain their result.
+          if(onReply){const toolCalls=schemaId==='intent'?0:r.toolCalls;if(schemaId==='intent'&&r.toolCalls!==undefined&&r.toolCalls!==0||!Number.isSafeInteger(toolCalls)||toolCalls<0||toolCalls>2)throw problem('invalid_output');onReply(Object.freeze({schemaId,toolCalls,usage:Object.freeze({...usage})}));}
+          finish(null,{data:r.data,usage,evidenceVerified:r.evidenceVerified===true,evidenceProvenance:r.evidenceProvenance??[]});}catch(error){finish(problem(code(error)));}
       });
     });
   };
