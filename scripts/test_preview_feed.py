@@ -1,7 +1,7 @@
 """Bounded local transport, replay and exact-import acknowledgement contracts."""
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
@@ -44,6 +44,43 @@ def source_files(directory, *, complete=False, body=b'{"schemaVersion":1,"rows":
     path.write_text(json.dumps(manifest, separators=(',', ':')))
     path.chmod(0o600)
     return path, part, manifest
+
+
+@contextmanager
+def local_operator(inbox, receipts):
+    """Exercise the real filesystem flow without changing the test user's UID."""
+    uid = os.geteuid()
+    account = SimpleNamespace(pw_uid=uid)
+    host = SimpleNamespace(verify_caps=lambda: None, verify_storage=lambda: None)
+    checked, private, fstat = FEED.checked_file, FEED.private_inbox, os.fstat
+    sealed = {receipts.stat().st_ino}
+
+    def owned_inbox(path, owner=None):
+        if owner == 0 and path.stat().st_ino not in sealed:
+            raise AssertionError('Expected an operator-owned directory.')
+        return private(path, uid)
+
+    def owned_stat(fd):
+        info = fstat(fd)
+        if stat.S_ISREG(info.st_mode) or info.st_ino in sealed:
+            fields = list(info)
+            fields[4] = 0
+            return os.stat_result(fields)
+        return info
+
+    def seal(fd, owner, group):
+        assert (owner, group) == (0, -1)
+        sealed.add(fstat(fd).st_ino)
+
+    with patch.object(FEED, 'INBOX', inbox), patch.object(FEED, 'RECEIPTS', receipts), \
+            patch.object(FEED, 'host_module', return_value=host), \
+            patch.object(FEED, 'private_inbox', side_effect=owned_inbox), \
+            patch.object(FEED.pwd, 'getpwnam', return_value=account), \
+            patch.object(FEED, 'checked_file', side_effect=lambda path, _owner: checked(path, uid)), \
+            patch.object(FEED.os, 'geteuid', return_value=0), \
+            patch.object(FEED.os, 'fstat', side_effect=owned_stat), \
+            patch.object(FEED.os, 'fchown', side_effect=seal):
+        yield
 
 
 class PrepareTests(unittest.TestCase):
@@ -465,6 +502,145 @@ class ImportSequenceTests(unittest.TestCase):
         self.assertEqual(args[-1], ['validated'])
 
 
+class RetirementTests(unittest.TestCase):
+    def setUp(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.inbox = root / 'inbox'
+        self.receipts = root / 'receipts'
+        self.inbox.mkdir(mode=0o700)
+        self.receipts.mkdir(mode=0o700)
+        manifest, self.part, _ = source_files(self.inbox)
+        self.staged = manifest.parent
+        self.digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        self.latest = self.inbox / 'latest.json'
+        FEED.write_private(self.latest, b'accepted export')
+        FEED.write_private(self.staged / 'candidate.json', b'batch candidate')
+        self.enterContext(local_operator(self.inbox, self.receipts))
+        FEED.bind_candidate_build(BATCH_ID, self.staged / 'candidate.json', self.digest, SHA)
+
+    def retire(self):
+        return FEED.retire_accepted(BATCH_ID, self.digest)
+
+    def test_acceptance_and_exact_reference_are_required_before_moving_batch(self):
+        with self.assertRaisesRegex(FEED.FeedStageError, 'no accepted receipt'):
+            self.retire()
+        FEED.store_receipt(BATCH_ID, self.digest)
+        with self.assertRaises(FEED.FeedStageError):
+            FEED.retire_accepted(BATCH_ID, 'b' * 64)
+        with self.assertRaises(FEED.FeedStageError):
+            FEED.retire_accepted('../unsafe', self.digest)
+        with patch.object(FEED.os, 'geteuid', return_value=1234), self.assertRaises(FEED.FeedStageError):
+            self.retire()
+        self.assertTrue(self.part.is_file())
+
+    def test_purge_refuses_unexpected_or_altered_files(self):
+        FEED.store_receipt(BATCH_ID, self.digest)
+        self.part.write_bytes(b'altered staged data')
+        with self.assertRaisesRegex(FEED.FeedStageError, 'Staged feed part changed'):
+            self.retire()
+        verifying, = self.receipts.glob(f'.retiring-{BATCH_ID}-*')
+        self.assertEqual((verifying / self.part.name).read_bytes(), b'altered staged data')
+        self.assertTrue((verifying / 'candidate.json').is_file())
+        (verifying / self.part.name).write_bytes(b'{"schemaVersion":1,"rows":[{}]}')
+        unexpected = verifying / 'unexpected'
+        unexpected.symlink_to(self.latest)
+        with self.assertRaisesRegex(FEED.FeedStageError, 'unexpected file'):
+            self.retire()
+        self.assertTrue(unexpected.is_symlink())
+        self.assertEqual(self.latest.read_bytes(), b'accepted export')
+        unexpected.unlink()
+        candidate = verifying / 'candidate.json'
+        candidate.write_bytes(b'different candidate')
+        with self.assertRaisesRegex(FEED.FeedStageError, 'candidate differs'):
+            self.retire()
+        candidate.write_bytes(b'batch candidate')
+        self.assertEqual(self.retire()['status'], 'retired')
+
+    def test_partial_cleanup_retries_without_manifest_and_preserves_acknowledgement(self):
+        receipt = FEED.store_receipt(BATCH_ID, self.digest)
+        marker = FEED.candidate_marker_path(BATCH_ID)
+        candidate_identity = marker.read_bytes()
+        real_unlink = Path.unlink
+
+        def interrupted(path, *args, **kwargs):
+            if path.parent.name == f'.purging-{BATCH_ID}':
+                manifest = path.parent / 'manifest.json'
+                if manifest.exists():
+                    real_unlink(manifest)
+                raise OSError('Synthetic interruption after manifest deletion.')
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, 'unlink', autospec=True, side_effect=interrupted), self.assertRaises(OSError):
+            self.retire()
+        self.assertFalse(self.staged.exists())
+        self.assertTrue((self.receipts / f'.purging-{BATCH_ID}' / self.part.name).is_file())
+        self.assertEqual(FEED.show_receipt(BATCH_ID, self.digest), receipt)
+        self.assertEqual(FEED.process_batch(BATCH_ID, self.digest)['status'], 'already_accepted')
+        self.assertEqual(self.retire(), {'status': 'retired', 'manifestSha256': self.digest, 'stagedReplayPresent': False})
+        self.assertEqual(self.retire()['status'], 'already_retired')
+        self.assertEqual(FEED.show_receipt(BATCH_ID, self.digest), receipt)
+        self.assertEqual(marker.read_bytes(), candidate_identity)
+        self.assertEqual(self.latest.read_bytes(), b'accepted export')
+
+    def test_purge_waits_for_directory_sync_and_retry_checks_a_new_staged_copy(self):
+        FEED.store_receipt(BATCH_ID, self.digest)
+        purging = self.receipts / f'.purging-{BATCH_ID}'
+        sync = os.fsync
+        receipts_inode = self.receipts.stat().st_ino
+
+        def interrupted(fd):
+            if os.fstat(fd).st_ino == receipts_inode and purging.is_dir():
+                raise OSError('Synthetic interruption before purge publication.')
+            sync(fd)
+
+        with patch.object(FEED.os, 'fsync', side_effect=interrupted), self.assertRaises(OSError):
+            self.retire()
+        self.assertTrue((purging / 'manifest.json').is_file())
+        self.assertTrue((purging / self.part.name).is_file())
+        source_files(self.inbox)
+        self.assertTrue(self.retire()['stagedReplayPresent'])
+        self.assertTrue(self.staged.is_dir())
+        self.assertFalse(self.retire()['stagedReplayPresent'])
+        self.assertFalse(self.staged.exists())
+
+    def test_parent_swap_cannot_redirect_the_move(self):
+        FEED.store_receipt(BATCH_ID, self.digest)
+        moved_inbox = self.inbox.with_name('moved-inbox')
+        rename = os.rename
+
+        def rebind_parent(source, target, **kwargs):
+            if source == self.staged.name:
+                rename(self.inbox, moved_inbox)
+                self.inbox.mkdir(mode=0o700)
+                source_files(self.inbox)
+            return rename(source, target, **kwargs)
+
+        with patch.object(FEED.os, 'rename', side_effect=rebind_parent):
+            self.assertEqual(self.retire()['status'], 'retired')
+        self.assertTrue(self.staged.is_dir())
+        self.assertFalse((moved_inbox / self.staged.name).exists())
+        self.assertEqual((moved_inbox / 'latest.json').read_bytes(), b'accepted export')
+
+    def test_substituted_batch_inode_stays_held_across_retry(self):
+        FEED.store_receipt(BATCH_ID, self.digest)
+        previous = self.staged.with_name('previous')
+        rename = os.rename
+
+        def rebind_batch(source, target, **kwargs):
+            if source == self.staged.name:
+                rename(self.staged, previous)
+                source_files(self.inbox)
+            return rename(source, target, **kwargs)
+
+        with patch.object(FEED.os, 'rename', side_effect=rebind_batch), self.assertRaises(FEED.FeedStageError):
+            self.retire()
+        with self.assertRaises(FEED.FeedStageError):
+            self.retire()
+        verifying, = self.receipts.glob(f'.retiring-{BATCH_ID}-*')
+        self.assertTrue((verifying / 'manifest.json').is_file())
+        self.assertTrue((previous / 'manifest.json').is_file())
+
+
 class ComposedImportTests(unittest.TestCase):
     def test_actual_adapter_and_database_import_recover_partial_and_committed_batches(self):
         root = Path(__file__).resolve().parents[1]
@@ -567,6 +743,9 @@ class ComposedImportTests(unittest.TestCase):
                 self.assertEqual(FEED.candidate_marker('b' * 32)['buildIdentity'], build)
                 self.assertEqual(FEED.candidate_marker('b' * 32)['manifestSha256'], partial[3])
                 self.assertEqual(FEED.root_receipt('b' * 32, partial[3]), {'schemaVersion': 1, 'manifestSha256': partial[3]})
+                with local_operator(inbox, receipts):
+                    self.assertEqual(FEED.retire_accepted('b' * 32, partial[3])['status'], 'retired')
+                    self.assertFalse(partial[0].exists())
                 complete = stage([], batch_id='c' * 32, kind='changes',
                                  from_cursor=partial[2]['toCursor'], cutoff=complete_at, source_count=3)
                 with patch.object(FEED, 'promote_candidate', side_effect=OSError('Synthetic post-commit interruption.')), self.assertRaises(OSError):
