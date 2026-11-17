@@ -1,11 +1,12 @@
-// Neutral geography is interactive even before a reviewed hiring-country report exists.
+// Render the public hiring-country sample on the fixed-scale company globe.
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, PointerEvent } from 'react';
+import type { CompanyHiringFootprint } from '../../api/types';
 import { useInterfaceLocale } from '../../i18n/LocaleProvider';
-import { globePaths, home, rotate, wheelRotation } from './globe';
+import { countryPainter, globePaths, home, rotate, wheelRotation, type CountryBoundary } from './globe';
 
-export function CompanyGlobe() {
-  const { t } = useInterfaceLocale();
+export function CompanyGlobe({ footprint }: { footprint?: CompanyHiringFootprint | undefined }) {
+  const { locale, t } = useInterfaceLocale();
   const id = useId();
   const sphere = useRef<HTMLDivElement>(null);
   const orientation = useRef(home);
@@ -14,6 +15,20 @@ export function CompanyGlobe() {
   const touchObserver = useRef<{ document: Document; listener: (event: globalThis.PointerEvent) => void } | null>(null);
   const [view, setView] = useState(home);
   const paths = useMemo(() => globePaths(view), [view]);
+  const observed = footprint?.state === 'observed';
+  const [boundaries, setBoundaries] = useState<Readonly<Record<string, CountryBoundary>> | null>(null);
+  useEffect(() => {
+    if (import.meta.env.SSR || !observed || boundaries) return;
+    let current = true;
+    void import('./country-boundaries').then(({ countryBoundaries }) => {
+      if (current) setBoundaries(countryBoundaries);
+    }).catch(() => { /* The country list remains available if the map asset cannot load. */ });
+    return () => { current = false; };
+  }, [observed, boundaries]);
+  const paintCountries = useMemo(() => observed && boundaries
+    ? countryPainter(boundaries, footprint.countries.map(country => country.code)) : null, [observed, footprint, boundaries]);
+  const countryPaths = useMemo(() => paintCountries?.(view) ?? [], [paintCountries, view]);
+  const names = useMemo(() => new Intl.DisplayNames(locale, { type: 'region' }), [locale]);
   function update(longitude: number, latitude = 0, reset = false) {
     if (!reset && longitude === 0 && latitude === 0) return;
     orientation.current = reset ? home : rotate(orientation.current, longitude, latitude);
@@ -76,17 +91,27 @@ export function CompanyGlobe() {
   return <section className="company-footprint" aria-labelledby={`${id}-title`}>
     <div className="footprint-copy">
       <h2 id={`${id}-title`}>{t('Worldwide footprint.')}</h2>
-      <span className="eyebrow">{t('UNKNOWN')}</span>
-      <p id={`${id}-unknown`}>{t('Hiring countries are unknown.')}</p>
+      {observed ? <>
+        <p id={`${id}-evidence`}>{t('Country locations identified for {known} of {total} sampled listings.', {
+          known: footprint.knownSampleSize.toLocaleString(locale), total: footprint.sampleSize.toLocaleString(locale),
+        })}</p>
+        <ul className="globe-country-list" aria-label={t('Countries listed in the sample')}>
+          {footprint.countries.map(({ code, count }) => <li key={code}>{names.of(code) ?? code} ({count.toLocaleString(locale)})</li>)}
+        </ul>
+      </> : <>
+        <span className="eyebrow">{t('UNKNOWN')}</span>
+        <p id={`${id}-evidence`}>{t('Hiring countries are unknown.')}</p>
+      </>}
       <p className="globe-hint">{t('Drag or scroll to rotate.')}</p>
       <p className="sr-only" id={`${id}-instructions`}>{t('Use arrow keys to rotate and Home to reset. On touch screens, drag horizontally to rotate or vertically to scroll the page. Scrolling over the globe also scrolls the page. Browser zoom stays available.')}</p>
       <button type="button" className="button outline globe-reset" onClick={() => update(0, 0, true)}>{t('Reset view')}</button>
     </div>
-    <div ref={sphere} className="company-globe" role="group" tabIndex={0} aria-label={t('Neutral world globe')} aria-describedby={`${id}-unknown ${id}-instructions`} aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Home"
+    <div ref={sphere} className="company-globe" role="group" tabIndex={0} aria-label={t(observed ? 'Hiring country globe' : 'Neutral world globe')} aria-describedby={`${id}-evidence ${id}-instructions`} aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Home"
       onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end} onKeyDown={key}>
       <svg viewBox="-110 -110 220 220" aria-hidden="true" focusable="false">
         <circle className="globe-ocean" r="100" />
         <path className="globe-grid" d={paths.grid} />
+        {countryPaths.map(({ code, path }) => path ? <path key={code} className="globe-country" data-country={code} fillRule="evenodd" d={path} /> : null)}
         <path className="globe-land" d={paths.land} />
       </svg>
     </div>

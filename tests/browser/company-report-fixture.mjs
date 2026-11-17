@@ -14,3 +14,9 @@ export function companyReportSample(companyId) {
       { currency: 'USD', period: 'year', sampleSize: 2, min: 90000, max: 150000 },
     ] } };
 }
+
+export const hiringFootprintSample = {
+  state: 'observed', source: 'jobseek_direct_country_locations_v1', sampleSize: 6,
+  knownSampleSize: 3, unknownSampleSize: 3,
+  countries: [{ code: 'CH', count: 3 }, { code: 'JP', count: 1 }, { code: 'TV', count: 1 }],
+};

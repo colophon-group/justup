@@ -1,9 +1,10 @@
-// Fixed-scale orthographic projection and direct-input bounds for the neutral globe.
+// Fixed-scale orthographic projection for coastlines and evidenced countries.
 import { coastlines } from './coastlines.ts';
 
 export type Orientation = { longitude: number; latitude: number };
 export const home: Orientation = { longitude: 0, latitude: 0 };
 type Vector = readonly [number, number, number];
+export type CountryBoundary = readonly (readonly (readonly (readonly [number, number])[])[])[];
 const radians = Math.PI / 180;
 const vector = ([longitude, latitude]: readonly [number, number]): Vector => [
   Math.cos(latitude * radians) * Math.sin(longitude * radians),
@@ -28,25 +29,33 @@ export function wheelRotation(event: { deltaX: number; deltaY: number; deltaMode
   return Math.max(-30, Math.min(30, delta * scale * .15));
 }
 
-export function globePaths(view: Orientation): { land: string; grid: string } {
+function projection(view: Orientation) {
   const yaw = view.longitude * radians, pitch = view.latitude * radians;
   const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
-  const project = ([x, y, z]: Vector): Vector => {
+  return ([x, y, z]: Vector): Vector => {
     const depth = sy * x + cy * z;
     return [cy * x - sy * z, cp * y - sp * depth, sp * y + cp * depth];
   };
-  const point = ([x, y]: Vector) => `${(x * 100).toFixed(2)},${(-y * 100).toFixed(2)}`;
+}
+
+const point = ([x, y]: Vector) => `${(x * 100).toFixed(2)},${(-y * 100).toFixed(2)}`;
+function horizonBetween(from: Vector, to: Vector): Vector {
+  const t = from[2] / (from[2] - to[2]);
+  const x = from[0] + t * (to[0] - from[0]);
+  const y = from[1] + t * (to[1] - from[1]);
+  const radius = Math.hypot(x, y);
+  return [x / radius, y / radius, 0];
+}
+
+export function globePaths(view: Orientation): { land: string; grid: string } {
+  const project = projection(view);
   const path = (lines: readonly (readonly Vector[])[]) => lines.map(line => {
     let previous: Vector | undefined, drawing = false, result = '';
     for (const source of line) {
       const current = project(source);
       // Clip each coast/grid segment at the horizon, never draw across the back.
       if (previous && (previous[2] >= 0) !== (current[2] >= 0)) {
-        const t = previous[2] / (previous[2] - current[2]);
-        const x = previous[0] + t * (current[0] - previous[0]);
-        const y = previous[1] + t * (current[1] - previous[1]);
-        const radius = Math.hypot(x, y);
-        const horizon: Vector = [x / radius, y / radius, 0];
+        const horizon = horizonBetween(previous, current);
         result += `${drawing ? 'L' : 'M'}${point(horizon)}`;
         drawing = current[2] >= 0;
       }
@@ -57,4 +66,41 @@ export function globePaths(view: Orientation): { land: string; grid: string } {
     return result;
   }).join('');
   return { land: path(land), grid: path(grid) };
+}
+
+function clippedRing(ring: readonly Vector[]) {
+  const behind = ring.findIndex(vertex => vertex[2] < 0);
+  if (behind < 0) return `M${ring.map(point).join('L')}Z`;
+  let previous = ring[behind]!;
+  let entrance: Vector | undefined;
+  let result = '';
+  for (let offset = 1; offset <= ring.length; offset++) {
+    const current = ring[(behind + offset) % ring.length]!;
+    if (current[2] >= 0) {
+      if (previous[2] < 0) {
+        entrance = horizonBetween(previous, current);
+        result += `M${point(entrance)}`;
+      }
+      result += `L${point(current)}`;
+    } else if (entrance) {
+      const exit = horizonBetween(previous, current);
+      // Close the visible fragment along the near-hemisphere rim. SVG y points down.
+      const sweep = exit[1] * entrance[0] - exit[0] * entrance[1] >= 0 ? 1 : 0;
+      result += `L${point(exit)}A100,100 0 0,${sweep} ${point(entrance)}Z`;
+      entrance = undefined;
+    }
+    previous = current;
+  }
+  return result;
+}
+
+export function countryPainter(boundaries: Readonly<Record<string, CountryBoundary>>, codes: readonly string[]) {
+  const selected = codes.flatMap(code => {
+    const boundary = boundaries[code];
+    return boundary ? [{ code, rings: boundary.flatMap(polygon => polygon.map(ring => ring.map(vector))) }] : [];
+  });
+  return (view: Orientation) => {
+    const project = projection(view);
+    return selected.map(({ code, rings }) => ({ code, path: rings.map(ring => clippedRing(ring.map(project))).join('') }));
+  };
 }

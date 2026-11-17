@@ -2,6 +2,7 @@
 // published frozen source history. This reader never opens source files or queues work.
 import { DAY_MS, problem } from './store.mjs';
 import { compileWireSnapshot, digest } from './hiring-wire-facts.mjs';
+import { postingCountryCode } from './geonames-country-codes.mjs';
 
 const iso = value => new Date(value).toISOString();
 const WEEK = 7 * DAY_MS;
@@ -11,7 +12,28 @@ const METHODOLOGY = Object.freeze({
   monitoring: 'Earliest tracked-since evidence among the scopes in this historical snapshot; this does not establish uninterrupted company-wide monitoring.',
   roles: 'Source occupation labels among currently eligible public sample listings; unlabelled listings remain unknown.',
   salaries: 'Reported numeric salary bounds among currently eligible public sample listings, grouped by currency and period without conversion or annualization. Crossed aggregate bounds remain unknown. These are listing values, not employee pay.',
+  footprint: 'Direct country locations among currently eligible public sample listings, identified by GeoNames country ID. A country is counted once per listing. Listings without a mapped country remain unknown.',
 });
+
+function footprint(jobs) {
+  const counts = new Map();
+  let knownSampleSize = 0;
+  for (const job of jobs) {
+    const countries = new Set(job.locations.map(postingCountryCode));
+    countries.delete(null);
+    if (countries.size === 0) continue;
+    knownSampleSize++;
+    for (const countryCode of countries) counts.set(countryCode, (counts.get(countryCode) ?? 0) + 1);
+  }
+  return {
+    state: knownSampleSize > 0 ? 'observed' : 'unknown',
+    source: 'jobseek_direct_country_locations_v1',
+    sampleSize: jobs.length,
+    knownSampleSize,
+    unknownSampleSize: jobs.length - knownSampleSize,
+    countries: [...counts.keys()].sort().map(code => ({ code, count: counts.get(code) })),
+  };
+}
 
 function roles(jobs) {
   const found = new Map();
@@ -131,7 +153,8 @@ export function createCompanyReports({ db, feed, now = Date.now } = {}) {
       freshness: { listings: coverage.stale ? 'unavailable' : 'fresh', history: recorded.freshness },
       monitoringSince: recorded.monitoringSince, sourceChecks: recorded.sourceChecks, hiringHistory: recorded.hiringHistory,
       hiringRoles: { state: coverage.stale ? 'unavailable' : 'available', ...roles(jobs) },
-      reportedSalaries: { state: coverage.stale ? 'unavailable' : 'available', ...salaries(jobs) }, methodology: METHODOLOGY };
+      reportedSalaries: { state: coverage.stale ? 'unavailable' : 'available', ...salaries(jobs) },
+      hiringFootprint: footprint(jobs), methodology: METHODOLOGY };
   }
   function publicRoute(ctx) {
     const match = /^\/companies\/([^/]+)\/report$/u.exec(ctx.path);

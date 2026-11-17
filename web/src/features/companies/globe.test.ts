@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { coastlines } from './coastlines.ts';
-import { globePaths, home, rotate, wheelRotation } from './globe.ts';
+import { countryBoundaries } from './country-boundaries.ts';
+import { countryPainter, globePaths, home, rotate, wheelRotation, type CountryBoundary } from './globe.ts';
 
 test('global coastlines include east/west, both hemispheres and Antarctica within a bounded asset', () => {
   const points = coastlines.flat();
@@ -34,4 +35,29 @@ test('wheel units and bursts are bounded while Ctrl and Command zoom never rotat
     [{ ...base, deltaMode: 2 }, 30], [{ ...base, deltaY: -100000 }, -30],
     [{ ...base, shiftKey: true }, 1.5], [{ ...base, ctrlKey: true }, 0], [{ ...base, metaKey: true }, 0],
   ] as const) assert.equal(wheelRotation(input), expected);
+});
+
+test('country fills disappear beyond the horizon and close clipped rings along its rim', () => {
+  const shape: CountryBoundary = [[[[70, -10], [110, -10], [110, 10], [70, 10]]]];
+  const paint = countryPainter({ XX: shape }, ['XX', 'NO_BOUNDARY']);
+  const clipped = paint(home)[0]!.path;
+  assert.match(clipped, /A100,100 0 0,[01] /);
+  assert.ok(clipped.endsWith('Z'));
+  assert.equal(paint(rotate(home, -90))[0]!.path, '');
+  const full = paint(rotate(home, 90))[0]!.path;
+  assert.match(full, /^M[^A]+Z$/);
+  assert.equal(paint(home).length, 1);
+});
+
+test('mapped countries stay finite across the globe and the geometry stays bounded', () => {
+  const codes = Object.keys(countryBoundaries);
+  assert.equal(codes.length, 245);
+  assert.ok(Object.values(countryBoundaries).flat(2).reduce((count, ring) => count + ring.length, 0) < 19_000);
+  const paint = countryPainter(countryBoundaries, codes);
+  for (const view of [home, rotate(home, 90, 60), rotate(home, -90, -60), rotate(home, 180)]) {
+    const shapes = paint(view);
+    assert.ok(shapes.some(({ path }) => path.includes('A100,100')));
+    assert.ok(shapes.some(({ path }) => path === ''));
+    for (const { path } of shapes) assert.doesNotMatch(path, /NaN|Infinity/);
+  }
 });

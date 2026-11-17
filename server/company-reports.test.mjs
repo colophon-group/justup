@@ -75,6 +75,37 @@ test('current snapshot supports sampled roles and separate salary units without 
   assert.equal(f.reports.report('company-1').provenance.sampleObservedThrough, null);
 });
 
+test('hiring footprint counts direct country IDs only in eligible public company listings', t => {
+  const country = id => ({ id, name: null, workplace: 'remote', geoType: 'country' });
+  const switzerland = country('2658434'), germany = country('2921044');
+  const f = fixture(t, [
+    job('multiple', 3, { locations: [switzerland, switzerland, germany] }),
+    job('swiss', 4, { locations: [switzerland] }),
+    job('unmapped', 5, { locales: ['fr'], locations: [country('1'), { ...switzerland, geoType: 'city' }, { id: '2658434', geoType: 'macro' }] }),
+    job('recent', 1, { locations: [country('6252001')] }),
+    job('other-company', 3, { companyId: 'company-2', locations: [country('1861060')] }),
+  ]);
+  const before = f.reports.report('company-1');
+  assert.deepEqual(before.hiringFootprint, {
+    state: 'observed', source: 'jobseek_direct_country_locations_v1', sampleSize: 3,
+    knownSampleSize: 2, unknownSampleSize: 1, countries: [{ code: 'CH', count: 2 }, { code: 'DE', count: 1 }],
+  });
+  assert.equal(before.provenance.sampleObservedFrom, iso(AT));
+  assert.equal(before.scope.completeCompanyCoverage, false);
+
+  f.setNow(AT + 1);
+  f.load([], { observations: ['multiple', 'swiss'].map(id => ({ id, active: false, observedAt: iso(AT + 1), reserved: false })) });
+  assert.deepEqual(f.reports.report('company-1').hiringFootprint, {
+    state: 'unknown', source: 'jobseek_direct_country_locations_v1', sampleSize: 1,
+    knownSampleSize: 0, unknownSampleSize: 1, countries: [],
+  });
+  f.setNow(AT + DAY_MS + 1);
+  assert.deepEqual(f.reports.report('company-1').hiringFootprint, {
+    state: 'unknown', source: 'jobseek_direct_country_locations_v1', sampleSize: 0,
+    knownSampleSize: 0, unknownSampleSize: 0, countries: [],
+  });
+});
+
 test('crossed one-sided salary observations keep their counts without a reversed band or lost role/source evidence', async t => {
   const f = fixture(t, [
     job('lower-only', 3, { occupation: { id: '23', name: 'Developer' }, salary: { min: 100, max: null, currency: 'USD', period: 'year' } }),
