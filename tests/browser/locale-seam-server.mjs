@@ -21,7 +21,8 @@ export async function localeSeam() {
       const staticHtml = html.replace(/<script\b[^>]*\bsrc="\/@vite\/client"[^>]*><\/script>/u, '');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(staticHtml); return true;
     }
-    if (/^\/(?:@|node_modules\/|web\/src\/|tests\/browser\/locale-seam)/.test(url.pathname)) {
+    const sharedGeography = url.pathname === '/server/geonames-country-codes.mjs';
+    if (sharedGeography || /^\/(?:@|node_modules\/|web\/src\/|tests\/browser\/locale-seam)/.test(url.pathname)) {
       await new Promise(resolve => { res.once('finish', resolve); res.once('close', resolve); vite.middlewares(req, res, () => { res.writeHead(404); res.end('Not found'); }); }); return true;
     }
     return false;
