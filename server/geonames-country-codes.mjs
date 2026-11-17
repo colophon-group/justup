@@ -55,6 +55,12 @@ const countryCodes = Object.freeze({
   7609695: 'SX', 7626836: 'CW', 7626844: 'BQ', 7909807: 'SS',
 });
 
+const knownCodes = new Set(Object.values(countryCodes));
+
+export function isKnownCountryCode(code) {
+  return knownCodes.has(code);
+}
+
 export function postingCountryCode(location) {
   if (location.geoType !== 'country' || !Object.hasOwn(countryCodes, location.id)) return null;
   return countryCodes[location.id];

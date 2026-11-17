@@ -1,5 +1,6 @@
 import { safePublicCompanyURL, safePublicCompanyDomain } from './publicCompanyUrls.ts';
 import { parseInterfaceLocale } from "../i18n/locales.ts";
+import { isKnownCountryCode } from '../../../server/geonames-country-codes.mjs';
 // Validate public response shapes at the network boundary; ignore unrequested private fields.
 import type {
   FollowSnapshot,
@@ -233,7 +234,7 @@ function decodeHiringFootprint(value: unknown, roles: CompanyReport["hiringRoles
   const countries = entries.map(value => {
     const item = record(value, "country sample"), code = text(item.code, "country code");
     const count = sampleCount(item.count, "country listing count");
-    if (!/^[A-Z]{2}$/u.test(code) || seen.has(code) || count === 0 || count > knownSampleSize) fail("country sample");
+    if (!isKnownCountryCode(code) || seen.has(code) || count === 0 || count > knownSampleSize) fail("country sample");
     seen.add(code);
     return { code, count };
   });

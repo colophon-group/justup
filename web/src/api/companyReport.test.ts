@@ -67,7 +67,7 @@ test('hiring footprint is bound to the same public sample and rejects contradict
   for (const override of [
     { source: 'company_headquarters' }, { state: 'unknown' }, { sampleSize: 4 },
     { unknownSampleSize: 1 }, { countries: [] }, { countries: [{ code: 'CH', count: 1 }] },
-    { countries: [{ code: 'CH', count: 4 }] }, { countries: [{ code: 'ch', count: 3 }] },
+    { countries: [{ code: 'CH', count: 4 }] }, { countries: [{ code: 'ch', count: 3 }] }, { countries: [{ code: 'ZZ', count: 3 }] },
     { countries: [{ code: 'CH', count: 2 }, { code: 'CH', count: 1 }] },
   ]) assert.throws(() => decodeCompanyReport({ ...raw, hiringFootprint: { ...footprint, ...override } }, 'company'));
   assert.throws(() => decodeCompanyReport({ ...report(), hiringFootprint: footprint }, 'company'));
