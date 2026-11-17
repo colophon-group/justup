@@ -1,6 +1,6 @@
 // Explicit real-service journey. No interception, fixtures, retained credentials or media.
 import { test, expect } from '@playwright/test';
-import { loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, GATE_LOCALES, disposableAccount, ownSession, cleanupCandidateAccount } from './release-gate.mjs';
+import { loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, GATE_LOCALES, disposableAccount, ownSession, cleanupCandidateAccount } from './release-gate.mjs';
 import { verifyPublicFootprint } from './release-footprint.mjs';
 
 for (const locale of GATE_LOCALES) {
@@ -59,10 +59,10 @@ for (const locale of GATE_LOCALES) {
       expect(registered.status() === 201).toBe(true);
       const registeredSession = await registered.json();
       expect(ownSession(registeredSession, account)).toBe(true);
-      // Registration is not a verified entitlement and must never grant full access by itself.
-      expect(registeredSession.access?.kind === 'limited' && registeredSession.access?.fullAccess === false && registeredSession.access?.billingEnabled === false).toBe(true);
-      verifyPolicyState(config, registeredSession.policies, locale);
       account.id = registeredSession.user.id;
+      verifyPolicyState(config, registeredSession.policies, locale);
+      const billing = config.billingMode === 'stripe_test' ? await read('/api/v1/account/billing') : undefined;
+      verifyDisposableAccountAccess(config, registeredSession, billing);
       await expect(page.locator('#sign-in-dialog')).not.toBeVisible();
 
       stage = 'logout and login';

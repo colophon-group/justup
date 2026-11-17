@@ -29,6 +29,8 @@ function sourceUrl(value) {
 }
 export function validateGateConfig(value) {
   requireThat(record(value) && origin(value.origin), 'Set one fixed HTTPS acceptance origin.');
+  requireThat(value.billingMode === undefined || ['disabled', 'stripe_test'].includes(value.billingMode),
+    'Set preview billing mode to disabled or stripe_test.');
   const f = value.frontend, api = value.api, policies = value.policies, scenario = value.scenario;
   requireThat(record(f) && f.deploymentMode === 'preview' && ['sourceSha', 'treeSha'].every(key => hash(f[key], 40))
     && ['assetsSha256', 'workerSha256', 'artifactSha256', 'runtimeConfigSha256'].every(key => hash(f[key])), 'Supply exact frontend identities.');
@@ -198,10 +200,13 @@ export async function preflight(config, get, now = Date.now) {
   // Complete every declared locale's read-only policy proof before private work is allowed.
   for (const [locale, entry] of Object.entries(config.policies.admittedLocales)) {
     const s = (await read('/api/v1/session', 200, locale)).json;
-    requireThat(s?.user === null && s.access?.fullAccess === false && s.access?.billingEnabled === false
+    requireThat(s?.user === null && s.access?.kind === 'guest'
+      && s.access.fullAccess === false && s.access.billingEnabled === false
       && s.authentication?.method === 'username_password' && s.authentication.loginEnabled === true
       && s.authentication.registrationEnabled === true && freshCoverage(s.coverage, clock())
       && s.capabilities?.search === true && s.capabilities.companyRequests === true, 'Preview authentication, capabilities or coverage are not ready for an admitted locale.');
+    requireThat(s.capabilities.billing === (config.billingMode === 'stripe_test'),
+      'Preview billing capability differs from the reviewed mode.');
     verifyPolicyState(config, s.policies, locale);
     const serverTime = Date.parse(s.serverTime);
     requireThat(Number.isFinite(serverTime) && Math.abs(serverTime - clock()) < 30_000, 'Preview server time is unavailable or out of range.');
@@ -228,6 +233,19 @@ export async function preflight(config, get, now = Date.now) {
   const exact = Array.isArray(companies) ? companies.filter(company => company.name?.normalize('NFKC').trim().toLowerCase() === config.scenario.companyName.normalize('NFKC').trim().toLowerCase()) : [];
   requireThat(exact.length === 1 && exact[0].id === config.scenario.companyId
     && exact[0].coverage?.state === 'imported_snapshot', 'The selected company is not an unambiguous imported identity.');
+}
+
+export function verifyDisposableAccountAccess(config, session, billingResponse) {
+  const testBilling = config.billingMode === 'stripe_test';
+  requireThat(session?.access?.kind === 'limited' && session.access.fullAccess === false
+    && session.access.billingEnabled === testBilling && session.capabilities?.billing === testBilling,
+  'Registration must keep the disposable account limited in the reviewed billing mode.');
+  if (!testBilling) return;
+  const billing = billingResponse?.json?.billing;
+  requireThat(billingResponse?.status === 200 && billing?.mode === 'test' && billing.available === true
+    && billing.closing === false && billing.canCheckout === false && billing.canManage === false
+    && billing.operation === null && billing.termination === null,
+  'Disposable account billing must confirm test mode, availability and checkout ineligibility.');
 }
 export function disposableAccount() {
   return { username: `gate_${randomBytes(12).toString('hex')}`, password: randomBytes(32).toString('base64url'), id: null, attempted: false, deleted: false };

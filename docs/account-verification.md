@@ -153,8 +153,11 @@ recall a delivered message or establish deletion of Resend's provider copy.
 
 Keep `account-access` (durable account access) and `account-provider-resources`
 (identity/email and billing qualification) open until real-adapter/mailbox and
-the separate actual Stripe sandbox journeys are evidenced. For Stripe, first
-review actual nonsecret sandbox identity, restricted test runtime scope, approved test offer and portal
+the actual Stripe sandbox journeys are evidenced.
+
+## Verify one isolated Stripe sandbox checkout
+
+Review actual nonsecret sandbox identity, restricted test runtime scope, approved test offer and portal
 configuration IDs, webhook route/secret delivery, fixed account/API version and
 zero-spend scope. Through the existing [billing routes](account-billing.md),
 complete one hosted **test-mode** checkout using provider test payment details,
