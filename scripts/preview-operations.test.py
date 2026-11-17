@@ -768,7 +768,7 @@ class OperatorUpgradeContracts(unittest.TestCase):
             qualification.assert_called_once_with()
             self.assertTrue(result['backupUnitsInstalled'])
             self.assertFalse(result['activated'])
-            self.assertEqual(host.installed_backup_units(result['planSha256']), host.BACKUP_UNITS)
+            self.assertEqual(tuple(host.installed_backup_units(result['planSha256'])), host.BACKUP_UNITS)
             self.assertIn(('systemd-analyze', 'verify', *(str(fixture.units / name) for name in host.BACKUP_UNITS)), fixture.commands)
 
             fixture.before = fixture.after
@@ -777,7 +777,7 @@ class OperatorUpgradeContracts(unittest.TestCase):
             script.write_text(script.read_text() + '\n# second fixture revision\n')
             fixture.after = host.plan(fixture.new, 'a' * 64, include_backup=True)
             self.assertFalse(self.upgrade(fixture)['backupUnitsInstalled'])
-            self.assertEqual(host.installed_backup_units(fixture.after['planSha256']), host.BACKUP_UNITS)
+            self.assertEqual(tuple(host.installed_backup_units(fixture.after['planSha256'])), host.BACKUP_UNITS)
             self.assertFalse((fixture.base / host.UPGRADE_LOCK).exists())
             self.assertFalse(any(args[:2] == ('systemctl', 'enable') for args in fixture.commands))
             self.assert_private_state_unchanged(fixture)
@@ -839,6 +839,27 @@ class OperatorUpgradeContracts(unittest.TestCase):
             self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
             self.assert_private_state_unchanged(fixture)
 
+    def test_backup_rollback_preserves_a_replacement_after_prechecking_both_units(self):
+        with self.installation(add_backup=True) as fixture:
+            timer = fixture.units / host.BACKUP_TIMER
+            replacement = fixture.units / 'competing-timer'
+            replacement.write_bytes((fixture.new / 'deploy/justup-preview' / host.BACKUP_TIMER).read_bytes())
+            replacement_inode = replacement.stat().st_ino
+            prior_call = host.call.side_effect
+            def race(*args, **kwargs):
+                if args[:2] == ('systemd-analyze', 'verify'):
+                    raise subprocess.CalledProcessError(1, args)
+                if args[2:] == ('--property=FragmentPath', '--value', host.BACKUP_SERVICE):
+                    replacement.replace(timer)
+                return prior_call(*args, **kwargs)
+            with patch.object(host, 'call', side_effect=race), self.assertRaisesRegex(ValueError, 'changed during removal'):
+                self.backup_upgrade(fixture)
+            self.assertEqual(timer.stat().st_ino, replacement_inode)
+            self.assertTrue((fixture.units / host.BACKUP_SERVICE).is_file())
+            self.assertFalse(fixture.marker.exists())
+            self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
+            self.assert_private_state_unchanged(fixture)
+
     def test_stop_binds_backup_units_to_the_current_receipt_and_loaded_files(self):
         stop_preview = host.stop_preview
         with self.installation(add_backup=True) as fixture:
@@ -892,7 +913,7 @@ class OperatorUpgradeContracts(unittest.TestCase):
                  patch.object(host.os.path, 'ismount', return_value=False):
                 teardown = host.teardown(expected_plan=result['planSha256'])
             self.assertTrue(teardown['imageRetained'])
-            self.assertIn(('systemctl', 'disable', '--now', host.BACKUP_TIMER), fixture.commands)
+            self.assertIn(('systemctl', 'disable', host.BACKUP_TIMER), fixture.commands)
             self.assertTrue(all((fixture.units / unit).exists() for unit in host.BACKUP_UNITS))
 
         with self.installation(add_backup=True) as fixture:
@@ -901,6 +922,27 @@ class OperatorUpgradeContracts(unittest.TestCase):
                 host.teardown(expected_plan=fixture.before['planSha256'])
             self.assertFalse(fixture.commands)
             self.assert_private_state_unchanged(fixture)
+
+    def test_teardown_preserves_the_image_if_a_backup_unit_was_replaced_after_disable(self):
+        with self.installation(add_backup=True) as fixture:
+            result = self.backup_upgrade(fixture)
+            timer = fixture.units / host.BACKUP_TIMER
+            replacement = fixture.units / 'replacement'
+            replacement.write_bytes(timer.read_bytes())
+            replacement_inode = replacement.stat().st_ino
+            simulator = host.call.side_effect
+            def simulate_unmount(*args, **kwargs):
+                if args == ('systemctl', 'stop', 'srv-justup_preview.mount'):
+                    fixture.base.rename(fixture.root / 'retained')
+                    fixture.base.mkdir()
+                    replacement.replace(timer)
+                return simulator(*args, **kwargs)
+            with patch.object(host.os, 'geteuid', return_value=0), patch.object(host, 'call', side_effect=simulate_unmount), \
+                 patch.object(host.os.path, 'ismount', return_value=False):
+                with self.assertRaisesRegex(ValueError, 'changed during removal'):
+                    host.teardown(erase_data=True, expected_plan=result['planSha256'])
+            self.assertTrue(fixture.image.exists())
+            self.assertEqual(timer.stat().st_ino, replacement_inode)
 
         with self.installation(add_backup=True) as fixture:
             result = self.backup_upgrade(fixture)

@@ -88,6 +88,10 @@ unit name. The transition verifies the installed pair with `systemd-analyze` and
 checks the loaded paths, drop-ins and inactive state before publishing the new
 receipt. The timer stays disabled. Once the pair is installed, render subsequent
 operator plans with `--include-backup` so ordinary upgrades preserve both units.
+Before removing a backup unit on rollback, the operator moves its fragment to a
+private directory on the systemd filesystem and verifies the moved inode. A
+replacement leaves the receipt withdrawn. Inspect any retained
+`.justup-backup-unit-*` directory before recovering the operator transaction.
 
 Retain the complete previous plan JSON from the approved source, and render the new plan from the exact integrated source using the same private machine fingerprint. Review both digests and the full changed script bytes. Stage the new plan's files and the previous JSON in a canonical root-owned protected directory. The command requires the old receipt and every old installed script/unit hash to match; a familiar plan label alone is insufficient. Run the **new reviewed source tool**, with both explicit plan identities, inside the existing slice:
 

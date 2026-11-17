@@ -657,6 +657,35 @@ def qualify_backup_units():
     verify_inactive_backup_units()
 
 
+def remove_owned_backup_unit(target, expected_inode, checksum):
+    # Quarantine on the systemd filesystem so the rename takes the actual
+    # inode at the live path. A competing unit can never be unlinked here.
+    quarantine = Path(tempfile.mkdtemp(prefix='.justup-backup-unit-', dir=UNIT_ROOT))
+    moved = quarantine / target.name
+    try:
+        target.rename(moved)
+    except OSError:
+        quarantine.rmdir()
+        raise
+    sync_directory(quarantine)
+    sync_directory(UNIT_ROOT)
+    try:
+        actual = owned_path(moved)
+        if (actual.st_dev, actual.st_ino) != (expected_inode.st_dev, expected_inode.st_ino) or digest(moved) != checksum:
+            raise ValueError('The quarantined unit is not the one the operator verified.')
+    except (ValueError, OSError) as error:
+        # Restore without overwriting a replacement installed after the rename.
+        # If the path is now occupied, preserve the quarantined file for review.
+        os.link(moved, target, follow_symlinks=False)
+        moved.unlink()
+        quarantine.rmdir()
+        sync_directory(UNIT_ROOT)
+        raise ValueError('A backup unit changed during removal; retain pending state.') from error
+    moved.unlink()
+    quarantine.rmdir()
+    sync_directory(UNIT_ROOT)
+
+
 def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, *, addition=None):
     previous_plan_path = Path(previous_plan_path).absolute()
     previous = load_reviewed_plan(previous_plan_path, previous_sha)
@@ -836,9 +865,16 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
                             raise ValueError('A backup unit became active during rollback; retain pending state.')
                     removable_units.append(target)
                 for target in removable_units:
-                    target.unlink()
+                    if add_backup:
+                        written = installed_units[target.name]
+                        checksum = candidate['files'][f'deploy/justup-preview/{target.name}']
+                        remove_owned_backup_unit(target, written, checksum)
+                    else:
+                        target.unlink()
                 sync_directory(UNIT_ROOT)
                 call('systemctl', 'daemon-reload')
+            if add_backup and any(os.path.lexists(UNIT_ROOT / name) for name in BACKUP_UNITS):
+                raise ValueError('A backup unit still occupies the new inventory; retain pending state.')
             sync_directory(history)
             sync_directory(BASE)
             verify_operator_files(BASE / 'ops', scripts)
@@ -928,28 +964,28 @@ def installed_backup_units(expected_plan, *, skip_unowned=False):
     allow_no_plan = skip_unowned or not units_present
     history_root = BASE / '.preview-ops-updates'
     if allow_no_plan and not os.path.lexists(history_root):
-        return ()
+        return {}
     owned_path(history_root, directory=True)
     histories = [path for path in history_root.glob(f'*-{expected_plan}')
                  if re.fullmatch(r'[a-f0-9]{64}-[a-f0-9]{64}', path.name)]
     if allow_no_plan and not histories:
-        return ()
+        return {}
     if len(histories) != 1:
         raise ValueError('The installed backup units require one matching reviewed plan.')
     owned_path(histories[0], directory=True)
     reviewed_plan = load_reviewed_plan(histories[0] / 'new-plan.json', expected_plan)
     if allow_no_plan and not BACKUP_ADDITIONS & reviewed_plan['files'].keys():
-        return ()
+        return {}
     if not BACKUP_ADDITIONS <= reviewed_plan['files'].keys():
         raise ValueError('The installed plan does not own both backup units.')
     verify_operator_units({name: reviewed_plan['files'][name] for name in BACKUP_ADDITIONS})
-    return BACKUP_UNITS
+    return {name: reviewed_plan['files'][f'deploy/justup-preview/{name}'] for name in BACKUP_UNITS}
 
 
 def backup_units_for_current_receipt():
     marker = BASE / '.preview-install.json'
     if not os.path.lexists(marker):
-        return ()
+        return {}
     if owned_path(marker).st_size > 4096:
         raise ValueError('The installed plan receipt exceeds its bound.')
     receipt = json.loads(marker.read_text())
@@ -972,10 +1008,11 @@ def teardown(erase_data=False, expected_plan=None):
         raise ValueError('Missing owned installation marker; refuse teardown.')
     require_operator(cleanup=True)
     backup_units = installed_backup_units(expected_plan)
+    backup_inodes = {name: owned_path(UNIT_ROOT / name) for name in backup_units} if erase_data else {}
     stop_preview()
     if backup_units:
         verify_loaded_backup_unit(BACKUP_TIMER)
-        call('systemctl', 'disable', '--now', BACKUP_TIMER)
+        call('systemctl', 'disable', BACKUP_TIMER)
     call('systemctl', 'disable', '--now', 'justup-preview-guard.timer')
     call('systemctl', 'stop', 'justup-preview-guard.service')
     # Normal unmount must succeed. No forced/lazy unmount or unrelated cleanup.
@@ -985,13 +1022,15 @@ def teardown(erase_data=False, expected_plan=None):
     if any(BASE.iterdir()):
         raise ValueError('Unmounted mountpoint is not empty; refuse cleanup.')
     if erase_data:
+        for name, checksum in backup_units.items():
+            remove_owned_backup_unit(UNIT_ROOT / name, backup_inodes[name], checksum)
         IMAGE.unlink()
         BASE.rmdir()
         for user in (USER, RUNNER_USER, MODEL_USER):
             call('userdel', user)
         for group in (STATE_GROUP, CLIENT_GROUP):
             call('groupdel', group)
-        for name in (*UNITS[1:], *backup_units):
+        for name in UNITS[1:]:
             (UNIT_ROOT / name).unlink()
         call('systemctl', 'daemon-reload')
     return {'stopped': True, 'imageRetained': not erase_data,
