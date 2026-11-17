@@ -5,6 +5,7 @@ import type {
   FollowSnapshot,
   Company,
   CompanyCataloguePage,
+  CompanyHiringFootprint,
   CompanyReport,
   CompanyRequest,
   CompanyRequestPrefill,
@@ -202,7 +203,12 @@ export function decodeCompanyReport(value: unknown, expectedCompanyId: string): 
   const linked = items.filter(item => item.publicLink !== null).length;
   const state = linked === 0 ? "unavailable" : linked === items.length ? "available" : "partial";
   if (checks.state !== state) fail("source check state");
-  return { companyId, asOf, sourceChecks: { state, items }, ...decodeCompanySamples(o, asOf) };
+  const samples = decodeCompanySamples(o, asOf);
+  return { companyId, asOf, sourceChecks: { state, items }, ...samples,
+    ...(o.hiringFootprint === undefined ? {} : {
+      hiringFootprint: decodeHiringFootprint(o.hiringFootprint, samples.hiringRoles),
+    }),
+  };
 }
 // The store retains at most 1,000 jobs across imports (server/store.mjs),
 // independently of the historical source-check contract's 2,000 scopes.
@@ -210,6 +216,30 @@ const COMPANY_SAMPLE_LIMIT = 1000;
 function sampleCount(value: unknown, label: string): number {
   const result = count(value, label);
   return result <= COMPANY_SAMPLE_LIMIT ? result : fail(label);
+}
+function decodeHiringFootprint(value: unknown, roles: CompanyReport["hiringRoles"]): CompanyHiringFootprint {
+  const footprint = record(value, "hiring footprint");
+  const source = "jobseek_direct_country_locations_v1";
+  const sampleSize = sampleCount(footprint.sampleSize, "country sample size");
+  const knownSampleSize = sampleCount(footprint.knownSampleSize, "known country sample size");
+  const unknownSampleSize = sampleCount(footprint.unknownSampleSize, "unknown country sample size");
+  const state = knownSampleSize > 0 ? "observed" : "unknown";
+  if (!roles || footprint.source !== source || footprint.state !== state
+      || sampleSize !== (roles.state === "available" ? roles.sampleSize : 0)
+      || knownSampleSize + unknownSampleSize !== sampleSize) fail("hiring footprint evidence");
+  const entries: unknown[] = Array.isArray(footprint.countries) && footprint.countries.length <= 249
+    ? footprint.countries : fail("country sample");
+  const seen = new Set<string>();
+  const countries = entries.map(value => {
+    const item = record(value, "country sample"), code = text(item.code, "country code");
+    const count = sampleCount(item.count, "country listing count");
+    if (!/^[A-Z]{2}$/u.test(code) || seen.has(code) || count === 0 || count > knownSampleSize) fail("country sample");
+    seen.add(code);
+    return { code, count };
+  });
+  // A listing may appear in several countries, but every mapped listing must appear at least once.
+  if (countries.reduce((sum, item) => sum + item.count, 0) < knownSampleSize) fail("country sample denominator");
+  return { state, source, sampleSize, knownSampleSize, unknownSampleSize, countries };
 }
 function reportText(value: unknown, label: string, max: number): string {
   const result = text(value, label);

@@ -142,14 +142,19 @@ class FakePublicHttp:
 class PublicImportTests(unittest.TestCase):
     def test_feed_snapshot_binds_source_identity_and_body_without_old_asset_url(self):
         with tempfile.TemporaryDirectory() as root:
-            path, _ = write_feed_bundle(Path(root) / "feed", [feed_posting()], source_count=2)
+            row = feed_posting(locationDirectIds=[2657896, 2658434], locationNames=["Zurich", "Switzerland"],
+                               locationTypes=["onsite", "remote"], locationGeoTypes=["city", "country"])
+            path, _ = write_feed_bundle(Path(root) / "feed", [row], source_count=2)
             result = IMPORT.import_feed_bundle(path, max_jobs=1, now=NOW)
             self.assertEqual(result["schemaVersion"], 1)
             self.assertTrue(result["selection"]["limitedCoverage"])
             job = result["jobs"][0]
             self.assertEqual(job["id"], JOB_A)
             self.assertEqual(job["firstObserved"], "2026-10-28T16:00:00.000Z")
-            self.assertEqual(job["locations"][0]["id"], "2657896")
+            self.assertEqual(job["locations"], [
+                {"id": "2657896", "name": "Zurich", "workplace": "onsite", "geoType": "city"},
+                {"id": "2658434", "name": "Switzerland", "workplace": "remote", "geoType": "country"},
+            ])
             self.assertEqual(result["companyIdentities"], [{"companyId": COMPANY_A, "officialDomain": "employer.example"}])
             self.assertEqual(job["evidence"]["bodySha256"], feed_posting()["body"]["sha256"])
             self.assertIsNone(job["evidence"]["bodyUrl"])

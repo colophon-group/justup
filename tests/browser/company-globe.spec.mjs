@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { mockApi, session } from './api-fixture.mjs';
+import { companyReportSample, hiringFootprintSample } from './company-report-fixture.mjs';
 
 const origin = `http://127.0.0.1:${process.env.JUSTUP_PUBLIC_TEST_PORT || 4207}`;
 test.use({ baseURL: origin, viewport: { width: 1280, height: 900 } });
@@ -45,6 +46,36 @@ test('public HTML has a neutral textual alternative and no hiring-country infere
   await expect(page.locator('.company-footprint')).toContainText('Hiring countries are unknown.');
   await expect(page.locator('.tracked-sources button')).toHaveText('Try again');
   await expect(page.locator('.company-footprint [data-country], .company-footprint [data-hiring]')).toHaveCount(0);
+});
+
+test('known countries are listed in public HTML and fill only their visible globe areas after navigation', async ({ browser, page }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  const staticPage = await context.newPage();
+  await staticPage.goto(origin + '/companies/footprint');
+  const list = current => current.getByRole('list', { name: 'Countries listed in the sample' });
+  for (const label of ['Switzerland (3)', 'Japan (1)', 'Tuvalu (1)']) await expect(list(staticPage)).toContainText(label);
+  await expect(staticPage.getByRole('group', { name: 'Hiring country globe' }))
+    .toHaveAccessibleDescription(/Country locations identified for 3 of 6 sampled listings/);
+  await context.close();
+
+  await mockApi(page, { 'GET /session': session({ user: null }), 'GET /companies/library/report': {
+    ...companyReportSample('library'), hiringFootprint: hiringFootprintSample,
+  } });
+  await page.goto('/'); await page.getByRole('link', { name: 'Companies', exact: true }).click();
+  await page.getByRole('link', { name: 'Test Library', exact: true }).click();
+  const target = page.getByRole('group', { name: 'Hiring country globe' });
+  const swiss = target.locator('[data-country="CH"]'), japan = target.locator('[data-country="JP"]');
+  await expect(swiss).toHaveAttribute('d', /^M.+Z$/);
+  await expect(japan).toHaveCount(0);
+  await expect(list(page)).toContainText('Tuvalu (1)');
+  await capture(page, 'desktop-evidenced-countries');
+  for (let i = 0; i < 12; i++) await target.press('ArrowRight');
+  await expect(japan).toHaveAttribute('d', /^M.+Z$/);
+  await expect(swiss).toHaveCount(0);
+  await expect(target.locator('[data-country="TV"]')).toHaveCount(0);
+  await capture(page, 'desktop-evidenced-opposite-hemisphere');
+  await target.press('Home');
+  await expect(swiss).toHaveCount(1);
 });
 
 test('pointer drag, release, arrows and Home rotate a square globe with keyboard-only focus and no idle movement', async ({ page }) => {

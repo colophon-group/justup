@@ -151,6 +151,14 @@ export type CompanySalarySample = { state: "unavailable" } | {
   unknownSampleSize: number;
   groups: { currency: string; period: string; sampleSize: number; min: number | null; max: number | null }[];
 };
+export interface CompanyHiringFootprint {
+  state: "observed" | "unknown";
+  source: "jobseek_direct_country_locations_v1";
+  sampleSize: number;
+  knownSampleSize: number;
+  unknownSampleSize: number;
+  countries: { code: string; count: number }[];
+}
 export interface CompanyReport {
   companyId: string;
   asOf: string;
@@ -171,6 +179,7 @@ export interface CompanyReport {
   freshness?: { listings: "fresh" | "unavailable" };
   hiringRoles?: CompanyRoleSample;
   reportedSalaries?: CompanySalarySample;
+  hiringFootprint?: CompanyHiringFootprint;
   sourceChecks: {
     state: "available" | "partial" | "unavailable";
     items: {

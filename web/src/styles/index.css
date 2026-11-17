@@ -194,6 +194,7 @@ form label { display: block; font-size: 12px; font-weight: 600; line-height: 1.5
 .company-footprint { display: grid; grid-template-columns: 1fr minmax(0, 390px); align-items: center; gap: 20px 36px; }
 .footprint-copy h2 { margin: 0 0 24px; font: 900 clamp(34px, 5vw, 56px)/1.05 var(--display); }
 .footprint-copy p { font-size: 12px; line-height: 1.7; }
+.globe-country-list { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; list-style: none; font-size: 12px; line-height: 1.7; }
 .footprint-copy .globe-hint { margin-top: 24px; font-size: 10px; }
 .globe-reset { margin-top: 8px; }
 .company-globe { width: 100%; aspect-ratio: 1; border-radius: 50%; cursor: grab; touch-action: pan-y pinch-zoom; user-select: none; outline: none; }
@@ -203,6 +204,7 @@ form label { display: block; font-size: 12px; font-weight: 600; line-height: 1.5
 .globe-ocean { fill: var(--cream); stroke: var(--ink); stroke-width: .8; }
 .globe-grid, .globe-land { fill: none; stroke: var(--ink); }
 .globe-grid { stroke-width: .35; opacity: .18; }
+.globe-country { fill: var(--paper); stroke: var(--ink); stroke-width: .3; }
 .globe-land { stroke-width: .65; stroke-linejoin: round; stroke-linecap: round; }
 @media (max-width: 620px) {
   .company-footprint { grid-template-columns: minmax(0, 1fr); gap: 12px; }

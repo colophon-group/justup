@@ -7,26 +7,23 @@ read_when: Integrating company reports, reviewing source gaps or verifying the p
 
 ## Read the globe
 
-Company pages include a circular, interactive neutral world globe with a visible
-unknown state and an accessible textual equivalent. No hiring-country contract
-exists in the report below, so no geography is highlighted. Headquarters, company
-locations, career-page locales and posting languages cannot establish hiring
-countries. Factual shading requires reviewed posting hiring-location country
-codes with scope, time, provenance and explicit unknown evidence; that dependency
-and deployed first-release proof remain open in
-[#110](https://github.com/colophon-group/justup/issues/110).
+Company pages highlight countries observed in current public listing samples.
+The country list and its sample count are also readable in public HTML with
+JavaScript disabled. An empty, stale or unmapped sample keeps the globe neutral
+and labels the hiring countries unknown. The report's scope and observation
+timestamps describe exactly which listings contributed. Deployed first-release
+proof is tracked in [#110](https://github.com/colophon-group/justup/issues/110).
 
 Pointer dragging, wheel input, arrow keys and Home rotate or reset a fixed-scale
 orthographic view. Horizontal touch dragging rotates; vertical touch gestures
 and wheel input preserve native page scrolling. Browser zoom remains available.
-There is no automatic movement, inertia, zoom or reduced-motion animation. The
-same unknown text is present in public HTML without JavaScript. See
+There is no automatic movement, inertia, zoom or reduced-motion animation. See
 [motion controls](motion-design.md#company-globe) and the local
 [geography provenance](../web/src/features/companies/geography.md).
 
 The company interface owns `tests/browser/company-globe.spec.mjs` for native
-pointer/touch/wheel/keyboard controls, unknown public HTML, reduced motion and
-page scroll/zoom preservation. It runs in the browser CI lane against compiled
+pointer/touch/wheel/keyboard controls, observed and unknown public HTML, reduced
+motion and page scroll/zoom preservation. It runs in the browser CI lane against compiled
 assets with local API fixtures and no provider calls (expected under 20 seconds).
 `globe.test.ts` owns pure projection, geography and input-bound contracts in the
 web lane. Existing web/browser impact rules select both for globe source changes.
@@ -40,7 +37,7 @@ private scope selectors return `400 invalid_query`. It creates no visitor sessio
 task or source read. The standard API no-store/noindex headers still apply.
 
 The report has `companyId`, `asOf`, `provenance`, `scope`, `freshness`,
-`monitoringSince`, `sourceChecks`, `hiringHistory`, `hiringRoles`, `reportedSalaries` and
+`monitoringSince`, `sourceChecks`, `hiringHistory`, `hiringRoles`, `reportedSalaries`, `hiringFootprint` and
 `methodology`. `asOf` is when the report was computed. Listing verification,
 historical observation, source generation and publication have their own explicit
 timestamps; none are replaced with the request time.
@@ -65,6 +62,20 @@ sections, not a zero-hiring claim.
 `unknownSampleSize` and `items:[{id,name,count}]`. The labels are Jobseek's
 structured leaf occupation ID/name, not a classifier run by this report or a
 guess from titles. Older imports without occupation labels remain unlabelled.
+
+`hiringFootprint` contains `state`, `source`, `sampleSize`, `knownSampleSize`,
+`unknownSampleSize` and `countries:[{code,count}]`. The source
+`jobseek_direct_country_locations_v1` uses only Jobseek's explicit `country`
+locations whose GeoNames IDs map to a current ISO 3166-1 alpha-2 code. Both
+types of import retain those direct location IDs and geographic types. Each
+mapped listing contributes at most one count per country and may contribute to
+more than one country. Unmapped listings stay in the denominator. City, region
+and macro entries supply no evidence under this contract. A headquarters,
+language, career-board locale or location label supplies no country evidence.
+The `observed` state means at least one mapped listing in this public sample.
+The `unknown` state supplies an empty country list and makes no claim about where
+the company hires. The report's shared `scope`, `freshness` and `provenance`
+give the observation window, verification times and import generation.
 
 `reportedSalaries` contains `state`, `sampleSize`, `reportedSampleSize`,
 `groupedSampleSize`, `incompleteSampleSize`, `unknownSampleSize` and

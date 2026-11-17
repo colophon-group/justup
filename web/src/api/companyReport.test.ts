@@ -57,6 +57,23 @@ const currentReport = () => ({ ...report(),
       { currency: 'USD', period: 'month', sampleSize: 1, min: null, max: 8 },
       { currency: 'USD', period: 'year', sampleSize: 1, min: 100, max: 200 }] },
 });
+test('hiring footprint is bound to the same public sample and rejects contradictory evidence', () => {
+  const footprint = { state: 'observed', source: 'jobseek_direct_country_locations_v1', sampleSize: 5,
+    knownSampleSize: 3, unknownSampleSize: 2, countries: [{ code: 'CH', count: 3 }, { code: 'DE', count: 1 }] };
+  const raw = { ...currentReport(), hiringFootprint: footprint };
+  const decoded = decodeCompanyReport(raw, 'company');
+  assert.deepEqual(decoded.hiringFootprint, footprint);
+  assert.deepEqual(decodeCompanyReport(decoded, 'company'), decoded);
+  for (const override of [
+    { source: 'company_headquarters' }, { state: 'unknown' }, { sampleSize: 4 },
+    { unknownSampleSize: 1 }, { countries: [] }, { countries: [{ code: 'CH', count: 1 }] },
+    { countries: [{ code: 'CH', count: 4 }] }, { countries: [{ code: 'ch', count: 3 }] },
+    { countries: [{ code: 'CH', count: 2 }, { code: 'CH', count: 1 }] },
+  ]) assert.throws(() => decodeCompanyReport({ ...raw, hiringFootprint: { ...footprint, ...override } }, 'company'));
+  assert.throws(() => decodeCompanyReport({ ...report(), hiringFootprint: footprint }, 'company'));
+  assert.throws(() => decodeCompanyReport({ ...raw, freshness: { listings: 'unavailable' },
+    hiringRoles: { state: 'unavailable' }, reportedSalaries: { state: 'unavailable' } }, 'company'));
+});
 test('current report keeps exact role/sample denominators and separate currency-period bounds without private history', () => {
   const raw = currentReport(), value = decodeCompanyReport(raw, 'company');
   assert.deepEqual(value.hiringRoles, raw.hiringRoles);
