@@ -420,6 +420,8 @@ class OperatorUpgradeContracts(unittest.TestCase):
                         return str(units / args[-1])
                     if property_name == '--property=DropInPaths':
                         return ''
+                    if property_name == '--property=NeedDaemonReload':
+                        return 'no'
                     if property_name == '--property=UnitFileState':
                         return 'disabled' if args[-1] == host.BACKUP_TIMER else 'static'
                 return 'inactive' if kwargs.get('capture') else None
@@ -818,21 +820,50 @@ class OperatorUpgradeContracts(unittest.TestCase):
                 self.assert_private_state_unchanged(fixture)
 
     def test_backup_adoption_does_not_remove_a_competing_exact_unit(self):
+        stop_preview = host.stop_preview
         with self.installation(add_backup=True) as fixture:
             write = host.write_update_file
-            timer = fixture.units / host.BACKUP_TIMER
+            service = fixture.units / host.BACKUP_SERVICE
             def competing_write(path, data, mode=0o444):
-                if path == timer:
+                if path == service:
                     write(path, data, mode)
                     raise FileExistsError('another writer published these bytes first')
                 return write(path, data, mode)
-            with patch.object(host, 'write_update_file', side_effect=competing_write):
+            with patch.object(host, 'write_update_file', side_effect=competing_write), patch.object(host, 'stop_preview', side_effect=stop_preview):
                 with self.assertRaisesRegex(ValueError, 'changed during rollback'):
                     self.backup_upgrade(fixture)
-            self.assertEqual(host.digest(timer), fixture.after['files'][f'deploy/justup-preview/{host.BACKUP_TIMER}'])
+            self.assertEqual(host.digest(service), fixture.after['files'][f'deploy/justup-preview/{host.BACKUP_SERVICE}'])
+            for unit in host.BACKUP_UNITS:
+                self.assertNotIn(('systemctl', 'stop', unit), fixture.commands)
             self.assertFalse(fixture.marker.exists())
             self.assertTrue((fixture.base / host.UPGRADE_LOCK).exists())
             self.assert_private_state_unchanged(fixture)
+
+    def test_stop_binds_backup_units_to_the_current_receipt_and_loaded_files(self):
+        stop_preview = host.stop_preview
+        with self.installation(add_backup=True) as fixture:
+            self.backup_upgrade(fixture)
+            fixture.commands.clear()
+            stop_preview()
+            stopped = [args[-1] for args in fixture.commands if args[:2] == ('systemctl', 'stop')]
+            self.assertEqual(stopped, [*host.BACKUP_UNITS, *host.STOP_UNITS])
+
+            fixture.commands.clear()
+            prior_call = host.call.side_effect
+            def changed(*args, **kwargs):
+                if args[2:] == ('--property=NeedDaemonReload', '--value', host.BACKUP_SERVICE):
+                    return 'yes'
+                return prior_call(*args, **kwargs)
+            with patch.object(host, 'call', side_effect=changed):
+                with self.assertRaisesRegex(ValueError, 'differs from its reviewed file'):
+                    stop_preview()
+            stopped = [args[-1] for args in fixture.commands if args[:2] == ('systemctl', 'stop')]
+            self.assertEqual(stopped, list(host.STOP_UNITS))
+
+        with self.installation(add_backup=True) as fixture:
+            (fixture.units / host.BACKUP_SERVICE).write_text('foreign backup service')
+            stop_preview()
+            self.assertNotIn(('systemctl', 'stop', host.BACKUP_SERVICE), fixture.commands)
 
     def test_backup_adoption_refuses_to_shadow_a_loaded_unit_from_another_directory(self):
         with self.installation(add_backup=True) as fixture:
@@ -868,6 +899,16 @@ class OperatorUpgradeContracts(unittest.TestCase):
             (fixture.units / host.BACKUP_TIMER).write_text('unowned backup timer')
             with patch.object(host.os, 'geteuid', return_value=0), self.assertRaises(OSError):
                 host.teardown(expected_plan=fixture.before['planSha256'])
+            self.assertFalse(fixture.commands)
+            self.assert_private_state_unchanged(fixture)
+
+        with self.installation(add_backup=True) as fixture:
+            result = self.backup_upgrade(fixture)
+            for unit in host.BACKUP_UNITS:
+                (fixture.units / unit).unlink()
+            fixture.commands.clear()
+            with patch.object(host.os, 'geteuid', return_value=0), self.assertRaises(OSError):
+                host.teardown(expected_plan=result['planSha256'])
             self.assertFalse(fixture.commands)
             self.assert_private_state_unchanged(fixture)
 

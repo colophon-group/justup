@@ -39,7 +39,7 @@ UNITS = ('justup-preview.slice', 'srv-justup_preview.mount', 'justup-preview-api
 BACKUP_SERVICE = 'justup-preview-backup.service'
 BACKUP_TIMER = 'justup-preview-backup.timer'
 BACKUP_UNITS = (BACKUP_TIMER, BACKUP_SERVICE)
-STOP_UNITS = (*BACKUP_UNITS, 'justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service',
+STOP_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service',
               'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-feed.socket')
 ROOT_FLOOR = 8 * GIB
 DISK_LIMIT = 2 * GIB
@@ -225,7 +225,17 @@ def proof():
 
 
 def stop_preview():
-    for unit in STOP_UNITS:
+    try:
+        backup_units = backup_units_for_current_receipt()
+        for unit in backup_units:
+            verify_loaded_backup_unit(unit)
+        stop_units(backup_units)
+    finally:
+        stop_units(STOP_UNITS)
+
+
+def stop_units(units):
+    for unit in units:
         # Never issue a broad wildcard stop or touch unrelated services. Missing
         # future runner/tunnel units are explicit, not a failed-stop exception.
         if call('systemctl', 'show', '--property=LoadState', '--value', unit, capture=True) == 'not-found':
@@ -627,11 +637,17 @@ def upgrade_backup(root, previous_plan_path, previous_sha, expected, host_finger
     return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, addition='backup')
 
 
+def verify_loaded_backup_unit(unit):
+    if (call('systemctl', 'show', '--property=FragmentPath', '--value', unit, capture=True) != str(UNIT_ROOT / unit)
+            or call('systemctl', 'show', '--property=DropInPaths', '--value', unit, capture=True)
+            or call('systemctl', 'show', '--property=NeedDaemonReload', '--value', unit, capture=True) != 'no'):
+        raise ValueError('The loaded backup unit differs from its reviewed file.')
+
+
 def verify_inactive_backup_units():
     for unit, expected in ((BACKUP_TIMER, 'disabled'), (BACKUP_SERVICE, 'static')):
-        if (call('systemctl', 'show', '--property=FragmentPath', '--value', unit, capture=True) != str(UNIT_ROOT / unit)
-                or call('systemctl', 'show', '--property=DropInPaths', '--value', unit, capture=True)
-                or call('systemctl', 'show', '--property=UnitFileState', '--value', unit, capture=True) != expected
+        verify_loaded_backup_unit(unit)
+        if (call('systemctl', 'show', '--property=UnitFileState', '--value', unit, capture=True) != expected
                 or call('systemctl', 'show', '--property=ActiveState', '--value', unit, capture=True) != 'inactive'):
             raise ValueError('Backup units must load from their exact paths and remain inactive and unenabled.')
 
@@ -792,7 +808,7 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
             # rollback. Never restore it over unknown or partly replaced bytes.
             if os.path.lexists(marker):
                 raise ValueError('A receipt appeared during update publication; retain the pending lock for review.')
-            if added_units:
+            if add_feed:
                 # Qualification may have started a real receiver. Prove every
                 # dedicated identity idle before restoring files or a receipt.
                 require_idle_preview()
@@ -814,6 +830,10 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
                     if name == BACKUP_TIMER and call('systemctl', 'show', '--property=UnitFileState', '--value', name,
                                                      capture=True) != 'disabled':
                         raise ValueError('The backup timer enablement changed during rollback; retain pending state.')
+                    if add_backup:
+                        verify_loaded_backup_unit(name)
+                        if call('systemctl', 'show', '--property=ActiveState', '--value', name, capture=True) != 'inactive':
+                            raise ValueError('A backup unit became active during rollback; retain pending state.')
                     removable_units.append(target)
                 for target in removable_units:
                     target.unlink()
@@ -902,21 +922,42 @@ def switch(build):
     return {'current': build, 'apiStopped': True, 'activated': False}
 
 
-def installed_backup_units(expected_plan):
-    if not any(os.path.lexists(UNIT_ROOT / name) for name in BACKUP_UNITS):
-        return ()
+def installed_backup_units(expected_plan, *, skip_unowned=False):
+    timer_link = UNIT_ROOT / 'timers.target.wants' / BACKUP_TIMER
+    units_present = os.path.lexists(timer_link) or any(os.path.lexists(UNIT_ROOT / name) for name in BACKUP_UNITS)
+    allow_no_plan = skip_unowned or not units_present
     history_root = BASE / '.preview-ops-updates'
+    if allow_no_plan and not os.path.lexists(history_root):
+        return ()
     owned_path(history_root, directory=True)
     histories = [path for path in history_root.glob(f'*-{expected_plan}')
                  if re.fullmatch(r'[a-f0-9]{64}-[a-f0-9]{64}', path.name)]
+    if allow_no_plan and not histories:
+        return ()
     if len(histories) != 1:
         raise ValueError('The installed backup units require one matching reviewed plan.')
     owned_path(histories[0], directory=True)
     reviewed_plan = load_reviewed_plan(histories[0] / 'new-plan.json', expected_plan)
+    if allow_no_plan and not BACKUP_ADDITIONS & reviewed_plan['files'].keys():
+        return ()
     if not BACKUP_ADDITIONS <= reviewed_plan['files'].keys():
         raise ValueError('The installed plan does not own both backup units.')
     verify_operator_units({name: reviewed_plan['files'][name] for name in BACKUP_ADDITIONS})
     return BACKUP_UNITS
+
+
+def backup_units_for_current_receipt():
+    marker = BASE / '.preview-install.json'
+    if not os.path.lexists(marker):
+        return ()
+    if owned_path(marker).st_size > 4096:
+        raise ValueError('The installed plan receipt exceeds its bound.')
+    receipt = json.loads(marker.read_text())
+    sha = receipt.get('planSha256') if isinstance(receipt, dict) else None
+    if (not isinstance(sha, str) or not re.fullmatch(r'[a-f0-9]{64}', sha)
+            or type(receipt.get('formatVersion')) is not int or receipt != {'formatVersion': 1, 'planSha256': sha}):
+        raise ValueError('The installed plan receipt is invalid.')
+    return installed_backup_units(sha, skip_unowned=True)
 
 
 def teardown(erase_data=False, expected_plan=None):
@@ -933,6 +974,7 @@ def teardown(erase_data=False, expected_plan=None):
     backup_units = installed_backup_units(expected_plan)
     stop_preview()
     if backup_units:
+        verify_loaded_backup_unit(BACKUP_TIMER)
         call('systemctl', 'disable', '--now', BACKUP_TIMER)
     call('systemctl', 'disable', '--now', 'justup-preview-guard.timer')
     call('systemctl', 'stop', 'justup-preview-guard.service')
