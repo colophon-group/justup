@@ -7,7 +7,7 @@ verified bytes. The root operator imports and retires accepted batches.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import fcntl
 import hashlib
 import hmac
@@ -761,7 +761,8 @@ def seal_retiring_directory(directory):
     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         meta = os.fstat(fd)
-        if meta.st_uid not in {0, owner} or stat.S_IMODE(meta.st_mode) != 0o700:
+        if (meta.st_uid not in {0, owner} or stat.S_IMODE(meta.st_mode) != 0o700
+                or not directory.name.endswith(f'-{meta.st_dev}-{meta.st_ino}')):
             raise FeedStageError('Feed retirement directory is unsafe.')
         # A process may still hold an open descriptor from the inbox. Root
         # ownership prevents it from changing the directory entries.
@@ -769,6 +770,27 @@ def seal_retiring_directory(directory):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+@contextmanager
+def open_feed_directory(path, owner):
+    named = private_inbox(path, owner).lstat()
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        meta = os.fstat(fd)
+        if (meta.st_uid != owner or stat.S_IMODE(meta.st_mode) != 0o700
+                or (meta.st_dev, meta.st_ino) != (named.st_dev, named.st_ino)):
+            raise FeedStageError('Feed retirement parent is unsafe.')
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def file_at(name, directory_fd):
+    try:
+        return os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
 
 
 def retirement_files(directory, expected_names=None):
@@ -786,48 +808,73 @@ def retirement_files(directory, expected_names=None):
     return files
 
 
+def move_retiring_batch(batch_name, verifying_prefix, inbox_fd, receipts_fd, owner):
+    try:
+        fd = os.open(batch_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=inbox_fd)
+    except FileNotFoundError:
+        return None
+    try:
+        staged = os.fstat(fd)
+        if staged.st_uid != owner or stat.S_IMODE(staged.st_mode) != 0o700:
+            raise FeedStageError('Feed retirement batch is unsafe.')
+        # The quarantine name records the expected inode across interruption.
+        # Keep it open through rename so it cannot be freed and reused.
+        verifying = RECEIPTS / f'{verifying_prefix}{staged.st_dev}-{staged.st_ino}'
+        os.rename(batch_name, verifying.name, src_dir_fd=inbox_fd, dst_dir_fd=receipts_fd)
+        return verifying
+    finally:
+        os.close(fd)
+
+
 def retire_accepted(batch_id, expected_manifest_sha256):
     if os.geteuid() != 0:
         raise FeedStageError('Feed retirement requires the operator.')
     validate_batch_reference(batch_id, expected_manifest_sha256)
-    with import_lock():
+    with import_lock(), ExitStack() as directories:
         if root_receipt(batch_id, expected_manifest_sha256) is None:
             raise FeedStageError('Feed batch has no accepted receipt.')
-        inbox = private_inbox(INBOX)
-        staged = inbox / f'batch-{batch_id}'
-        verifying = RECEIPTS / f'.retiring-{batch_id}'
+        owner = pwd.getpwnam('justup-preview-api').pw_uid
+        inbox_fd = directories.enter_context(open_feed_directory(INBOX, owner))
+        receipts_fd = directories.enter_context(open_feed_directory(RECEIPTS, 0))
+        batch_name = f'batch-{batch_id}'
+        verifying_prefix = f'.retiring-{batch_id}-'
+        verifying_paths = [RECEIPTS / name for name in os.listdir(receipts_fd) if name.startswith(verifying_prefix)]
         purging = RECEIPTS / f'.purging-{batch_id}'
-        has_verifying = verifying.exists() or verifying.is_symlink()
-        has_purging = purging.exists() or purging.is_symlink()
-        if has_verifying and has_purging:
+        has_purging = file_at(purging.name, receipts_fd) is not None
+        if len(verifying_paths) > 1 or (verifying_paths and has_purging):
             raise FeedStageError('Feed retirement has competing recovery state.')
-        if not (has_verifying or has_purging):
-            if not (staged.exists() or staged.is_symlink()):
-                fsync_dir(RECEIPTS)
+        verifying = next(iter(verifying_paths), None)
+        if verifying is None and not has_purging:
+            verifying = move_retiring_batch(batch_name, verifying_prefix, inbox_fd, receipts_fd, owner)
+            if verifying is None:
+                os.fsync(receipts_fd)
                 return {'status': 'already_retired', 'manifestSha256': expected_manifest_sha256}
-            private_inbox(staged)
-            os.rename(staged, verifying)
-            has_verifying = True
         # Establish both sides of the move before validating or deleting bytes.
-        fsync_dir(inbox)
-        fsync_dir(RECEIPTS)
-        if has_verifying:
+        os.fsync(inbox_fd)
+        os.fsync(receipts_fd)
+        if verifying is not None:
             seal_retiring_directory(verifying)
             _, _, manifest, digest = read_batch(verifying, batch_id, directory_owner=0)
             require_source_digest(digest, expected_manifest_sha256)
             names = {'manifest.json', 'candidate.json', *(part['file'] for part in manifest['parts'])}
-            retirement_files(verifying, names)
-            os.rename(verifying, purging)
-            fsync_dir(RECEIPTS)
+            files = retirement_files(verifying, names)
+            candidate = verifying / 'candidate.json'
+            if candidate in files:
+                marker = candidate_marker(batch_id)
+                if (marker is None or marker['manifestSha256'] != digest
+                        or marker['candidateSha256'] != candidate_digest(candidate)):
+                    raise FeedStageError('Feed retirement candidate differs from its receipt.')
+            os.rename(verifying.name, purging.name, src_dir_fd=receipts_fd, dst_dir_fd=receipts_fd)
+            os.fsync(receipts_fd)
         # The root-private purge name survives partial cleanup. Accept only
         # flat staged files here, then resume without needing the removed manifest.
         for path in retirement_files(purging):
             path.unlink()
         fsync_dir(purging)
-        purging.rmdir()
-        fsync_dir(RECEIPTS)
+        os.rmdir(purging.name, dir_fd=receipts_fd)
+        os.fsync(receipts_fd)
         return {'status': 'retired', 'manifestSha256': expected_manifest_sha256,
-                'stagedReplayPresent': staged.exists() or staged.is_symlink()}
+                'stagedReplayPresent': file_at(batch_name, inbox_fd) is not None}
 
 
 def main(argv=None):

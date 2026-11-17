@@ -53,10 +53,10 @@ def local_operator(inbox, receipts):
     account = SimpleNamespace(pw_uid=uid)
     host = SimpleNamespace(verify_caps=lambda: None, verify_storage=lambda: None)
     checked, private, fstat = FEED.checked_file, FEED.private_inbox, os.fstat
-    sealed = set()
+    sealed = {receipts.stat().st_ino}
 
     def owned_inbox(path, owner=None):
-        if owner == 0 and path != receipts and path.stat().st_ino not in sealed:
+        if owner == 0 and path.stat().st_ino not in sealed:
             raise AssertionError('Expected an operator-owned directory.')
         return private(path, uid)
 
@@ -516,6 +516,7 @@ class RetirementTests(unittest.TestCase):
         FEED.write_private(self.latest, b'accepted export')
         FEED.write_private(self.staged / 'candidate.json', b'batch candidate')
         self.enterContext(local_operator(self.inbox, self.receipts))
+        FEED.bind_candidate_build(BATCH_ID, self.staged / 'candidate.json', self.digest, SHA)
 
     def retire(self):
         return FEED.retire_accepted(BATCH_ID, self.digest)
@@ -537,7 +538,7 @@ class RetirementTests(unittest.TestCase):
         self.part.write_bytes(b'altered staged data')
         with self.assertRaisesRegex(FEED.FeedStageError, 'Staged feed part changed'):
             self.retire()
-        verifying = self.receipts / f'.retiring-{BATCH_ID}'
+        verifying, = self.receipts.glob(f'.retiring-{BATCH_ID}-*')
         self.assertEqual((verifying / self.part.name).read_bytes(), b'altered staged data')
         self.assertTrue((verifying / 'candidate.json').is_file())
         (verifying / self.part.name).write_bytes(b'{"schemaVersion":1,"rows":[{}]}')
@@ -548,12 +549,17 @@ class RetirementTests(unittest.TestCase):
         self.assertTrue(unexpected.is_symlink())
         self.assertEqual(self.latest.read_bytes(), b'accepted export')
         unexpected.unlink()
+        candidate = verifying / 'candidate.json'
+        candidate.write_bytes(b'different candidate')
+        with self.assertRaisesRegex(FEED.FeedStageError, 'candidate differs'):
+            self.retire()
+        candidate.write_bytes(b'batch candidate')
         self.assertEqual(self.retire()['status'], 'retired')
 
     def test_partial_cleanup_retries_without_manifest_and_preserves_acknowledgement(self):
         receipt = FEED.store_receipt(BATCH_ID, self.digest)
         marker = FEED.candidate_marker_path(BATCH_ID)
-        FEED.write_private(marker, b'candidate identity')
+        candidate_identity = marker.read_bytes()
         real_unlink = Path.unlink
 
         def interrupted(path, *args, **kwargs):
@@ -573,20 +579,21 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(self.retire(), {'status': 'retired', 'manifestSha256': self.digest, 'stagedReplayPresent': False})
         self.assertEqual(self.retire()['status'], 'already_retired')
         self.assertEqual(FEED.show_receipt(BATCH_ID, self.digest), receipt)
-        self.assertEqual(marker.read_bytes(), b'candidate identity')
+        self.assertEqual(marker.read_bytes(), candidate_identity)
         self.assertEqual(self.latest.read_bytes(), b'accepted export')
 
     def test_purge_waits_for_directory_sync_and_retry_checks_a_new_staged_copy(self):
         FEED.store_receipt(BATCH_ID, self.digest)
         purging = self.receipts / f'.purging-{BATCH_ID}'
-        sync = FEED.fsync_dir
+        sync = os.fsync
+        receipts_inode = self.receipts.stat().st_ino
 
-        def interrupted(path):
-            if path == self.receipts and purging.is_dir():
+        def interrupted(fd):
+            if os.fstat(fd).st_ino == receipts_inode and purging.is_dir():
                 raise OSError('Synthetic interruption before purge publication.')
-            sync(path)
+            sync(fd)
 
-        with patch.object(FEED, 'fsync_dir', side_effect=interrupted), self.assertRaises(OSError):
+        with patch.object(FEED.os, 'fsync', side_effect=interrupted), self.assertRaises(OSError):
             self.retire()
         self.assertTrue((purging / 'manifest.json').is_file())
         self.assertTrue((purging / self.part.name).is_file())
@@ -595,6 +602,43 @@ class RetirementTests(unittest.TestCase):
         self.assertTrue(self.staged.is_dir())
         self.assertFalse(self.retire()['stagedReplayPresent'])
         self.assertFalse(self.staged.exists())
+
+    def test_parent_swap_cannot_redirect_the_move(self):
+        FEED.store_receipt(BATCH_ID, self.digest)
+        moved_inbox = self.inbox.with_name('moved-inbox')
+        rename = os.rename
+
+        def rebind_parent(source, target, **kwargs):
+            if source == self.staged.name:
+                rename(self.inbox, moved_inbox)
+                self.inbox.mkdir(mode=0o700)
+                source_files(self.inbox)
+            return rename(source, target, **kwargs)
+
+        with patch.object(FEED.os, 'rename', side_effect=rebind_parent):
+            self.assertEqual(self.retire()['status'], 'retired')
+        self.assertTrue(self.staged.is_dir())
+        self.assertFalse((moved_inbox / self.staged.name).exists())
+        self.assertEqual((moved_inbox / 'latest.json').read_bytes(), b'accepted export')
+
+    def test_substituted_batch_inode_stays_held_across_retry(self):
+        FEED.store_receipt(BATCH_ID, self.digest)
+        previous = self.staged.with_name('previous')
+        rename = os.rename
+
+        def rebind_batch(source, target, **kwargs):
+            if source == self.staged.name:
+                rename(self.staged, previous)
+                source_files(self.inbox)
+            return rename(source, target, **kwargs)
+
+        with patch.object(FEED.os, 'rename', side_effect=rebind_batch), self.assertRaises(FEED.FeedStageError):
+            self.retire()
+        with self.assertRaises(FEED.FeedStageError):
+            self.retire()
+        verifying, = self.receipts.glob(f'.retiring-{BATCH_ID}-*')
+        self.assertTrue((verifying / 'manifest.json').is_file())
+        self.assertTrue((previous / 'manifest.json').is_file())
 
 
 class ComposedImportTests(unittest.TestCase):
