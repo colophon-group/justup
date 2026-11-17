@@ -1,6 +1,6 @@
 // Observe the application's own edge stream through a real browser session.
 import { expect } from '@playwright/test';
-import { validEventId } from '../../web/src/api/liveResults.ts';
+import { liveResultsPath, validEventId } from '../../web/src/api/liveResults.ts';
 
 const streamPath = '/api/v1/workspace/events';
 const snapshotDeadlineMs = 20_000;
@@ -52,6 +52,47 @@ export async function openReleaseStream(page, origin, submitSearch) {
   return { response, firstSnapshotMs: await connectedSnapshot(page, response) };
 }
 
+export async function verifyReleaseResumeIdentity(page, search, eventId) {
+  if (!validEventId(eventId)) throw new Error('Reopened browser stream has an invalid event identity.');
+  // A well-formed unknown token also opens successfully. Ask for one frame
+  // with the exact observed header and require the server to recognize it.
+  const resumed = await page.evaluate(async ({ path, eventId, searchId, revision, deadline }) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), deadline);
+    try {
+      const response = await fetch(path, {
+        credentials: 'same-origin', redirect: 'error', cache: 'no-store', signal: controller.signal,
+        headers: { Accept: 'text/event-stream', 'Last-Event-ID': eventId },
+      });
+      if (!response.ok || response.headers.get('content-type')?.split(';')[0] !== 'text/event-stream' || !response.body) return false;
+      const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true });
+      let text = '', size = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return false;
+        size += value.byteLength;
+        if (size > 1_048_640) return false;
+        text += decoder.decode(value, { stream: true });
+        for (let end = text.indexOf('\n\n'); end !== -1; end = text.indexOf('\n\n')) {
+          const lines = text.slice(0, end).split('\n');
+          text = text.slice(end + 2);
+          const payload = lines.find(line => line.startsWith('data: '));
+          if (!payload) continue;
+          const snapshot = JSON.parse(payload.slice(6));
+          return lines.includes('event: snapshot') && snapshot.schemaVersion === 1
+            && snapshot.scope === 'active_search' && snapshot.searchId === searchId
+            && snapshot.revision === revision && snapshot.reason === 'resumed';
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }, { path: accountStreamUrl(search), eventId,
+    searchId: search.id, revision: search.revision, deadline: snapshotDeadlineMs });
+  if (!resumed) throw new Error('The preview server did not recognize the browser resume identity.');
+}
+
 export async function verifyReleaseStreamReconnect(page, origin, opening, acceptedSearch, sourceUrl) {
   if (!isSearchStream(opening.response, acceptedSearch)) throw new Error('Initial stream search identity changed.');
   const sourceRow = await page.evaluateHandle(url =>
@@ -72,10 +113,8 @@ export async function verifyReleaseStreamReconnect(page, origin, opening, accept
         { timeout: snapshotDeadlineMs }),
       page.keyboard.press('Escape'),
     ]);
-    if (!validEventId(response.request().headers()['last-event-id'])) {
-      throw new Error('Reopened browser stream did not present its accepted event identity.');
-    }
     const reconnectSnapshotMs = await connectedSnapshot(page, response);
+    await verifyReleaseResumeIdentity(page, acceptedSearch, response.request().headers()['last-event-id']);
     if (!await sourceRow.evaluate(row => row.isConnected
         && [...document.querySelectorAll('[data-job]')].filter(value => value.dataset.job === row.dataset.job).length === 1)) {
       throw new Error('Reconnect replaced or duplicated the accepted source row.');
@@ -87,5 +126,5 @@ export async function verifyReleaseStreamReconnect(page, origin, opening, accept
 }
 
 export function accountStreamUrl(search) {
-  return `${streamPath}?${new URLSearchParams({ searchId: search.id, revision: String(search.revision) })}`;
+  return liveResultsPath('account', search.id, search.revision, 'en');
 }

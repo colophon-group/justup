@@ -1,7 +1,7 @@
 // Retained browser/Worker → real HTTP SSE and SQLite imports. No API interception.
 import { expect, test } from '@playwright/test';
 import { startVisitorRuntime } from '../assembled/visitor-runtime.mjs';
-import { accountStreamUrl, openReleaseStream, verifyReleaseStreamReconnect } from './release-live-results.mjs';
+import { accountStreamUrl, openReleaseStream, verifyReleaseResumeIdentity, verifyReleaseStreamReconnect } from './release-live-results.mjs';
 
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 1100 } });
 let runtime, initial, clock;
@@ -100,6 +100,8 @@ test('real account streams remove closed rows, never expose withheld arrivals an
   const timings = await verifyReleaseStreamReconnect(page, runtime.origin, opening, accepted, rows[0].sourceUrl);
   expect(timings.firstSnapshotMs).toBeGreaterThanOrEqual(0);
   expect(timings.reconnectSnapshotMs).toBeGreaterThanOrEqual(0);
+  await expect.poll(() => runtime.liveConnections()).toBe(1);
+  await expect(verifyReleaseResumeIdentity(page, accepted, 'z'.repeat(43))).rejects.toThrow('did not recognize');
   const signedOut = await page.context().browser().newContext({ ignoreHTTPSErrors: true });
   try {
     expect((await signedOut.request.get(runtime.origin + accountStreamUrl(accepted))).status()).toBe(401);
