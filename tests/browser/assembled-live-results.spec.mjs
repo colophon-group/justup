@@ -1,6 +1,7 @@
 // Retained browser/Worker → real HTTP SSE and SQLite imports. No API interception.
 import { expect, test } from '@playwright/test';
 import { startVisitorRuntime } from '../assembled/visitor-runtime.mjs';
+import { accountStreamUrl, openReleaseStream, verifyReleaseStreamReconnect } from './release-live-results.mjs';
 
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 1100 } });
 let runtime, initial, clock;
@@ -32,12 +33,15 @@ async function startSearch(page, account = false) {
     await expect(page.locator('#header-sign-in')).toBeHidden();
   }
   await page.locator('#query').fill('Engineer');
-  await page.locator('#job-search button[type=submit]').click();
+  const submitSearch = () => page.locator('#job-search button[type=submit]').click();
+  const opening = account ? await openReleaseStream(page, runtime.origin, submitSearch) : null;
+  if (opening === null) await submitSearch();
   await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible();
   await expect(page.locator('#live-status')).toContainText('Live results connected.');
   // The initial valid frame may be coalesced until the submit gesture finishes.
   await page.waitForTimeout(200);
   await expect.poll(() => runtime.liveConnections()).toBe(1);
+  return opening;
 }
 async function reveal(page, count) {
   for (let attempt = 0; attempt < count + 4 && await page.locator('[data-job]').count() < count; attempt++) {
@@ -90,7 +94,16 @@ test('real visitor arrivals preserve the reader and resume the actual event iden
 });
 
 test('real account streams remove closed rows, never expose withheld arrivals and pause stale source evidence without zero claims', async ({ page }) => {
-  const rows = baseline(); importJobs(rows); await startSearch(page, true);
+  const rows = baseline(); importJobs(rows);
+  const opening = await startSearch(page, true);
+  const { items: [accepted] } = await (await page.request.get(runtime.origin + '/api/v1/searches')).json();
+  const timings = await verifyReleaseStreamReconnect(page, runtime.origin, opening, accepted, rows[0].sourceUrl);
+  expect(timings.firstSnapshotMs).toBeGreaterThanOrEqual(0);
+  expect(timings.reconnectSnapshotMs).toBeGreaterThanOrEqual(0);
+  const signedOut = await page.context().browser().newContext({ ignoreHTTPSErrors: true });
+  try {
+    expect((await signedOut.request.get(runtime.origin + accountStreamUrl(accepted))).status()).toBe(401);
+  } finally { await signedOut.close(); }
   const hidden = job('withheld-arrival', initial - DAY, { title: 'Engineer PRIVATE_WITHHELD_ROLE' });
   importJobs([...rows.filter(row => row.id !== 'assembled-engineer'), hidden], [
     { id: 'assembled-engineer', active: false, observedAt: new Date(clock).toISOString() },
