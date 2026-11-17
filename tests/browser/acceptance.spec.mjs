@@ -2,6 +2,7 @@
 import { test, expect } from '@playwright/test';
 import { loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, GATE_LOCALES, disposableAccount, ownSession, cleanupCandidateAccount } from './release-gate.mjs';
 import { verifyPublicFootprint } from './release-footprint.mjs';
+import { accountStreamUrl, openReleaseStream, verifyReleaseStreamReconnect } from './release-live-results.mjs';
 
 for (const locale of GATE_LOCALES) {
   test(`${locale} fixed deployed candidate completes its disposable-account search and request journey`, async ({ browser }) => {
@@ -79,7 +80,9 @@ for (const locale of GATE_LOCALES) {
 
       stage = 'real interpreted search and source';
       await page.locator('#query').fill(config.scenario.query);
-      await page.locator('#job-search button[type=submit]').click();
+      const submitSearch = () => page.locator('#job-search button[type=submit]').click();
+      const opening = locale === 'en' ? await openReleaseStream(page, config.origin, submitSearch) : null;
+      if (opening === null) await submitSearch();
       await page.locator('#search-results').waitFor({ state: 'visible', timeout: 90_000 });
       await page.locator('#search-results').scrollIntoViewIfNeeded();
       await expect.poll(async () => page.locator('a.posting-link').evaluateAll((links, expected) => links.some(link => link.href === expected), config.scenario.sourceUrl), { timeout: 15_000 }).toBe(true);
@@ -91,6 +94,11 @@ for (const locale of GATE_LOCALES) {
         const prefix = expected.locale === 'en' ? '' : `/${expected.locale}`;
         return posting?.href === expected.sourceUrl && company?.getAttribute('href') === `${prefix}/companies/${encodeURIComponent(expected.companyId)}`;
       }), { ...config.scenario, locale })).toBe(true);
+      if (opening !== null) {
+        stage = 'deployed live results reconnect';
+        const timings = await verifyReleaseStreamReconnect(page, config.origin, opening, accepted, config.scenario.sourceUrl);
+        console.log(JSON.stringify({ liveResults: timings }));
+      }
 
       stage = 'warned edit and explicit confirmation';
       await page.locator('#query').fill(config.scenario.warnedQuery);
@@ -143,6 +151,7 @@ for (const locale of GATE_LOCALES) {
       const guest = await session();
       expect(guest.user === null).toBe(true);
       expect((await read('/api/v1/searches')).status === 401).toBe(true);
+      if (opening !== null) expect((await read(accountStreamUrl(confirmed))).status === 401).toBe(true);
       const absent = await mutation('/api/v1/auth/login', { username: account.username, password: account.password }, guest.csrfToken);
       expect(absent.status === 401 && absent.json.error?.code === 'invalid_credentials').toBe(true);
       account.deleted = true;

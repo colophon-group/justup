@@ -204,7 +204,8 @@ export async function preflight(config, get, now = Date.now) {
       && s.access.fullAccess === false && s.access.billingEnabled === false
       && s.authentication?.method === 'username_password' && s.authentication.loginEnabled === true
       && s.authentication.registrationEnabled === true && freshCoverage(s.coverage, clock())
-      && s.capabilities?.search === true && s.capabilities.companyRequests === true, 'Preview authentication, capabilities or coverage are not ready for an admitted locale.');
+      && s.capabilities?.search === true && s.capabilities.companyRequests === true && s.capabilities.sse === true,
+    'Preview authentication, capabilities or coverage are not ready for an admitted locale.');
     requireThat(s.capabilities.billing === (config.billingMode === 'stripe_test'),
       'Preview billing capability differs from the reviewed mode.');
     verifyPolicyState(config, s.policies, locale);
