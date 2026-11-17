@@ -174,12 +174,29 @@ First run the exact-byte smoke above against the retained artifact. Then prepare
     "warnedQuery": "<reviewed edit requiring explicit limitations confirmation>",
     "companyId": "<selected imported company id>",
     "companyName": "<its unambiguous imported name>",
-    "sourceUrl": "https://<selected real employer posting>"
+    "sourceUrl": "https://<selected real employer posting>",
+    "hiringFootprint": {
+      "observedCompanyId": "<imported company with explicit country evidence>",
+      "unknownCompanyId": "<distinct imported company with eligible listings and unknown countries>",
+      "countryCode": "CH",
+      "listingCount": 1
+    }
   }
 }
 ```
 
 `api.schemaVersion` is the application database schema reported by `/api/v1/version`; full acceptance now requires version 2 and rejects stale application version 1. This does not change independent search/import, runner, SSE, source or JEV wire schema versions.
+
+Choose both hiring-footprint companies from the reviewed public listing sample
+for `api.importGeneration`. Set `countryCode` to a reviewed code with a bundled
+[globe boundary](../web/src/features/companies/geography.md) and `listingCount`
+to its verified count of distinct eligible postings. `CH` and `1` are examples.
+The unknown company must have eligible postings with zero mapped country
+evidence. Before account work, preflight checks both current reports against
+the expected import generation and country count. The English browser journey
+then verifies the highlight, keyboard reset and pointer rotation, the neutral
+unknown state, the textual alternatives with JavaScript disabled, and native
+touch rotation in a mobile profile with reduced motion.
 
 The former English-only `policies.version`, `privacySha256` and `usageSha256` fields are no longer accepted. Migrate release evidence by listing **all five** interface locales in `policies.admittedLocales`, each with the seven exact server policy-state fields above and both approved document hashes. Locale keys and fields are strict; repeated JSON keys, including escaped equivalents, reject the file. Partial locale maps cannot pass full acceptance. The URLs must be the candidate origin’s exact English root or `.de.html`, `.fr.html`, `.it.html` and `.es.html` notice routes; query strings, fragments, foreign origins and alternate paths are rejected. The live UI journey always runs once for each of the five fixed locales; a scenario cannot narrow that set.
 

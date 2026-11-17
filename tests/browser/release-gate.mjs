@@ -2,6 +2,8 @@
 import { lstatSync, readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { isKnownCountryCode } from '../../server/geonames-country-codes.mjs';
+import { decodeCompanyReport } from '../../web/src/api/decode.ts';
 
 function requireThat(condition, message) {
   if (!condition) throw new Error(message);
@@ -37,6 +39,12 @@ export function validateGateConfig(value) {
   requireThat(record(scenario) && plain(scenario.query, 2000) && plain(scenario.warnedQuery, 2000)
     && scenario.query !== scenario.warnedQuery && plain(scenario.companyId)
     && plain(scenario.companyName, 100) && sourceUrl(scenario.sourceUrl), 'Supply a reviewed real-source acceptance scenario.');
+  const footprint = scenario.hiringFootprint;
+  requireThat(exactKeys(footprint, ['observedCompanyId', 'unknownCompanyId', 'countryCode', 'listingCount'])
+    && plain(footprint.observedCompanyId, 128) && plain(footprint.unknownCompanyId, 128)
+    && footprint.observedCompanyId !== footprint.unknownCompanyId && isKnownCountryCode(footprint.countryCode)
+    && Number.isSafeInteger(footprint.listingCount) && footprint.listingCount > 0 && footprint.listingCount <= 1000,
+  'Supply distinct reviewed observed and unknown hiring-footprint samples.');
   return value;
 }
 // The declared map is release evidence, not a way to approve notices or configure the API.
@@ -103,6 +111,22 @@ function freshCoverage(value, now) {
   return record(value) && value.kind === 'imported_snapshot' && value.stale === false
     && typeof value.verifiedAt === 'string' && Number.isFinite(Date.parse(value.verifiedAt))
     && Date.parse(value.verifiedAt) <= now && now - Date.parse(value.verifiedAt) < 86_400_000;
+}
+async function verifyHiringFootprints(config, read, now) {
+  const { observedCompanyId, unknownCompanyId, countryCode, listingCount } = config.scenario.hiringFootprint;
+  for (const [companyId, state] of [[observedCompanyId, 'observed'], [unknownCompanyId, 'unknown']]) {
+    const response = await read(`/api/v1/companies/${encodeURIComponent(companyId)}/report`);
+    const report = decodeCompanyReport(response.json, companyId);
+    const verifiedAt = Date.parse(report.provenance?.importVerifiedAt);
+    const at = now();
+    requireThat(report.provenance?.importGeneration === config.api.importGeneration
+      && report.freshness?.listings === 'fresh' && Math.abs(Date.parse(report.asOf) - at) < 30_000
+      && verifiedAt <= at && at - verifiedAt < 86_400_000
+      && report.hiringFootprint?.state === state && report.hiringFootprint.sampleSize > 0,
+    'The expected company hiring-footprint sample is unavailable in this import.');
+    if (state === 'observed') requireThat(report.hiringFootprint.countries.some(country => country.code === countryCode && country.count === listingCount),
+      'The expected hiring country or sampled listing count changed.');
+  }
 }
 export function verifyBuilds(config, frontend, api, health, now = Date.now()) {
   requireThat(same(frontend, config.frontend, Object.keys(config.frontend)), 'Frontend identity changed.');
@@ -187,6 +211,7 @@ export async function preflight(config, get, now = Date.now) {
       verifiedDocuments.add(url);
     }
   }
+  await verifyHiringFootprints(config, read, clock);
   const privateResponse = await read('/api/v1/searches', 401);
   requireThat(privateResponse.json?.error?.code === 'unauthenticated', 'Signed-out private access was not denied.');
   const publicFeed = (await read('/api/v1/jobs?limit=12')).json;

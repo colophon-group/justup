@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { mockApi, session } from './api-fixture.mjs';
 import { companyReportSample, hiringFootprintSample } from './company-report-fixture.mjs';
+import { verifyPublicFootprint } from './release-footprint.mjs';
 
 const origin = `http://127.0.0.1:${process.env.JUSTUP_PUBLIC_TEST_PORT || 4207}`;
 test.use({ baseURL: origin, viewport: { width: 1280, height: 900 } });
@@ -76,6 +77,13 @@ test('known countries are listed in public HTML and fill only their visible glob
   await capture(page, 'desktop-evidenced-opposite-hemisphere');
   await target.press('Home');
   await expect(swiss).toHaveCount(1);
+});
+
+test('deployed footprint checks exercise the built public reports with static, desktop and touch views', async ({ browser, page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await verifyPublicFootprint(browser, page, { origin, scenario: { hiringFootprint: {
+    observedCompanyId: 'footprint', unknownCompanyId: 'library', countryCode: 'JP', listingCount: 1,
+  } } });
 });
 
 test('pointer drag, release, arrows and Home rotate a square globe with keyboard-only focus and no idle movement', async ({ page }) => {
