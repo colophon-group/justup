@@ -47,18 +47,25 @@ async function fixture(temporary) {
   const git = (...args) => execFileSync('git', args, { cwd: repository, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
   git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.test');
   await mkdir(join(repository, 'web/public'), { recursive: true }); await mkdir(join(repository, 'deploy/frontend'), { recursive: true });
+  await mkdir(join(repository, 'server'));
+  for (const name of ['geonames-country-codes.mjs', 'geonames-country-codes.d.mts']) {
+    await writeFile(join(repository, 'server', name), await readFile(new URL(`server/${name}`, root)));
+  }
+  await writeFile(join(repository, 'server/unrelated.mjs'), 'throw new Error("Unrelated server file");');
   await writeFile(join(repository, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.0.0', private: true, scripts: { build: 'node web/build-fixture.mjs' } }));
   await writeFile(join(repository, 'package-lock.json'), JSON.stringify({ name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'fixture', version: '1.0.0' } } }));
   await writeFile(join(repository, 'web/index.html'), '<h1>Committed</h1>');
   for (const name of ['privacy.html', 'usage.html']) await writeFile(join(repository, 'web/public', name), '<h1>Policy</h1>');
   await writeFile(join(repository, 'web/build-fixture.mjs'), `
-    import {mkdirSync,copyFileSync,writeFileSync} from 'node:fs';
+    import {mkdirSync,copyFileSync,writeFileSync,existsSync} from 'node:fs';
+    import {isKnownCountryCode} from '../server/geonames-country-codes.mjs';
+    if (!existsSync('server/geonames-country-codes.d.mts') || existsSync('server/unrelated.mjs')) throw new Error('Wrong staged build inputs');
     mkdirSync('web/dist/assets',{recursive:true});
     mkdirSync('web/worker-dist',{recursive:true});
     copyFileSync('deploy/frontend/worker.mjs','web/worker-dist/worker.mjs');
     copyFileSync('web/index.html','web/dist/index.html');
     for(const name of ['privacy.html','usage.html']) copyFileSync('web/public/'+name,'web/dist/'+name);
-    writeFileSync('web/dist/assets/app.fixture.js',JSON.stringify({privateBuildValue:process.env.VITE_PRIVATE_CANARY??null}));
+    writeFileSync('web/dist/assets/app.fixture.js',JSON.stringify({privateBuildValue:process.env.VITE_PRIVATE_CANARY??null, knownCountry:isKnownCountryCode('CH')}));
   `);
   await writeFile(join(repository, 'deploy/frontend/worker.mjs'), await readFile(new URL('deploy/frontend/worker.mjs', root)));
   git('add', '.'); git('commit', '-qm', 'Fixture');
@@ -77,7 +84,7 @@ test('artifact builds committed source, ignores dirty input and filters operator
     const release = await prepare(sha, first, repository);
     assert.deepEqual(await prepare(sha, second, repository), release);
     assert.equal(await readFile(join(first, 'assets/index.html'), 'utf8'), '<h1>Committed</h1>');
-    assert.deepEqual(JSON.parse(await readFile(join(first, 'assets/assets/app.fixture.js'), 'utf8')), { privateBuildValue: null });
+    assert.deepEqual(JSON.parse(await readFile(join(first, 'assets/assets/app.fixture.js'), 'utf8')), { privateBuildValue: null, knownCountry: true });
     assert.equal(release.assets.length, 4);
     await assert.rejects(prepare(sha, first, repository), /must not exist/);
     await assert.rejects(prepare('HEAD', join(temporary, 'bad'), repository), /exact/);

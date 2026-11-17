@@ -26,6 +26,7 @@ IMPACT = {
     "docs": (),
     "web": ("typecheck", "build", "web", "deployment", "browser"),
     "server": ("build", "server", "deployment", "python"),
+    "shared": FULL_SUITES,
     "python": ("build", "python", "deployment"),
     "deployment": ("build", "deployment", "server", "python", "browser"),
     "tooling": FULL_SUITES,
@@ -108,6 +109,8 @@ def classify(path: str) -> str:
         return "tooling"
     if path.startswith(("web/", "tests/browser/", "src/public/")):
         return "web"
+    if path in {"server/geonames-country-codes.mjs", "server/geonames-country-codes.d.mts"}:
+        return "shared"
     if path.startswith("server/"):
         return "server"
     if path.startswith(("vite.config.", "tsconfig")) or path.startswith("playwright.config."):
@@ -337,6 +340,8 @@ def selftest() -> None:
     assert select(["scripts/import-jobs.py", "scripts/test_import_jobs.py"], "dev", False)[:2] == (("build", "deployment", "python"), False)
     assert select(["scripts/import-jobs.py"], "main", False)[:2] == (FULL_SUITES, True)
     assert select(["server/auth.mjs", "server/auth.test.mjs"], "dev", False)[:2] == (("build", "deployment", "server", "python"), False)
+    for path in ("server/geonames-country-codes.mjs", "server/geonames-country-codes.d.mts"):
+        assert select([path], "dev", False)[:2] == (FULL_SUITES, False)
     for suites in IMPACT.values():
         if "deployment" in suites:
             assert "build" in suites and suites.index("build") < suites.index("deployment")

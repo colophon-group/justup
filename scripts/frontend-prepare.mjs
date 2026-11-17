@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 
 export const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const CONFIG = /^(?:package(?:-lock)?\.json|tsconfig(?:\.[\w-]+)?\.json|vite\.config\.(?:ts|mts|js|mjs))$/;
+const SHARED_PUBLIC_GEOGRAPHY = new Set(['server/geonames-country-codes.mjs', 'server/geonames-country-codes.d.mts']);
 function publicPath(name) {
   if (name.split('/').some(part => !part || part.startsWith('.')) || /(^|\/)(?:_worker\.js|_redirects|_headers|README(?:\.md)?)$/i.test(name) || /\.(?:env|pem|key|map|tsx?|mjs)$/i.test(name)) throw new Error(`Refusing public asset: ${name}`);
 }
@@ -69,7 +70,7 @@ export async function prepare(source, output, cwd = process.cwd()) {
   if (!workerEntry || !/^(100644|100755) blob /.test(workerEntry)) throw new Error('Worker must be a regular committed file');
   for (const entry of entries) {
     const split = entry.indexOf('\t'), name = entry.slice(split + 1);
-    if (!(name.startsWith('web/') || name === 'deploy/frontend/worker.mjs' || CONFIG.test(name))) continue;
+    if (!(name.startsWith('web/') || name === 'deploy/frontend/worker.mjs' || CONFIG.test(name) || SHARED_PUBLIC_GEOGRAPHY.has(name))) continue;
     const match = /^(100644|100755) blob ([a-f0-9]+)$/.exec(entry.slice(0, split));
     if (!match) throw new Error('Build inputs must be regular committed files');
     if ((name.startsWith('web/dist/') || name.startsWith('web/worker-dist/')) || name.split('/').some(part => part.startsWith('.')) || /\.(?:env|pem|key)$/i.test(name)) throw new Error(`Refusing build input: ${name}`);
