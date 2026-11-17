@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Stage a bounded private job feed through the isolated preview socket.
 
-The SSH identity may only relay bytes. The socket-activated receiver runs inside
-the preview slice and owns all parsing, hashing, storage and receipts.
+The SSH identity may only relay bytes. The socket-activated receiver stages
+verified bytes. The root operator imports and retires accepted batches.
 """
 from __future__ import annotations
 
@@ -393,15 +393,20 @@ def prepare(inbox=INBOX):
     return {'prepared': True, 'created': created}
 
 
-def batch_files(batch_id, inbox=INBOX):
+def validate_batch_id(batch_id):
     if not isinstance(batch_id, str) or not re.fullmatch(r'[0-9a-f]{32}', batch_id):
         raise FeedStageError('Invalid feed batch identity.')
+
+
+def batch_files(batch_id, inbox=INBOX):
+    validate_batch_id(batch_id)
     directory = private_inbox(inbox) / f'batch-{batch_id}'
-    meta = directory.lstat()
+    return read_batch(directory, batch_id)
+
+
+def read_batch(directory, batch_id, *, directory_owner=None):
     owner = pwd.getpwnam('justup-preview-api').pw_uid
-    if (not stat.S_ISDIR(meta.st_mode) or meta.st_uid != owner
-            or stat.S_IMODE(meta.st_mode) != 0o700):
-        raise FeedStageError('Feed batch directory is unsafe.')
+    private_inbox(directory, owner if directory_owner is None else directory_owner)
     name = f'batch-{batch_id}/manifest.json'
     manifest_file = directory / 'manifest.json'
     if checked_file(manifest_file, owner) > MAX_MANIFEST:
@@ -497,6 +502,12 @@ def bind_candidate_build(batch_id, candidate, source_digest, build_identity):
 def require_source_digest(actual, expected):
     if not isinstance(expected, str) or not SHA.fullmatch(expected) or not hmac.compare_digest(actual, expected):
         raise FeedStageError('Staged feed differs from the independently reviewed source digest.')
+
+
+def validate_batch_reference(batch_id, digest):
+    validate_batch_id(batch_id)
+    if not isinstance(digest, str) or not SHA.fullmatch(digest):
+        raise FeedStageError('Invalid source manifest digest.')
 
 
 def authorized_batch(batch_id, expected_manifest_sha256):
@@ -699,17 +710,12 @@ def consume_batch(directory, manifest_path, manifest, digest, release, release_m
             'manifestSha256': digest, 'releaseBuildIdentity': release_manifest['buildIdentity']}
 
 
-def process_batch(batch_id, expected_manifest_sha256, max_jobs=500):
-    if os.geteuid() != 0:
-        raise FeedStageError('Feed import requires the operator.')
-    if type(max_jobs) is not int or not 1 <= max_jobs <= 1000:
-        raise FeedStageError('Feed import limit must be 1..1000.')
+@contextmanager
+def import_lock():
     host = host_module()
     host.verify_caps()
     host.verify_storage()
-    inbox = private_inbox()
-    if not RECEIPTS.is_dir() or RECEIPTS.is_symlink() or RECEIPTS.stat().st_uid != 0 or stat.S_IMODE(RECEIPTS.stat().st_mode) != 0o700:
-        raise FeedStageError('Feed receipt directory is unsafe.')
+    private_inbox(RECEIPTS, owner=0)
     lock_fd = os.open(RECEIPTS / '.import.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         lock_meta = os.fstat(lock_fd)
@@ -717,25 +723,111 @@ def process_batch(batch_id, expected_manifest_sha256, max_jobs=500):
                 or lock_meta.st_nlink != 1 or stat.S_IMODE(lock_meta.st_mode) != 0o600):
             raise FeedStageError('Feed import lock is unsafe.')
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        directory, manifest_path, manifest, digest = authorized_batch(batch_id, expected_manifest_sha256)
-        if root_receipt(batch_id, digest) is not None:
-            return {'status': 'already_accepted', 'manifestSha256': digest}
-        release, release_manifest = active_release()
-        return consume_batch(directory, manifest_path, manifest, digest, release,
-                             release_manifest, inbox, max_jobs)
+        yield
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)
 
 
+def process_batch(batch_id, expected_manifest_sha256, max_jobs=500):
+    if os.geteuid() != 0:
+        raise FeedStageError('Feed import requires the operator.')
+    validate_batch_reference(batch_id, expected_manifest_sha256)
+    if type(max_jobs) is not int or not 1 <= max_jobs <= 1000:
+        raise FeedStageError('Feed import limit must be 1..1000.')
+    with import_lock():
+        if root_receipt(batch_id, expected_manifest_sha256) is not None:
+            return {'status': 'already_accepted', 'manifestSha256': expected_manifest_sha256}
+        inbox = private_inbox(INBOX)
+        directory, manifest_path, manifest, digest = authorized_batch(batch_id, expected_manifest_sha256)
+        release, release_manifest = active_release()
+        return consume_batch(directory, manifest_path, manifest, digest, release,
+                             release_manifest, inbox, max_jobs)
+
+
 def show_receipt(batch_id, expected_manifest_sha256):
     if os.geteuid() != 0:
         raise FeedStageError('Feed receipt requires the operator.')
-    _, _, _, digest = authorized_batch(batch_id, expected_manifest_sha256)
-    receipt = root_receipt(batch_id, digest)
+    validate_batch_reference(batch_id, expected_manifest_sha256)
+    private_inbox(RECEIPTS, owner=0)
+    receipt = root_receipt(batch_id, expected_manifest_sha256)
     if receipt is None:
         raise FeedStageError('Feed batch has no accepted receipt.')
     return receipt
+
+
+def seal_retiring_directory(directory):
+    owner = pwd.getpwnam('justup-preview-api').pw_uid
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        meta = os.fstat(fd)
+        if meta.st_uid not in {0, owner} or stat.S_IMODE(meta.st_mode) != 0o700:
+            raise FeedStageError('Feed retirement directory is unsafe.')
+        # A process may still hold an open descriptor from the inbox. Root
+        # ownership prevents it from changing the directory entries.
+        os.fchown(fd, 0, -1)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def retirement_files(directory, expected_names=None):
+    owner = pwd.getpwnam('justup-preview-api').pw_uid
+    private_inbox(directory, owner=0)
+    files = []
+    for path in directory.iterdir():
+        name = path.name
+        allowed = name in {'manifest.json', 'candidate.json'} or (
+            re.fullmatch(r'part-[0-9]{4}\.json', name) and 1 <= int(name[5:9]) <= MAX_PARTS)
+        if not allowed or (expected_names is not None and name not in expected_names):
+            raise FeedStageError('Feed retirement found an unexpected file.')
+        checked_file(path, owner)
+        files.append(path)
+    return files
+
+
+def retire_accepted(batch_id, expected_manifest_sha256):
+    if os.geteuid() != 0:
+        raise FeedStageError('Feed retirement requires the operator.')
+    validate_batch_reference(batch_id, expected_manifest_sha256)
+    with import_lock():
+        if root_receipt(batch_id, expected_manifest_sha256) is None:
+            raise FeedStageError('Feed batch has no accepted receipt.')
+        inbox = private_inbox(INBOX)
+        staged = inbox / f'batch-{batch_id}'
+        verifying = RECEIPTS / f'.retiring-{batch_id}'
+        purging = RECEIPTS / f'.purging-{batch_id}'
+        has_verifying = verifying.exists() or verifying.is_symlink()
+        has_purging = purging.exists() or purging.is_symlink()
+        if has_verifying and has_purging:
+            raise FeedStageError('Feed retirement has competing recovery state.')
+        if not (has_verifying or has_purging):
+            if not (staged.exists() or staged.is_symlink()):
+                fsync_dir(RECEIPTS)
+                return {'status': 'already_retired', 'manifestSha256': expected_manifest_sha256}
+            private_inbox(staged)
+            os.rename(staged, verifying)
+            has_verifying = True
+        # Establish both sides of the move before validating or deleting bytes.
+        fsync_dir(inbox)
+        fsync_dir(RECEIPTS)
+        if has_verifying:
+            seal_retiring_directory(verifying)
+            _, _, manifest, digest = read_batch(verifying, batch_id, directory_owner=0)
+            require_source_digest(digest, expected_manifest_sha256)
+            names = {'manifest.json', 'candidate.json', *(part['file'] for part in manifest['parts'])}
+            retirement_files(verifying, names)
+            os.rename(verifying, purging)
+            fsync_dir(RECEIPTS)
+        # The root-private purge name survives partial cleanup. Accept only
+        # flat staged files here, then resume without needing the removed manifest.
+        for path in retirement_files(purging):
+            path.unlink()
+        fsync_dir(purging)
+        purging.rmdir()
+        fsync_dir(RECEIPTS)
+        return {'status': 'retired', 'manifestSha256': expected_manifest_sha256,
+                'stagedReplayPresent': staged.exists() or staged.is_symlink()}
 
 
 def main(argv=None):
@@ -750,9 +842,10 @@ def main(argv=None):
     import_parser.add_argument('--batch-id', required=True)
     import_parser.add_argument('--manifest-sha256', required=True)
     import_parser.add_argument('--max-jobs', type=int, default=500)
-    receipt_parser = command.add_parser('receipt')
-    receipt_parser.add_argument('--batch-id', required=True)
-    receipt_parser.add_argument('--manifest-sha256', required=True)
+    for name in ('receipt', 'retire-accepted'):
+        batch_parser = command.add_parser(name)
+        batch_parser.add_argument('--batch-id', required=True)
+        batch_parser.add_argument('--manifest-sha256', required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == 'send':
@@ -775,8 +868,10 @@ def main(argv=None):
             print(json.dumps(result, separators=(',', ':')))
         elif args.command == 'import':
             print(json.dumps(process_batch(args.batch_id, args.manifest_sha256, args.max_jobs), separators=(',', ':')))
-        else:
+        elif args.command == 'receipt':
             print(json.dumps(show_receipt(args.batch_id, args.manifest_sha256), separators=(',', ':')))
+        else:
+            print(json.dumps(retire_accepted(args.batch_id, args.manifest_sha256), separators=(',', ':')))
         return 0
     except (FeedStageError, OSError, ValueError) as exc:
         # Never echo a source body, source path or exception chain to SSH.
