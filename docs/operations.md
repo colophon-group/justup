@@ -81,6 +81,14 @@ Use `upgrade-drill` for the single addition `scripts/preview-failure-drill.py`, 
 
 The separate `upgrade-feed` transition remains limited to its exact feed script and two unit additions. It cannot also add the drill helper. Retain the actual complete Git-derived plans for each sequential transition; never remove paths or rewrite a predecessor plan to fit a command. Other inventory or boundary changes need a separately reviewed procedure.
 
+Use `upgrade-backup` to add the exact backup service and timer together. Render
+the proposed plan with `plan --include-backup` and retain the complete installed
+predecessor. Use the command below with `upgrade-backup` and a distinct transient
+unit name. The transition verifies the installed pair with `systemd-analyze` and
+checks the loaded paths, drop-ins and inactive state before publishing the new
+receipt. The timer stays disabled. Once the pair is installed, render subsequent
+operator plans with `--include-backup` so ordinary upgrades preserve both units.
+
 Retain the complete previous plan JSON from the approved source, and render the new plan from the exact integrated source using the same private machine fingerprint. Review both digests and the full changed script bytes. Stage the new plan's files and the previous JSON in a canonical root-owned protected directory. The command requires the old receipt and every old installed script/unit hash to match; a familiar plan label alone is insufficient. Run the **new reviewed source tool**, with both explicit plan identities, inside the existing slice:
 
 ```sh
@@ -270,7 +278,7 @@ Rehearse deliberate stop separately: capture while active, run `systemctl stop` 
 
 Auth owns session cleanup and any explicitly stored account deadline. Accounts are durable by default; sessions expire after seven days by default and expiry does not delete identity. An optional deployment deadline applies only when a new account is created. Private deletion immediately removes owned state and invalidates its backups. Failed cleanup closes authentication availability. Verify model/cache retention against the actual integrated modules before policy approval.
 
-Operations maintains at most two complete SQLite snapshots, each at most 256 MiB and at most seven days old; all are inside the same disk quota. The current restricted deployment has no activated backup schedule. The candidate daily 03:00 UTC timer and 90-second service bound in `deploy/justup-preview/justup-preview-backup.{timer,service}` are source files only: the installed host plan does not inventory or install them. The timer has no boot catch-up or persistent replay; a missed run waits for the next daily slot, while `backup-status` must expose a stale snapshot to the separately reviewed alert path. A 24-hour nominal recovery point is only a candidate until cadence, backup-age threshold and actual restore time are reviewed. Run recovery commands under the preview slice. An explicit manual backup uses the actual active manifest identity:
+Operations maintains at most two complete SQLite snapshots, each at most 256 MiB and at most seven days old, inside the same disk quota. The restricted deployment has no active backup schedule. Adopt the daily 03:00 UTC timer and 90-second service through [the reviewed host upgrade](#update-installed-operator-scripts-without-replacing-the-boundary). A missed run waits for the next daily slot. Use `backup-status` to detect stale or unusable snapshots. Verify the cadence, backup-age threshold and actual restore time before claiming a 24-hour recovery point. Run recovery commands under the preview slice. An explicit manual backup uses the actual active manifest identity:
 
 ```sh
 python3 /srv/justup_preview/ops/preview-recovery.py backup \
@@ -280,7 +288,16 @@ python3 /srv/justup_preview/ops/preview-recovery.py backup \
   --source-commit "$JUSTUP_PREVIEW_COMMIT" --build-identity "$JUSTUP_PREVIEW_BUILD_ID"
 ```
 
-The candidate service calls `scheduled-backup` with no arguments. That command fixes the database, backup and deletion-generation paths and reads the verified active immutable manifest itself; it does not accept an environment-supplied build identity. Manual and scheduled backups and pruning take the same nonblocking directory lock, so a concurrent attempt fails instead of running a second snapshot. A later attempt removes only owned, unpaired files left by an interrupted backup before making a new one; complete retained snapshots remain subject to the existing integrity and deletion checks. A scheduled attempt keeps operator logs unchanged and fails closed if the active manifest, resource guard, database epoch, deletion barrier or backup limit fails. It requires enough space for a maximum snapshot plus a 64 MiB reserve and 8 MiB margin, and rechecks the reserve before publication. The root-run minute guard continues to own global work/log sublimit checks. The service gives its existing API UID the same preview state write allowance as the API unit because a clean SQLite WAL open may need to create its shared-memory file; it receives no queue, model or credential access. The 90-second service timeout is an outer bound on the existing 30-second in-process SQLite copy budget. No unit is activated by this source change: adding these files to the reviewed host inventory, qualifying their sandbox and timeout on the target host, installing them through an exact operator upgrade, choosing the cadence/alert threshold and observing live backup/restore behavior are separate gates under [#143](https://github.com/colophon-group/justup/issues/143). Local snapshots remain on the same host. Reusing Jobseek's backup storage location for a protected copy requires a separate access, deletion, retention and resource review before any shared storage is touched.
+The service calls `scheduled-backup` with no arguments. That command uses fixed database, backup and deletion-generation paths and reads the verified active manifest. Manual and scheduled backups and pruning share a nonblocking directory lock. A later run removes owned, unpaired files left by an interrupted backup. Complete snapshots remain subject to the same integrity and deletion checks. A scheduled attempt preserves operator logs and fails closed if the manifest, resource guard, database epoch, deletion barrier or backup limit fails. It requires space for a maximum snapshot plus a 64 MiB reserve and 8 MiB margin. It rechecks the reserve before publication. The root-run minute guard owns the global work and log limits. The API UID may write preview state because a clean SQLite WAL open may create a shared-memory file. The service sandbox excludes queue, model and credential paths. The 90-second service timeout bounds the 30-second SQLite copy budget.
+
+After the reviewed upgrade, qualify one run of `justup-preview-backup.service` on
+the intended preview build under operator authority. Verify the sandbox, slice,
+timeout and successful usable-snapshot status. Rehearse recovery under [#143](https://github.com/colophon-group/justup/issues/143)
+and confirm backup-age alert delivery before enabling the timer. The stop,
+switch and restore procedures stop both scheduled-backup units. Restart the
+timer only after confirming the intended active build and recovery state. Local
+snapshots remain on the preview host. A protected copy in Jobseek storage needs
+separate access, deletion, retention and resource review.
 
 The read-only `backup-status` command is a fail-closed input for the planned backup-age alert. Run it under the same preview slice with the maximum acceptable age from the reviewed cadence (seconds):
 

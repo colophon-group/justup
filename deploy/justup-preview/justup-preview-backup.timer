@@ -1,4 +1,4 @@
-# Candidate only: no host upgrade or timer enablement is included here.
+# The reviewed backup upgrade installs this timer disabled.
 [Unit]
 Description=Run one Justup preview snapshot daily
 

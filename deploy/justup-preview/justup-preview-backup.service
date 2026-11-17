@@ -1,4 +1,4 @@
-# Candidate only: the current host plan does not install this unit.
+# Adopt with the reviewed backup upgrade before qualifying a first run.
 [Unit]
 Description=Create one deletion-safe Justup preview snapshot
 Requires=srv-justup_preview.mount

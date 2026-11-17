@@ -36,7 +36,10 @@ UNITS = ('justup-preview.slice', 'srv-justup_preview.mount', 'justup-preview-api
          'justup-preview-guard.service', 'justup-preview-guard.timer',
          'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-runner.service',
          'justup-preview-feed.socket', 'justup-preview-feed@.service')
-STOP_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service',
+BACKUP_SERVICE = 'justup-preview-backup.service'
+BACKUP_TIMER = 'justup-preview-backup.timer'
+BACKUP_UNITS = (BACKUP_TIMER, BACKUP_SERVICE)
+STOP_UNITS = (*BACKUP_UNITS, 'justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service',
               'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-feed.socket')
 ROOT_FLOOR = 8 * GIB
 DISK_LIMIT = 2 * GIB
@@ -53,6 +56,7 @@ UPGRADE_LOCK = '.preview-ops-upgrade.lock'
 FEED_UNITS = ('justup-preview-feed.socket', 'justup-preview-feed@.service')
 FEED_ADDITIONS = {'scripts/preview-feed.py', *(f'deploy/justup-preview/{name}' for name in FEED_UNITS)}
 DRILL_ADDITIONS = {'scripts/preview-failure-drill.py'}
+BACKUP_ADDITIONS = {f'deploy/justup-preview/{name}' for name in BACKUP_UNITS}
 FEED_SOCKET = Path('/run/justup-preview-feed.sock')
 
 
@@ -69,11 +73,12 @@ def digest(path):
     return h.hexdigest()
 
 
-def plan(root, host_fingerprint=None):
+def plan(root, host_fingerprint=None, *, include_backup=False):
     if not re.fullmatch(r'[a-f0-9]{64}', host_fingerprint or ''):
         raise ValueError('Supply the reviewed host machine-id SHA256; never infer a new allocation target.')
     root = Path(root)
-    files = {f'deploy/justup-preview/{name}': digest(root / 'deploy/justup-preview' / name) for name in UNITS}
+    units = (*UNITS, *BACKUP_UNITS) if include_backup else UNITS
+    files = {f'deploy/justup-preview/{name}': digest(root / 'deploy/justup-preview' / name) for name in units}
     for name in ('runtime.json', 'codex-LICENSE'):
         files[f'deploy/justup-preview/{name}'] = digest(root / 'deploy/justup-preview' / name)
     for path in sorted((root / 'scripts').glob('preview-*.py')):
@@ -103,8 +108,8 @@ def plan(root, host_fingerprint=None):
     return body
 
 
-def reviewed(root, expected, host_fingerprint):
-    actual = plan(root, host_fingerprint)['planSha256']
+def reviewed(root, expected, host_fingerprint, *, include_backup=False):
+    actual = plan(root, host_fingerprint, include_backup=include_backup)['planSha256']
     if not expected or expected != actual:
         raise ValueError('Plan digest differs from the reviewed files; review the new plan before applying it.')
     if os.geteuid() != 0 or platform.system() != 'Linux' or platform.machine() not in {'aarch64', 'arm64'}:
@@ -398,6 +403,7 @@ def write_update_file(path, data, mode=0o444):
         stream.write(data)
         stream.flush()
         os.fsync(stream.fileno())
+        return os.fstat(stream.fileno())
 
 
 def publish_receipt(marker, temporary, data):
@@ -422,13 +428,28 @@ def verify_operator_files(folder, scripts):
 
 
 def verify_operator_units(files):
-    for name in UNITS:
+    for name in (*UNITS, *BACKUP_UNITS):
         if f'deploy/justup-preview/{name}' not in files:
             continue
         target = UNIT_ROOT / name
         owned_path(target)
         if digest(target) != files[f'deploy/justup-preview/{name}']:
             raise ValueError('Installed unit bytes differ from the previous reviewed plan.')
+
+
+def load_reviewed_plan(path, expected):
+    owned_path(path)
+    value = json.loads(path.read_text())
+    if (not isinstance(value, dict) or not re.fullmatch(r'[a-f0-9]{64}', expected or '')
+            or type(value.get('formatVersion')) is not int or value['formatVersion'] != 1
+            or not isinstance(value.get('files'), dict)
+            or any(not isinstance(key, str) or not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)
+                   for key, digest in value['files'].items())
+            or value.get('planSha256') != expected
+            or hashlib.sha256(json.dumps({key: data for key, data in value.items() if key != 'planSha256'},
+                                        sort_keys=True, separators=(',', ':')).encode()).hexdigest() != expected):
+        raise ValueError('Previous plan does not match its exact reviewed digest.')
+    return value
 
 
 def require_idle_preview():
@@ -593,36 +614,50 @@ def upgrade_ops(root, previous_plan_path, previous_sha, expected, host_fingerpri
 
 def upgrade_feed(root, previous_plan_path, previous_sha, expected, host_fingerprint):
     """Install only the reviewed private feed script and disabled unit pair."""
-    return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, add_feed=True)
+    return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, addition='feed')
 
 
 def upgrade_drill(root, previous_plan_path, previous_sha, expected, host_fingerprint):
     """Adopt only the prepared drill helper; never execute it or change units."""
-    return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, add_drill=True)
+    return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, addition='drill')
 
 
-def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, *, add_feed=False, add_drill=False):
-    if add_feed and add_drill:
-        raise ValueError('Feed and drill additions require separate reviewed transitions.')
-    reviewed(root, expected, host_fingerprint)
+def upgrade_backup(root, previous_plan_path, previous_sha, expected, host_fingerprint):
+    """Adopt the fixed backup unit pair with the schedule disabled."""
+    return _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, addition='backup')
+
+
+def verify_inactive_backup_units():
+    for unit, expected in ((BACKUP_TIMER, 'disabled'), (BACKUP_SERVICE, 'static')):
+        if (call('systemctl', 'show', '--property=FragmentPath', '--value', unit, capture=True) != str(UNIT_ROOT / unit)
+                or call('systemctl', 'show', '--property=DropInPaths', '--value', unit, capture=True)
+                or call('systemctl', 'show', '--property=UnitFileState', '--value', unit, capture=True) != expected
+                or call('systemctl', 'show', '--property=ActiveState', '--value', unit, capture=True) != 'inactive'):
+            raise ValueError('Backup units must load from their exact paths and remain inactive and unenabled.')
+
+
+def qualify_backup_units():
+    call('systemd-analyze', 'verify', *(str(UNIT_ROOT / name) for name in BACKUP_UNITS))
+    verify_inactive_backup_units()
+
+
+def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fingerprint, *, addition=None):
+    previous_plan_path = Path(previous_plan_path).absolute()
+    previous = load_reviewed_plan(previous_plan_path, previous_sha)
+    old_backup = BACKUP_ADDITIONS & previous['files'].keys()
+    if old_backup and old_backup != BACKUP_ADDITIONS:
+        raise ValueError('The previous plan has an incomplete backup inventory.')
+    add_feed, add_drill, add_backup = addition == 'feed', addition == 'drill', addition == 'backup'
+    include_backup = add_backup or bool(old_backup)
+    reviewed(root, expected, host_fingerprint, include_backup=include_backup)
     require_operator()
     root = Path(root).absolute()
     owned_path(root, directory=True)
     owned_path(root / 'scripts', directory=True)
     owned_path(UNIT_ROOT, directory=True)
-    previous_plan_path = Path(previous_plan_path).absolute()
-    owned_path(previous_plan_path)
-    previous = json.loads(previous_plan_path.read_text())
-    if (not isinstance(previous, dict) or not re.fullmatch(r'[a-f0-9]{64}', previous_sha or '')
-            or type(previous.get('formatVersion')) is not int or previous['formatVersion'] != 1
-            or not isinstance(previous.get('files'), dict)
-            or any(not isinstance(key, str) or not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value)
-                   for key, value in previous['files'].items())
-            or previous.get('planSha256') != previous_sha
-            or hashlib.sha256(json.dumps({key: value for key, value in previous.items() if key != 'planSha256'},
-                                        sort_keys=True, separators=(',', ':')).encode()).hexdigest() != previous_sha):
-        raise ValueError('Previous plan does not match its exact reviewed digest.')
-    candidate = plan(root, host_fingerprint)
+    candidate = plan(root, host_fingerprint, include_backup=include_backup)
+    if candidate['planSha256'] != expected:
+        raise ValueError('The proposed plan changed during operator update preparation.')
     unchanged = lambda value: {key: item for key, item in value.items() if key not in {'files', 'planSha256'}}
     old_files, new_files = previous['files'], candidate['files']
     if previous_sha == expected or unchanged(previous) != unchanged(candidate):
@@ -634,6 +669,9 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
     elif add_drill:
         if set(new_files) - set(old_files) != DRILL_ADDITIONS or set(old_files) - set(new_files):
             raise ValueError('Drill upgrade accepts only the exact reviewed helper addition without removals.')
+    elif add_backup:
+        if set(new_files) - set(old_files) != BACKUP_ADDITIONS or set(old_files) - set(new_files):
+            raise ValueError('Backup upgrade accepts only the exact reviewed timer and service additions.')
     elif old_files.keys() != new_files.keys():
         raise ValueError('Operator updates cannot change inventory paths.')
     scripts = {Path(name).name: checksum for name, checksum in previous['files'].items() if name.startswith('scripts/')}
@@ -642,11 +680,12 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
         if not name.startswith('scripts/') and candidate['files'][name] != checksum:
             raise ValueError('Operator updates cannot change units, native runtime pins or licenses.')
     verify_operator_units(previous['files'])
-    if add_feed and any(os.path.lexists(UNIT_ROOT / name) for name in FEED_UNITS):
-        raise ValueError('A new feed unit path already exists; inspect it before installing.')
-    if add_feed:
-        for name in FEED_UNITS:
-            owned_path(root / 'deploy/justup-preview' / name)
+    added_units = FEED_UNITS if add_feed else BACKUP_UNITS if add_backup else ()
+    for name in added_units:
+        if (os.path.lexists(UNIT_ROOT / name) or (add_backup and
+                call('systemctl', 'show', '--property=LoadState', '--value', name, capture=True) != 'not-found')):
+            raise ValueError(f'A new {addition} unit path already exists; inspect it before installing.')
+        owned_path(root / 'deploy/justup-preview' / name)
     for name in new_scripts:
         owned_path(root / 'scripts' / name)
     owned_path(BASE, directory=True)
@@ -675,7 +714,7 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
     os.close(fd)
     sync_directory(BASE)
     withdrawn = moved_old = moved_new = qualified = history_created = False
-    installed_feed_units = []
+    installed_units = {}
     try:
         history.mkdir(mode=0o700)
         history_created = True
@@ -707,20 +746,22 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
         sync_directory(history)
         sync_directory(BASE)
         verify_operator_files(BASE / 'ops', new_scripts)
-        if add_feed:
-            for name in FEED_UNITS:
+        if added_units:
+            for name in added_units:
                 key = f'deploy/justup-preview/{name}'
                 # An exclusive create may succeed before a later write/fsync
                 # fails. Track the attempt so unknown partial bytes can never
                 # escape rollback verification and restore the old receipt.
-                installed_feed_units.append(name)
-                write_update_file(UNIT_ROOT / name, (root / key).read_bytes(), 0o644)
+                installed_units[name] = None
+                installed_units[name] = write_update_file(UNIT_ROOT / name, (root / key).read_bytes(), 0o644)
             sync_directory(UNIT_ROOT)
             call('systemctl', 'daemon-reload')
         verify_operator_units(candidate['files'])
         if add_feed:
             qualify_feed_units()
             require_idle_preview()
+        if add_backup:
+            qualify_backup_units()
         guard()
         publish_receipt(marker, history / 'new-receipt.tmp',
                         (json.dumps({'formatVersion': 1, 'planSha256': expected}) + '\n').encode())
@@ -729,6 +770,7 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
                 'feedUnitsInstalled': add_feed,
                 'feedInboxPrepared': add_feed,
                 'drillHelperInstalled': add_drill,
+                'backupUnitsInstalled': add_backup,
                 'privateStateTouched': False, 'activated': False}
     except Exception:
         if not withdrawn and history_created:
@@ -750,7 +792,7 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
             # rollback. Never restore it over unknown or partly replaced bytes.
             if os.path.lexists(marker):
                 raise ValueError('A receipt appeared during update publication; retain the pending lock for review.')
-            if add_feed:
+            if added_units:
                 # Qualification may have started a real receiver. Prove every
                 # dedicated identity idle before restoring files or a receipt.
                 require_idle_preview()
@@ -758,12 +800,22 @@ def _upgrade_operator(root, previous_plan_path, previous_sha, expected, host_fin
                 (BASE / 'ops').rename(history / 'rejected-ops')
             if moved_old:
                 (history / 'previous-ops').rename(BASE / 'ops')
-            if add_feed:
-                for name in installed_feed_units:
+            if installed_units:
+                removable_units = []
+                for name, written in installed_units.items():
                     target = UNIT_ROOT / name
-                    owned_path(target)
-                    if digest(target) != candidate['files'][f'deploy/justup-preview/{name}']:
-                        raise ValueError('A feed unit changed during rollback; retain pending state.')
+                    if add_backup and not os.path.lexists(target):
+                        continue
+                    actual = owned_path(target)
+                    same_written_inode = written is not None and (written.st_dev, written.st_ino) == (actual.st_dev, actual.st_ino)
+                    if ((add_backup and not same_written_inode)
+                            or digest(target) != candidate['files'][f'deploy/justup-preview/{name}']):
+                        raise ValueError(f'A {addition} unit changed during rollback; retain pending state.')
+                    if name == BACKUP_TIMER and call('systemctl', 'show', '--property=UnitFileState', '--value', name,
+                                                     capture=True) != 'disabled':
+                        raise ValueError('The backup timer enablement changed during rollback; retain pending state.')
+                    removable_units.append(target)
+                for target in removable_units:
                     target.unlink()
                 sync_directory(UNIT_ROOT)
                 call('systemctl', 'daemon-reload')
@@ -850,6 +902,23 @@ def switch(build):
     return {'current': build, 'apiStopped': True, 'activated': False}
 
 
+def installed_backup_units(expected_plan):
+    if not any(os.path.lexists(UNIT_ROOT / name) for name in BACKUP_UNITS):
+        return ()
+    history_root = BASE / '.preview-ops-updates'
+    owned_path(history_root, directory=True)
+    histories = [path for path in history_root.glob(f'*-{expected_plan}')
+                 if re.fullmatch(r'[a-f0-9]{64}-[a-f0-9]{64}', path.name)]
+    if len(histories) != 1:
+        raise ValueError('The installed backup units require one matching reviewed plan.')
+    owned_path(histories[0], directory=True)
+    reviewed_plan = load_reviewed_plan(histories[0] / 'new-plan.json', expected_plan)
+    if not BACKUP_ADDITIONS <= reviewed_plan['files'].keys():
+        raise ValueError('The installed plan does not own both backup units.')
+    verify_operator_units({name: reviewed_plan['files'][name] for name in BACKUP_ADDITIONS})
+    return BACKUP_UNITS
+
+
 def teardown(erase_data=False, expected_plan=None):
     if os.geteuid() != 0 or not re.fullmatch(r'[a-f0-9]{64}', expected_plan or ''):
         raise ValueError('Teardown requires root and the exact reviewed installed plan digest.')
@@ -861,7 +930,10 @@ def teardown(erase_data=False, expected_plan=None):
     if marker.get('formatVersion') != 1 or marker.get('planSha256') != expected_plan:
         raise ValueError('Missing owned installation marker; refuse teardown.')
     require_operator(cleanup=True)
+    backup_units = installed_backup_units(expected_plan)
     stop_preview()
+    if backup_units:
+        call('systemctl', 'disable', '--now', BACKUP_TIMER)
     call('systemctl', 'disable', '--now', 'justup-preview-guard.timer')
     call('systemctl', 'stop', 'justup-preview-guard.service')
     # Normal unmount must succeed. No forced/lazy unmount or unrelated cleanup.
@@ -877,8 +949,8 @@ def teardown(erase_data=False, expected_plan=None):
             call('userdel', user)
         for group in (STATE_GROUP, CLIENT_GROUP):
             call('groupdel', group)
-        for name in UNITS[1:]:
-            (Path('/etc/systemd/system') / name).unlink()
+        for name in (*UNITS[1:], *backup_units):
+            (UNIT_ROOT / name).unlink()
         call('systemctl', 'daemon-reload')
     return {'stopped': True, 'imageRetained': not erase_data,
             'sliceRetained': True, 'protectedWorkloadsTouched': False}
@@ -886,12 +958,13 @@ def teardown(erase_data=False, expected_plan=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
     parser.add_argument('--previous-plan', type=Path)
     parser.add_argument('--previous-plan-sha')
+    parser.add_argument('--include-backup', action='store_true')
     parser.add_argument('--stop-on-failure', action='store_true')
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--sha256')
@@ -899,8 +972,10 @@ def main():
     parser.add_argument('--erase-data', action='store_true')
     args = parser.parse_args()
     try:
+        if args.include_backup and args.command != 'plan':
+            raise ValueError('Use --include-backup when rendering a plan.')
         if args.command == 'plan':
-            result = plan(args.source_root, args.host_machine_sha)
+            result = plan(args.source_root, args.host_machine_sha, include_backup=args.include_backup)
         elif args.command == 'install-slice':
             result = install_slice(args.source_root, args.reviewed_plan_sha, args.host_machine_sha)
         elif args.command == 'install':
@@ -920,6 +995,11 @@ def main():
                 raise ValueError('The exact previous reviewed plan file is required.')
             result = upgrade_drill(args.source_root, args.previous_plan, args.previous_plan_sha,
                                    args.reviewed_plan_sha, args.host_machine_sha)
+        elif args.command == 'upgrade-backup':
+            if args.previous_plan is None:
+                raise ValueError('The exact previous reviewed plan file is required.')
+            result = upgrade_backup(args.source_root, args.previous_plan, args.previous_plan_sha,
+                                    args.reviewed_plan_sha, args.host_machine_sha)
         elif args.command == 'prove':
             result = proof()
         elif args.command == 'guard':
