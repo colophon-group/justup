@@ -200,7 +200,8 @@ export async function preflight(config, get, now = Date.now) {
   // Complete every declared locale's read-only policy proof before private work is allowed.
   for (const [locale, entry] of Object.entries(config.policies.admittedLocales)) {
     const s = (await read('/api/v1/session', 200, locale)).json;
-    requireThat(s?.user === null && s.access?.fullAccess === false && s.access?.billingEnabled === false
+    requireThat(s?.user === null && s.access?.kind === 'guest'
+      && s.access.fullAccess === false && s.access.billingEnabled === false
       && s.authentication?.method === 'username_password' && s.authentication.loginEnabled === true
       && s.authentication.registrationEnabled === true && freshCoverage(s.coverage, clock())
       && s.capabilities?.search === true && s.capabilities.companyRequests === true, 'Preview authentication, capabilities or coverage are not ready for an admitted locale.');

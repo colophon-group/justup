@@ -35,7 +35,7 @@ function fixture() {
   };
   const coverage = { kind: 'imported_snapshot', stale: false, verifiedAt: new Date(now - 1000).toISOString() };
   const runner = { ready: true, identity: 'runner-fixed', sourceCommit: config.api.sourceCommit, buildIdentity: config.api.buildIdentity, lastHeartbeat: new Date(now - 1000).toISOString() };
-  const sessions = Object.fromEntries(locales.map(locale => [locale, { status: 200, json: { user: null, access: { fullAccess: false, billingEnabled: false }, serverTime: new Date(now).toISOString(), authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true }, policies: runtimePolicy(entries[locale]), capabilities: { search: true, companyRequests: true, billing: false }, coverage } }]));
+  const sessions = Object.fromEntries(locales.map(locale => [locale, { status: 200, json: { user: null, access: { kind: 'guest', fullAccess: false, billingEnabled: false }, serverTime: new Date(now).toISOString(), authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true }, policies: runtimePolicy(entries[locale]), capabilities: { search: true, companyRequests: true, billing: false }, coverage } }]));
   const data = {
     '/__release/version': { status: 200, json: { ...config.frontend } },
     '/api/v1/version': { status: 200, json: { ...config.api, runner: { ...runner } } },
@@ -112,6 +112,7 @@ test('preview preflight requires the reviewed billing mode across all admitted l
     state => { state.config.billingMode = 'disabled'; },
     state => { state.sessions.es.json.capabilities.billing = false; },
     state => { state.sessions.de.json.access.billingEnabled = true; },
+    state => { state.sessions.fr.json.access.kind = 'limited'; },
   ]) {
     const state = structuredClone({ config: f.config, sessions: f.sessions });
     change(state);
