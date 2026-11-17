@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { validateGateConfig, loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, cleanupCandidateAccount, cleanupAccount, disposableAccount } from '../../tests/browser/release-gate.mjs';
+import { validateGateConfig, loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, cleanupCandidateAccount, cleanupAccount, disposableAccount } from '../../tests/browser/release-gate.mjs';
 import { companyReportSample, hiringFootprintSample } from '../../tests/browser/company-report-fixture.mjs';
 
 const now = Date.parse('2026-10-31T12:00:00Z');
@@ -35,7 +35,7 @@ function fixture() {
   };
   const coverage = { kind: 'imported_snapshot', stale: false, verifiedAt: new Date(now - 1000).toISOString() };
   const runner = { ready: true, identity: 'runner-fixed', sourceCommit: config.api.sourceCommit, buildIdentity: config.api.buildIdentity, lastHeartbeat: new Date(now - 1000).toISOString() };
-  const sessions = Object.fromEntries(locales.map(locale => [locale, { status: 200, json: { user: null, access: { fullAccess: false, billingEnabled: false }, serverTime: new Date(now).toISOString(), authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true }, policies: runtimePolicy(entries[locale]), capabilities: { search: true, companyRequests: true }, coverage } }]));
+  const sessions = Object.fromEntries(locales.map(locale => [locale, { status: 200, json: { user: null, access: { fullAccess: false, billingEnabled: false }, serverTime: new Date(now).toISOString(), authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true }, policies: runtimePolicy(entries[locale]), capabilities: { search: true, companyRequests: true, billing: false }, coverage } }]));
   const data = {
     '/__release/version': { status: 200, json: { ...config.frontend } },
     '/api/v1/version': { status: 200, json: { ...config.api, runner: { ...runner } } },
@@ -101,6 +101,47 @@ test('invalid configuration and mismatched deployed evidence fail before the reg
   boundary.data['/api/v1/jobs?limit=12'].json.asOf = new Date(now + 1000).toISOString();
   boundary.data['/api/v1/jobs?limit=12'].json.items = [2, 14].map(days => ({ firstObserved: new Date(now + 1000 - days * 86_400_000).toISOString() }));
   await preflight(boundary.config, boundary.get, now + 1000);
+});
+test('preview preflight requires the reviewed billing mode across all admitted locales', async () => {
+  const f = fixture();
+  f.config.billingMode = 'stripe_test';
+  for (const session of Object.values(f.sessions)) session.json.capabilities.billing = true;
+  await preflight(f.config, f.get, now);
+  for (const change of [
+    state => { state.config.billingMode = 'live'; },
+    state => { state.config.billingMode = 'disabled'; },
+    state => { state.sessions.es.json.capabilities.billing = false; },
+    state => { state.sessions.de.json.access.billingEnabled = true; },
+  ]) {
+    const state = structuredClone({ config: f.config, sessions: f.sessions });
+    change(state);
+    const reads = [];
+    await assert.rejects(preflight(state.config, (path, options) => {
+      reads.push(path);
+      if (path === '/api/v1/session') return state.sessions[options.locale];
+      return f.get(path, options);
+    }, now));
+    assert.equal(reads.includes('/api/v1/searches'), false);
+  }
+});
+test('Stripe test availability keeps newly registered acceptance accounts limited and unable to purchase', () => {
+  const session = { access: { kind: 'limited', fullAccess: false, billingEnabled: true }, capabilities: { billing: true } };
+  const response = { status: 200, json: { billing: { mode: 'test', available: true, closing: false,
+    canCheckout: false, canManage: false, operation: null, termination: null } } };
+  const config = { billingMode: 'stripe_test' };
+  verifyDisposableAccountAccess(config, session, response);
+  assert.throws(() => verifyDisposableAccountAccess(config, session));
+  assert.throws(() => verifyDisposableAccountAccess({}, session, response));
+  for (const [key, value] of [
+    ['mode', 'live'], ['available', false], ['closing', true], ['canCheckout', true], ['canManage', true],
+    ['operation', {}], ['termination', {}],
+  ]) {
+    const broken = structuredClone(response);
+    broken.json.billing[key] = value;
+    assert.throws(() => verifyDisposableAccountAccess(config, session, broken));
+  }
+  assert.throws(() => verifyDisposableAccountAccess(config, { ...session, access: { ...session.access, fullAccess: true } }, response));
+  verifyDisposableAccountAccess({}, { ...session, capabilities: { billing: false }, access: { ...session.access, billingEnabled: false } });
 });
 test('stale application schema one is rejected in configured and deployed API identities', async () => {
   for (const change of [
