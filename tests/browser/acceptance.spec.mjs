@@ -1,6 +1,7 @@
 // Explicit real-service journey. No interception, fixtures, retained credentials or media.
 import { test, expect } from '@playwright/test';
 import { loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, GATE_LOCALES, disposableAccount, ownSession, cleanupCandidateAccount } from './release-gate.mjs';
+import { verifyPublicFootprint } from './release-footprint.mjs';
 
 for (const locale of GATE_LOCALES) {
   test(`${locale} fixed deployed candidate completes its disposable-account search and request journey`, async ({ browser }) => {
@@ -38,6 +39,10 @@ for (const locale of GATE_LOCALES) {
     const responseFor = (method, path) => page.waitForResponse(response => response.request().method() === method && new URL(response.url()).pathname === path, { timeout: 15_000 });
     try {
       await preflight(config, read);
+      if (locale === 'en') {
+        stage = 'public hiring footprint';
+        await verifyPublicFootprint(browser, page, config);
+      }
       stage = 'disposable account registration';
       await page.goto(`${prefix}/`);
       await page.locator('#header-sign-in').click();

@@ -4,11 +4,15 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { mockApi, session } from './api-fixture.mjs';
 import { companyReportSample, hiringFootprintSample } from './company-report-fixture.mjs';
+import { verifyPublicFootprint } from './release-footprint.mjs';
 
 const origin = `http://127.0.0.1:${process.env.JUSTUP_PUBLIC_TEST_PORT || 4207}`;
 test.use({ baseURL: origin, viewport: { width: 1280, height: 900 } });
 const globe = page => page.getByRole('group', { name: 'Neutral world globe' });
 const coast = page => page.locator('.globe-land');
+const releaseFootprintConfig = { origin, scenario: { hiringFootprint: {
+  observedCompanyId: 'footprint', unknownCompanyId: 'library', countryCode: 'JP', listingCount: 1,
+} } };
 async function open(page) {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('/companies/library');
@@ -78,6 +82,20 @@ test('known countries are listed in public HTML and fill only their visible glob
   await expect(swiss).toHaveCount(1);
 });
 
+test('deployed footprint checks exercise the built public reports with static, desktop and touch views', async ({ browser, page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await verifyPublicFootprint(browser, page, releaseFootprintConfig);
+});
+
+test('the deployed footprint check refuses an invisible highlighted country', async ({ browser, page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/assets/*.css', async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, body: `${await response.text()}\n.globe-country { opacity: 0 !important; }` });
+  });
+  await expect(verifyPublicFootprint(browser, page, releaseFootprintConfig)).rejects.toThrow('The evidenced country has a visible fill.');
+});
+
 test('pointer drag, release, arrows and Home rotate a square globe with keyboard-only focus and no idle movement', async ({ page }) => {
   const errors = await open(page); const target = globe(page), land = coast(page);
   const box = await target.boundingBox(); expect(box.width).toBe(box.height);
@@ -99,6 +117,7 @@ test('pointer drag, release, arrows and Home rotate a square globe with keyboard
   for (let i = 0; i < 12; i++) await target.press('ArrowRight');
   await page.mouse.click(at.x, at.y); await capture(page, 'desktop-opposite-hemisphere');
   // A synchronous input burst schedules one frame rather than one render per event.
+  await page.clock.runFor(20);
   const beforeBurst = await land.getAttribute('d');
   const frames = await target.evaluate(element => {
     const original = window.requestAnimationFrame; let scheduled = 0;

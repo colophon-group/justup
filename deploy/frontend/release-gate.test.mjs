@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { validateGateConfig, loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, cleanupCandidateAccount, cleanupAccount, disposableAccount } from '../../tests/browser/release-gate.mjs';
+import { companyReportSample, hiringFootprintSample } from '../../tests/browser/company-report-fixture.mjs';
 
 const now = Date.parse('2026-10-31T12:00:00Z');
 const locales = ['en', 'de', 'fr', 'it', 'es'];
@@ -29,7 +30,8 @@ function fixture() {
     frontend: { deploymentMode: 'preview', sourceSha: 'a'.repeat(40), treeSha: 'b'.repeat(40), assetsSha256: 'c'.repeat(64), workerSha256: 'd'.repeat(64), artifactSha256: 'e'.repeat(64), runtimeConfigSha256: 'f'.repeat(64) },
     api: { sourceCommit: 'a'.repeat(40), schemaVersion: 2, buildIdentity: 'build-fixed', runnerIdentity: 'runner-fixed', importGeneration: '00000000-0000-4000-8000-000000000000' },
     policies: { admittedLocales: entries, fallbackApprovals: {} },
-    scenario: { query: 'Reviewed query', warnedQuery: 'Reviewed query plus unsupported requirement', companyId: 'company-fixed', companyName: 'Company', sourceUrl: 'https://employer.example/careers/one' },
+    scenario: { query: 'Reviewed query', warnedQuery: 'Reviewed query plus unsupported requirement', companyId: 'company-fixed', companyName: 'Company', sourceUrl: 'https://employer.example/careers/one',
+      hiringFootprint: { observedCompanyId: 'company-fixed', unknownCompanyId: 'company-unknown', countryCode: 'CH', listingCount: 3 } },
   };
   const coverage = { kind: 'imported_snapshot', stale: false, verifiedAt: new Date(now - 1000).toISOString() };
   const runner = { ready: true, identity: 'runner-fixed', sourceCommit: config.api.sourceCommit, buildIdentity: config.api.buildIdentity, lastHeartbeat: new Date(now - 1000).toISOString() };
@@ -43,6 +45,20 @@ function fixture() {
     '/api/v1/jobs?limit=12': { status: 200, json: { asOf: new Date(now).toISOString(), items: [{ firstObserved: new Date(now - 3 * 86_400_000).toISOString() }], coverage } },
     '/api/v1/companies?q=Company': { status: 200, json: { items: [{ id: 'company-fixed', name: 'Company', coverage: { state: 'imported_snapshot' } }] } },
   };
+  for (const [id, hiringFootprint] of [
+    ['company-fixed', hiringFootprintSample],
+    ['company-unknown', { state: 'unknown', source: hiringFootprintSample.source, sampleSize: 6, knownSampleSize: 0, unknownSampleSize: 6, countries: [] }],
+  ]) {
+    const asOf = new Date(now).toISOString();
+    const observedAt = coverage.verifiedAt;
+    const report = companyReportSample(id);
+    data[`/api/v1/companies/${id}/report`] = { status: 200, json: {
+      ...report, asOf, hiringFootprint: structuredClone(hiringFootprint),
+      provenance: { source: report.provenance.source, importVerifiedAt: observedAt, importGeneration: config.api.importGeneration,
+        sampleObservedFrom: observedAt, sampleObservedThrough: observedAt },
+      scope: { ...report.scope, firstObservedFrom: new Date(now - 14 * 86_400_000).toISOString(), firstObservedThrough: new Date(now - 2 * 86_400_000).toISOString() },
+    } };
+  }
   for (const locale of locales) for (const kind of ['privacy', 'usage']) data[policyPath(kind, locale)] = { status: 200, bytes: policyBytes(locale, kind) };
   const reads = [];
   const get = async (path, options) => {
@@ -95,6 +111,33 @@ test('stale application schema one is rejected in configured and deployed API id
     await assert.rejects(preflight(f.config, f.get, now));
     assert.equal(f.reads.some(read => read.path === '/api/v1/searches'), false);
   }
+});
+
+test('the known country and fresh unknown sample must match the reviewed import before private work', async () => {
+  const observed = f => f.data['/api/v1/companies/company-fixed/report'].json;
+  const unknown = f => f.data['/api/v1/companies/company-unknown/report'].json;
+  for (const change of [
+    f => { delete f.config.scenario.hiringFootprint; },
+    f => { f.config.scenario.hiringFootprint.unknownCompanyId = 'company-fixed'; },
+    f => { f.config.scenario.hiringFootprint.countryCode = 'ZZ'; },
+    f => { f.config.scenario.hiringFootprint.listingCount = 2; },
+    f => { f.config.scenario.hiringFootprint.countryCode = 'GB'; },
+    f => { observed(f).provenance.importGeneration = 'another-import'; },
+    f => { unknown(f).companyId = 'company-other'; },
+    f => { unknown(f).provenance.importVerifiedAt = new Date(now - 86_400_000).toISOString(); },
+    f => { observed(f).provenance.sampleObservedFrom = new Date(now - 86_400_000).toISOString(); },
+    f => { delete unknown(f).hiringFootprint; },
+    f => { unknown(f).hiringFootprint = structuredClone(hiringFootprintSample); },
+  ]) {
+    const f = fixture(); change(f);
+    await assert.rejects(preflight(f.config, f.get, now));
+    assert.equal(f.reads.some(read => read.path === '/api/v1/searches'), false);
+  }
+  const f = fixture();
+  await preflight(f.config, f.get, now);
+  assert.deepEqual(f.reads.filter(read => read.path.endsWith('/report')).map(read => read.path), [
+    '/api/v1/companies/company-fixed/report', '/api/v1/companies/company-unknown/report',
+  ]);
 });
 
 test('every admitted locale and all ten exact documents are verified before private reads', async () => {
