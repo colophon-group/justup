@@ -54,12 +54,18 @@ export async function verifyPublicFootprint(browser, page, config) {
     await expect(coast).not.toHaveAttribute('d', before);
     return false;
   }, { timeout: 15_000, intervals: [60] }).toBe(true);
+  await expect(country).toBeVisible();
   await expect(country).toHaveAttribute('d', /^M.+Z$/);
   expect(await country.evaluate(path => {
     const ocean = path.ownerSVGElement?.querySelector('.globe-ocean');
-    const fill = getComputedStyle(path).fill;
-    return !!ocean && fill !== 'none' && fill !== getComputedStyle(ocean).fill;
-  })).toBe(true);
+    const style = getComputedStyle(path);
+    const transparentFill = style.fill === 'transparent' || /^rgba\(.*,\s*0\)$/.test(style.fill);
+    if (!ocean || style.fill === 'none' || transparentFill || style.fill === getComputedStyle(ocean).fill || Number(style.fillOpacity) === 0) return false;
+    for (let element = path; element; element = element.parentElement) {
+      if (Number(getComputedStyle(element).opacity) === 0) return false;
+    }
+    return true;
+  }), 'The evidenced country has a visible fill.').toBe(true);
   await globe.press('Home');
   await expect(coast).toHaveAttribute('d', initial);
   const center = await globeCenter(globe);

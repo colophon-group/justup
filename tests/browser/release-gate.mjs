@@ -118,10 +118,12 @@ async function verifyHiringFootprints(config, read, now) {
     const response = await read(`/api/v1/companies/${encodeURIComponent(companyId)}/report`);
     const report = decodeCompanyReport(response.json, companyId);
     const verifiedAt = Date.parse(report.provenance?.importVerifiedAt);
+    const oldestListingEvidence = Date.parse(report.provenance?.sampleObservedFrom);
     const at = now();
     requireThat(report.provenance?.importGeneration === config.api.importGeneration
       && report.freshness?.listings === 'fresh' && Math.abs(Date.parse(report.asOf) - at) < 30_000
       && verifiedAt <= at && at - verifiedAt < 86_400_000
+      && oldestListingEvidence <= at && at - oldestListingEvidence < 86_400_000
       && report.hiringFootprint?.state === state && report.hiringFootprint.sampleSize > 0,
     'The expected company hiring-footprint sample is unavailable in this import.');
     if (state === 'observed') requireThat(report.hiringFootprint.countries.some(country => country.code === countryCode && country.count === listingCount),

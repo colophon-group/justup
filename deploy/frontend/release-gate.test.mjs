@@ -125,6 +125,7 @@ test('the known country and fresh unknown sample must match the reviewed import 
     f => { observed(f).provenance.importGeneration = 'another-import'; },
     f => { unknown(f).companyId = 'company-other'; },
     f => { unknown(f).provenance.importVerifiedAt = new Date(now - 86_400_000).toISOString(); },
+    f => { observed(f).provenance.sampleObservedFrom = new Date(now - 86_400_000).toISOString(); },
     f => { delete unknown(f).hiringFootprint; },
     f => { unknown(f).hiringFootprint = structuredClone(hiringFootprintSample); },
   ]) {
