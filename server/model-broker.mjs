@@ -70,13 +70,20 @@ function evidenceAttributes(markup){
   return values;
 }
 
+function markupGap(html,start,end){
+  const text=html.slice(start,end);
+  if(/<(?:\/?[a-z]|[!?])/iu.test(text))throw problem('invalid_output');
+  return text;
+}
+
 function evidenceMarkup(html){
   const tokens=/<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<\?[\s\S]*?(?:\?>|$)|<![^<>]*>|<(\/?)([a-z][a-z0-9_:-]*)(?=[\s/>])((?:[^<>"']|"[^"]*"|'[^']*')*)>/giu;
   const hidden=[], visible=[];
-  let cursor=0;
+  let cursor=0,headingOpen=false;
   for(let match=tokens.exec(html);match;match=tokens.exec(html)){
     const [raw,closing,name,attributes]=match, tag=name?.toLowerCase();
-    if(!hidden.length)visible.push(html.slice(cursor,match.index));
+    const gap=markupGap(html,cursor,match.index);
+    if(!hidden.length)visible.push(gap);
     cursor=match.index+raw.length;
     if(!closing&&tag==='plaintext'){cursor=html.length;break;}
     const fields=tag&&!closing&&!hidden.length?evidenceAttributes(attributes):null;
@@ -86,9 +93,12 @@ function evidenceMarkup(html){
       const endTag=new RegExp(`</${tag}\\s*>`,'giu');
       endTag.lastIndex=cursor;
       const end=endTag.exec(html);
+      const rawText=html.slice(cursor,end?.index??html.length);
+      const escapeStart=tag==='script'?rawText.indexOf('<!--'):-1;
+      if(escapeStart>=0&&/<script(?=[\s/>])/iu.test(rawText.slice(escapeStart+4)))throw problem('invalid_output');
       if(!hidden.length){
         visible.push(tag==='title'&&!concealed&&end
-          ?`<title>${html.slice(cursor,end.index).replaceAll('<','&lt;')}</title>`:' ');
+          ?`<title>${rawText.replaceAll('<','&lt;')}</title>`:' ');
       }
       tokens.lastIndex=cursor=end?end.index+end[0].length:html.length;
       continue;
@@ -101,16 +111,24 @@ function evidenceMarkup(html){
       continue;
     }
     const foreign=foreignElements.has(tag);
+    if(headingOpen&&(/^h[1-6]$/u.test(tag??'')||concealed||foreign||tag==='template')){
+      visible.push('</h1>');
+      headingOpen=false;
+    }
     if(!closing&&(concealed||foreign||tag==='template')){
       visible.push(' ');
       if(!voidElements.has(tag)&&!(foreign&&raw.endsWith('/>')))hidden.push({tag,foreign});
-    }else if(tag==='h1'||(tag==='a'&&closing))visible.push(`<${closing}${tag}>`);
+    }else if(tag==='h1'&&!closing){
+      visible.push('<h1>');
+      headingOpen=true;
+    }else if(tag==='a'&&closing)visible.push('</a>');
     else if(tag==='a'){
       const value=fields.get('href');
       visible.push(value&&value.length<=2048&&!/["<>]/u.test(value)?`<a href="${value}">`:' ');
     }else visible.push(' ');
   }
-  if(!hidden.length)visible.push(html.slice(cursor));
+  const remainder=markupGap(html,cursor,html.length);
+  if(!hidden.length)visible.push(remainder);
   return visible.join('');
 }
 function visibleText(markup){
