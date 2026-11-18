@@ -1,6 +1,8 @@
 // Observe the application's own edge stream through a real browser session.
+import { createHash } from 'node:crypto';
 import { expect } from '@playwright/test';
 import { liveResultsPath, validEventId } from '../../web/src/api/liveResults.ts';
+import { decodeResults } from '../../web/src/api/decode.ts';
 
 const streamPath = '/api/v1/workspace/events';
 const snapshotDeadlineMs = 20_000;
@@ -127,4 +129,88 @@ export async function verifyReleaseStreamReconnect(page, origin, opening, accept
 
 export function accountStreamUrl(search) {
   return liveResultsPath('account', search.id, search.revision, 'en');
+}
+
+// Qualify an actual arrival while holding one reader and one connected response.
+// A later operator readback ties the observed import generation to the source receipt.
+export async function verifyReleaseFeedArrival(page, { opening, search, sourceUrl, baselineGeneration, read, observeImport, timeout = 150_000 }) {
+  if (!isSearchStream(opening.response, search) || search.configuration?.residualAi !== null) {
+    throw new Error('Feed arrival needs the exact primary-only search stream.');
+  }
+  const resultsPath = `/api/v1/searches/${encodeURIComponent(search.id)}/results?revision=${search.revision}&limit=50`;
+  const results = async () => {
+    const { status, json } = await read(resultsPath);
+    const page = decodeResults(json), asOf = Date.parse(json.asOf);
+    if (status !== 200 || page.searchId !== search.id || page.revision !== search.revision
+      || page.ai.status !== 'not_required' || page.coverage?.kind !== 'imported_snapshot' || page.coverage.stale !== false
+      || !Number.isFinite(asOf) || Math.abs(Date.now() - asOf) >= 30_000) throw new Error('Search results are out of scope or stale.');
+    return { items: page.items, asOf };
+  };
+  const before = await results();
+  if (!before.items.some(item => item.sourceUrl === sourceUrl)) throw new Error('The reviewed reading anchor is absent.');
+  const row = await page.evaluateHandle(url => [...document.querySelectorAll('#feed a.posting-link')]
+    .find(link => link.href === url)?.closest('[data-job]') ?? null, sourceUrl);
+  let selection;
+  try {
+    selection = await row.evaluateHandle(anchor => {
+      if (!anchor?.isConnected) throw new Error('The reading anchor is outside the rendered results.');
+      anchor.scrollIntoView({ block: 'start', behavior: 'instant' });
+      const link = anchor.querySelector('.posting-link');
+      link.focus({ preventScroll: true });
+      const range = document.createRange();
+      range.selectNodeContents(link);
+      const selected = getSelection();
+      selected.removeAllRanges();
+      selected.addRange(range);
+      return { anchor, link, text: selected.toString() };
+    });
+    // Let the application settle the scroll so this measures an idle reader.
+    await page.waitForTimeout(250);
+    const anchorTop = await selection.evaluate(({ anchor, link, text }) => {
+      const bounds = anchor.getBoundingClientRect();
+      if (document.activeElement !== link || !text || getSelection().toString() !== text
+        || scrollY <= 0 || bounds.bottom <= 0 || bounds.top >= innerHeight) throw new Error('Could not establish the reader position.');
+      return bounds.top;
+    });
+    if (await observeImport() !== baselineGeneration) throw new Error('Import changed before the reader baseline.');
+    await expect(page.locator('#new-results')).toHaveCount(0);
+    const startedAt = Date.now();
+    const arrival = await Promise.race([
+      page.waitForFunction(asOf => {
+        const found = [...document.querySelectorAll('#feed [data-job].is-new')]
+          .find(item => Date.parse(item.querySelector('time')?.dateTime) > asOf);
+        return found ? { id: found.dataset.job, sourceUrl: found.querySelector('.posting-link')?.href,
+          firstObserved: found.querySelector('time').dateTime } : false;
+      }, before.asOf, { timeout }).then(async handle => {
+        try { return await handle.jsonValue(); } finally { await handle.dispose(); }
+      }),
+      opening.response.finished().then(() => { throw new Error('The stream closed before the feed arrival.'); }),
+    ]);
+    const observedAfterMs = Date.now() - startedAt;
+    if (observedAfterMs < 0 || observedAfterMs > timeout) throw new Error('The feed arrival missed its observation window.');
+    const generation = await observeImport();
+    if (generation === baselineGeneration || before.items.some(item => item.id === arrival.id)) throw new Error('The observed posting did not come from a new import.');
+    const after = await results();
+    const published = after.items.find(item => item.id === arrival.id);
+    if (published?.sourceUrl !== arrival.sourceUrl || published?.firstObserved !== arrival.firstObserved
+      || Date.parse(arrival.firstObserved) > after.asOf || await observeImport() !== generation) {
+      throw new Error('Could not bind the arriving posting to the new import.');
+    }
+    const stable = await selection.evaluate(({ anchor, link, text }, top) => anchor.isConnected && link.isConnected
+      && anchor.querySelector('.posting-link') === link && document.activeElement === link && getSelection().toString() === text
+      && Math.abs(anchor.getBoundingClientRect().top - top) <= 1, anchorTop);
+    if (!stable) throw new Error('The feed arrival moved the reader or replaced the selected row.');
+    const rendered = page.locator(`[data-job=${JSON.stringify(arrival.id)}]`);
+    await expect(rendered).toHaveCount(1);
+    await expect(page.locator('#live-arrivals')).toContainText(/new matching positions? added\./);
+    await page.locator('#new-results').click();
+    await expect(rendered.locator('.posting-link')).toBeFocused();
+    const sourcePostingSha256 = createHash('sha256').update(JSON.stringify([arrival.id, arrival.sourceUrl, arrival.firstObserved])).digest('hex');
+    return { baselineGeneration, baselineAsOf: new Date(before.asOf).toISOString(),
+      arrivalGeneration: generation, firstObserved: arrival.firstObserved,
+      sourcePostingSha256, observedAfterMs, readerPreserved: true };
+  } finally {
+    await selection?.dispose();
+    await row.dispose();
+  }
 }

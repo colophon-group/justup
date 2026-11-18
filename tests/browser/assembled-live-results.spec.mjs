@@ -1,7 +1,7 @@
 // Retained browser/Worker → real HTTP SSE and SQLite imports. No API interception.
 import { expect, test } from '@playwright/test';
 import { startVisitorRuntime } from '../assembled/visitor-runtime.mjs';
-import { accountStreamUrl, openReleaseStream, verifyReleaseResumeIdentity, verifyReleaseStreamReconnect } from './release-live-results.mjs';
+import { accountStreamUrl, openReleaseStream, verifyReleaseFeedArrival, verifyReleaseResumeIdentity, verifyReleaseStreamReconnect } from './release-live-results.mjs';
 
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 1100 } });
 let runtime, initial, clock;
@@ -125,4 +125,42 @@ test('real account streams remove closed rows, never expose withheld arrivals an
   await expect(page.locator('#feed-status')).not.toContainText('No matching positions');
   await expect(page.locator('#header-sign-in')).toBeHidden();
   expect(runtime.modelCalls()).toBe(1);
+});
+
+test('the release arrival observer preserves the reader through an advancing HTTP import generation', async ({ page }) => {
+  const owner = runtime.db.prepare("SELECT id FROM auth_accounts WHERE username='assembled-reader'").get().id;
+  runtime.db.prepare("INSERT INTO access_subscriptions VALUES(?,?,1,'active','monthly',?,0)").run('synthetic-arrival', owner, clock + DAY);
+  const rows = baseline(); importJobs(rows);
+  const opening = await startSearch(page, true);
+  await reveal(page, 12);
+  const read = async path => {
+    const response = await page.request.get(runtime.origin + path);
+    return { status: response.status(), json: await response.json() };
+  };
+  const { json: { items: [search] } } = await read('/api/v1/searches');
+  const generation = async () => (await read('/api/v1/version')).json.importGeneration;
+  const baselineGeneration = await generation();
+  const baselineRead = Promise.withResolvers();
+  let observations = 0;
+  const observed = verifyReleaseFeedArrival(page, { opening, search, sourceUrl: rows[5].sourceUrl, baselineGeneration, read,
+    observeImport: async () => {
+      const current = await generation();
+      if (++observations === 1) baselineRead.resolve();
+      return current;
+    }, timeout: 10_000 });
+  await Promise.race([baselineRead.promise, observed]);
+  await page.waitForTimeout(150);
+  const older = job('synthetic-backfill', initial - DAY);
+  clock = Date.now(); runtime.refreshHeartbeat();
+  importJobs([...rows, older]);
+  await expect(page.locator('[data-job="synthetic-backfill"].is-new')).toHaveCount(1);
+  const arrival = job('synthetic-live-arrival', clock);
+  importJobs([...rows, older, arrival]);
+  const evidence = await observed;
+  expect(evidence).toMatchObject({ baselineGeneration, arrivalGeneration: await generation(),
+    firstObserved: arrival.firstObserved, sourcePostingSha256: expect.stringMatching(/^[a-f0-9]{64}$/), readerPreserved: true });
+  expect(evidence.arrivalGeneration).not.toBe(baselineGeneration);
+  expect(evidence).not.toHaveProperty('sourceUrl');
+  expect(runtime.modelCalls()).toBe(1);
+  expect(runtime.calls.filter(call => call.path === '/api/v1/workspace/events')).toHaveLength(1);
 });
