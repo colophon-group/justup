@@ -6,6 +6,28 @@ import assert from 'node:assert/strict';
 import { digest } from './frontend-prepare.mjs';
 import { httpsOrigin } from '../deploy/frontend/worker.mjs';
 
+function headAssets(document) {
+  // Vite and the public renderer emit a head with only these top-level elements.
+  const start = /^\s*<!doctype html>\s*<html lang="[a-zA-Z-]+">\s*<head>/i.exec(document);
+  assert.ok(start, 'Missing generated document head');
+  const token = /\s+|<!--(?:[^-]|-(?!-))*-->|<\/head>|<title>[^<]*<\/title>|<(meta|link|script)((?:\s+[a-z][\w:-]*(?:="[^"]*")?)*)\s*\/?>/gy;
+  token.lastIndex = start[0].length;
+  const assets = new Map();
+  for (let match; (match = token.exec(document));) {
+    if (match[0] === '</head>') return assets;
+    const [, element, attributes] = match;
+    if (element !== 'script' && element !== 'link') continue;
+    if (element === 'script') {
+      assert.ok(document.startsWith('</script>', token.lastIndex), 'Unexpected generated head script');
+      token.lastIndex += '</script>'.length;
+    }
+    const values = new Map(Array.from(attributes.matchAll(/\s+([a-z][\w:-]*)(?:="([^"]*)")?/g), ([, name, value]) => [name, value]));
+    const path = /^\/(assets\/[A-Za-z0-9_./-]+\.(?:js|css))$/.exec(values.get(element === 'script' ? 'src' : 'href'))?.[1];
+    if (path) assets.set(match[0], { path, module: element === 'script' && values.get('type') === 'module' });
+  }
+  assert.fail('Unexpected markup in generated document head');
+}
+
 export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
   origin = httpsOrigin(origin);
   const release = JSON.parse(await readFile(join(artifact, 'release.json'), 'utf8'));
@@ -35,6 +57,10 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
   assert.ok(Array.isArray(release.assets) && release.assets.length <= 200, 'Asset count exceeds bounded smoke allowance');
   const index = release.assets.find(asset => asset.path === 'index.html');
   assert.ok(index, 'Missing root index identity');
+  const retainedIndex = await readFile(join(artifact, 'assets', 'index.html'));
+  assert.equal(digest(retainedIndex), index.sha256, 'Wrong asset bytes: index.html');
+  const entryAssets = headAssets(retainedIndex.toString('utf8'));
+  assert.ok([...entryAssets.values()].some(({ path, module }) => module && path.endsWith('.js')), 'Missing retained module entry script');
   const document = await (await get('/')).text();
   assert.match(document, /<meta name="justup-public-document" content="v1">/, 'Missing shared public rendering proof');
   assert.ok(document.includes(`<meta name="justup-source" content="${release.sourceSha}">`), 'Rendered document has wrong source identity');
@@ -43,7 +69,11 @@ export async function smoke(origin, artifact, fetchRemote = globalThis.fetch) {
   assert.match(document, /<div id="root">[\s\S]*Beat the/, 'Landing document has no readable public content');
   assert.match(document, /<template id="public-bootstrap" data-public=/, 'Missing inert public hydration data');
   assert.doesNotMatch(document, /(?:csrfToken|proposalId|passwordHash|sessionToken|modelEvidence)/, 'Private state in public document');
-  for (const asset of release.assets.filter(asset => /^assets\/.*\.(?:js|css)$/.test(asset.path))) assert.ok(document.includes('/' + asset.path), `Public document does not use retained asset: ${asset.path}`);
+  const servedReferences = headAssets(document);
+  const retainedPaths = new Set(release.assets.map(asset => asset.path));
+  // Lazy modules need to be available and byte-verified when requested.
+  for (const [tag, { path }] of entryAssets) assert.ok(servedReferences.has(tag), `Public document does not use retained entry asset: ${path}`);
+  for (const { path } of servedReferences.values()) assert.ok(retainedPaths.has(path), `Public document references an unretained asset: ${path}`);
   for (const asset of release.assets) {
     assert.ok(!asset.path.startsWith('/') && !asset.path.split('/').some(part => part === '..'), 'Unsafe asset path');
     const result = await get(`/${asset.path.split('/').map(encodeURIComponent).join('/')}`);

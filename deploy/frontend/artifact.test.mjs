@@ -9,6 +9,9 @@ import { prepare, verifyArtifact, digest } from '../../scripts/frontend-prepare.
 import { smoke } from '../../scripts/frontend-smoke.mjs';
 import { createHandler } from './worker.mjs';
 const root = new URL('../../', import.meta.url);
+const entryScript = '<script type="module" src="/assets/app.fixture.js"></script>';
+const entryStyles = '<link rel="stylesheet" href="/assets/app.fixture.css">';
+const committedIndex = `<!doctype html><html lang="en"><head>${entryScript}${entryStyles}</head><body><h1>Committed</h1></body></html>`;
 
 test('explicit API-off preview retains bytes, refuses production and verifies unavailable APIs without a health claim', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'justup-api-off-'));
@@ -30,11 +33,24 @@ test('explicit API-off preview retains bytes, refuses production and verifies un
     const remote = async url => {
       const path = new URL(url).pathname;
       if (path.startsWith('/api/') || path === '/__release/version' || path === '/robots.txt') return handle(new Request(url), config.vars);
-      if (path === '/') return new Response(`<meta name="justup-public-document" content="v1"><meta name="justup-source" content="${release.sourceSha}"><meta name="justup-runtime-config" content="${config.vars.RUNTIME_CONFIG_SHA256}"><link rel="canonical" href="${config.vars.PUBLIC_ORIGIN}/"><div id="root">Beat the endless scroll.</div><template id="public-bootstrap" data-public="{}"></template><script src="/assets/app.fixture.js"></script>`, { headers });
+      if (path === '/') return new Response(`<!doctype html><html lang="en"><head><meta name="justup-public-document" content="v1"><meta name="justup-source" content="${release.sourceSha}"><meta name="justup-runtime-config" content="${config.vars.RUNTIME_CONFIG_SHA256}"><link rel="canonical" href="${config.vars.PUBLIC_ORIGIN}/">${entryScript}${entryStyles}</head><body><div id="root">Beat the endless scroll.</div><template id="public-bootstrap" data-public="{}"></template></body></html>`, { headers });
       return new Response(await readFile(join(artifact, 'assets', path.slice(1))), { headers });
     };
     const report = await smoke(config.vars.PUBLIC_ORIGIN, artifact, remote);
     assert.equal(report.result, 'passed'); assert.equal(report.apiState, 'disabled'); assert.equal(report.completeReleaseGate, false);
+    const replacingHeadTag = (tag, replacement) => async url => {
+      if (new URL(url).pathname !== '/') return remote(url);
+      const document = await (await remote(url)).text();
+      return new Response(document.replace(tag, replacement), { headers });
+    };
+    for (const replacement of ['', `<!--${entryScript}-->`, '<script src="/assets/app.fixture.js"></script>', '<link rel="preload" href="/assets/app.fixture.js">']) {
+      await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, replacingHeadTag(entryScript, replacement)), /Public document does not use retained entry asset: assets\/app\.fixture\.js/);
+    }
+    await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, replacingHeadTag(entryScript, `<template>${entryScript}</template>`)), /Unexpected markup in generated document head/);
+    await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, replacingHeadTag(entryStyles, '<link rel="alternate" href="/assets/app.fixture.css">')), /Public document does not use retained entry asset: assets\/app\.fixture\.css/);
+    await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, url =>
+      new URL(url).pathname === '/assets/lazy.fixture.js' ? new Response('changed lazy bytes', { headers }) : remote(url),
+    ), /Wrong asset bytes: assets\/lazy\.fixture\.js/);
     await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, url => new URL(url).pathname === '/api/v1/health' ? new Response('{}', { headers }) : remote(url)), /Expected 503/);
     const accidental = { ...config, vars: { ...config.vars } }; delete accidental.vars.API_DISABLED;
     await writeFile(join(artifact, 'wrangler.json'), JSON.stringify(accidental));
@@ -54,7 +70,7 @@ async function fixture(temporary) {
   await writeFile(join(repository, 'server/unrelated.mjs'), 'throw new Error("Unrelated server file");');
   await writeFile(join(repository, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.0.0', private: true, scripts: { build: 'node web/build-fixture.mjs' } }));
   await writeFile(join(repository, 'package-lock.json'), JSON.stringify({ name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'fixture', version: '1.0.0' } } }));
-  await writeFile(join(repository, 'web/index.html'), '<h1>Committed</h1>');
+  await writeFile(join(repository, 'web/index.html'), committedIndex);
   for (const name of ['privacy.html', 'usage.html']) await writeFile(join(repository, 'web/public', name), '<h1>Policy</h1>');
   await writeFile(join(repository, 'web/build-fixture.mjs'), `
     import {mkdirSync,copyFileSync,writeFileSync,existsSync} from 'node:fs';
@@ -66,6 +82,8 @@ async function fixture(temporary) {
     copyFileSync('web/index.html','web/dist/index.html');
     for(const name of ['privacy.html','usage.html']) copyFileSync('web/public/'+name,'web/dist/'+name);
     writeFileSync('web/dist/assets/app.fixture.js',JSON.stringify({privateBuildValue:process.env.VITE_PRIVATE_CANARY??null, knownCountry:isKnownCountryCode('CH')}));
+    writeFileSync('web/dist/assets/app.fixture.css','body { color: black; }');
+    writeFileSync('web/dist/assets/lazy.fixture.js','export const deferred = true;');
   `);
   await writeFile(join(repository, 'deploy/frontend/worker.mjs'), await readFile(new URL('deploy/frontend/worker.mjs', root)));
   git('add', '.'); git('commit', '-qm', 'Fixture');
@@ -83,9 +101,9 @@ test('artifact builds committed source, ignores dirty input and filters operator
     const first = join(temporary, 'first'), second = join(temporary, 'second');
     const release = await prepare(sha, first, repository);
     assert.deepEqual(await prepare(sha, second, repository), release);
-    assert.equal(await readFile(join(first, 'assets/index.html'), 'utf8'), '<h1>Committed</h1>');
+    assert.equal(await readFile(join(first, 'assets/index.html'), 'utf8'), committedIndex);
     assert.deepEqual(JSON.parse(await readFile(join(first, 'assets/assets/app.fixture.js'), 'utf8')), { privateBuildValue: null, knownCountry: true });
-    assert.equal(release.assets.length, 4);
+    assert.equal(release.assets.length, 6);
     await assert.rejects(prepare(sha, first, repository), /must not exist/);
     await assert.rejects(prepare('HEAD', join(temporary, 'bad'), repository), /exact/);
     await assert.rejects(prepare(sha, join(repository, 'artifact'), repository), /outside the source/);
@@ -107,7 +125,7 @@ test('artifact builds committed source, ignores dirty input and filters operator
       if (path === '/__release/version') return new Response(JSON.stringify(version), { headers });
       if (path.startsWith('/api/v1/')) return new Response(JSON.stringify({ user: null, access: { kind: 'guest' } }), { headers });
       if (path === '/robots.txt') return new Response('User-agent: *\nDisallow: /\n', { headers });
-      if (path === '/') return new Response(`<html><head><meta name="justup-public-document" content="v1"><meta name="justup-source" content="${release.sourceSha}"><meta name="justup-runtime-config" content="${config.vars.RUNTIME_CONFIG_SHA256}"><link rel="canonical" href="${config.vars.PUBLIC_ORIGIN}/"></head><body><div id="root">Beat the endless scroll.</div><template id="public-bootstrap" data-public="{}"></template><script src="/assets/app.fixture.js"></script></body></html>`, { headers });
+      if (path === '/') return new Response(`<!doctype html><html lang="en"><head><meta name="justup-public-document" content="v1"><meta name="justup-source" content="${release.sourceSha}"><meta name="justup-runtime-config" content="${config.vars.RUNTIME_CONFIG_SHA256}"><link rel="canonical" href="${config.vars.PUBLIC_ORIGIN}/">${entryScript}${entryStyles}</head><body><div id="root">Beat the endless scroll.</div><template id="public-bootstrap" data-public="{}"></template></body></html>`, { headers });
       return new Response(await readFile(join(first, 'assets', path.slice(1))), { headers });
     };
     assert.equal((await smoke('https://preview.justup.test', first, fetchFixture)).result, 'passed');
