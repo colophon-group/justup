@@ -10,6 +10,8 @@ export interface Coverage {
   description?: string;
   verifiedAt?: string | null;
   stale?: boolean;
+  postingOrigin?: "reviewed_direct_only" | "reviewed_with_unknowns";
+  postingOriginExpiresAt?: string;
 }
 export interface SessionPolicies {
   reviewed: boolean;

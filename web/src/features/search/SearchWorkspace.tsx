@@ -6,6 +6,7 @@ import type { ApiClient } from "../../api/client.ts";
 import type { CompanyRequestPrefill, Session } from "../../api/types.ts";
 import { Dialog } from "../../shared/Dialog.tsx";
 import { LandingOverview } from "./LandingOverview.tsx";
+import type { PostingOriginDeadline } from '../../app/sessionCoherence.ts';
 import { ResultFeed } from "./ResultFeed.tsx";
 import { TypingExample } from "./TypingExample.tsx";
 import { PostingLanguages } from "./PostingLanguages.tsx";
@@ -15,6 +16,7 @@ interface Props {
   followInvalidation: FollowControl["invalidation"];
   client: ApiClient;
   session: Session | null;
+  verifiedSourceUntil: PostingOriginDeadline | null;
   active: boolean;
   reducedMotion: boolean;
   onSignIn: (reason?: string) => void;
@@ -29,6 +31,7 @@ export function SearchWorkspace({
   client,
   followInvalidation,
   session,
+  verifiedSourceUntil,
   active,
   reducedMotion,
   onSignIn,
@@ -333,7 +336,7 @@ export function SearchWorkspace({
           </div>
         </div>
       </div>
-      {state.searches.length ? null : <LandingOverview />}
+      {state.searches.length ? null : <LandingOverview verifiedSourceUntil={active ? verifiedSourceUntil : null} />}
       {search?.status === "ready" ? (
         <ResultFeed
           key={`${session?.access.fullAccess}:${session?.access.kind}:${session?.access.until ?? ''}`}

@@ -40,6 +40,7 @@ export function importedCoverage(row, at, ttl = DAY_MS, countRetainedScope = () 
       && origin.manifestSha256 === selection.feed?.manifestSha256 && Number.isFinite(reviewedAt)
       && row.verified_at <= reviewedAt && reviewedAt <= at && at - reviewedAt < ttl) {
     coverage.postingOrigin = origin.unknown === false ? 'reviewed_direct_only' : 'reviewed_with_unknowns';
+    coverage.postingOriginExpiresAt = new Date(verifiedAt + ttl).toISOString();
   }
 
   const entireSourceScope = selection?.source === 'jobseek_feed_v1' && selection.limitedCoverage === false

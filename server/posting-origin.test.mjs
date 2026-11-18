@@ -63,6 +63,7 @@ test('reviewed import excludes agency, repost and unknown listings from every ac
 
   clock += DAY_MS;
   assert.equal(feed.coverage().postingOrigin, undefined);
+  assert.equal(feed.coverage().postingOriginExpiresAt, undefined);
   assert.equal(feed.list().continuation.state, 'paused');
 });
 
@@ -85,8 +86,9 @@ test('posting review requires exact identity, evidence for each verdict and the 
   }
   const proof = review(candidate, { b: 'repost' });
   store.importSnapshot(candidate, { originReview: proof });
-  const feed = createFeed({ db: store.db, now: () => at });
+  const feed = createFeed({ db: store.db, now: () => at, verificationTtlMs: 5_000 });
   assert.equal(feed.coverage().postingOrigin, 'reviewed_direct_only');
+  assert.equal(feed.coverage().postingOriginExpiresAt, iso(at + 5_000));
   assert.deepEqual(feed.eligibleJobs().map(job => job.id), ['a']);
   assert.throws(() => store.importSnapshot({ ...candidate, selection: { ...candidate.selection, postingOriginReview: proof } }), { code: 'invalid_import' });
 });

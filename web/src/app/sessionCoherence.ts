@@ -4,6 +4,20 @@ import type { Session } from '../api/types.ts';
 export const SESSION_CHANNEL = 'justup-session';
 export const SESSION_INVALIDATED = 'invalidate';
 const MAX_TIMER = 2_147_483_647;
+const DAY = 86_400_000;
+
+export type PostingOriginDeadline = { wall: number; monotonic: number };
+
+export function postingOriginDeadline(session: Session | null, started: PostingOriginDeadline): PostingOriginDeadline | null {
+  const coverage = session?.coverage;
+  if (!session?.serverTime || coverage?.kind !== 'imported_snapshot' || coverage.stale !== false
+      || coverage.state === 'import_unavailable' || coverage.postingOrigin !== 'reviewed_direct_only'
+      || !coverage.postingOriginExpiresAt || !coverage.verifiedAt) return null;
+  const serverTime = Date.parse(session.serverTime), verified = Date.parse(coverage.verifiedAt), expiry = Date.parse(coverage.postingOriginExpiresAt);
+  if (!(verified <= serverTime && serverTime < expiry && expiry <= verified + DAY)) return null;
+  const remaining = expiry - serverTime;
+  return { wall: started.wall + remaining, monotonic: started.monotonic + remaining };
+}
 
 export function sessionDeadlineRemaining(session: Session, requestStarted: number, now: number): number | null {
   const serverNow = session.serverTime ? Date.parse(session.serverTime) + Math.max(0, now - requestStarted) : now;

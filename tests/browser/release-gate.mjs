@@ -139,10 +139,11 @@ export function requireLiveArrivalAccount(config, env) {
 }
 const same = (a, b, keys) => record(a) && keys.every(key => a[key] === b[key]);
 function freshCoverage(value, now) {
-  return record(value) && value.kind === 'imported_snapshot' && value.stale === false
-    && value.postingOrigin === 'reviewed_direct_only'
-    && typeof value.verifiedAt === 'string' && Number.isFinite(Date.parse(value.verifiedAt))
-    && Date.parse(value.verifiedAt) <= now && now - Date.parse(value.verifiedAt) < 86_400_000;
+  if (!record(value) || value.kind !== 'imported_snapshot' || value.stale !== false || value.state === 'import_unavailable'
+      || value.postingOrigin !== 'reviewed_direct_only' || typeof value.verifiedAt !== 'string'
+      || typeof value.postingOriginExpiresAt !== 'string') return false;
+  const verified = Date.parse(value.verifiedAt), expiry = Date.parse(value.postingOriginExpiresAt);
+  return verified <= now && now < expiry && expiry <= verified + 86_400_000;
 }
 async function verifyHiringFootprints(config, read, now) {
   const { observedCompanyId, unknownCompanyId, countryCode, listingCount } = config.scenario.hiringFootprint;
