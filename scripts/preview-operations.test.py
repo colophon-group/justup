@@ -1602,6 +1602,31 @@ assert.equal(configFromEnv(input.child).stripeBilling.enabled,true);
                 with self.assertRaisesRegex(ValueError, 'physically preallocated'):
                     host.verify_storage()
 
+    def test_storage_reads_the_exact_loop_mount_without_spawning_a_process(self):
+        mountpoint = host.BASE
+        backing = Path('/sys/class/block/loop11/loop/backing_file')
+        mountinfo = Path('/proc/self/mountinfo')
+        valid = f'35 25 7:11 / {mountpoint} rw,nosuid,nodev - ext4 /dev/loop11 rw\n'
+        child = f'36 35 7:11 /state {mountpoint}/state rw - ext4 /dev/loop11 rw\n'
+        table = {mountinfo: valid + child, backing: str(host.IMAGE) + '\n'}
+
+        def namespace_stat(path):
+            return SimpleNamespace(st_dev=2 if path == mountpoint else 1)
+
+        with patch.object(host.os.path, 'ismount', return_value=True), \
+             patch.object(Path, 'stat', autospec=True, side_effect=namespace_stat), \
+             patch.object(Path, 'read_text', autospec=True, side_effect=table.__getitem__), \
+             patch.object(host.os, 'statvfs', return_value=SimpleNamespace(f_blocks=2, f_frsize=4096)), \
+             patch.object(host, 'call', side_effect=BlockingIOError(errno.EAGAIN, 'cannot fork')):
+            self.assertEqual(host._mounted_image_size(), 8192)
+            for rejected in (valid + valid, child, valid.replace(' / ', ' /partition '),
+                             valid.replace('nodev', 'dev'), valid.replace('loop11 rw', 'loop11 rw,discard'),
+                             valid.replace('ext4', 'tmpfs')):
+                with self.subTest(mountinfo=rejected):
+                    table[mountinfo] = rejected
+                    with self.assertRaises(ValueError):
+                        host._mounted_image_size()
+
     def test_format_preserves_reservation_and_guard_rejects_later_discard_without_reallocation(self):
         with tempfile.TemporaryDirectory() as temp:
             image = Path(temp) / 'preview.disk'

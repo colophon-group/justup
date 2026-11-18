@@ -195,9 +195,21 @@ def format_image():
 def _mounted_image_size():
     if not os.path.ismount(BASE) or BASE.stat().st_dev == BASE.parent.stat().st_dev:
         raise ValueError('The preview filesystem is not a dedicated mounted boundary.')
-    filesystem = call('findmnt', '-n', '-o', 'FSTYPE', '--mountpoint', str(BASE), capture=True)
-    source = call('findmnt', '-n', '-o', 'SOURCE', '--mountpoint', str(BASE), capture=True)
-    options = set(call('findmnt', '-n', '-o', 'OPTIONS', '--mountpoint', str(BASE), capture=True).split(','))
+    # The feed receiver shares a UID with the API and cannot fork under its
+    # process limit. Read the mount in the receiver's own namespace.
+    matches = []
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        mount, _, filesystem = line.partition(' - ')
+        fields = mount.split()
+        if len(fields) >= 5 and fields[4] == str(BASE):
+            matches.append((fields, filesystem.split()))
+    if len(matches) != 1:
+        raise ValueError('The preview filesystem must have one exact mount record.')
+    mount, filesystem = matches[0]
+    if len(mount) < 6 or mount[3] != '/' or len(filesystem) != 3:
+        raise ValueError('The preview filesystem must mount the full loop image.')
+    filesystem, source, super_options = filesystem
+    options = set(mount[5].split(',')) | set(super_options.split(','))
     if not re.fullmatch(r'/dev/loop[0-9]+', source):
         raise ValueError('Preview source is not a loop device.')
     backing = (Path('/sys/class/block') / Path(source).name / 'loop/backing_file').read_text().strip()
