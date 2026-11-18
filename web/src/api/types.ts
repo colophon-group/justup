@@ -172,6 +172,12 @@ export interface CompanyHiringHistory {
     scopeCount: number;
   }[];
 }
+type CompanyListingMix<Item> =
+  | { state: "unavailable" }
+  | { state: "available"; sampleSize: number; labelledSampleSize: number; unknownSampleSize: number; items: Item[] };
+export type CompanyExperienceMix = CompanyListingMix<{ min: number | null; max: number | null; count: number }>;
+export type CompanyWorkplaceMix = CompanyListingMix<{ mode: "onsite" | "remote" | "hybrid"; count: number }>;
+
 export interface CompanyReport {
   companyId: string;
   asOf: string;
@@ -203,6 +209,8 @@ export interface CompanyReport {
   freshness?: { listings: "fresh" | "unavailable" };
   hiringRoles?: CompanyRoleSample;
   reportedSalaries?: CompanySalarySample;
+  experienceMix?: CompanyExperienceMix;
+  workplaceMix?: CompanyWorkplaceMix;
   hiringFootprint?: CompanyHiringFootprint;
   sourceChecks: {
     state: "available" | "partial" | "unavailable";

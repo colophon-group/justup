@@ -75,6 +75,29 @@ test('current snapshot supports sampled roles and separate salary units without 
   assert.equal(f.reports.report('company-1').provenance.sampleObservedThrough, null);
 });
 
+test('experience and workplace summaries count only structured labels on eligible public company listings', t => {
+  const location = workplace => ({ name: 'Office', workplace });
+  const f = fixture(t, [
+    job('range', 3, { experience: { min: 2.5, max: 4 }, locations: [location('remote'), location('remote'), location('hybrid')] }),
+    job('open-ended', 4, { experience: { min: 5, max: 99 }, locations: [location('remote')] }),
+    job('minimum-only', 5, { experience: { min: 5 }, locations: [location('onsite')] }),
+    job('maximum-only', 6, { experience: { max: 2 }, locations: [location('unknown')] }),
+    job('crossed', 7, { experience: { min: 4, max: 3 } }),
+    job('unlabelled', 8, { experience: { max: 99 } }),
+    job('hidden-latest', 1, { experience: { min: 42 }, locations: [location('hybrid')] }),
+    job('other-company', 3, { companyId: 'company-2', experience: { min: 2.5, max: 4 }, locations: [location('onsite')] }),
+  ]);
+  const report = f.reports.report('company-1');
+  assert.deepEqual(report.experienceMix, { state: 'available', sampleSize: 6, labelledSampleSize: 4, unknownSampleSize: 2,
+    items: [{ min: 5, max: null, count: 2 }, { min: null, max: 2, count: 1 }, { min: 2.5, max: 4, count: 1 }] });
+  assert.deepEqual(report.workplaceMix, { state: 'available', sampleSize: 6, labelledSampleSize: 3, unknownSampleSize: 3,
+    items: [{ mode: 'hybrid', count: 1 }, { mode: 'onsite', count: 1 }, { mode: 'remote', count: 2 }] });
+  f.setNow(AT + DAY_MS);
+  const stale = f.reports.report('company-1');
+  assert.deepEqual(stale.experienceMix, { state: 'unavailable' });
+  assert.deepEqual(stale.workplaceMix, { state: 'unavailable' });
+});
+
 test('hiring footprint counts direct country IDs only in eligible public company listings', t => {
   const country = id => ({ id, name: null, workplace: 'remote', geoType: 'country' });
   const switzerland = country('2658434'), germany = country('2921044');

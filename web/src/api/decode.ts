@@ -6,11 +6,13 @@ import type {
   FollowSnapshot,
   Company,
   CompanyCataloguePage,
+  CompanyExperienceMix,
   CompanyHiringFootprint,
   CompanyHiringHistory,
   CompanyReport,
   CompanyRequest,
   CompanyRequestPrefill,
+  CompanyWorkplaceMix,
   Coverage,
   HiringWire,
   HiringWireItem,
@@ -219,6 +221,7 @@ export function decodeCompanyReport(value: unknown, expectedCompanyId: string): 
     samples.provenance.history = decodeCompanyHistoryProvenance(provenance.history, lastWeek.end, asOf);
   } else if (lastWeek) fail("company history provenance");
   return { companyId, asOf, sourceChecks: { state, items }, ...samples, ...history,
+    ...decodeCompanyListingMixes(o, samples.hiringRoles),
     ...(o.hiringFootprint === undefined ? {} : {
       hiringFootprint: decodeHiringFootprint(o.hiringFootprint, samples.hiringRoles),
     }),
@@ -288,6 +291,55 @@ const COMPANY_SAMPLE_LIMIT = 1000;
 function sampleCount(value: unknown, label: string): number {
   const result = count(value, label);
   return result <= COMPANY_SAMPLE_LIMIT ? result : fail(label);
+}
+function decodeListingMix<Item extends { count: number }>(
+  value: unknown, roles: NonNullable<CompanyReport["hiringRoles"]>, maxItems: number,
+  entry: (value: Record<string, unknown>, count: number) => Item,
+  key: (item: Item) => string,
+  allowOverlap: boolean,
+): { state: "unavailable" } |
+  { state: "available"; sampleSize: number; labelledSampleSize: number; unknownSampleSize: number; items: Item[] } {
+  const mix = record(value, "company listing mix");
+  if (mix.state !== roles.state) fail("company listing mix freshness");
+  if (roles.state === "unavailable") return { state: "unavailable" };
+  const sampleSize = sampleCount(mix.sampleSize, "listing mix sample size");
+  const labelledSampleSize = sampleCount(mix.labelledSampleSize, "labelled listing mix sample");
+  const unknownSampleSize = sampleCount(mix.unknownSampleSize, "unlabelled listing mix sample");
+  if (sampleSize !== roles.sampleSize || labelledSampleSize + unknownSampleSize !== sampleSize) fail("listing mix denominator");
+  const entries: unknown[] = Array.isArray(mix.items) && mix.items.length <= maxItems ? mix.items : fail("listing mix entries");
+  const seen = new Set<string>();
+  const items = entries.map(value => {
+    const row = record(value, "listing mix entry");
+    const count = sampleCount(row.count, "listing mix count");
+    if (!count || count > labelledSampleSize) fail("listing mix count");
+    const item = entry(row, count), id = key(item);
+    if (seen.has(id)) fail("duplicate listing mix entry");
+    seen.add(id);
+    return item;
+  });
+  const count = items.reduce((sum, item) => sum + item.count, 0);
+  if (allowOverlap ? count < labelledSampleSize : count !== labelledSampleSize) fail("listing mix group denominator");
+  return { state: "available", sampleSize, labelledSampleSize, unknownSampleSize, items };
+}
+function experienceYears(value: unknown): number | null {
+  return value === null ? null : typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 99
+    ? value : fail("experience years");
+}
+function decodeCompanyListingMixes(o: Record<string, unknown>, roles: CompanyReport["hiringRoles"]):
+  Pick<CompanyReport, "experienceMix" | "workplaceMix"> {
+  if (o.experienceMix === undefined && o.workplaceMix === undefined) return {};
+  if (!roles) return fail("listing mixes without company sample");
+  const experienceMix: CompanyExperienceMix = decodeListingMix(o.experienceMix, roles, COMPANY_SAMPLE_LIMIT, (row, count) => {
+    const min = experienceYears(row.min), max = experienceYears(row.max);
+    if (max === 99 || min === null && max === null || min !== null && max !== null && min > max) fail("experience sample bounds");
+    return { min, max, count };
+  }, item => JSON.stringify([item.min, item.max]), false);
+  const workplaceMix: CompanyWorkplaceMix = decodeListingMix(o.workplaceMix, roles, 3, (row, count) => {
+    const mode = row.mode;
+    if (mode !== "onsite" && mode !== "remote" && mode !== "hybrid") return fail("workplace sample mode");
+    return { mode, count };
+  }, item => item.mode, true);
+  return { experienceMix, workplaceMix };
 }
 function decodeHiringFootprint(value: unknown, roles: CompanyReport["hiringRoles"]): CompanyHiringFootprint {
   const footprint = record(value, "hiring footprint");
