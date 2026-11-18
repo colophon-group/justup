@@ -45,7 +45,8 @@ function readReceipt(entry, sourceCompanyId, now) {
       || value.companyId !== sourceCompanyId || value.boardId !== entry.boardId || value.revision !== entry.revision) fail();
   const observedAt = timestamp(value.observedAt);
   if (observedAt > now || now - observedAt >= DAY) fail();
-  const receipt = {boardId:entry.boardId, revision:entry.revision, sha256:entry.sha256, observedAt, verifiedAt:null, expiresAt:null};
+  const receipt = {boardId:entry.boardId, revision:entry.revision, sha256:entry.sha256, observedAt,
+    reason:value.reason, verifiedAt:null, expiresAt:null};
   if (value.state === 'unavailable') {
     if (!UNAVAILABLE.has(value.reason) || value.verifiedAt !== null || value.expiresAt !== null) fail();
     return receipt;

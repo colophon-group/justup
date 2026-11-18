@@ -5,7 +5,7 @@ import { useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import type { ApiClient } from '../../api/client';
 import type { CompanyRequestPrefill, Session } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
-import { coverageLabel, safeSourceUrl } from './presentation';
+import { coverageLabel, safeSourceUrl, type MonitoringClock } from './presentation';
 import { useCompanyRequest } from './useCompanyRequest';
 import { CompanyRequestUpdates } from './CompanyRequestUpdates.tsx';
 
@@ -14,12 +14,13 @@ export interface CompanyRequestPageProps {
   client: ApiClient;
   session: Session | null;
   active: boolean;
+  monitoringClock?: MonitoringClock | null;
   onSignIn: (reason?: string) => void;
   accountEpoch: number;
   prefill: CompanyRequestPrefill | null;
   onPrefillConsumed: () => void;
 }
-export function CompanyRequestPage({ client, session, active, onSignIn, accountEpoch, prefill, onPrefillConsumed, onAccepted }: CompanyRequestPageProps) {
+export function CompanyRequestPage({ client, session, active, onSignIn, accountEpoch, prefill, onPrefillConsumed, onAccepted, monitoringClock = null }: CompanyRequestPageProps) {
   const { t, locale, notice } = useInterfaceLocale();
   const [input, setInput] = useState('');
   const [scope, setScope] = useState('');
@@ -112,6 +113,6 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
         {flow.error && request?.status === 'pending' ? <button className="text-link" disabled={flow.busy} onClick={flow.reset}>{t("Try another lead")}</button> : null}
       </div>
     </div>
-    <CompanyRequestUpdates client={client} owner={session?.user?.id} active={active} latest={request} />
+    <CompanyRequestUpdates client={client} owner={session?.user?.id} active={active} latest={request} monitoringClock={monitoringClock} />
   </section>;
 }

@@ -14,6 +14,7 @@ import {createEntitlements,createAccessReader} from './entitlements.mjs';
 import {createCompanyService} from './companies.mjs';
 import {createReadingPreferencesService} from './reading-preferences.mjs';
 import {createCompanyProgress} from './company-progress.mjs';
+import {readMonitoringApproval} from './company-monitoring.mjs';
 import {companySetupCommand} from '../scripts/company-requests/setup.mjs';
 import {createHandler} from './http.mjs';
 
@@ -271,11 +272,11 @@ for(const grant of ['standard','legacy','paid'])test(`known-company priority HTT
   assert.equal((await post()).status,200);assert.equal((await post({},'after-expiry')).status,403);
 });
 
-function sourceReceipt(companyId, boardId, revision, at, current=true) {
+function sourceReceipt(companyId, boardId, revision, at, current=true, reason='no_complete_check') {
   const raw = Buffer.from(JSON.stringify({
     schemaVersion:1, sourceVersion:'jobseek-monitoring-v1', companyId, boardId, revision,
     observedAt:new Date(at).toISOString(), state:current?'current':'unavailable',
-    reason:current?null:'no_complete_check',
+    reason:current?null:reason,
     verifiedAt:current?new Date(at-1000).toISOString():null,
     expiresAt:current?new Date(at+60_000).toISOString():null
   })+'\n');
@@ -326,4 +327,52 @@ test('operator receipts bind complete board sets to exact requester scopes and o
   assert.equal(f.db.prepare('SELECT 1 FROM justup_company_requests WHERE id=?').get(alice.id),undefined);
   assert.equal(f.db.prepare('SELECT count(*) count FROM justup_company_monitoring').get().count,2);
   assert.equal((await status('bob')).setup.state,'queued');
+});
+
+test('a retired scope receipt cannot withdraw a newer verified revision', async t=>{
+  const f=fixture(t), request = await f.accept();
+  const sourceCompanyId=randomUUID(), board=randomUUID(), retired=randomUUID(), active=randomUUID();
+  const approval={schemaVersion:1, companyId:f.id, expectedRevision:1, sourceCompanyId,
+    receipts:[sourceReceipt(sourceCompanyId,board,active,AT)],requests:[{id:request.id,scope:null}]};
+  const apply=value=>{
+    const input=readMonitoringApproval(Buffer.from(JSON.stringify(value)),f.now());
+    f.db.exec('BEGIN IMMEDIATE');
+    try {return f.progress.applyMonitoring(input);} finally {f.db.exec('COMMIT');}
+  };
+  assert.equal(apply(approval).changed,true);
+  f.advance(500);
+  assert.deepEqual(apply({...approval,expectedRevision:2,requests:[],
+    receipts:[sourceReceipt(sourceCompanyId,board,retired,f.now(),false,'scope_changed')]}),
+    {companyId:f.id,revision:2,changed:false});
+  assert.equal(f.feed.company(f.id).setup.state,'monitoring');
+});
+
+test('a requested company lists verified source-company posts and invalidates the mapped cursor on withdrawal', async t=>{
+  const f=fixture(t), request=await f.accept(), sourceCompanyId=randomUUID(), board=randomUUID(), revision=randomUUID();
+  const approval={schemaVersion:1, companyId:f.id, expectedRevision:1, sourceCompanyId,
+    receipts:[sourceReceipt(sourceCompanyId,board,revision,AT)],requests:[{id:request.id,scope:null}]};
+  const apply=value=>{
+    const input=readMonitoringApproval(Buffer.from(JSON.stringify(value)),f.now());
+    f.db.exec('BEGIN IMMEDIATE');
+    try {return f.progress.applyMonitoring(input);} finally {f.db.exec('COMMIT');}
+  };
+  apply(approval);
+  f.store.importSnapshot({schemaVersion:1,snapshotAt:new Date(AT).toISOString(),verifiedAt:new Date(AT).toISOString(),
+    observations:[],unknownIds:[],jobs:['role-1','role-2'].map(id=>({
+      id,companyId:sourceCompanyId,companyName:'Shared Company',companySlug:'shared',
+      title:id,sourceUrl:'https://shared.example.org/jobs/'+id,active:true,reserved:false,hasContent:true,
+      firstObserved:new Date(AT-3*86400000).toISOString(),lastObserved:null,locales:['en'],locations:[],
+      employmentTypes:[],seniority:null,salary:null,bodyText:null,evidence:{source:'jobseek_public',metadataFetchedAt:new Date(AT).toISOString(),
+        bodyFetchedAt:null,bodyUrl:null,bodySha256:null,textSha256:null,bodyBytes:0,normalizationVersion:1,truncated:false},
+    }))});
+  const positions=f.feed.companyPositions(f.id,{limit:1});
+  assert.equal(positions.items[0].company.id,f.id);
+  assert.equal(positions.items[0].id,'role-1');
+  assert.equal(positions.continuation.state,'open');
+  assert.equal(f.feed.list().items[0].company.id,sourceCompanyId);
+  f.advance(500);
+  apply({...approval,expectedRevision:2,requests:[],
+    receipts:[sourceReceipt(sourceCompanyId,board,revision,f.now(),false)]});
+  assert.throws(()=>f.feed.companyPositions(f.id,{cursor:positions.continuation.cursor}),{code:'stale_cursor'});
+  assert.deepEqual(f.feed.companyPositions(f.id,{}).items,[]);
 });

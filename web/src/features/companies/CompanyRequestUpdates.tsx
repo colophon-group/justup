@@ -4,13 +4,14 @@ import type { ApiClient } from '../../api/client.ts';
 import type { CompanyRequest } from '../../api/types.ts';
 import { pageHref } from '../../app/useRoute.ts';
 import { useInterfaceLocale } from '../../i18n/LocaleProvider.tsx';
-import { monitoringLabel, reportDate } from './presentation.ts';
+import { monitoringLabel, reportDate, useMonitoringClock, type MonitoringClock } from './presentation.ts';
 
-export function CompanyRequestUpdates({client, owner, active, latest}: {
+export function CompanyRequestUpdates({client, owner, active, latest, monitoringClock}: {
   client: ApiClient;
   owner: string | undefined;
   active: boolean;
   latest: CompanyRequest | null;
+  monitoringClock: MonitoringClock | null;
 }) {
   const {locale, t} = useInterfaceLocale();
   const [history, setHistory] = useState<{owner:string; items:CompanyRequest[]; failed:boolean}>();
@@ -34,16 +35,7 @@ export function CompanyRequestUpdates({client, owner, active, latest}: {
     return () => controller.abort();
   }, [active, client, owner, read]);
 
-  const at = Date.now();
-  const expires = visible.reduce((soonest, item) => {
-    const expiry = item.setup?.state === 'monitoring' ? Date.parse(item.setup.expiresAt) : Infinity;
-    return expiry > at ? Math.min(expiry, soonest) : soonest;
-  }, Infinity);
-  useEffect(() => {
-    if (!active || !Number.isFinite(expires)) return;
-    const timer = setTimeout(() => setRead(previous => previous + 1), Math.max(0, expires - Date.now()));
-    return () => clearTimeout(timer);
-  }, [active, expires]);
+  const at = useMonitoringClock(visible.map(item => item.setup), active ? monitoringClock : null);
 
   if (!active || !owner || (!visible.length && !current?.failed)) return null;
   return <section aria-label={t('Your company requests')}>

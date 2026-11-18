@@ -142,8 +142,10 @@ export class ApiClient {
     const method = options.method ?? "GET",
       mutation = method !== "GET",
       sessionVersion = this.sessionVersion;
-    const publicRead = !mutation && (path === '/session' || path === '/hiring-wire' || path === '/companies' || path.startsWith('/companies?') || path.startsWith('/companies/'));
-    if (this.suspended && !publicRead) throw new DOMException('Session is being checked', 'AbortError');
+    const companyPositions = /^\/companies\/[^/?]+\/positions(?:\?|$)/u.test(path);
+    const publicRead = !mutation && !companyPositions && (path === '/session' || path === '/hiring-wire' || path === '/companies' || path.startsWith('/companies?') || path.startsWith('/companies/'));
+    if ((this.suspended && !publicRead) || (companyPositions && this.owner === null))
+      throw new DOMException('Session is being checked', 'AbortError');
     if (mutation && !this.csrfToken)
       throw new ApiError(
         403,

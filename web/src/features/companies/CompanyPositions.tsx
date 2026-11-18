@@ -56,7 +56,10 @@ export function CompanyPositions({client, companyId}: {client:ApiClient; company
       <button className="text-link" onClick={() => setRequest({cursor:null})}>{t('Try again')}</button></> : null}
     {state === 'ready' && page?.continuation.state === 'exhausted' && !page.items.length
       ? <p>{t('No positions in the current sample.')}</p> : null}
-    {state === 'idle' ? <button className="text-link" onClick={() => setRequest({cursor:null})}>{t('View positions')}</button> : null}
+    {state === 'idle' ? <button className="text-link" onClick={() => {
+      history.replaceState(history.state,'','#positions');
+      setRequest({cursor:null});
+    }}>{t('View positions')}</button> : null}
     {page?.continuation.state === 'open' ? <button className="text-link" disabled={state === 'loading'}
       onClick={() => setRequest({cursor:page.continuation.cursor})}>{t('More positions')}</button> : null}
   </section>;

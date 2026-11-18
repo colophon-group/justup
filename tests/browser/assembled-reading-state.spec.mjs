@@ -263,6 +263,37 @@ test('a company monitoring update survives reload and links to positions for tha
   await page.goto(runtime.origin + '/#request');
   await expect(update).toHaveCount(0);
 });
+
+test('company positions wait for session authority and monitoring expires with a skewed browser clock', async ({page}) => {
+  const companyId = 'assembled', sourceCompanyId = randomUUID(), boardId = randomUUID(), revision = randomUUID();
+  const at = Date.now();
+  const raw = Buffer.from(JSON.stringify({
+    schemaVersion:1, sourceVersion:'jobseek-monitoring-v1', companyId:sourceCompanyId, boardId, revision,
+    observedAt:new Date(at).toISOString(), state:'current', reason:null,
+    verifiedAt:new Date(at-1000).toISOString(), expiresAt:new Date(at+7000).toISOString()
+  })+'\n');
+  const entry = {boardId,revision,sha256:createHash('sha256').update(raw).digest('hex'),receiptBase64:raw.toString('base64')};
+  const approval = {schemaVersion:1,companyId,expectedRevision:0,sourceCompanyId,receipts:[entry],requests:[]};
+  const path = realpathSync(runtime.db.prepare('PRAGMA database_list').get().file);
+  expect(companySetupCommand({env:{JUSTUP_DB_PATH:path},args:['apply-monitoring'],
+    stdin:()=>Buffer.from(JSON.stringify(approval))})).toEqual({companyId,revision:1,changed:true});
+  await page.addInitScript(() => {
+    const clock = Date.now;
+    Date.now = () => clock() - 86_400_000;
+  });
+  const held = runtime.holdNext('GET','/session');
+  try {
+    await page.goto(runtime.origin+'/companies/assembled#positions');
+    await held.arrived;
+    await expect(page.getByRole('heading',{name:'Assembled Company'})).toBeVisible();
+    await expect(page.locator('#positions')).toHaveCount(0);
+    expect(runtime.calls.some(call=>call.path.endsWith('/positions'))).toBe(false);
+  } finally {held.release();}
+  await expect(page.locator('#positions').getByRole('link',{name:'Engineer',exact:true})).toBeVisible();
+  const status = page.locator('.report-facts');
+  await expect(status.getByText('Monitoring',{exact:true})).toBeVisible();
+  await expect(status.getByText('Monitoring evidence unavailable')).toBeVisible({timeout:10000});
+});
 test('long French Italian and Spanish follow labels retain row geometry and keyboard focus during held acknowledgements', async ({ page }) => {
   await page.goto(runtime.origin); await login(page);
   for (const locale of ['fr', 'it', 'es']) {

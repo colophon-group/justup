@@ -116,10 +116,11 @@ export function createCompanyProgress({db,canonicalCompanyId=id=>id,now=Date.now
   function applyMonitoring({companyId, expectedRevision, sourceCompanyId, receipts, requests}) {
     if (!db.isTransaction) throw new Error('Monitoring intake requires an operator write transaction.');
     const canonical = canonicalCompanyId(sourceCompanyId);
+    const sourceBinding = db.prepare('SELECT company_id FROM justup_company_monitoring WHERE source_company_id=? LIMIT 1').get(sourceCompanyId);
     if (canonicalCompanyId(companyId) !== companyId || (canonical !== sourceCompanyId && canonical !== companyId)
-        || (sourceCompanyId !== companyId && canonical === sourceCompanyId && db.prepare(`SELECT 1 FROM justup_requested_companies WHERE id=?
+        || (sourceCompanyId !== companyId && canonical === sourceCompanyId && !sourceBinding && db.prepare(`SELECT 1 FROM justup_requested_companies WHERE id=?
            UNION ALL SELECT 1 FROM justup_jobs WHERE company_id=? LIMIT 1`).get(sourceCompanyId, sourceCompanyId))
-        || db.prepare('SELECT 1 FROM justup_company_monitoring WHERE source_company_id=? AND company_id<>?').get(sourceCompanyId,companyId)) {
+        || (sourceBinding && sourceBinding.company_id !== companyId)) {
       throw problem('revision_conflict', 409);
     }
     const found = row(companyId);
@@ -141,8 +142,11 @@ export function createCompanyProgress({db,canonicalCompanyId=id=>id,now=Date.now
     const changed = receipts.filter(receipt => {
       const previous = db.prepare('SELECT * FROM justup_company_monitoring WHERE board_id=?').get(receipt.boardId);
       if (!previous) return true;
-      if (previous.company_id !== companyId || previous.source_company_id !== sourceCompanyId
-          || (previous.sha256 !== receipt.sha256 && previous.observed_at >= receipt.observedAt)) throw problem('revision_conflict', 409);
+      if (previous.company_id !== companyId || previous.source_company_id !== sourceCompanyId)
+        throw problem('revision_conflict', 409);
+      // A stale approval establishes unavailability for that revision only.
+      if (receipt.reason === 'scope_changed' && previous.scope_revision !== receipt.revision) return false;
+      if (previous.sha256 !== receipt.sha256 && previous.observed_at >= receipt.observedAt) throw problem('revision_conflict', 409);
       return previous.sha256 !== receipt.sha256;
     });
     const newBindings = attached.filter(request => request.monitoring_boards_json !== bindings);
@@ -163,5 +167,13 @@ export function createCompanyProgress({db,canonicalCompanyId=id=>id,now=Date.now
     db.prepare('UPDATE justup_company_setups SET revision=? WHERE company_id=?').run(revision,companyId);
     return {companyId,revision,changed:true};
   }
-  return {ensure,snapshot,publicSnapshot,publicReader,pending,update,monitoringRequests,applyMonitoring};
+  function positionSources(companyId, at) {
+    const sources = db.prepare(`SELECT DISTINCT source_company_id FROM justup_company_monitoring
+      WHERE company_id=? AND observed_at<=? AND expires_at>? ORDER BY source_company_id`).all(companyId,at,at);
+    return sources.map(row => row.source_company_id).filter(source => {
+      const canonical = canonicalCompanyId(source);
+      return source !== companyId && (canonical === source || canonical === companyId);
+    });
+  }
+  return {ensure,snapshot,publicSnapshot,publicReader,pending,update,monitoringRequests,applyMonitoring,positionSources};
 }

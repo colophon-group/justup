@@ -8,7 +8,7 @@ import { ApiError, type ApiClient, errorText, isAbortError } from '../../api/cli
 import type { PublicDocumentState } from '../../public/metadata.ts';
 import type { Company, CompanyHiringHistory, CompanyReport } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
-import { coverageLabel, monitoringLabel, reportDate, useMonitoringClock } from './presentation';
+import { companyCoverageLabel, monitoringLabel, reportDate, useMonitoringClock, type MonitoringClock } from './presentation';
 import { CompanyReportSamples } from './CompanyReportSamples';
 import { CompanyGlobe } from './CompanyGlobe';
 import { CompanyPositions } from './CompanyPositions.tsx';
@@ -34,8 +34,8 @@ function ListingHistory({ history }: { history: CompanyHiringHistory }) {
   </section>;
 }
 
-export interface CompanyPageProps { follows?: FollowControl | undefined; client: ApiClient; id: string; fullAccess?: boolean; initialCompany?: Company | undefined; initialReport?: CompanyReport | undefined; onDocumentState?: ((id: string, state: PublicDocumentState) => void) | undefined }
-export function CompanyPage({ client, id, fullAccess = false, initialCompany, initialReport, onDocumentState, follows }: CompanyPageProps) {
+export interface CompanyPageProps { follows?: FollowControl | undefined; client: ApiClient; id: string; fullAccess?: boolean; positionsReady?: boolean; monitoringClock?: MonitoringClock | null; initialCompany?: Company | undefined; initialReport?: CompanyReport | undefined; onDocumentState?: ((id: string, state: PublicDocumentState) => void) | undefined }
+export function CompanyPage({ client, id, fullAccess = false, positionsReady = false, monitoringClock = null, initialCompany, initialReport, onDocumentState, follows }: CompanyPageProps) {
   const { t, locale, notice } = useInterfaceLocale();
   const [company, setCompany] = useState<Company | null>(initialCompany ?? null);
   const [report, setReport] = useState<CompanyReport | null>(initialReport ?? null);
@@ -60,7 +60,7 @@ export function CompanyPage({ client, id, fullAccess = false, initialCompany, in
   useEffect(() => {
     onDocumentState?.(id, { outcome: error ? error.missing ? 'not-found' : 'unavailable' : company ? 'ready' : 'pending', company: company ?? undefined });
   }, [id, company, error, onDocumentState]);
-  const monitoringTime = useMonitoringClock([company?.setup]);
+  const monitoringTime = useMonitoringClock([company?.setup], monitoringClock);
   if (error) return <section id="company-page" className="page"><a className="back" href={pageHref("jobs", locale)}>{t("← Back to search")}</a><h1>{t(error.missing ? 'Page not found.' : 'Report unavailable.')}</h1>{!error.missing ? <p role="status">{notice(error.message)}</p> : null}{!error.missing ? <button className="button outline" onClick={() => setRetry(value => value + 1)}>{t("Try again")}</button> : null}</section>;
   if (!company) return <section id="company-page" className="page"><p role="status">{t("Opening the company report…")}</p></section>;
   const companyReport = report?.companyId === id ? report : null;
@@ -71,12 +71,12 @@ export function CompanyPage({ client, id, fullAccess = false, initialCompany, in
     <div className="detail-actions report-subtitle"><CompanyMark company={company} /><FollowButton companyId={company.id} name={company.name} follows={follows} /></div>
     <FollowNotice follows={follows} />
     {company.description ? <p className="detail-description">{company.description}</p> : null}
-    <div className="report-facts">{monitoringSince ? <p>{t("Monitoring since")}{" "}<time dateTime={monitoringSince}>{reportDate(monitoringSince, locale)}</time></p> : null}<p>{coverageLabel(company.coverage?.state, locale)}</p>
+    <div className="report-facts">{monitoringSince ? <p>{t("Monitoring since")}{" "}<time dateTime={monitoringSince}>{reportDate(monitoringSince, locale)}</time></p> : null}<p>{companyCoverageLabel(company, locale, monitoringTime)}</p>
       {company.setup?.updatedAt ? <p>{monitoringLabel(company.setup, locale, monitoringTime)}</p> : null}</div>
     <CompanyGlobe key={id} footprint={companyReport?.hiringFootprint} />
     {companyReport?.hiringHistory ? <ListingHistory history={companyReport.hiringHistory} /> : null}
     {companyReport ? <CompanyReportSamples report={companyReport} /> : null}
-    <CompanyPositions key={`${id}:${fullAccess}`} client={client} companyId={id} />
+    {positionsReady ? <CompanyPositions key={`${id}:${fullAccess}`} client={client} companyId={id} /> : null}
     {companyReport?.sourceChecks.items.some(item => item.publicLink) ? <section className="tracked-sources"><h2>{t("At the source.")}</h2>
       <ul>{companyReport.sourceChecks.items.map((item, index) => item.publicLink ? <li key={`${item.publicLink.url}:${index}`}>
         <a href={item.publicLink.url} target="_blank" rel="noopener noreferrer">{new URL(item.publicLink.url).hostname}{new URL(item.publicLink.url).pathname === '/' ? '' : new URL(item.publicLink.url).pathname} ↗</a>

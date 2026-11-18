@@ -9,14 +9,15 @@ import { pageHref } from '../../app/useRoute.ts';
 import { useInterfaceLocale } from '../../i18n/LocaleProvider.tsx';
 import { CompanyMark } from '../../shared/CompanyMark.tsx';
 import { useViewportReveal } from '../../shared/useViewportReveal.ts';
-import { coverageLabel, monitoringLabel, useMonitoringClock } from './presentation.ts';
+import { companyCoverageLabel, monitoringLabel, useMonitoringClock, type MonitoringClock } from './presentation.ts';
 export interface CompaniesPageProps {
   follows?: FollowControl | undefined;
+  monitoringClock?: MonitoringClock | null;
   client: ApiClient; active: boolean; connected?: boolean;
   initialCompanies?: Company[] | undefined;
   initialCatalogue?: PublicBootstrap['catalogue'];
 }
-export function CompaniesPage({ client, active, connected = true, initialCompanies, initialCatalogue, follows }: CompaniesPageProps) {
+export function CompaniesPage({ client, active, connected = true, initialCompanies, initialCatalogue, follows, monitoringClock = null }: CompaniesPageProps) {
   const { locale, t, notice } = useInterfaceLocale();
   const [query, setQuery] = useState(initialCatalogue?.query ?? '');
   const [search, setSearch] = useState({ query: initialCatalogue?.query ?? '', revision: 0 });
@@ -60,7 +61,7 @@ export function CompaniesPage({ client, active, connected = true, initialCompani
   }, [client, error, key, nextCursor, paging, search.query, t]);
   const { visible, revealing, initialCount } = useViewportReveal({ items, resetKey: key, tailRef: tail, active,
     loading: status === 'loading' || paging, hasMore: !!nextCursor && !error, onNeedMore: more, prerenderedCount: initialCompanies?.length ?? 0 });
-  const monitoringTime = useMonitoringClock(visible.map(company => company.setup));
+  const monitoringTime = useMonitoringClock(visible.map(company => company.setup), monitoringClock);
   function reload(nextQuery = search.query) {
     const criteria = nextQuery.trim();
     const params = new URLSearchParams(); if (criteria) params.set('q', criteria);
@@ -82,7 +83,7 @@ export function CompaniesPage({ client, active, connected = true, initialCompani
     <div id="company-list">{visible.map((company, index) => <article key={company.id} className={`company-row list-row${index >= initialCount ? ' is-revealed' : ''}`} data-company={company.id}>
       <div className="company-info"><a className="company-name row-link" href={pageHref('company', locale, company.id)}><CompanyMark company={company} /><span>{company.name}</span></a></div>
       <div className="company-industry">{company.industry || company.description || ''}</div>
-      <div className="company-state"><span className="status">{coverageLabel(company.coverage?.state, locale)}</span>
+      <div className="company-state"><span className="status">{companyCoverageLabel(company, locale, monitoringTime)}</span>
         {company.setup?.updatedAt ? <span className="status">{monitoringLabel(company.setup, locale, monitoringTime)}</span> : null}</div>
       <FollowButton companyId={company.id} name={company.name} follows={follows} />
       <span className="company-open row-arrow" aria-hidden="true">↗</span>
