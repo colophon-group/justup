@@ -288,6 +288,12 @@ export function createHandler({ auth, feed, tasks, db, services = [], config = {
         try{productRecords?.inspect({viewer,interfaceLocale},'coverage_served');}catch{}
         return finish(200,catalogue);
       }
+      const positionsMatch = method === 'GET' && /^\/companies\/([^/]+)\/positions$/u.exec(path);
+      if (positionsMatch) {
+        if ([...url.searchParams.keys()].some(key => key !== 'cursor') || url.searchParams.getAll('cursor').length > 1)
+          throw problem('invalid_query');
+        return finish(200, feed.companyPositions(decodePath(positionsMatch[1]), {viewer, cursor:url.searchParams.get('cursor')}));
+      }
       if (method === 'GET' && /^\/companies\/[^/]+$/.test(path)) return finish(200, feed.company(decodePath(path.split('/')[2])));
       if (method === 'GET' && path === '/health') {
         const readiness = typeof config.readiness === 'function' ? config.readiness() : { ready: true, runner: { ready: false, identity: null } };

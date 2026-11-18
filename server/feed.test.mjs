@@ -271,3 +271,20 @@ test('private latest cohort shares source gates and excludes the exact visible c
   s.db.prepare("UPDATE justup_jobs SET reserved=1 WHERE id='new'").run();assert.deepEqual(feed.restrictedLatestJobs(),[]);
   s.db.prepare("UPDATE justup_jobs SET reserved=0 WHERE id='new'").run();advance(DAY_MS);assert.deepEqual(feed.restrictedLatestJobs(),[]);assert.equal(feed.coverage().stale,true);
 });
+
+test('company positions preserve access, continuation scope and stale feed behavior', t => {
+  const {feed,add,advance} = setup(t);
+  add([['new',1],['old',3],['older',4]]);
+  const other = feed.publishCompany({name:'Other',domain:'other.example.org',websiteUrl:'https://other.example.org/',evidenceUrls:[]});
+  const first = feed.companyPositions('company',{limit:1});
+  assert.deepEqual(first.items.map(job=>job.id), ['old']);
+  assert.equal(first.continuation.state, 'open');
+  assert.throws(() => feed.list({cursor:first.continuation.cursor}), {code:'stale_cursor'});
+  assert.throws(() => feed.companyPositions(other,{cursor:first.continuation.cursor}), {code:'stale_cursor'});
+  assert.throws(() => feed.companyPositions('company',{viewer,cursor:first.continuation.cursor}), {code:'stale_cursor'});
+  assert.deepEqual(feed.companyPositions('company',{cursor:first.continuation.cursor}).items.map(job=>job.id), ['older']);
+  assert.deepEqual(feed.companyPositions('company',{viewer}).items.map(job=>job.id), ['new','old','older']);
+  assert.deepEqual(feed.companyPositions(other,{}).items, []);
+  advance(DAY_MS);
+  assert.equal(feed.companyPositions('company',{}).continuation.state, 'paused');
+});

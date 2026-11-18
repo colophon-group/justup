@@ -137,8 +137,11 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
   INSERT OR IGNORE INTO justup_company_request_tasks SELECT owner_id,id,task_id FROM justup_company_requests WHERE task_id IS NOT NULL;`);
   transaction(db,()=>{
     // Earlier requests have no acceptance-time proof; never infer it from today's access.
-    if(!db.prepare('PRAGMA table_info(justup_company_requests)').all().some(column=>column.name==='acceptance_priority'))
+    const columns = new Set(db.prepare('PRAGMA table_info(justup_company_requests)').all().map(column => column.name));
+    if(!columns.has('acceptance_priority'))
       db.exec("ALTER TABLE justup_company_requests ADD COLUMN acceptance_priority TEXT NOT NULL DEFAULT 'standard' CHECK(acceptance_priority IN ('premium','standard'))");
+    if (!columns.has('monitoring_boards_json')) db.exec('ALTER TABLE justup_company_requests ADD COLUMN monitoring_boards_json TEXT');
+    if (!columns.has('monitoring_started_at')) db.exec('ALTER TABLE justup_company_requests ADD COLUMN monitoring_started_at INTEGER');
   });
   if(feed.ensureCompanySetup)transaction(db,()=>{
     for(const found of db.prepare("SELECT candidate_json FROM justup_company_requests WHERE status='accepted' AND candidate_json IS NOT NULL").all()) {
@@ -151,7 +154,8 @@ export function createCompanyService({ db, feed, tasks, config = {}, now = Date.
     const candidate=found.candidate_json?JSON.parse(found.candidate_json):null,storedId=candidate?.companyId??null;
     const companyId=storedId?(feed.canonicalCompanyId?.(storedId)??storedId):null;
     return { id: found.id, input: found.input_text, scope: found.scope, status: found.status,
-      companyId,setup:found.status==='accepted'&&companyId&&feed.companySetup?{...feed.companySetup(companyId),priority:found.acceptance_priority}:null,
+      companyId,setup:found.status==='accepted'&&companyId&&feed.companySetup?{...feed.companySetup(companyId,found),priority:found.acceptance_priority}:null,
+      ...(found.monitoring_started_at == null ? {} : {monitoringStartedAt:new Date(found.monitoring_started_at).toISOString()}),
       candidate:candidate?{...candidate,companyId}:null, previewRevision: found.preview_revision,
       clarification: found.clarification, taskId: found.task_id, createdAt: new Date(found.created_at).toISOString() };
   }

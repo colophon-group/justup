@@ -47,6 +47,9 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
   const [quarantined, setQuarantined] = useState(false);
   const [sessionRequestStart, setSessionRequestStart] = useState({ wall: 0, monotonic: 0 });
   const sessionStartedAt = sessionRequestStart.wall;
+  const positionsReady = !!session && !connecting && !quarantined;
+  const monitoringClock = positionsReady && session.serverTime
+    ? {serverTime:Date.parse(session.serverTime),monotonic:sessionRequestStart.monotonic} : null;
   const heldFocus = useRef<{ element: HTMLElement | null; x: number; y: number; selection: [number | null, number | null] | null } | null>(null);
   const consumedDeadline = useRef<string | null>(null);
   const ownershipUncertain = useRef(false);
@@ -379,11 +382,15 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
             active={route.page === "companies" && publicPage?.outcome !== "unavailable"}
             initialCompanies={publicPage?.companies}
             initialCatalogue={publicPage?.catalogue}
+            monitoringClock={monitoringClock}
           /> : null}
           {route.page === "company" && publicPage?.outcome !== "unavailable" && publicPage?.outcome !== "not-found" ? (
             <CompanyPage
               key={`${epoch}:${route.id}`}
               follows={follows}
+              fullAccess={session?.access.fullAccess === true}
+              positionsReady={positionsReady}
+              monitoringClock={monitoringClock}
               client={client}
               id={route.id}
               initialCompany={initialPublicPage?.company?.id === route.id ? initialPublicPage.company : undefined}
@@ -397,6 +404,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
             client={client}
             session={session}
             active={route.page === "request"}
+            monitoringClock={monitoringClock}
             onSignIn={openSignIn}
             accountEpoch={epoch}
             prefill={companyPrefill}

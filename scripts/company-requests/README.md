@@ -19,10 +19,29 @@ The shared public setup stores only canonical identity, revision, progress and t
 
 The implementation defaults remain 32 requests and 128 keys per account. Queue reads use the deterministic order above. Limits and ordering within each priority still require operational definition before wider launch; these defaults provide no turnaround guarantee.
 
-## Monitoring producer gap
+## Apply current source evidence
 
-`monitoring` is reserved in the product contract but cannot be written or returned by this implementation. The current imported snapshot proves listing evidence only. Published v1/v2 weekly coverage snapshots prove attributable historical scopes and approved links, with their own observation times; they do not prove present source health or successful configuration. A company name, one posting, ATS URL, `active:true` flag or operator assertion cannot establish monitoring.
+Use the [Jobseek monitoring exporter](https://github.com/colophon-group/jobseek/blob/main/docs/reference/source-coverage.md#export-evidence-of-current-monitoring) in the protected source environment. Verify the source release, canonical company, approved board and scope revision. Retain the exact receipt bytes and obtain their SHA-256 from the protected source read. The weekly coverage artifact remains the input for historical reports.
 
-The missing producer must supply a reviewed current validation receipt bound to the canonical company and approved source identity, with an attributable validation time, bounded freshness, source/build or configuration identity, and a trust/verifiability boundary. Its consumer must reject stale, conflicting or withdrawn receipts and project unknown/blocked state when proof is missing. Qualify that producer and the separate requester-notification path before claiming the monitoring milestone. This checklist does not invent a receipt store, accept a caller-provided boolean or run a general agent workflow engine.
+Run `setup.mjs monitoring-requests --company COMPANY_ID` under the existing application database identity. It returns the current setup revision and up to 50 request IDs and exact scopes for that company. Use `--after-request` with `nextRequest` to continue. Review which complete set of boards satisfies each selected request. An unspecified scope is represented by JSON null and needs the same scope review.
 
-`server/company-progress.test.mjs` owns acceptance-time grants, access expiry, shared progress, idempotence, protected command and local HTTP gate contracts. `server/company-catalogue.test.mjs` owns bounded private catalogue membership and continuations. Both run in the server CI lane with synthetic data and no external resources. Actual configuration, authoritative monitoring receipts and deployed browser/notification qualification remain unverified.
+Run `setup.mjs apply-monitoring` in the existing protected operator context and pass the independently reviewed approval on standard input. Keep the approval in private operator custody. Each receipt entry carries its approved board ID, revision, SHA-256 and canonical base64 of the exact Jobseek receipt, including its final newline.
+
+```json
+{
+  "schemaVersion": 1,
+  "companyId": "<Justup catalogue ID>",
+  "expectedRevision": 1,
+  "sourceCompanyId": "<Jobseek company UUID>",
+  "receipts": [
+    {"boardId": "<Jobseek board UUID>", "revision": "<Jobseek scope revision UUID>", "sha256": "<independent source digest>", "receiptBase64": "<exact receipt bytes>"}
+  ],
+  "requests": [{"id": "<accepted Justup request UUID>", "scope": "Engineering in Zürich"}]
+}
+```
+
+The bounded intake accepts up to 32 boards and 50 reviewed requests per approval. Every listed request is bound to the entire listed board set. Send separate approvals for requests with different coverage. Use an empty `requests` list for public board evidence, routine receipt refresh or an unavailable receipt. The command applies a compare-and-set revision to new changes. It accepts an exact current replay without a second write. A newer unavailable receipt or a new revision can supersede the former board proof. A `scope_changed` receipt withdraws only its own revision. The catalogue reports active monitoring while it has at least one current board, and a private request reports active monitoring only while every board in its approved set is current.
+
+On first confirmation, the private request records an in-product milestone. The catalogue milestone links to the company. The monitoring milestone also links to its positions, which use the main feed's access and freshness rules. Expired evidence changes current status and preserves the historical milestone. Request deletion removes its private binding and milestone. Public evidence retains source identity and expiry without request IDs or scope text.
+
+`server/company-progress.test.mjs` covers grants, protected receipt intake, replay, expiry, request isolation and deletion. The compiled browser journey covers the private milestones, reload and company-scoped positions. The deployed preview gate still requires a protected source-to-application transfer and a real browser journey.

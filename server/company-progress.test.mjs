@@ -6,6 +6,7 @@ import {mkdtempSync,realpathSync,rmSync,writeFileSync,chmodSync,symlinkSync} fro
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
+import {createHash,randomUUID} from 'node:crypto';
 import {openStore} from './store.mjs';
 import {createFeed} from './feed.mjs';
 import {createTasks} from './tasks.mjs';
@@ -13,6 +14,7 @@ import {createEntitlements,createAccessReader} from './entitlements.mjs';
 import {createCompanyService} from './companies.mjs';
 import {createReadingPreferencesService} from './reading-preferences.mjs';
 import {createCompanyProgress} from './company-progress.mjs';
+import {readMonitoringApproval} from './company-monitoring.mjs';
 import {companySetupCommand} from '../scripts/company-requests/setup.mjs';
 import {createHandler} from './http.mjs';
 
@@ -35,8 +37,8 @@ function fixture(t,{path=':memory:',at=AT,sharedState=false}={}) {
     db.prepare('INSERT INTO access_identities VALUES(?,?,?,?)').run(owner,`synthetic-subject-${owner}`,kind==='legacy'?`synthetic-legacy-${owner}`:null,clock);
     return entitlements.activateFreePeriod(owner);
   }
-  async function accept(owner='bob',{name='Shared Company',key=`ordinary-${owner}`}={}) {
-    const request=(await companies.route(ctx('POST','/company-requests',{input:name,requestKey:key},owner))).body.request;
+  async function accept(owner='bob',{name='Shared Company',key=`ordinary-${owner}`,scope}={}) {
+    const request=(await companies.route(ctx('POST','/company-requests',{input:name,requestKey:key,...(scope===undefined?{}:{scope})},owner))).body.request;
     return (await companies.route(ctx('POST',`/company-requests/${request.id}/accept`,{candidateId:request.candidate.id,previewRevision:request.previewRevision},owner,{idempotencyKey:`accept-${key}`}))).body.request;
   }
   return {store,db,feed,tasks,reading,companies,progress,id,otherId,ctx,priority,paid,free,access,accept,now:()=>clock,advance:ms=>clock+=ms,pause:()=>policy=false};
@@ -268,4 +270,109 @@ for(const grant of ['standard','legacy','paid'])test(`known-company priority HTT
   assert.equal((await post()).status,200);assert.equal(f.db.prepare('SELECT count(*) n FROM justup_company_requests').get().n,1);
   f.advance(grant==='paid'?60_001:(grant==='legacy'?30:7)*86_400_000);
   assert.equal((await post()).status,200);assert.equal((await post({},'after-expiry')).status,403);
+});
+
+function sourceReceipt(companyId, boardId, revision, at, current=true, reason='no_complete_check') {
+  const raw = Buffer.from(JSON.stringify({
+    schemaVersion:1, sourceVersion:'jobseek-monitoring-v1', companyId, boardId, revision,
+    observedAt:new Date(at).toISOString(), state:current?'current':'unavailable',
+    reason:current?null:reason,
+    verifiedAt:current?new Date(at-1000).toISOString():null,
+    expiresAt:current?new Date(at+60_000).toISOString():null
+  })+'\n');
+  return {boardId, revision, sha256:createHash('sha256').update(raw).digest('hex'), receiptBase64:raw.toString('base64')};
+}
+
+test('operator receipts bind complete board sets to exact requester scopes and outlive request deletion only as public evidence',async t=>{
+  const directory=realpathSync(mkdtempSync(join(tmpdir(),'company-monitoring-')));
+  t.after(()=>rmSync(directory,{recursive:true,force:true}));
+  const path=join(directory,'application.sqlite'), generation=join(directory,'private-generation');
+  writeFileSync(generation,randomUUID()+'\n',{mode:0o600});
+  const f=fixture(t,{path});
+  const alice=await f.accept('alice',{scope:'Zurich engineering'}),bob=await f.accept('bob',{scope:'Geneva operations'});
+  const sourceCompanyId=randomUUID(), first=randomUUID(), second=randomUUID(), revision=randomUUID();
+  const env={JUSTUP_DB_PATH:path}, now=f.now;
+  const operator=(args, input)=>companySetupCommand({env,now,args,stdin:()=>Buffer.from(JSON.stringify(input))});
+  assert.deepEqual(operator(['monitoring-requests','--company',f.id]).items,[
+    {id:alice.id,scope:'Zurich engineering'}, {id:bob.id,scope:'Geneva operations'}
+  ].sort((a,b)=>a.id.localeCompare(b.id)));
+  const options={schemaVersion:1,companyId:f.id,expectedRevision:1,sourceCompanyId,
+    receipts:[sourceReceipt(sourceCompanyId,first,revision,AT),sourceReceipt(sourceCompanyId,second,revision,AT)],
+    requests:[{id:alice.id,scope:'Zurich engineering'}]};
+  const apply=input=>operator(['apply-monitoring'],input);
+  assert.throws(()=>apply({...options,requests:[{...options.requests[0],scope:'Geneva operations'}]}),{code:'revision_conflict'});
+  assert.throws(()=>apply({...options,receipts:[{...options.receipts[0],sha256:'0'.repeat(64)}]}),{code:'invalid_input'});
+  assert.throws(()=>apply({...options,sourceCompanyId:randomUUID()}),{code:'invalid_input'});
+  assert.equal(f.feed.company(f.id).setup.state,'queued');
+  assert.deepEqual(apply(options),{companyId:f.id,revision:2,changed:true});
+  assert.deepEqual(apply(options),{companyId:f.id,revision:2,changed:false});
+  const status=async owner=>(await f.companies.route(f.ctx('GET','/company-requests',undefined,owner))).body.items[0];
+  assert.equal((await status('alice')).setup.state,'monitoring');
+  assert.equal((await status('alice')).monitoringStartedAt,new Date(AT).toISOString());
+  assert.equal((await status('bob')).setup.state,'queued');
+  assert.equal((await status('bob')).monitoringStartedAt,undefined);
+  assert.equal(f.feed.company(f.id).setup.state,'monitoring');
+  assert.deepEqual(f.progress.pending().items[0].requestedScopes,['Geneva operations']);
+  assert.ok(!JSON.stringify(f.feed.company(f.id)).includes(first));
+  f.advance(500);
+  assert.deepEqual(apply({...options,expectedRevision:2,receipts:[sourceReceipt(sourceCompanyId,second,revision,f.now(),false)],requests:[]}),
+    {companyId:f.id,revision:3,changed:true});
+  assert.throws(()=>apply(options),{code:'revision_conflict'});
+  assert.equal((await status('alice')).setup.state,'blocked');
+  assert.equal((await status('alice')).monitoringStartedAt,new Date(AT).toISOString());
+  assert.equal(f.feed.company(f.id).setup.state,'monitoring'); // The independently verified board remains available.
+  f.advance(59_500);
+  assert.equal(f.feed.company(f.id).setup.state,'blocked');
+  f.companies.deleteAccountData('alice');
+  assert.equal(f.db.prepare('SELECT 1 FROM justup_company_requests WHERE id=?').get(alice.id),undefined);
+  assert.equal(f.db.prepare('SELECT count(*) count FROM justup_company_monitoring').get().count,2);
+  assert.equal((await status('bob')).setup.state,'queued');
+});
+
+test('a retired scope receipt cannot withdraw a newer verified revision', async t=>{
+  const f=fixture(t), request = await f.accept();
+  const sourceCompanyId=randomUUID(), board=randomUUID(), retired=randomUUID(), active=randomUUID();
+  const approval={schemaVersion:1, companyId:f.id, expectedRevision:1, sourceCompanyId,
+    receipts:[sourceReceipt(sourceCompanyId,board,active,AT)],requests:[{id:request.id,scope:null}]};
+  const apply=value=>{
+    const input=readMonitoringApproval(Buffer.from(JSON.stringify(value)),f.now());
+    f.db.exec('BEGIN IMMEDIATE');
+    try {return f.progress.applyMonitoring(input);} finally {f.db.exec('COMMIT');}
+  };
+  assert.equal(apply(approval).changed,true);
+  f.advance(500);
+  assert.deepEqual(apply({...approval,expectedRevision:2,requests:[],
+    receipts:[sourceReceipt(sourceCompanyId,board,retired,f.now(),false,'scope_changed')]}),
+    {companyId:f.id,revision:2,changed:false});
+  assert.equal(f.feed.company(f.id).setup.state,'monitoring');
+});
+
+test('a requested company lists verified source-company posts and invalidates the mapped cursor on withdrawal', async t=>{
+  const f=fixture(t), request=await f.accept(), sourceCompanyId=randomUUID(), board=randomUUID(), revision=randomUUID();
+  const approval={schemaVersion:1, companyId:f.id, expectedRevision:1, sourceCompanyId,
+    receipts:[sourceReceipt(sourceCompanyId,board,revision,AT)],requests:[{id:request.id,scope:null}]};
+  const apply=value=>{
+    const input=readMonitoringApproval(Buffer.from(JSON.stringify(value)),f.now());
+    f.db.exec('BEGIN IMMEDIATE');
+    try {return f.progress.applyMonitoring(input);} finally {f.db.exec('COMMIT');}
+  };
+  apply(approval);
+  f.store.importSnapshot({schemaVersion:1,snapshotAt:new Date(AT).toISOString(),verifiedAt:new Date(AT).toISOString(),
+    observations:[],unknownIds:[],jobs:['role-1','role-2'].map(id=>({
+      id,companyId:sourceCompanyId,companyName:'Shared Company',companySlug:'shared',
+      title:id,sourceUrl:'https://shared.example.org/jobs/'+id,active:true,reserved:false,hasContent:true,
+      firstObserved:new Date(AT-3*86400000).toISOString(),lastObserved:null,locales:['en'],locations:[],
+      employmentTypes:[],seniority:null,salary:null,bodyText:null,evidence:{source:'jobseek_public',metadataFetchedAt:new Date(AT).toISOString(),
+        bodyFetchedAt:null,bodyUrl:null,bodySha256:null,textSha256:null,bodyBytes:0,normalizationVersion:1,truncated:false},
+    }))});
+  const positions=f.feed.companyPositions(f.id,{limit:1});
+  assert.equal(positions.items[0].company.id,f.id);
+  assert.equal(positions.items[0].id,'role-1');
+  assert.equal(positions.continuation.state,'open');
+  assert.equal(f.feed.list().items[0].company.id,sourceCompanyId);
+  f.advance(500);
+  apply({...approval,expectedRevision:2,requests:[],
+    receipts:[sourceReceipt(sourceCompanyId,board,revision,f.now(),false)]});
+  assert.throws(()=>f.feed.companyPositions(f.id,{cursor:positions.continuation.cursor}),{code:'stale_cursor'});
+  assert.deepEqual(f.feed.companyPositions(f.id,{}).items,[]);
 });
