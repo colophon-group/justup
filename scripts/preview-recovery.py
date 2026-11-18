@@ -496,21 +496,23 @@ def main():
             result = backup(*paths, manifest['sourceCommit'], manifest['buildIdentity'],
                             schema_version=manifest['schemaVersion'])
         elif args.command == 'migrate':
-            current, _ = operational_context(paths)
             spec = importlib.util.spec_from_file_location('migration_host', Path(__file__).with_name('preview-host.py'))
             host = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(host)
-            result = migrate_live(args.database, args.backup_dir, args.generation, manifest, [*prepare_command[:-1], '--migrate-db'], current, host=host)
+            with host.data_writer_lock():
+                current, _ = operational_context(paths)
+                result = migrate_live(args.database, args.backup_dir, args.generation, manifest, [*prepare_command[:-1], '--migrate-db'], current, host=host)
         elif args.command == 'restore':
             if os.geteuid() != 0:
                 raise ValueError('Restoration is an explicit root operator step.')
             spec = importlib.util.spec_from_file_location('restore_host', Path(__file__).with_name('preview-host.py'))
             host = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(host)
-            host.require_idle_preview()
-            if manifest['schemaVersion'] != APPLICATION_SCHEMA:
-                raise ValueError('Restore requires the current epoch-2 runtime.')
-            result = restore(args.snapshot, args.generation, args.destination, prepare_command, migrate_v1=args.migrate_v1)
+            with host.data_writer_lock():
+                host.require_idle_preview()
+                if manifest['schemaVersion'] != APPLICATION_SCHEMA:
+                    raise ValueError('Restore requires the current epoch-2 runtime.')
+                result = restore(args.snapshot, args.generation, args.destination, prepare_command, migrate_v1=args.migrate_v1)
         elif args.command == 'check-restore':
             validate_restore(args.snapshot, args.generation)
             result = {'eligible': True, 'activated': False, 'sessionsStillRequireInvalidation': True}

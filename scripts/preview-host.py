@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import ExitStack, contextmanager
 import errno
 import fcntl
 import hashlib
@@ -33,6 +34,7 @@ from datetime import date, datetime, timezone
 GIB = 1024 ** 3
 MIB = 1024 ** 2
 BASE = Path('/srv/justup_preview')
+DATA_WRITER_LOCK = Path('/run/justup-preview-data-writer.lock')
 IMAGE = Path('/var/lib/justup-preview.disk')
 SLICE = 'justup-preview.slice'
 UNITS = ('justup-preview.slice', 'srv-justup_preview.mount', 'justup-preview-api.service',
@@ -385,6 +387,31 @@ def artifact_module():
     result = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(result)
     return result
+
+
+class PreviewDataWriterBusy(ValueError):
+    """A protected feed or maintenance operation already owns the writer lock."""
+
+
+@contextmanager
+def data_writer_lock():
+    if os.geteuid() != 0:
+        raise ValueError('The preview data writer lock requires root.')
+    fd = os.open(DATA_WRITER_LOCK, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        meta = os.fstat(fd)
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0 or meta.st_nlink != 1
+                or stat.S_IMODE(meta.st_mode) != 0o600):
+            raise ValueError('The preview data writer lock is unsafe.')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise PreviewDataWriterBusy('A protected preview data writer is already active.') from exc
+        yield fd
+    finally:
+        # A demoted importer can inherit this open description. Closing
+        # rather than unlocking retains the fence if that child outlives us.
+        os.close(fd)
 
 
 def require_operator(cleanup=False, *, cleanup_logs=True):
@@ -1607,7 +1634,11 @@ def main():
     parser.add_argument('--source-version', choices=COVERAGE_DIRS)
     parser.add_argument('--erase-data', action='store_true')
     args = parser.parse_args()
+    writer = ExitStack()
     try:
+        writer_commands = {'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'switch', 'teardown', 'stop'}
+        if args.command in writer_commands:
+            writer.enter_context(data_writer_lock())
         if args.include_backup and args.command != 'plan':
             raise ValueError('Use --include-backup when rendering a plan.')
         if args.command == 'plan':
@@ -1670,6 +1701,8 @@ def main():
         # Do not publish raw command output, environment or provider responses.
         print(json.dumps({'ok': False, 'error': type(error).__name__}), file=sys.stderr)
         return 1
+    finally:
+        writer.close()
 
 
 if __name__ == '__main__':
