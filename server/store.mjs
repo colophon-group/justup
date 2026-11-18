@@ -164,10 +164,14 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
       return { id, active: o.active !== false, reserved: o.reserved === true, observedAt };
     });
     const selection = boundedJson(snapshot.selection ?? {}, 8192);
+    const privateFeed = snapshot.selection?.source === 'jobseek_feed_v1';
+    if (privateFeed && snapshot.selection.feed?.complete !== true) throw problem('invalid_import');
     const generationId = randomUUID();
     return transaction(db, () => {
-      if ((generation()?.verified_at ?? -1) > verifiedAt) throw problem('stale_import', 409, 'A newer import is already present.');
-      const existing = db.prepare('SELECT company_id,first_seen_at FROM job_source_identities WHERE id = ?');
+      const previousVerifiedAt = generation()?.verified_at ?? -1;
+      if (previousVerifiedAt > verifiedAt) throw problem('stale_import', 409, 'A newer import is already present.');
+      const existing = db.prepare(`SELECT source.company_id,source.first_seen_at,retained.verified_at AS retained_verified_at
+        FROM job_source_identities source LEFT JOIN justup_jobs retained USING (id) WHERE source.id=?`);
       const rememberIdentity = db.prepare(`INSERT INTO job_source_identities(id,company_id,first_seen_at,verified_at,active,reserved) VALUES(?,?,?,?,1,0)
         ON CONFLICT(id) DO UPDATE SET verified_at=excluded.verified_at,active=1,reserved=0`);
       const priorEvidence = db.prepare('SELECT verified_at,active,reserved FROM job_source_identities WHERE id=?');
@@ -180,7 +184,9 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
         if (row && (row.first_seen_at !== first || row.company_id !== job.companyId)) throw problem('source_identity_conflict', 409, 'Source discovery time changed.');
         const observedAt = Date.parse(job.evidence.metadataFetchedAt), prior = priorEvidence.get(job.id);
         // A later export may carry older per-record observations. It must not
-        // reopen a closure, undo a reservation or replace newer source content.
+        // reopen a closure, undo a reservation, restore unverified membership
+        // or replace newer source content.
+        if (row?.retained_verified_at === 0 && observedAt <= previousVerifiedAt) continue;
         if (prior && (observedAt < prior.verified_at || observedAt === prior.verified_at && (!prior.active || prior.reserved))) continue;
         rememberIdentity.run(job.id,job.companyId,first,observedAt);
         insert.run(job.id, job.companyId, first, observedAt, textHash, boundedJson(job, 16_384), bodyText);
@@ -195,6 +201,12 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
           rememberObservation.run(o.active ? 1 : 0,o.reserved ? 1 : 0,o.observedAt,o.id);
         }
       }
+      // A complete private feed carries the entire eligible preview selection.
+      // Omitted listings lose current verification, but absence supplies no
+      // closure fact. Keep their catalogue metadata and immutable source history.
+      if (privateFeed) db.prepare(`UPDATE justup_jobs SET verified_at=0
+        WHERE active=1 AND reserved=0 AND verified_at<>0
+        AND id NOT IN (SELECT value FROM json_each(?))`).run(JSON.stringify(jobs.map(({ job }) => job.id)));
       db.prepare('INSERT INTO justup_imports VALUES (?, ?, ?, ?, ?, ?)').run(generationId, snapshotAt, verifiedAt, selection, jobs.length, snapshot.unknownIds?.length ?? 0);
       // Old import metadata is not needed for cursor validity or public evidence.
       db.prepare('DELETE FROM justup_imports WHERE rowid NOT IN (SELECT rowid FROM justup_imports ORDER BY rowid DESC LIMIT 32)').run();

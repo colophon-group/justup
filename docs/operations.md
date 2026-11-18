@@ -378,13 +378,19 @@ Pass the JSON from `preview-feed.py receipt --batch-id <id> --manifest-sha256 <s
 
 The host stage cap is deliberately lower than the producer's global 512 MiB batch ceiling. Qualify the selected company cohort against that cap, current SQLite capacity and the release's 24-hour verification lifetime. An oversized batch fails without silently claiming coverage or allocating a larger disk. Any additional infrastructure spend follows the explicit resource approval path.
 
+After an interruption that outlasts the freshness window, replay and acknowledge
+the producer's exact pending batch, then finish any cursor-linked change pages.
+Reconcile with a fresh full snapshot as soon as the producer can issue one.
+Historical imports keep their source dates. The job API stays paused until the
+new full snapshot is durable and reports the current import generation.
+
 ## Schedule and observation contract
 
 The shared queue leases tasks durably; schedules enqueue fixed task kinds and never launch arbitrary scripts or a second permanent model worker. A schedule must be disabled until its exact candidate, owner, cadence, timeout, concurrency, replay key and failure alert are reviewed. Retrying an interval reuses its import generation or edition period. Interactive search/company work takes priority over weekly editorial work within the one model slot. Stop new work before recovery; retain pending tasks, usage ledgers and immutable edition evidence.
 
 | Operation | Current interface and required release evidence |
 | --- | --- |
-| Job refresh | `scripts/import-jobs.py --snapshot <fixed UTC> --typesense-host <approved origin> --previous <last snapshot> --output <new private path>` followed by `server/main.mjs --import <completed snapshot>`. Both steps use the approved read-only transfer and resource boundary. Prove repeated updates, known-ID closures, stale-source behavior and replay before enabling the cadence. |
+| Job refresh | Use the [private job-feed handoff](#private-job-feed-handoff). Observe completed cursor-linked changes and a full reconciliation before the 24-hour freshness deadline. Prove repeated updates, known-ID closures, a missed refresh and exact replay before enabling the cadence. |
 | Source history | The producer under `source-coverage-history` must supply authoritative scope/revision and complete/interrupted intervals. Latest success or a current snapshot cannot prove two continuous weeks. Missing history suppresses comparative publication. |
 | Hiring Wire | The shared runner waits for the protected Monday UTC artifact, then idempotently enqueues the period and binds the five-tool Sol dispatcher. The 15-minute file check uses no task attempt. Source history, independent qualification and exact deployed evidence must pass before enabling its configuration. Facts, selections and execution identity persist with the edition. Cleanup uncertainty durably halts the queue for reviewed recovery. |
 | Backups | `preview-recovery.py backup` uses the active immutable manifest identity and live deletion generation. Review cadence/recovery objective and confirm backup age, capacity and restore before unattended operation. The ledger is excluded. |
