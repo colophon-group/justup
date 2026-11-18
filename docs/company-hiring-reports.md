@@ -166,7 +166,12 @@ headcount. No raw source scope IDs/revisions or posting IDs/bodies are public.
 
 Public company HTML and client navigation read the report’s `sourceChecks` through a bounded, validated projection. Only approved public HTTPS career links appear. Each link retains its supplied last-check date; an absent date produces no invented check status. A missing report leaves company identity readable, and a failed browser report read offers a separate retry. Legacy identity-source URLs never substitute for approved report links.
 
-The browser integration consumes approved source links and the fresh structured role and salary samples above. The globe remains neutral because no reviewed hiring-country projection exists. Report history still needs its complete presentation, and all factual sections require the deployed source qualification described below.
+The browser and public HTML render the tracking start and the two weeks from the
+same report. A fully covered week displays its verified listing count, including
+zero. Incomplete weeks say “Incomplete coverage” and omit their count and bar.
+Without a recorded snapshot the historical chart and tracking date are omitted.
+The globe uses the [country sample](#read-current-structured-samples). All factual
+sections require the deployed source qualification below.
 
 ## Verify source identity and release readiness
 

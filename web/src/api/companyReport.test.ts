@@ -42,6 +42,64 @@ test('valid producer scope counts remain supported through the 2000-scope contra
   assert.throws(() => decodeCompanyReport(oversized, 'company'));
 });
 
+function historicalReport() {
+  const scopeCount = 2;
+  const base = currentReport();
+  base.sourceChecks.items[1]!.lastVerifiedAt = '2026-10-19T00:00:00Z';
+  const history = {
+    source: 'jobseek_public_coverage', sourceVersion: 'jobseek-coverage-v2', snapshotId: 'frozen-covered-cohort',
+    asOf: '2026-10-26T00:00:00Z', generatedAt: '2026-10-26T01:00:00Z', publishedAt: '2026-10-26T02:00:00Z',
+    sha256: 'e'.repeat(64),
+  };
+  return { ...base, provenance: { ...base.provenance, history }, monitoringSince: '2026-10-01T00:00:00Z', hiringHistory: {
+    state: 'partial', scopeCount,
+    points: [
+      { start: '2026-10-12T00:00:00Z', end: '2026-10-19T00:00:00Z', state: 'complete',
+        completeScopeCount: 2, scopeCount, newListings: 0 as number | null, observedListings: 0 },
+      { start: '2026-10-19T00:00:00Z', end: '2026-10-26T00:00:00Z', state: 'partial',
+        completeScopeCount: 1, scopeCount, newListings: null as number | null, observedListings: 5 },
+    ],
+  } };
+}
+
+test('published history survives hydration and distinguishes complete zero from an incomplete count', () => {
+  const raw = historicalReport();
+  const value = decodeCompanyReport(raw, 'company');
+  assert.equal(value.monitoringSince, raw.monitoringSince);
+  assert.deepEqual(value.hiringHistory, raw.hiringHistory);
+  assert.deepEqual(value.provenance?.history, raw.provenance.history);
+  assert.deepEqual(decodeCompanyReport(value, 'company'), value);
+  const absent = decodeCompanyReport({ companyId: 'company', asOf: raw.asOf,
+    sourceChecks: { state: 'unavailable', items: [] }, monitoringSince: null,
+    hiringHistory: { state: 'unavailable', scopeCount: 0, points: [] } }, 'company');
+  assert.deepEqual(absent.hiringHistory, { state: 'unavailable', scopeCount: 0, points: [] });
+});
+
+test('historical weekly totals require a matching tracked cohort and full coverage', () => {
+  const mutations: ((value: ReturnType<typeof historicalReport>) => void)[] = [
+    value => { value.monitoringSince = '2026-10-02T00:00:00Z'; },
+    value => { value.hiringHistory.scopeCount = 3; },
+    value => { value.hiringHistory.points[0]!.start = '2026-10-13T00:00:00Z'; },
+    value => { value.hiringHistory.points[0]!.start = '2026-10-05T00:00:00Z'; value.hiringHistory.points[0]!.end = '2026-10-12T00:00:00Z'; },
+    value => { value.hiringHistory.points[0]!.newListings = 4; },
+    value => { value.hiringHistory.points[1]!.newListings = 0; },
+    value => { value.hiringHistory.points[1]!.state = 'complete'; },
+    value => { value.sourceChecks.items[1]!.lastVerifiedAt = null; },
+    value => { value.provenance.history.source = 'current_import'; },
+    value => { value.provenance.history.sourceVersion = 'unknown-producer'; },
+    value => { value.provenance.history.asOf = '2026-10-25T00:00:00Z'; },
+    value => { value.provenance.history.generatedAt = '2026-10-25T00:00:00Z'; },
+    value => { value.provenance.history.publishedAt = '2026-11-02T00:00:00Z'; },
+    value => { value.provenance.history.sha256 = 'not-frozen'; },
+  ];
+  for (const mutate of mutations) {
+    const value = historicalReport();
+    mutate(value);
+    assert.throws(() => decodeCompanyReport(value, 'company'));
+  }
+  const value = historicalReport();
+  assert.throws(() => decodeCompanyReport({ ...value, provenance: { ...value.provenance, history: undefined } }, 'company'));
+});
 
 const iso = (at: number) => new Date(at).toISOString();
 const at = Date.parse('2026-11-01T12:00:00Z');
@@ -197,7 +255,12 @@ test('report client makes one public request for approved sources and structured
   const value = await client.getCompanyReport('company');
   assert.deepEqual(calls, ['/api/v1/companies/company/report']); assert.equal(value.hiringRoles?.state, 'available');
 });
-test('legacy company role and salary arrays do not bypass report evidence', () => {
-  const value = decodeCompany({ id: 'company', name: 'Sample company', hiringRoles: [{ name: 'Guessed', count: 500 }], reportedSalaries: [{ text: 'Guaranteed pay' }] });
-  assert.equal(Object.hasOwn(value, 'hiringRoles'), false); assert.equal(Object.hasOwn(value, 'reportedSalaries'), false);
+test('legacy company analytics do not bypass report evidence', () => {
+  const value = decodeCompany({
+    id: 'company', name: 'Sample company', hiringRoles: [{ name: 'Guessed', count: 500 }],
+    reportedSalaries: [{ text: 'Guaranteed pay' }], monitoringSince: '2026-10-01T00:00:00Z',
+    hiringHistory: [{ date: '2026-10-26T00:00:00Z', count: 500 }],
+  });
+  for (const key of ['hiringRoles', 'reportedSalaries', 'monitoringSince', 'hiringHistory'])
+    assert.equal(Object.hasOwn(value, key), false);
 });

@@ -6,11 +6,32 @@ import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 import { useEffect, useState } from 'react';
 import { ApiError, type ApiClient, errorText, isAbortError } from '../../api/client';
 import type { PublicDocumentState } from '../../public/metadata.ts';
-import type { Company, CompanyReport } from '../../api/types';
+import type { Company, CompanyHiringHistory, CompanyReport } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
 import { coverageLabel, reportDate } from './presentation';
 import { CompanyReportSamples } from './CompanyReportSamples';
 import { CompanyGlobe } from './CompanyGlobe';
+
+function ListingHistory({ history }: { history: CompanyHiringHistory }) {
+  const { t, locale } = useInterfaceLocale();
+  if (history.state === 'unavailable') return null;
+  const maximum = Math.max(1, ...history.points.map(point => point.newListings ?? 0));
+  const date = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  const day = 86_400_000;
+  return <section aria-label={t("Historical hiring")}>
+    <h2>{t("Hiring over time.")}</h2>
+    <p className="small-print">{t("Newly observed listings on monitored career pages.")}</p>
+    <ol className="hiring-history">{history.points.map(point => {
+      const count = point.newListings;
+      const through = new Date(Date.parse(point.end) - day);
+      return <li key={point.start} data-coverage={point.state}>
+        {count ? <span className="history-bar" style={{ height: `${count / maximum * 100}%` }} aria-hidden="true" /> : null}
+        <b>{count === null ? t("Incomplete coverage") : count.toLocaleString(locale)}</b>
+        <small><time dateTime={point.start}>{date.format(new Date(point.start))}</time>{" – "}<time dateTime={through.toISOString()}>{date.format(through)}</time></small>
+      </li>;
+    })}</ol>
+  </section>;
+}
 
 export interface CompanyPageProps { follows?: FollowControl | undefined; client: ApiClient; id: string; initialCompany?: Company | undefined; initialReport?: CompanyReport | undefined; onDocumentState?: ((id: string, state: PublicDocumentState) => void) | undefined }
 export function CompanyPage({ client, id, initialCompany, initialReport, onDocumentState, follows }: CompanyPageProps) {
@@ -40,20 +61,20 @@ export function CompanyPage({ client, id, initialCompany, initialReport, onDocum
   }, [id, company, error, onDocumentState]);
   if (error) return <section id="company-page" className="page"><a className="back" href={pageHref("jobs", locale)}>{t("← Back to search")}</a><h1>{t(error.missing ? 'Page not found.' : 'Report unavailable.')}</h1>{!error.missing ? <p role="status">{notice(error.message)}</p> : null}{!error.missing ? <button className="button outline" onClick={() => setRetry(value => value + 1)}>{t("Try again")}</button> : null}</section>;
   if (!company) return <section id="company-page" className="page"><p role="status">{t("Opening the company report…")}</p></section>;
-  const history = company.hiringHistory || [];
-  const maximum = Math.max(1, ...history.map(point => point.count));
+  const companyReport = report?.companyId === id ? report : null;
+  const monitoringSince = companyReport?.monitoringSince;
   return <section id="company-page" className="page">
     <a className="back" href={pageHref("jobs", locale)}>{t("← Back to search")}</a>
     <div className="section-heading"><h1>{company.name}</h1><span className="eyebrow">{t("Hiring report")}</span></div>
     <div className="detail-actions report-subtitle"><CompanyMark company={company} /><FollowButton companyId={company.id} name={company.name} follows={follows} /></div>
     <FollowNotice follows={follows} />
     {company.description ? <p className="detail-description">{company.description}</p> : null}
-    <div className="report-facts">{company.monitoringSince ? <p>{t("Monitoring since")}{" "}<time dateTime={company.monitoringSince}>{reportDate(company.monitoringSince, locale)}</time></p> : null}<p>{coverageLabel(company.coverage?.state, locale)}</p></div>
-    <CompanyGlobe key={id} footprint={report?.companyId === id ? report.hiringFootprint : undefined} />
-    {history.length ? <section aria-label={t("Historical hiring")}><h2>{t("Hiring over time.")}</h2><p className="small-print">{t("Listing activity reported by the source data.")}</p><ol className="hiring-history">{history.map((point, index) => <li key={`${point.date}:${index}`}><span className="history-bar" style={{ height: `${Math.max(2, point.count / maximum * 100)}%` }} aria-hidden="true" /><b>{point.count.toLocaleString(locale)}</b><small>{reportDate(point.date, locale)}</small></li>)}</ol></section> : null}
-    {report?.companyId === id ? <CompanyReportSamples report={report} /> : null}
-    {report?.companyId === id && report.sourceChecks.items.some(item => item.publicLink) ? <section className="tracked-sources"><h2>{t("At the source.")}</h2>
-      <ul>{report.sourceChecks.items.map((item, index) => item.publicLink ? <li key={`${item.publicLink.url}:${index}`}>
+    <div className="report-facts">{monitoringSince ? <p>{t("Monitoring since")}{" "}<time dateTime={monitoringSince}>{reportDate(monitoringSince, locale)}</time></p> : null}<p>{coverageLabel(company.coverage?.state, locale)}</p></div>
+    <CompanyGlobe key={id} footprint={companyReport?.hiringFootprint} />
+    {companyReport?.hiringHistory ? <ListingHistory history={companyReport.hiringHistory} /> : null}
+    {companyReport ? <CompanyReportSamples report={companyReport} /> : null}
+    {companyReport?.sourceChecks.items.some(item => item.publicLink) ? <section className="tracked-sources"><h2>{t("At the source.")}</h2>
+      <ul>{companyReport.sourceChecks.items.map((item, index) => item.publicLink ? <li key={`${item.publicLink.url}:${index}`}>
         <a href={item.publicLink.url} target="_blank" rel="noopener noreferrer">{new URL(item.publicLink.url).hostname}{new URL(item.publicLink.url).pathname === '/' ? '' : new URL(item.publicLink.url).pathname} ↗</a>
         {item.lastVerifiedAt ? <p>{t("Last checked")}{" "}<time dateTime={item.lastVerifiedAt}>{reportDate(item.lastVerifiedAt, locale)}</time></p> : null}
       </li> : null)}</ul>

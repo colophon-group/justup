@@ -7,6 +7,7 @@ import type {
   Company,
   CompanyCataloguePage,
   CompanyHiringFootprint,
+  CompanyHiringHistory,
   CompanyReport,
   CompanyRequest,
   CompanyRequestPrefill,
@@ -205,11 +206,75 @@ export function decodeCompanyReport(value: unknown, expectedCompanyId: string): 
   const state = linked === 0 ? "unavailable" : linked === items.length ? "available" : "partial";
   if (checks.state !== state) fail("source check state");
   const samples = decodeCompanySamples(o, asOf);
-  return { companyId, asOf, sourceChecks: { state, items }, ...samples,
+  const history = decodeCompanyHistory(o, asOf, items);
+  const lastWeek = history.hiringHistory?.points.at(-1);
+  if (lastWeek && samples.provenance) {
+    const provenance = record(o.provenance, "company report provenance");
+    samples.provenance.history = decodeCompanyHistoryProvenance(provenance.history, lastWeek.end, asOf);
+  } else if (lastWeek) fail("company history provenance");
+  return { companyId, asOf, sourceChecks: { state, items }, ...samples, ...history,
     ...(o.hiringFootprint === undefined ? {} : {
       hiringFootprint: decodeHiringFootprint(o.hiringFootprint, samples.hiringRoles),
     }),
   };
+}
+function decodeCompanyHistoryProvenance(
+  value: unknown, weekEnd: string, reportAt: string,
+): NonNullable<NonNullable<CompanyReport["provenance"]>["history"]> {
+  const evidence = record(value, "company history provenance");
+  const source = "jobseek_public_coverage";
+  const sourceVersion = evidence.sourceVersion;
+  const snapshotId = text(evidence.snapshotId, "historical snapshot identity");
+  const sha256 = text(evidence.sha256, "historical snapshot hash");
+  const asOf = date(evidence.asOf), generatedAt = date(evidence.generatedAt), publishedAt = date(evidence.publishedAt);
+  const periodEnd = Date.parse(asOf), generated = Date.parse(generatedAt), published = Date.parse(publishedAt);
+  if (evidence.source !== source || (sourceVersion !== "jobseek-coverage-v1" && sourceVersion !== "jobseek-coverage-v2")
+    || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(snapshotId) || !/^[a-f0-9]{64}$/u.test(sha256)
+    || periodEnd !== Date.parse(weekEnd) || generated < periodEnd || generated - periodEnd > 86_400_000
+    || published < generated || published > Date.parse(reportAt)) return fail("company history provenance");
+  return { source, sourceVersion, snapshotId, sha256, asOf, generatedAt, publishedAt };
+}
+function decodeCompanyHistory(
+  report: Record<string, unknown>,
+  asOf: string,
+  sources: CompanyReport["sourceChecks"]["items"],
+): Pick<CompanyReport, "monitoringSince" | "hiringHistory"> {
+  if (report.hiringHistory === undefined && report.monitoringSince === undefined) return {};
+  const history = record(report.hiringHistory, "company listing history");
+  const scopeCount = count(history.scopeCount, "historical scope count");
+  const rawPoints: unknown[] = Array.isArray(history.points) ? history.points : fail("company listing history");
+  if (scopeCount !== sources.length) fail("company listing history");
+  if (scopeCount === 0) {
+    if (history.state !== "unavailable" || report.monitoringSince !== null || rawPoints.length !== 0)
+      fail("unavailable company listing history");
+    return { monitoringSince: null, hiringHistory: { state: "unavailable", scopeCount, points: [] } };
+  }
+  const monitoringSince = date(report.monitoringSince);
+  const earliestStart = Math.min(...sources.map(source => Date.parse(source.trackedSince)));
+  if (Date.parse(monitoringSince) !== earliestStart || rawPoints.length !== 2) fail("company tracking evidence");
+  const DAY = 86_400_000;
+  const reportAt = Date.parse(asOf);
+  const points = list<CompanyHiringHistory["points"][number]>(rawPoints, input => {
+    const point = record(input, "company listing history week");
+    const start = date(point.start), end = date(point.end);
+    const from = Date.parse(start), until = Date.parse(end);
+    const observedListings = count(point.observedListings, "historically observed listings");
+    const completeScopeCount = count(point.completeScopeCount, "complete historical scopes");
+    const verifiedScopes = sources.filter(source => Date.parse(source.trackedSince) <= from
+      && source.lastVerifiedAt !== null && Date.parse(source.lastVerifiedAt) >= until).length;
+    if (until - from !== 7 * DAY || until % DAY !== 0 || new Date(until).getUTCDay() !== 1
+      || until > reportAt || observedListings > 100_000 || completeScopeCount > verifiedScopes || point.scopeCount !== scopeCount)
+      fail("company listing history week");
+    const state = completeScopeCount === scopeCount ? "complete" : observedListings > 0 || completeScopeCount > 0 ? "partial" : "unknown";
+    const newListings = state === "complete" ? observedListings : null;
+    if (point.state !== state || point.newListings !== newListings) fail("company listing history completeness");
+    return { start, end, observedListings, completeScopeCount, scopeCount, state, newListings };
+  }, "company listing history");
+  const [previous, current] = points;
+  const state = points.every(point => point.state === "complete") ? "available" : "partial";
+  if (!previous || !current || Date.parse(previous.end) !== Date.parse(current.start) || history.state !== state)
+    fail("company listing history periods");
+  return { monitoringSince, hiringHistory: { state, scopeCount, points } };
 }
 // The store retains at most 1,000 jobs across imports (server/store.mjs),
 // independently of the historical source-check contract's 2,000 scopes.
@@ -324,23 +389,6 @@ export function decodeCompany(value: unknown): Company {
     // report sourceChecks contract may supply those; do not retain them in hydration data.
     ...(Array.isArray(o.evidenceUrls) ? { evidenceUrls: o.evidenceUrls.map(safePublicCompanyURL).filter((url): url is string => url !== null) } : {}),
     ...optionalText(o, "lastSuccessfulCheckAt"),
-    ...optionalText(o, "monitoringSince"),
-    ...(o.hiringHistory == null
-      ? {}
-      : {
-          hiringHistory: list(
-            o.hiringHistory,
-            (v) => {
-              const point = record(v, "historical observation");
-              return {
-                date: date(point.date),
-                count: count(point.count, "historical count"),
-              };
-            },
-            "hiring history",
-          ),
-        }),
-
   };
 }
 // Optional compiler hints cannot invalidate an otherwise usable warning.
