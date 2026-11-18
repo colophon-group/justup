@@ -33,6 +33,8 @@ Application artifacts declare database epoch 2. Current protected API/queue laun
 
 The feed's Python contracts also run the actual feed adapter and pinned Node SQLite importer against synthetic private batches, including partial catch-up and recovery after database commit. They substitute the local identity, Python interpreter and host configuration; they do not establish target-host confinement or real-source coverage.
 
+`verify-feed-arrival.py` joins a deployed browser observation with protected source receipts and the metadata for two committed SQLite imports. It verifies an offline evidence interval and never triggers a transfer. See [private feed arrival evidence](../docs/operations.md#verify-private-feed-arrival-evidence).
+
 Every accepted receipt read syncs the validated file and its parent directory before returning proof. A synchronization failure blocks acknowledgement on both publication and replay; a durable historical receipt remains replayable after a later build switch.
 
 
