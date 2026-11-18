@@ -182,6 +182,15 @@ export interface CompanyReport {
     importGeneration: string | null;
     sampleObservedFrom: string | null;
     sampleObservedThrough: string | null;
+    history?: {
+      source: "jobseek_public_coverage";
+      sourceVersion: "jobseek-coverage-v1" | "jobseek-coverage-v2";
+      snapshotId: string;
+      asOf: string;
+      generatedAt: string;
+      publishedAt: string;
+      sha256: string;
+    };
   };
   scope?: {
     kind: "eligible_public_listing_sample";

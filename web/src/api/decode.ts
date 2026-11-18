@@ -206,11 +206,33 @@ export function decodeCompanyReport(value: unknown, expectedCompanyId: string): 
   const state = linked === 0 ? "unavailable" : linked === items.length ? "available" : "partial";
   if (checks.state !== state) fail("source check state");
   const samples = decodeCompanySamples(o, asOf);
-  return { companyId, asOf, sourceChecks: { state, items }, ...samples, ...decodeCompanyHistory(o, asOf, items),
+  const history = decodeCompanyHistory(o, asOf, items);
+  const lastWeek = history.hiringHistory?.points.at(-1);
+  if (lastWeek && samples.provenance) {
+    const provenance = record(o.provenance, "company report provenance");
+    samples.provenance.history = decodeCompanyHistoryProvenance(provenance.history, lastWeek.end, asOf);
+  } else if (lastWeek) fail("company history provenance");
+  return { companyId, asOf, sourceChecks: { state, items }, ...samples, ...history,
     ...(o.hiringFootprint === undefined ? {} : {
       hiringFootprint: decodeHiringFootprint(o.hiringFootprint, samples.hiringRoles),
     }),
   };
+}
+function decodeCompanyHistoryProvenance(
+  value: unknown, weekEnd: string, reportAt: string,
+): NonNullable<NonNullable<CompanyReport["provenance"]>["history"]> {
+  const evidence = record(value, "company history provenance");
+  const source = "jobseek_public_coverage";
+  const sourceVersion = evidence.sourceVersion;
+  const snapshotId = text(evidence.snapshotId, "historical snapshot identity");
+  const sha256 = text(evidence.sha256, "historical snapshot hash");
+  const asOf = date(evidence.asOf), generatedAt = date(evidence.generatedAt), publishedAt = date(evidence.publishedAt);
+  const periodEnd = Date.parse(asOf), generated = Date.parse(generatedAt), published = Date.parse(publishedAt);
+  if (evidence.source !== source || (sourceVersion !== "jobseek-coverage-v1" && sourceVersion !== "jobseek-coverage-v2")
+    || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(snapshotId) || !/^[a-f0-9]{64}$/u.test(sha256)
+    || periodEnd !== Date.parse(weekEnd) || generated < periodEnd || generated - periodEnd > 86_400_000
+    || published < generated || published > Date.parse(reportAt)) return fail("company history provenance");
+  return { source, sourceVersion, snapshotId, sha256, asOf, generatedAt, publishedAt };
 }
 function decodeCompanyHistory(
   report: Record<string, unknown>,

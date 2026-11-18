@@ -44,9 +44,14 @@ test('valid producer scope counts remain supported through the 2000-scope contra
 
 function historicalReport() {
   const scopeCount = 2;
-  const base = report();
+  const base = currentReport();
   base.sourceChecks.items[1]!.lastVerifiedAt = '2026-10-19T00:00:00Z';
-  return { ...base, monitoringSince: '2026-10-01T00:00:00Z', hiringHistory: {
+  const history = {
+    source: 'jobseek_public_coverage', sourceVersion: 'jobseek-coverage-v2', snapshotId: 'frozen-covered-cohort',
+    asOf: '2026-10-26T00:00:00Z', generatedAt: '2026-10-26T01:00:00Z', publishedAt: '2026-10-26T02:00:00Z',
+    sha256: 'e'.repeat(64),
+  };
+  return { ...base, provenance: { ...base.provenance, history }, monitoringSince: '2026-10-01T00:00:00Z', hiringHistory: {
     state: 'partial', scopeCount,
     points: [
       { start: '2026-10-12T00:00:00Z', end: '2026-10-19T00:00:00Z', state: 'complete',
@@ -62,6 +67,7 @@ test('published history survives hydration and distinguishes complete zero from 
   const value = decodeCompanyReport(raw, 'company');
   assert.equal(value.monitoringSince, raw.monitoringSince);
   assert.deepEqual(value.hiringHistory, raw.hiringHistory);
+  assert.deepEqual(value.provenance?.history, raw.provenance.history);
   assert.deepEqual(decodeCompanyReport(value, 'company'), value);
   const absent = decodeCompanyReport({ companyId: 'company', asOf: raw.asOf,
     sourceChecks: { state: 'unavailable', items: [] }, monitoringSince: null,
@@ -79,12 +85,20 @@ test('historical weekly totals require a matching tracked cohort and full covera
     value => { value.hiringHistory.points[1]!.newListings = 0; },
     value => { value.hiringHistory.points[1]!.state = 'complete'; },
     value => { value.sourceChecks.items[1]!.lastVerifiedAt = null; },
+    value => { value.provenance.history.source = 'current_import'; },
+    value => { value.provenance.history.sourceVersion = 'unknown-producer'; },
+    value => { value.provenance.history.asOf = '2026-10-25T00:00:00Z'; },
+    value => { value.provenance.history.generatedAt = '2026-10-25T00:00:00Z'; },
+    value => { value.provenance.history.publishedAt = '2026-11-02T00:00:00Z'; },
+    value => { value.provenance.history.sha256 = 'not-frozen'; },
   ];
   for (const mutate of mutations) {
     const value = historicalReport();
     mutate(value);
     assert.throws(() => decodeCompanyReport(value, 'company'));
   }
+  const value = historicalReport();
+  assert.throws(() => decodeCompanyReport({ ...value, provenance: { ...value.provenance, history: undefined } }, 'company'));
 });
 
 const iso = (at: number) => new Date(at).toISOString();

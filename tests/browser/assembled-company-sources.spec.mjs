@@ -105,12 +105,23 @@ test('real approved source evidence appears in public HTML and client company na
   await expect(page.locator('.report-facts time')).toHaveCount(0);
 });
 
-test('published complete weeks show the tracking start and a true zero through the public report', async ({ page }) => {
+test('published complete weeks show the tracking start and a true zero through the public report in every locale', async ({ page }) => {
   const period = await publishSources({ completeCompany: true });
-  await page.goto(runtime.origin + '/companies/assembled');
   const monitoring = new Date(Date.parse(period) - 21 * 86_400_000).toISOString();
-  await expect(page.locator('.report-facts time')).toHaveAttribute('datetime', monitoring);
-  const history = page.getByRole('region', { name: 'Historical hiring' });
-  await expect(history.locator('li[data-coverage="complete"] b')).toHaveText(['0', '1']);
-  await expect(history.locator('.history-bar')).toHaveCount(1);
+  const hydrationErrors = [];
+  const recordHydrationError = message => {
+    if (/hydrat|Minified React error #(418|423|425)/iu.test(message)) hydrationErrors.push(message);
+  };
+  page.on('pageerror', error => recordHydrationError(error.message));
+  page.on('console', message => { if (message.type() === 'error') recordHydrationError(message.text()); });
+  for (const prefix of ['', '/de', '/fr', '/it', '/es']) {
+    await page.goto(runtime.origin + prefix + '/companies/assembled');
+    await expect(page.locator('.report-facts time')).toHaveAttribute('datetime', monitoring);
+    const history = page.locator('.hiring-history');
+    await expect(history.locator('li[data-coverage="complete"] b')).toHaveText(['0', '1']);
+    await expect(history.locator('.history-bar')).toHaveCount(1);
+    await page.locator('#header-sign-in').click();
+    await expect(page.locator('#sign-in-dialog')).toBeVisible();
+  }
+  expect(hydrationErrors).toEqual([]);
 });

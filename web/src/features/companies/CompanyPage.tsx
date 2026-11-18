@@ -23,10 +23,11 @@ function ListingHistory({ history }: { history: CompanyHiringHistory }) {
     <p className="small-print">{t("Newly observed listings on monitored career pages.")}</p>
     <ol className="hiring-history">{history.points.map(point => {
       const count = point.newListings;
+      const through = new Date(Date.parse(point.end) - day);
       return <li key={point.start} data-coverage={point.state}>
         {count ? <span className="history-bar" style={{ height: `${count / maximum * 100}%` }} aria-hidden="true" /> : null}
         <b>{count === null ? t("Incomplete coverage") : count.toLocaleString(locale)}</b>
-        <small>{date.formatRange(new Date(point.start), new Date(Date.parse(point.end) - day))}</small>
+        <small><time dateTime={point.start}>{date.format(new Date(point.start))}</time>{" – "}<time dateTime={through.toISOString()}>{date.format(through)}</time></small>
       </li>;
     })}</ol>
   </section>;
