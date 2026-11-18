@@ -3,7 +3,8 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { isKnownCountryCode } from '../../server/geonames-country-codes.mjs';
-import { decodeCompanyReport } from '../../web/src/api/decode.ts';
+import { DAY, digest } from '../../server/hiring-wire-facts.mjs';
+import { decodeCompanyReport, decodeHiringWire } from '../../web/src/api/decode.ts';
 
 function requireThat(condition, message) {
   if (!condition) throw new Error(message);
@@ -47,7 +48,28 @@ export function validateGateConfig(value) {
     && footprint.observedCompanyId !== footprint.unknownCompanyId && isKnownCountryCode(footprint.countryCode)
     && Number.isSafeInteger(footprint.listingCount) && footprint.listingCount > 0 && footprint.listingCount <= 1000,
   'Supply distinct reviewed observed and unknown hiring-footprint samples.');
+  const wire = scenario.hiringWire;
+  const periodEnd = Date.parse(wire?.periodEnd);
+  requireThat(exactKeys(wire, ['periodEnd', 'editionSha256']) && typeof wire.periodEnd === 'string'
+    && Number.isFinite(periodEnd) && new Date(periodEnd).toISOString() === wire.periodEnd
+    && periodEnd % DAY === 0 && new Date(periodEnd).getUTCDay() === 1 && hash(wire.editionSha256),
+  'Supply the reviewed Hiring Wire Monday UTC period and public edition hash.');
   return value;
+}
+
+export async function verifyPublishedWire(expected, read, clock = Date.now) {
+  const current = (await read('/api/v1/hiring-wire')).json;
+  const { edition, state } = decodeHiringWire(current);
+  requireThat(state === 'published' && edition.period.end === expected.periodEnd
+    && Date.parse(edition.publishedAt) <= Date.parse(edition.period.end) + 2 * DAY
+    && digest(edition) === expected.editionSha256 && digest(current) === digest({ state, edition }),
+  'The current public Hiring Wire edition differs from the reviewed publication.');
+  const retained = (await read(`/api/v1/hiring-wire/editions/${edition.id}`)).json;
+  requireThat(digest(retained) === digest(current), 'The period-addressed Hiring Wire edition differs from the current edition.');
+  const at = clock();
+  requireThat(Date.parse(edition.publishedAt) <= at && at < Date.parse(edition.expiresAt),
+    'The reviewed Hiring Wire edition is no longer current at the end of verification.');
+  return edition;
 }
 // The declared map is release evidence, not a way to approve notices or configure the API.
 function validatePolicyEvidence(policies, candidateOrigin) {
@@ -205,7 +227,8 @@ export async function preflight(config, get, now = Date.now) {
       && s.authentication?.method === 'username_password' && s.authentication.loginEnabled === true
       && s.authentication.registrationEnabled === true && freshCoverage(s.coverage, clock())
       && s.capabilities?.search === true && s.capabilities.companyRequests === true && s.capabilities.sse === true
-      && s.capabilities.follows === true && s.capabilities.viewed === true && s.capabilities.preferences === true,
+      && s.capabilities.follows === true && s.capabilities.viewed === true && s.capabilities.preferences === true
+      && s.capabilities.hiringWire === true,
     'Preview authentication, capabilities or coverage are not ready for an admitted locale.');
     requireThat(s.capabilities.billing === (config.billingMode === 'stripe_test'),
       'Preview billing capability differs from the reviewed mode.');
@@ -221,6 +244,7 @@ export async function preflight(config, get, now = Date.now) {
     }
   }
   await verifyHiringFootprints(config, read, clock);
+  const wireEdition = await verifyPublishedWire(config.scenario.hiringWire, read, clock);
   const privateResponse = await read('/api/v1/searches', 401);
   requireThat(privateResponse.json?.error?.code === 'unauthenticated', 'Signed-out private access was not denied.');
   const publicFeed = (await read('/api/v1/jobs?limit=12')).json;
@@ -235,6 +259,7 @@ export async function preflight(config, get, now = Date.now) {
   const exact = Array.isArray(companies) ? companies.filter(company => company.name?.normalize('NFKC').trim().toLowerCase() === config.scenario.companyName.normalize('NFKC').trim().toLowerCase()) : [];
   requireThat(exact.length === 1 && exact[0].id === config.scenario.companyId
     && exact[0].coverage?.state === 'imported_snapshot', 'The selected company is not an unambiguous imported identity.');
+  return { wireEdition };
 }
 
 export function verifyDisposableAccountAccess(config, session, billingResponse) {

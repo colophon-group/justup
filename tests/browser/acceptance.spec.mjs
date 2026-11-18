@@ -1,9 +1,10 @@
 // Explicit real-service journey. Employer navigation stops at the reviewed destination.
 import { test, expect } from '@playwright/test';
-import { loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, GATE_LOCALES, disposableAccount, ownSession, cleanupCandidateAccount } from './release-gate.mjs';
+import { loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, verifyPublishedWire, GATE_LOCALES, disposableAccount, ownSession, cleanupCandidateAccount } from './release-gate.mjs';
 import { verifyPublicFootprint } from './release-footprint.mjs';
 import { accountStreamUrl, openReleaseStream, verifyReleaseStreamReconnect } from './release-live-results.mjs';
 import { exerciseReleaseReadingState, saveReleaseInterfaceLanguage, verifyReleaseReadingState } from './release-reading-preferences.mjs';
+import { verifyWireStrip } from './release-wire.mjs';
 
 for (const locale of GATE_LOCALES) {
   test(`${locale} fixed deployed candidate completes its disposable-account search and request journey`, async ({ browser }) => {
@@ -56,8 +57,17 @@ for (const locale of GATE_LOCALES) {
       expect(ownSession(await session(), account)).toBe(true);
     };
     try {
-      await preflight(config, read);
+      const { wireEdition } = await preflight(config, read);
       if (locale === 'en') {
+        stage = 'public Hiring Wire';
+        try { await verifyWireStrip(page, config.origin, wireEdition, { reducedMotion: false }); }
+        finally { await page.emulateMedia({ reducedMotion: 'reduce' }); }
+        const mobile = await browser.newContext({
+          baseURL: config.origin, viewport: { width: 390, height: 844 }, deviceScaleFactor: 2,
+          isMobile: true, hasTouch: true, locale, reducedMotion: 'reduce',
+        });
+        try { await verifyWireStrip(await mobile.newPage(), config.origin, wireEdition, { reducedMotion: true }); }
+        finally { await mobile.close(); }
         stage = 'public hiring footprint';
         await verifyPublicFootprint(browser, page, config);
       }
@@ -186,6 +196,11 @@ for (const locale of GATE_LOCALES) {
       account.deleted = true;
       stage = 'final fixed identity';
       await admission();
+      await verifyPublishedWire(config.scenario.hiringWire, async path => {
+        const result = await read(path);
+        expect(result.status).toBe(200);
+        return result;
+      });
     } catch {
       // Playwright call logs can contain fill values; emit only this fixed stage label.
       failedStage = stage;
