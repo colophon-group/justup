@@ -157,8 +157,10 @@ export async function resolveCompanyIdentity(task,{executeStage,fetchPage=fetchC
   const name=identity(candidate.name),requested=identity(input.input),visible=excerpts.map(page=>page.text).join(' '),markers=excerpts.map(page=>page.identityText).join(' ');
   const related=websiteHint!==null||name===requested||containsIdentity(name,requested)||containsIdentity(requested,name);
   if(name.length<2||!related||!containsIdentity(visible,candidate.name)||!containsIdentity(markers,candidate.name))throw problem('invalid_output');
-  const provenance=pages.filter(page=>candidate.evidenceUrls.includes(page.url)||candidate.evidenceUrls.includes(page.finalUrl)).map(page=>({url:candidate.evidenceUrls.includes(page.url)?page.url:page.finalUrl,finalUrl:page.finalUrl,status:200,bytes:page.bytes,sha256:page.sha256}));
-  if(!provenance.length||candidate.evidenceUrls.some(url=>!provenance.some(proof=>proof.url===url)))throw problem('invalid_output');
+  const provenance=candidate.evidenceUrls.map(url=>{
+    const page=pages.find(value=>url===value.url||url===value.finalUrl);
+    return {url,finalUrl:page.finalUrl,status:200,bytes:page.bytes,sha256:page.sha256};
+  });
   return finish(result,provenance);
 }
 

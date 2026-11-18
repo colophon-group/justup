@@ -135,7 +135,7 @@ test('company requests retain protected provenance across the exact www alias',a
         fetchPage:async url=>{assert.equal(url,original);return {url,finalUrl:final,status:200,text,bytes:Buffer.byteLength(text),sha256:hash};},
         executeStage:async()=>{
           const {data}=candidate();
-          data.candidate={name:'New Company',domain:host,websiteUrl:final,evidenceUrls:[original]};
+          data.candidate={name:'New Company',domain:host,websiteUrl:final,evidenceUrls:[original,final]};
           return {data,usage:{inputTokens:100,cachedInputTokens:0,outputTokens:50,reasoningOutputTokens:0},toolCalls:0};
         }
       }).then(({data,evidenceVerified,evidenceProvenance})=>({data,evidenceVerified,evidenceProvenance}));
@@ -147,7 +147,9 @@ test('company requests retain protected provenance across the exact www alias',a
     assert.equal(request.candidate.domain,host);
     assert.equal(request.candidate.websiteUrl,final);
     const saved=f.db.prepare('SELECT provenance_json FROM justup_company_evidence').get();
-    assert.deepEqual(JSON.parse(saved.provenance_json),[{url:original,finalUrl:final,status:200,bytes:Buffer.byteLength(text),sha256:hash}]);
+    assert.deepEqual(JSON.parse(saved.provenance_json),[original,final].map(url=>({
+      url,finalUrl:final,status:200,bytes:Buffer.byteLength(text),sha256:hash
+    })));
     assert.equal(Object.hasOwn(request,'provenance'),false);
   }
 });

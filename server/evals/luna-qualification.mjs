@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
+import { sameOfficialHost } from '../companies.mjs';
 import { compileIntent,intentCapabilities,intentModelInput } from '../intent.mjs';
 import { validateModelData } from '../model-runner.mjs';
 
@@ -118,7 +119,9 @@ function scoreCompany(value,entry){
       guessedAmbiguous:data?.status==='candidate',unverifiedCandidate:data?.status==='candidate'&&!evidenceVerified,
       normalization:manualReviewPending?'manual_required':'incorrect',feedback:[]};
   }
-  const correct=data?.status==='candidate'&&evidenceVerified&&data?.candidate?.domain===entry.expectedDomain;
+  const observedDomain=data?.candidate?.domain;
+  const correct=data?.status==='candidate'&&evidenceVerified&&typeof observedDomain==='string'
+    &&sameOfficialHost(observedDomain,entry.expectedDomain);
   return {correct,guessedAmbiguous:false,unverifiedCandidate:data?.status==='candidate'&&!evidenceVerified,normalization:correct?'candidate':'incorrect',feedback:[]};
 }
 const percentile95=values=>values.length?[...values].sort((a,b)=>a-b)[Math.ceil(values.length*0.95)-1]:null;
