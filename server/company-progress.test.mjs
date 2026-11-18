@@ -17,8 +17,8 @@ import {companySetupCommand} from '../scripts/company-requests/setup.mjs';
 import {createHandler} from './http.mjs';
 
 const AT=Date.parse('2026-11-01T12:00:00Z');
-function fixture(t,{path=':memory:',at=AT}={}) {
-  const store=openStore(path);let clock=at;const db=store.db;t.after(()=>{if(db.isOpen)store.close();});
+function fixture(t,{path=':memory:',at=AT,sharedState=false}={}) {
+  const store=openStore(path,{sharedState});let clock=at;const db=store.db;t.after(()=>{if(db.isOpen)store.close();});
   db.exec("CREATE TABLE auth_accounts(id TEXT PRIMARY KEY,account_expires_at INTEGER) STRICT; INSERT INTO auth_accounts VALUES('alice',NULL),('bob',NULL);");
   const entitlements=createEntitlements({db,now:()=>clock}),access=createAccessReader({db,now:()=>clock});
   let policy=true;
@@ -224,6 +224,26 @@ test('operator CLI reads bounded private handoff and CAS progress only from prot
   chmodSync(directory,0o755);assert.throws(pending);chmodSync(directory,0o700);
   writeFileSync(generation+'.pending','foreign deletion marker',{mode:0o600});assert.throws(pending);rmSync(generation+'.pending');
   assert.equal(f.db.prepare('PRAGMA user_version').get().user_version,2);
+});
+
+test('operator CLI admits the shared generation with read-only permissions for the state group', async t => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'company-setup-shared-')));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'application.sqlite'), generation = join(directory, 'private-generation');
+  chmodSync(directory, 0o2770);
+  const priorMask = process.umask(0o007);
+  try {
+    writeFileSync(generation, '11111111-1111-4111-8111-111111111111\n', { mode: 0o640 });
+    const f = fixture(t, { path, sharedState: true });
+    f.paid('alice'); await f.priority();
+    const env = { JUSTUP_DB_PATH: path, JUSTUP_SHARED_STATE: 'true' };
+    const pending = () => companySetupCommand({ env, args: ['pending'], now: () => AT });
+    assert.equal(pending().items.length, 1);
+    const args = ['update', '--company', f.id, '--revision', '1', '--state', 'in_progress', '--reason', 'source_validation_pending'];
+    assert.equal(companySetupCommand({ env, args, now: () => AT }).revision, 2);
+    chmodSync(generation, 0o660); assert.throws(pending);
+    chmodSync(generation, 0o600); assert.equal(pending().items[0].state, 'in_progress');
+  } finally { process.umask(priorMask); }
 });
 
 for(const grant of ['standard','legacy','paid'])test(`known-company priority HTTP admits active ${grant} access and enforces session, Origin, CSRF and exact locale policy`,async t=>{

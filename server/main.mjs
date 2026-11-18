@@ -1,11 +1,11 @@
 // Compose the Justup API. Direct execution requires explicit isolated storage
 // and build configuration; import createApplication to add reviewed feature services.
 import { createServer } from 'node:http';
-import { mkdirSync, chmodSync, readFileSync, readSync, statSync, lstatSync, readdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, unlinkSync, accessSync, fstatSync, realpathSync, constants } from 'node:fs';
+import { mkdirSync, chmodSync, fchmodSync, fchownSync, readFileSync, readSync, statSync, lstatSync, readdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, unlinkSync, accessSync, fstatSync, realpathSync, constants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, resolve, isAbsolute, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { openStore } from './store.mjs';
+import { openStore, transaction } from './store.mjs';
 import { SCHEMA_VERSION, migrateDatabaseFile } from './schema.mjs';
 import { createFeed } from './feed.mjs';
 import { createTasks } from './tasks.mjs';
@@ -18,7 +18,7 @@ import { createStripeBillingApi,stripeBillingFromEnv } from './stripe-billing.mj
 
 // Hold a durable pending marker across the SQL transaction. Backup/restore must
 // reject any pending marker, including one retained after a process crash.
-export function createDeletionBarrier({ generationPath, backupDir, dbPath, db } = {}) {
+export function createDeletionBarrier({ generationPath, backupDir, dbPath, db, sharedState = false } = {}) {
   if (!generationPath && !backupDir && (dbPath == null || dbPath === ':memory:')) return {
     ready: () => true, beforePrivateDelete: () => {}, afterPrivateTransaction: () => {},
   };
@@ -37,18 +37,41 @@ export function createDeletionBarrier({ generationPath, backupDir, dbPath, db } 
         || info.dev !== ownedMarker.dev || info.ino !== ownedMarker.ino
         || readFileSync(pendingPath, 'utf8') !== ownedMarker.value) throw new Error('Private deletion marker ownership changed.');
   }
-  function validate() {
+  function sharedGroup() {
+    const directory = dirname(resolve(generationPath));
+    if (directory !== dirname(resolve(dbPath))) throw new Error('Shared private deletion storage is unavailable.');
+    const info = lstatSync(directory);
+    if (!info.isDirectory() || (info.mode & 0o7777) !== 0o2770
+        || !process.getgroups().includes(info.gid)) throw new Error('Shared private deletion storage is unavailable.');
+    return info.gid;
+  }
+  function validateGeneration(upgradeLegacy) {
+    const fd = openSync(generationPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const info = fstatSync(fd);
+      if (info.size > 64 || !info.isFile() || info.nlink !== 1) throw new Error('Private deletion generation is unavailable.');
+      const bytes = Buffer.alloc(65), size = readSync(fd, bytes, 0, bytes.length, 0);
+      if (size !== info.size || !/^[a-f0-9-]{36}\n?$/.test(bytes.toString('utf8', 0, size))) throw new Error('Private deletion generation is unavailable.');
+      if (!sharedState) return;
+      const group = sharedGroup(), mode = info.mode & 0o7777;
+      if (info.uid === process.geteuid() && mode === 0o640 && info.gid === group) return;
+      if (!upgradeLegacy || info.uid !== process.geteuid() || mode !== 0o600
+          || (info.gid !== process.getegid() && info.gid !== group)) throw new Error('Shared private deletion generation is unavailable.');
+      if (info.gid !== group) fchownSync(fd, -1, group);
+      fchmodSync(fd, 0o640);
+      fsyncSync(fd);
+    } finally { closeSync(fd); }
+  }
+  function validate(upgradeLegacy = false) {
     if (!configured || inside(backupDir, generationPath) || (dbPath && dbPath !== ':memory:' && inside(backupDir, dbPath))) throw new Error('Private deletion storage is unavailable.');
     for (const directory of [dirname(generationPath), backupDir]) {
       const info = lstatSync(directory);
       if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Private deletion storage is unavailable.');
       accessSync(directory, constants.W_OK);
     }
-    const info = lstatSync(generationPath);
-    if (info.size > 64 || !info.isFile() || info.isSymbolicLink()
-        || !/^[a-f0-9-]{36}\n?$/.test(readFileSync(generationPath, 'utf8'))) throw new Error('Private deletion generation is unavailable.');
     const files = readdirSync(backupDir).map((name) => resolve(backupDir, name));
     if (files.some((file) => !lstatSync(file).isFile() || lstatSync(file).isSymbolicLink())) throw new Error('Private backup storage is unavailable.');
+    validateGeneration(upgradeLegacy);
     return files;
   }
   function syncDirectory(path) { const fd = openSync(path, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); } }
@@ -67,7 +90,12 @@ export function createDeletionBarrier({ generationPath, backupDir, dbPath, db } 
     const temporary = `${generationPath}.${randomUUID()}.tmp`; let fd;
     try {
       fd = openSync(temporary, 'wx', 0o600);
-      writeFileSync(fd, `${randomUUID()}\n`); fsyncSync(fd); closeSync(fd); fd = undefined;
+      writeFileSync(fd, `${randomUUID()}\n`);
+      if (sharedState) {
+        if (fstatSync(fd).gid !== sharedGroup()) throw new Error('Shared private deletion generation is unavailable.');
+        fchmodSync(fd, 0o640);
+      }
+      fsyncSync(fd); closeSync(fd); fd = undefined;
       renameSync(temporary, generationPath); syncDirectory(dirname(generationPath));
       for (const file of files) unlinkSync(file);
       syncDirectory(backupDir);
@@ -81,6 +109,13 @@ export function createDeletionBarrier({ generationPath, backupDir, dbPath, db } 
     if (db?.isTransaction !== false) throw new Error('Private SQL transaction has not ended.');
     markerIsOwned(); unlinkSync(pendingPath); syncDirectory(dirname(generationPath)); ownedMarker = null;
   }
+  if (sharedState && configured) {
+    // Older installs used an API-private generation. Give the existing state
+    // group read access at startup without rotating it or touching backups.
+    try {
+      transaction(db, () => { absentPending(); validate(true); });
+    } catch { /* Readiness keeps unsafe storage closed. */ }
+  }
   return { ready: () => { try { validate(); absentPending(); return !ownedMarker; } catch { return false; } },
     beforePrivateDelete, afterPrivateTransaction };
 }
@@ -93,7 +128,8 @@ export async function createApplication({ config = {}, now = Date.now, serviceFa
   try {
     const feed = createFeed({ db: store.db, now, cursorSecret: config.cursorSecret, verificationTtlMs: config.verificationTtlMs });
     const tasks = createTasks({ db: store.db, now });
-    const deletion = createDeletionBarrier({ generationPath: config.privateGenerationPath, backupDir: config.backupDir, dbPath: path, db: store.db });
+    const deletion = createDeletionBarrier({ generationPath: config.privateGenerationPath, backupDir: config.backupDir,
+      dbPath: path, db: store.db, sharedState: config.sharedState === true });
     const withPrivateTransaction = (work) => { try { return store.transaction(work); } finally { deletion.afterPrivateTransaction(); } };
     let auth,maintenanceReady=false;
     const accessForAccount=id=>auth?.accessForAccount?.(id)??null;

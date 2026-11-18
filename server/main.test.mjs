@@ -126,6 +126,7 @@ test('real concurrent SQLite backup is rejected throughout pending deletion and 
   });
   assert.equal(application.store.db.isTransaction, false); assert.equal(existsSync(generationPath + '.pending'), false);
   assert.equal(application.store.db.prepare('SELECT count(*) AS n FROM private_records').get().n, 0);
+  assert.equal(statSync(generationPath).mode & 0o777, 0o600);
   assert.notEqual(readFileSync(generationPath, 'utf8'), old); // A pre-deletion backup cannot restore under the live generation.
   const copy = new DatabaseSync(snapshot, { readOnly: true });
   assert.equal(copy.prepare('SELECT count(*) AS n FROM private_records').get().n, 1); copy.close();
@@ -168,6 +169,54 @@ test('shared API/queue storage keeps DB, WAL and SHM group-private and rejects u
     } finally { await application.close(); }
     process.umask(0o077); assert.throws(() => openStore(path, { sharedState: true }), /umask/);
     process.umask(0o007); chmodSync(dir, 0o0770); assert.throws(() => openStore(path, { sharedState: true }), /02770/);
+  } finally { process.umask(oldMask); }
+});
+
+test('shared startup and private deletion keep the current generation readable by the queue group', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'justup-shared-generation-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dbPath = join(dir, 'application.sqlite'), generationPath = join(dir, 'private-generation');
+  const backupDir = join(dir, 'backups'), pending = `${generationPath}.pending`;
+  const backup = join(backupDir, 'isolated-snapshot.sqlite');
+  const original = '00000000-0000-4000-8000-000000000000\n';
+  chmodSync(dir, 0o2770);
+  mkdirSync(backupDir, { mode: 0o700 });
+  writeFileSync(generationPath, original, { mode: 0o600 });
+  const originalInode = statSync(generationPath).ino;
+  writeFileSync(backup, 'synthetic snapshot', { mode: 0o600 });
+  const config = { dbPath, sharedState: true, allowedOrigin: 'https://preview.example', privateGenerationPath: generationPath, backupDir };
+  const oldMask = process.umask(0o007);
+  try {
+    writeFileSync(pending, 'crash-retained marker', { mode: 0o600 });
+    const blocked = await createApplication({ config, authFactory: () => ({}) });
+    try {
+      assert.equal(statSync(generationPath).mode & 0o777, 0o600);
+      assert.equal(readFileSync(pending, 'utf8'), 'crash-retained marker');
+      assert.throws(() => blocked.withPrivateTransaction(() => blocked.beforePrivateDelete()), /pending|generation/);
+    } finally { await blocked.close(); }
+    unlinkSync(pending);
+
+    const app = await createApplication({ config, authFactory: () => ({}) });
+    try {
+      const assertQueueAccess = () => {
+        const info = statSync(generationPath);
+        assert.equal(info.gid, statSync(dir).gid);
+        assert.equal(info.mode & 0o777, 0o640);
+      };
+      assertQueueAccess();
+      assert.equal(readFileSync(generationPath, 'utf8'), original);
+      assert.equal(statSync(generationPath).ino, originalInode);
+      assert.equal(readFileSync(backup, 'utf8'), 'synthetic snapshot');
+      app.withPrivateTransaction(() => {
+        app.beforePrivateDelete();
+        assertQueueAccess();
+        assert.equal(statSync(pending).mode & 0o777, 0o600);
+      });
+      assertQueueAccess();
+      assert.notEqual(readFileSync(generationPath, 'utf8'), original);
+      assert.equal(existsSync(pending), false);
+      assert.equal(existsSync(backup), false);
+    } finally { await app.close(); }
   } finally { process.umask(oldMask); }
 });
 
