@@ -175,7 +175,7 @@ export async function fetchCompanyEvidence(url,{signal,resolveAddresses=addresse
     const found=await abortable(resolveAddresses(current.hostname),combined);
     if(!Array.isArray(found)||!found.length||found.length>32||found.some(ip=>!publicIpv4(ip)))throw problem('invalid_output');
     const response=await new Promise((resolveResponse,reject)=>{
-      const req=request(current,{method:'GET',agent:false,servername:current.hostname,rejectUnauthorized:true,signal:combined,
+      const req=request(current,{method:'GET',agent:false,family:4,servername:current.hostname,rejectUnauthorized:true,signal:combined,
         lookup:(_hostname,_options,callback)=>callback(null,found[0],4),headers:{'user-agent':'JustupEvidence/1','accept':'text/html,application/xhtml+xml,text/plain'}},res=>{
         const status=res.statusCode;
         if([301,302,303,307,308].includes(status)){res.resume();resolveResponse({status,location:res.headers.location});return;}

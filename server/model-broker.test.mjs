@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync,mkdirSync,writeFileSync,readFileSync,readdirSync,realpathSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { request as coreHttpsRequest } from 'node:https';
 import { createConnection } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
@@ -92,6 +93,22 @@ function fakeHttps(responses,onOptions=()=>{}){return (url,options,callback)=>{o
 test('HTTPS evidence pins the checked public address and retains TLS hostname verification',async()=>{
   let observed;const page=await fetchCompanyEvidence('https://acme.com/about',{resolveAddresses:async()=>['8.8.8.8'],request:fakeHttps([{body:'<h1>Acme</h1>'}],(url,options)=>{observed={url,options};})});
   assert.equal(page.status,200);assert.equal(page.bytes,13);assert.equal(page.sha256.length,64);assert.equal(observed.options.servername,'acme.com');assert.equal(observed.options.rejectUnauthorized,true);assert.equal(observed.options.agent,false);observed.options.lookup('acme.com',{},(error,ip,family)=>{assert.equal(error,null);assert.equal(ip,'8.8.8.8');assert.equal(family,4);});
+});
+test('the pinned scalar lookup matches the actual Node HTTPS lookup mode',async()=>{
+  let observed;
+  await assert.rejects(()=>fetchCompanyEvidence('https://acme.com/',{
+    resolveAddresses:async()=>['8.8.8.8'],
+    request:(url,options,onResponse)=>coreHttpsRequest(url,{
+      ...options,
+      lookup(host,lookupOptions,callback){
+        options.lookup(host,lookupOptions,(error,address,family)=>{
+          observed={host,requestedFamily:lookupOptions.family,all:lookupOptions.all===true,error,address,family};
+          callback(new Error('Synthetic test stops before connecting.'));
+        });
+      }
+    },onResponse)
+  }),{code:'provider_unavailable'});
+  assert.deepEqual(observed,{host:'acme.com',requestedFamily:4,all:false,error:null,address:'8.8.8.8',family:4});
 });
 test('an exact www alias revalidates DNS and TLS on every HTTPS hop',async()=>{
   for(const [initial,alias] of [['acme.com','www.acme.com'],['www.acme.com','acme.com']]){
