@@ -397,7 +397,7 @@ Retain these inputs for one [deployed scheduled arrival](frontend-delivery.md#ob
 Run in the protected location where these inputs are already approved to coexist. Keep copies private and owned by the verifier's operator identity. Use the reviewed Justup checkout and pinned Node runtime.
 
 ```sh
-python3 scripts/verify-feed-arrival.py \
+python3 -I -B scripts/verify-feed-arrival.py \
   --browser /private/evidence/browser.json \
   --producer /private/evidence/jobseek \
   --receipts /private/evidence/justup-receipts \

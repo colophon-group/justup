@@ -832,6 +832,29 @@ def _feed_selection(rows, cutoff, max_jobs):
     return set(chosen)
 
 
+def validated_feed_rows(manifest, rows, cutoff):
+    last = _feed_cursor(manifest["fromCursor"]) if manifest["fromCursor"] else None
+    row_count, seen_ids = 0, set()
+    for row in rows:
+        first, updated = _feed_row(row, cutoff)
+        if row["id"] in seen_ids:
+            raise ImportFailure("Feed batch repeats a posting identity.")
+        seen_ids.add(row["id"])
+        position = (updated, row["id"])
+        if last is not None and position <= last:
+            raise ImportFailure("Feed rows are not strictly ordered after the cursor.")
+        last = position
+        row_count += 1
+        yield row, first
+    if row_count != manifest["rows"]:
+        raise ImportFailure("Feed row count changed during import.")
+    end = _feed_cursor(manifest["toCursor"])
+    if manifest["complete"] and end != (cutoff, "00000000-0000-0000-0000-000000000000"):
+        raise ImportFailure("Complete feed batch did not reach its cutoff.")
+    if not manifest["complete"] and (row_count == 0 or last is None or last != end):
+        raise ImportFailure("Partial feed batch cursor differs from its final row.")
+
+
 def import_feed_bundle(manifest_path, *, previous=None, max_jobs=500, now=None):
     if type(max_jobs) is not int or not 1 <= max_jobs <= MAX_JOBS:
         raise ImportFailure("The import limit must be between 1 and 1000.")
@@ -867,31 +890,13 @@ def import_feed_bundle(manifest_path, *, previous=None, max_jobs=500, now=None):
     # An expired pending batch must still be acknowledged before the producer
     # can issue a reconciliation. Keep source times unchanged: the app applies
     # its freshness limit to full_at, regardless of this import's arrival time.
-    since = _feed_cursor(manifest["fromCursor"]) if manifest["fromCursor"] else None
-    last = since
-    descriptions, row_count, seen_ids = [], 0, set()
-    for row in rows:
-        first, updated = _feed_row(row, cutoff)
-        if row["id"] in seen_ids:
-            raise ImportFailure("Feed batch repeats a posting identity.")
-        seen_ids.add(row["id"])
-        position = (updated, row["id"])
-        if last is not None and position <= last:
-            raise ImportFailure("Feed rows are not strictly ordered after the cursor.")
-        last = position
-        row_count += 1
+    descriptions = []
+    for row, first in validated_feed_rows(manifest, rows, cutoff):
         if row["active"] and not row["reserved"] and row["hasContent"] and cutoff - timedelta(days=14) <= first <= cutoff:
             descriptions.append(({
                 "id": row["id"], "companyId": row["companyId"], "title": row["title"],
                 "locationTypes": row["locationTypes"], "locales": row["locales"],
             }, first))
-    if row_count != manifest["rows"]:
-        raise ImportFailure("Feed row count changed during import.")
-    end = _feed_cursor(manifest["toCursor"])
-    if manifest["complete"] and end != (cutoff, "00000000-0000-0000-0000-000000000000"):
-        raise ImportFailure("Complete feed batch did not reach its cutoff.")
-    if not manifest["complete"] and (row_count == 0 or last is None or last != end):
-        raise ImportFailure("Partial feed batch cursor differs from its final row.")
     selected = _feed_selection(descriptions, cutoff, max_jobs) if manifest["kind"] == "snapshot" else {item[0]["id"] for item in descriptions}
     jobs = {} if manifest["kind"] == "snapshot" else {
         item["id"]: item for item in prior.get("jobs", [])

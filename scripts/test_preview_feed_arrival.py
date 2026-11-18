@@ -136,6 +136,24 @@ try {
         with self.assertRaisesRegex(PROOF.source.ImportFailure, "cursor chain"):
             self.run_proof()
 
+    def test_a_partial_cursor_must_describe_the_last_hashed_row(self):
+        batch = f"batch-{'2' * 32}"
+        manifest_path = self.producer / batch / "manifest.json"
+        manifest = self.restore(manifest_path)
+        manifest["toCursor"]["updatedAt"] = "2026-10-31T16:00:22.000Z"
+        digest = retain(manifest_path, manifest)
+        for name in (f"{batch}.json", f"{batch}-candidate.json"):
+            path = self.receipts / name
+            value = self.restore(path)
+            value["manifestSha256"] = digest
+            retain(path, value)
+        state_path = self.producer / "state.json"
+        state = self.restore(state_path)
+        state["accepted"][1]["sha256"] = digest
+        retain(state_path, state)
+        with self.assertRaisesRegex(PROOF.source.ImportFailure, "Partial feed batch cursor differs from its final row"):
+            self.run_proof()
+
     def test_checks_every_part_against_the_accepted_manifest(self):
         path = self.producer / f"batch-{'2' * 32}" / "part-0001.json"
         part = self.restore(path)

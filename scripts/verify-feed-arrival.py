@@ -22,7 +22,6 @@ source = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(source)
 SHA = re.compile(r"[a-f0-9]{64}")
 BATCH = re.compile(r"batch-[a-f0-9]{32}/manifest\.json")
-ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 EPOCH = datetime.fromtimestamp(0, timezone.utc)
 BROWSER_FIELDS = {
     "baselineGeneration", "baselineAsOf", "arrivalGeneration", "firstObserved",
@@ -200,10 +199,7 @@ def verify(browser, producer, receipts, database, candidate):
             and (manifest["fromCursor"] == previous["toCursor"] if manifest["kind"] == "changes"
                  else previous["complete"] and manifest["fromCursor"] is None))),
                 "The accepted source history changes scope or breaks the cursor chain.")
-        end = source._feed_cursor(manifest["toCursor"])
-        require((manifest["complete"] and end == (cutoff, ZERO_UUID))
-                or (not manifest["complete"] and manifest["kind"] == "changes" and end[0] < cutoff),
-                "Source completion and cursor cutoff disagree.")
+        require(manifest["complete"] or manifest["kind"] == "changes", "A full source snapshot cannot be partial.")
         if manifest["kind"] == "snapshot":
             full_at = cutoff
             justified_by = supplied_at = None
@@ -220,13 +216,9 @@ def verify(browser, producer, receipts, database, candidate):
                     and (imported != 0 or cutoff <= baseline_time < full_at + timedelta(days=1)),
                     "A committed generation differs from the accepted complete source selection.")
             imported += 1
-        found = False
-        for row in rows:
+        for row, first in source.validated_feed_rows(manifest, rows, cutoff):
             if row.get("id") != target_id:
                 continue
-            require(not found, "The source batch repeats the arrived posting.")
-            found = True
-            first, _ = source._feed_row(row, cutoff)
             require(previous is not None, "The arrived posting already appears in the baseline source batch.")
             if (row["active"] and not row["reserved"] and row["hasContent"] and row["companyId"] == target_company
                     and row["sourceUrl"] == target_url and source.iso(first) == target_first
