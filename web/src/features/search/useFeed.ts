@@ -72,6 +72,7 @@ export function useFeed(
   const load = useCallback(
     async (cursor: string | null, replace = false, metadataOnly = false) => {
       if (!search || !key || inFlight.current) return;
+      if (!cursor && !metadataOnly) seenCursors.current.clear();
       let recoverCursor = false;
       const epoch = generation.current,
         request = new AbortController();
@@ -166,7 +167,7 @@ export function useFeed(
       } catch (error) {
         if (epoch === generation.current && !isAbortError(error)) hiddenChecks.current = 30;
         if (epoch === generation.current && cursor && error instanceof ApiError && error.code === 'stale_cursor') {
-          seenCursors.current.clear(); recoverCursor = true; return;
+          recoverCursor = true; return;
         }
         if (isAbortError(error) && epoch === generation.current && !request.signal.aborted) interrupted.current = { cursor, replace, metadataOnly };
         if (epoch === generation.current && !isAbortError(error)) {
@@ -278,8 +279,17 @@ export function useFeed(
       const currentIds = new Set(reconciled.jobs.map(job => job.id));
       pendingArrivals.current = new Set([...pendingArrivals.current].filter(id => currentIds.has(id)));
       const immediateIds = new Set([...current.immediateIds, ...reconciled.arrivals].filter(id => currentIds.has(id)));
+      const snapshotContinuation = event.page.continuation;
+      // The stream carries a bounded prefix. Keep an exhausted client exhausted
+      // when the whole scan has settled and every retained result is loaded.
+      const allMatchesLoaded = !unavailable && snapshotContinuation.state === 'open' && event.reconciliation.complete &&
+        ['not_required', 'complete', 'insufficient_evidence'].includes(event.page.ai.status) &&
+        event.reconciliation.retainedItemIds.every(id => currentIds.has(id));
+      const continuation: Feed['continuation'] = allMatchesLoaded || snapshotContinuation.state === 'exhausted'
+        ? { state: 'exhausted', cursor: null, retryAfterMs: null }
+        : { ...snapshotContinuation, cursor: current.continuation.cursor };
       const updated = { ...current, received: true, loading: false, jobs: unavailable ? [] : reconciled.jobs, immediateIds,
-        continuation: { ...event.page.continuation, cursor: current.continuation.cursor }, ai: event.page.ai, coverage: event.page.coverage,
+        continuation, ai: event.page.ai, coverage: event.page.coverage,
         hiddenMatches: unavailable ? { status: 'unavailable' as const, count: null } : event.page.hiddenMatches, error: null };
       updateFeed(() => updated, !deferred);
     },
@@ -295,7 +305,6 @@ export function useFeed(
       generation.current++;
       controller.current?.abort();
       inFlight.current = false;
-      seenCursors.current.clear();
       void load(null, replace);
     },
   };

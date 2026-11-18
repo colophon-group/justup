@@ -108,6 +108,41 @@ test('complete baseline beyond the prefix preserves older paginated rows and rec
   await expect(page.locator('.is-new')).toHaveCount(0);
   await expect(page.locator('#new-results')).toHaveCount(0);
 });
+test('a settled reconnect keeps its evidence notice and fetches only when retained results are missing', async ({ page }) => {
+  const confirmed = fixture.jobs.slice(0, 13);
+  const prefix = confirmed.slice(0, 12);
+  const ai = 'insufficient_evidence';
+  fixture.setJobs(confirmed, ai);
+  await page.goto(fixture.origin);
+  await expect(page.locator('[data-job="job-1"]')).toBeVisible();
+  await expect.poll(() => fixture.streams.length).toBe(1);
+  const initial = fixture.snapshot({ items: prefix, reason: 'initial' });
+  await reveal(page, 13);
+
+  const notice = 'Some positions lacked enough evidence to confirm a match.';
+  await expect(page.locator('#feed-status')).toHaveText(notice);
+  const reads = () => fixture.calls.filter(call => call.path.endsWith('/results'));
+  expect(reads().map(call => call.query.cursor)).toEqual([undefined, '12']);
+  const older = await page.locator('[data-job="job-13"]').elementHandle();
+  fixture.disconnect();
+  await expect.poll(() => fixture.streams.length).toBe(2);
+  expect(fixture.streams[1].call.headers['last-event-id']).toBe(initial.id);
+  fixture.snapshot({ items: prefix, reason: 'resumed' });
+  await expect(page.locator('#live-status')).toContainText('Live results connected.');
+  await expect(page.locator('#feed-status')).toHaveText(notice);
+  await page.locator('#feed-tail').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(550);
+  expect(reads()).toHaveLength(2);
+
+  fixture.setJobs(fixture.jobs.slice(0, 14), ai);
+  fixture.snapshot({ items: prefix });
+  await reveal(page, 14);
+  await expect(page.locator('[data-job="job-14"]')).toBeVisible();
+  await expect(page.locator('#feed-status')).toHaveText(notice);
+  expect(reads().slice(2).map(call => call.query.cursor)).toEqual([undefined, '12']);
+  expect(await older.evaluate(element => element === document.querySelector('[data-job="job-13"]'))).toBe(true);
+  await expect(page.locator('#new-results')).toHaveCount(0);
+});
 test('pointer selection gesture coalesces live arrivals; editor caret and scroll stay stable through manual recovery', async ({ page }) => {
   await open(page); await reveal(page, 6);
   await page.locator('[data-job="job-4"]').scrollIntoViewIfNeeded();

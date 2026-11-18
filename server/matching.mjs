@@ -237,16 +237,14 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     if (!coverage.stale&&(!snapshot||createdScan)) schedule(scan,viewer.interfaceLocale);
     scan = scanById(scan.id);
     const all = rows(scan.id), remaining = all.filter((r) => r.position >= next), pending = remaining.some((r) => r.decision == null);
+    // A capped snapshot can have more confirmed rows to deliver even when the
+    // visible scan is settled. Hidden or replaced evidence never affects this.
+    const settledStatus = () => all.some(row => row.decision === 'insufficient_evidence' && matchingJob(row))
+      ? 'insufficient_evidence' : 'complete';
     let state, status, retryAfterMs = null;
     if (coverage.stale) { state = 'paused'; status = 'import_unavailable'; retryAfterMs = 5000; }
-    else if (!remaining.length) {
-      state = 'exhausted';
-      // Report the limitation of this visible, primary-filtered scan. The
-      // separate hidden cohort must not affect it or reveal missing evidence.
-      status = all.some(row => row.decision === 'insufficient_evidence' && matchingJob(row))
-        ? 'insufficient_evidence' : 'complete';
-    }
-    else if (!pending || remaining[0].decision != null) { state = 'open'; status = 'matching'; }
+    else if (!remaining.length) { state = 'exhausted'; status = settledStatus(); }
+    else if (!pending || remaining[0].decision != null) { state = 'open'; status = snapshot && !pending ? settledStatus() : 'matching'; }
     else if (!available()) { state = 'paused'; status = 'dependency_unavailable'; retryAfterMs = 5000; }
     else if (scan.state === 'paused' && scan.retry_at > now()) { state = 'paused'; status = scan.pause_code; retryAfterMs = scan.retry_at - now(); }
     else { state = 'pending'; status = 'matching'; retryAfterMs = 1000; }

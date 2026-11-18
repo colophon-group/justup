@@ -94,7 +94,16 @@ async function setup(t, options = {}) {
     return { res, next, close: () => controller.abort() };
   }
   async function work() { const task = app.tasks.claim({ workerId: 'fixture', kinds: ['ai_match'] }); assert(task); return matching.runTask(task); }
-  return { app, live, intent, matching, identity, importJobs, search, connect, work,
+  async function results(cursor = null) {
+    const query = new URLSearchParams({ revision: '1', limit: '50' });
+    if (cursor) query.set('cursor', cursor);
+    const response = await fetch(`${base}/searches/search-a/results?${query}`, {
+      headers: { Cookie: `__Host-justup_session=${accounts.get('a').token}` },
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  }
+  return { app, live, intent, matching, identity, importJobs, search, connect, work, results,
     blockDeletion: () => writeFileSync(`${storage.privateGenerationPath}.pending`, 'fixture-pending', { mode: 0o600 }),
     downgrade: owner => app.store.db.prepare("UPDATE access_subscriptions SET status='ended',paid_through_at=NULL WHERE account_id=?").run(accounts.get(owner).account.id),
     pauseProvider: () => { providerAvailable = false; },
@@ -171,6 +180,40 @@ test('residual snapshots wait for newest resolution, retain older accepted match
   assert.deepEqual(uncertain.data.searches[0].ai, { status: 'insufficient_evidence' });
   assert.deepEqual(ids(uncertain), ['first', 'second']);
   assert.ok(!JSON.stringify(uncertain).includes('newest'));
+});
+
+test('a capped reconnect preserves settled uncertainty while leaving ordinary pagination intact', async t => {
+  const s = await setup(t, { classifyDecision: j => j.id === 'uncertain' ? 'insufficient_evidence' : 'accepted' });
+  const confirmed = Array.from({ length: 97 }, (_, i) => job(`confirmed-${i}`, AT - 3 * DAY - i * 1000));
+  s.importJobs([...confirmed, job('uncertain', AT - 4 * DAY)]);
+  s.search('a', 'search-a', true);
+  const stream = await s.connect();
+  const initial = await stream.next();
+  assert.equal(initial.data.searches[0].continuation.state, 'pending');
+  stream.close();
+
+  const delivered = [];
+  let page;
+  for (let round = 0; round < 4; round++) {
+    await s.work();
+    page = await s.results(page?.continuation.cursor);
+    delivered.push(...page.items.map(item => item.id));
+    if (page.continuation.state === 'exhausted') break;
+    assert.deepEqual(page.ai, { status: 'matching' });
+  }
+  assert.equal(page.continuation.state, 'exhausted');
+  assert.deepEqual(page.ai, { status: 'insufficient_evidence' });
+  assert.deepEqual(delivered, confirmed.map(item => item.id));
+
+  const resumed = await s.connect('a', { headers: { 'Last-Event-ID': initial.id } });
+  const frame = await resumed.next();
+  assert.equal(frame.data.reason, 'resumed');
+  const snapshot = frame.data.searches[0];
+  assert.deepEqual(ids(frame), delivered.slice(0, 96));
+  assert.deepEqual(snapshot.reconciliation, { complete: true, retainedItemIds: delivered });
+  assert.deepEqual(snapshot.continuation, { state: 'open', cursor: null, retryAfterMs: null });
+  assert.deepEqual(snapshot.ai, page.ai);
+  assert.ok(!JSON.stringify(frame).includes('"uncertain"'));
 });
 
 test('search revision, cross-owner identity and logout cannot authorize stale rows', async t => {
