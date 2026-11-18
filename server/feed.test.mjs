@@ -87,6 +87,23 @@ test('a refreshed private selection hides omitted jobs without recording a closu
   assert.deepEqual(feed.list().items.map(row => row.id), ['omitted']);
   assert.equal(source().first_seen_at, original.first_seen_at);
 });
+test('private retention keeps verified jobs ahead of omitted bodies and fences stale evidence after eviction', (t) => {
+  const { s, feed, add, advance } = setup(t);
+  const selection = at => ({ source: 'jobseek_feed_v1', feed: { complete: true, fullSnapshotAt: iso(at) } });
+  const initial = [['evicted', 6], ...Array.from({ length: 999 }, (_, i) => [`recent-${i}`, 3])];
+  add(initial, AT, selection(AT));
+  advance(60_000);
+  add([['keeper', 7]], AT + 60_000, selection(AT + 60_000));
+  assert.deepEqual(feed.eligibleJobs().map(job => job.id), ['keeper']);
+  assert.equal(s.db.prepare("SELECT count(*) AS count FROM justup_jobs WHERE id='evicted'").get().count, 0);
+  assert.equal(s.db.prepare("SELECT omitted_at FROM justup_feed_omissions WHERE id='evicted'").get().omitted_at, AT + 60_000);
+  advance(60_000);
+  add([['keeper', 7, AT + 60_000], ['evicted', 6, AT]], AT + 120_000, selection(AT + 120_000));
+  assert.deepEqual(feed.eligibleJobs().map(job => job.id), ['keeper']);
+  advance(60_000);
+  add([['keeper', 7], ['evicted', 6]], AT + 180_000, selection(AT + 180_000));
+  assert.deepEqual(feed.eligibleJobs().map(job => job.id), ['evicted', 'keeper']);
+});
 test('missing, malformed or future full snapshot evidence fails closed', (t) => {
   const { feed, add } = setup(t);
   for (const fullSnapshotAt of [undefined, 'invalid', iso(AT + 60_000)]) {
