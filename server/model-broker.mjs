@@ -9,7 +9,7 @@ import { isAbsolute,join,resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import { CODEX_VERSION,codexArguments,codexEnvironment,executeCodex,validateModelData,modelCatalogueReady,MODEL_PROFILES } from './model-runner.mjs';
-import { sameOfficialHost, validateCompanyUrl } from './companies.mjs';
+import { COMPANY_EVIDENCE_MAX_BYTES, sameOfficialHost, validateCompanyUrl } from './companies.mjs';
 import { createHiringWireCodexSession } from './hiring-wire-codex.mjs';
 import { handleHiringWireCodexConnection,validWireConfiguration,validateWireOpen } from './hiring-wire-codex-broker.mjs';
 import { wireCatalogueReady,wireProfileReady,WIRE_NODE_VERSION } from './hiring-wire-codex-policy.mjs';
@@ -56,9 +56,35 @@ function numericEntity(_match,value){
   const character=String.fromCodePoint(point);
   return /[\p{Cc}\p{Cf}]/u.test(character)?' ':character;
 }
-function visibleText(html){
-  return html.replace(/<!--[\s\S]*?-->/gu,' ').replace(/<(script|style|template|noscript)\b[^>]*>[\s\S]*?<\/\1>/giu,' ')
-    .replace(/<[^>]*>/gu,' ').replace(/&(?:nbsp|amp|quot|apos|lt|gt);/giu,' ').replace(/&#(x[0-9a-f]+|[0-9]+);/giu,numericEntity)
+function evidenceMarkup(html){
+  const tokens=/<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<![^<>]*>|<(\/?)([a-z][a-z0-9-]*)(?=[\s/>])((?:[^<>"']|"[^"]*"|'[^']*')*)>/giu;
+  const inactive=new Set(['script','style','template','noscript','textarea','iframe','noembed','noframes','xmp','plaintext']);
+  const hidden=[], visible=[];
+  let cursor=0;
+  for(const match of html.matchAll(tokens)){
+    const [raw,closing,name,attributes]=match, tag=name?.toLowerCase();
+    if(!hidden.length)visible.push(html.slice(cursor,match.index));
+    cursor=match.index+raw.length;
+    if(hidden.length){
+      const current=hidden.at(-1);
+      if(closing&&tag===current)hidden.pop();
+      else if(!closing&&current==='template'&&inactive.has(tag))hidden.push(tag);
+      continue;
+    }
+    if(!closing&&inactive.has(tag))hidden.push(tag);
+    if(tag==='title'||tag==='h1'||(tag==='a'&&closing))visible.push(`<${closing}${tag}>`);
+    else if(tag==='a'){
+      const entries=attributes.matchAll(/\s+([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=]+)))?/gu);
+      const href=entries.find(entry=>entry[1].toLowerCase()==='href');
+      const value=href?.[2]??href?.[3];
+      visible.push(value&&value.length<=2048&&!/["<>]/u.test(value)?`<a href="${value}">`:' ');
+    }else visible.push(' ');
+  }
+  if(!hidden.length)visible.push(html.slice(cursor));
+  return visible.join('');
+}
+function visibleText(markup){
+  return markup.replace(/<[^<>]*>/gu,' ').replace(/&(?:nbsp|amp|quot|apos|lt|gt);/giu,' ').replace(/&#(x[0-9a-f]+|[0-9]+);/giu,numericEntity)
     .normalize('NFKC').replace(/[\u0000-\u001f\u007f]/gu,' ').replace(/\s+/gu,' ').trim();
 }
 function utf8Prefix(value,bytes){let end=Math.min(value.length,bytes);while(Buffer.byteLength(value.slice(0,end))>bytes)end--;if(end>0&&/[\uD800-\uDBFF]/u.test(value[end-1]))end--;return value.slice(0,end);}
@@ -66,16 +92,25 @@ function jsonTextPrefix(value,bytes){let result=utf8Prefix(value,bytes);while(Bu
 const identity=(value)=>value.normalize('NFKC').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 const containsIdentity=(text,name)=>` ${identity(text)} `.includes(` ${identity(name)} `);
 function pageData(page,url){
-  if(!plain(page)||page.url!==url||page.status!==200||typeof page.text!=='string'||!page.text.trim()||!Number.isInteger(page.bytes)||page.bytes<1||page.bytes>131_072||Buffer.byteLength(page.text)>131_072||page.sha256!==createHash('sha256').update(page.text).digest('hex'))throw problem('invalid_output');
+  if(!plain(page)||page.url!==url||page.status!==200||typeof page.text!=='string'||!page.text.trim()
+    ||!Number.isInteger(page.bytes)||page.bytes<1||page.bytes>COMPANY_EVIDENCE_MAX_BYTES
+    ||Buffer.byteLength(page.text)>COMPANY_EVIDENCE_MAX_BYTES
+    ||page.sha256!==createHash('sha256').update(page.text).digest('hex'))throw problem('invalid_output');
   const finalUrl=validateCompanyUrl(page.finalUrl,{official:true});
   if(!sameOfficialHost(new URL(finalUrl).hostname,new URL(url).hostname))throw problem('invalid_output');
-  return {...page,finalUrl};
+  const {text,...proof}=page;
+  return {...proof,finalUrl,markup:evidenceMarkup(text)};
 }
-function identityMarkers(html){
-  return [...html.matchAll(/<(title|h1)\b[^>]*>([\s\S]*?)<\/\1>/giu)].slice(0,16).map(match=>visibleText(match[2])).join(' ').slice(0,2048);
+function identityMarkers(markup){
+  const markers=[];
+  for(const match of markup.matchAll(/<(title|h1)\b[^<>]*>((?:[^<]|<(?!\/?(?:title|h1)\b))*)<\/\1\s*>/giu)){
+    markers.push(visibleText(match[2]).slice(0,2048));
+    if(markers.length===16)break;
+  }
+  return markers.join(' ').slice(0,2048);
 }
 function secondOfficialPage(page){
-  const matches=page.text.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']{1,2048})["'][^>]*>([\s\S]{0,300}?)<\/a>/giu);
+  const matches=page.markup.matchAll(/<a\b[^<>]*\shref\s*=\s*["']([^"'<>]{1,2048})["'][^<>]*>([\s\S]{0,300}?)<\/a>/giu);
   let count=0;
   for(const match of matches){
     if(++count>128)break;
@@ -146,7 +181,7 @@ export async function resolveCompanyIdentity(task,{executeStage,fetchPage=fetchC
   const textBudget=Math.min(12_288,24_576-Buffer.byteLength(prefix+JSON.stringify(payload))-256);
   if(textBudget<512)return finish(noIdentity('The supplied URLs leave too little bounded evidence to verify this company. Please provide a shorter official website URL.','unresolved'));
   const perPage=Math.floor(textBudget/pages.length);
-  excerpts.forEach((excerpt,index)=>{const text=visibleText(pages[index].text),markerBudget=Math.min(1024,Math.floor(perPage/4));excerpt.identityText=jsonTextPrefix(identityMarkers(pages[index].text),markerBudget);excerpt.text=jsonTextPrefix(text,perPage-markerBudget);excerpt.truncated=excerpt.text.length<text.length;});
+  excerpts.forEach((excerpt,index)=>{const markup=pages[index].markup,text=visibleText(markup),markerBudget=Math.min(1024,Math.floor(perPage/4));excerpt.identityText=jsonTextPrefix(identityMarkers(markup),markerBudget);excerpt.text=jsonTextPrefix(text,perPage-markerBudget);excerpt.truncated=excerpt.text.length<text.length;});
   const result=await infer('grounded_decision',prefix+JSON.stringify(payload),6000-usage.outputTokens);
   if(result.status!=='candidate'){
     if(result.candidate!==null||typeof result.clarification!=='string'||!result.clarification.trim())throw problem('invalid_output');
@@ -180,11 +215,12 @@ export async function fetchCompanyEvidence(url,{signal,resolveAddresses=addresse
       const req=request(current,{method:'GET',agent:false,family:4,servername:current.hostname,rejectUnauthorized:true,signal:combined,
         lookup:(_hostname,_options,callback)=>callback(null,found[0],4),headers:{'user-agent':'JustupEvidence/1','accept':'text/html,application/xhtml+xml,text/plain'}},res=>{
         const status=res.statusCode;
-        if([301,302,303,307,308].includes(status)){res.resume();resolveResponse({status,location:res.headers.location});return;}
+        if([301,302,303,307,308].includes(status)){res.destroy();resolveResponse({status,location:res.headers.location});return;}
         const mime=(res.headers['content-type']??'').split(';')[0].toLowerCase();
-        if(status!==200||!['text/html','application/xhtml+xml','text/plain'].includes(mime)||Number(res.headers['content-length']??0)>131_072){res.destroy();reject(problem('invalid_output'));return;}
+        if(status!==200||!['text/html','application/xhtml+xml','text/plain'].includes(mime)){res.destroy();reject(problem('invalid_output'));return;}
+        if(Number(res.headers['content-length']??0)>COMPANY_EVIDENCE_MAX_BYTES){res.destroy();reject(problem('output_limit'));return;}
         const chunks=[];let bytes=0;
-        res.on('data',chunk=>{bytes+=chunk.length;if(bytes>131_072){res.destroy();reject(problem('output_limit'));}else chunks.push(chunk);});
+        res.on('data',chunk=>{bytes+=chunk.length;if(bytes>COMPANY_EVIDENCE_MAX_BYTES){res.destroy();reject(problem('output_limit'));}else chunks.push(chunk);});
         res.once('error',()=>reject(problem('provider_unavailable')));res.once('end',()=>resolveResponse({status,text:Buffer.concat(chunks).toString('utf8'),bytes}));
       });
       req.once('error',()=>reject(problem(combined.aborted?'task_timeout':'provider_unavailable')));req.end();
