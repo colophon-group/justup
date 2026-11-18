@@ -25,6 +25,7 @@ import uuid
 import importlib.util
 import re
 import select
+import sqlite3
 import stat
 import time
 from datetime import date, datetime, timezone
@@ -1448,9 +1449,150 @@ def teardown(erase_data=False, expected_plan=None):
             'sliceRetained': True, 'protectedWorkloadsTouched': False}
 
 
+OBSERVATION_UNITS = {'api': 'justup-preview-api.service', 'runner': 'justup-preview-runner.service',
+                     'tunnel': 'justup-preview-tunnel.service', 'guard': 'justup-preview-guard.service',
+                     'guardTimer': 'justup-preview-guard.timer',
+                     'backupTimer': BACKUP_TIMER}
+ALERT_INPUTS = 'app/server/alert-signals-cli.mjs'
+
+
+def observation(read):
+    try:
+        return read()
+    except (ValueError, OSError, KeyError, sqlite3.Error, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
+def unit_observation(unit):
+    result = subprocess.run(['/usr/bin/systemctl', 'show', '--property=LoadState,ActiveState,ControlGroup', unit],
+                            capture_output=True, text=True, timeout=3)
+    lines = result.stdout.splitlines()
+    fields = dict(line.split('=', 1) for line in lines)
+    if len(lines) != 3 or len(result.stdout) > 1024 or set(fields) != {'LoadState', 'ActiveState', 'ControlGroup'}:
+        raise ValueError('Unit observation is incomplete.')
+    if fields['LoadState'] == 'not-found':
+        return 'missing'
+    state = fields['ActiveState']
+    if (result.returncode != 0 or fields['LoadState'] != 'loaded'
+            or state not in {'active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading'}):
+        raise ValueError('Unit observation is invalid.')
+    if unit.endswith('.service') and state == 'active' and Path(fields['ControlGroup']).parts[-2:] != (SLICE, unit):
+        raise ValueError('Active unit is outside the preview slice.')
+    return state
+
+
+def validate_application_observation(value, manifest):
+    def object_keys(data, keys):
+        return isinstance(data, dict) and set(data) == set(keys.split())
+
+    def age(value):
+        return type(value) is int and 0 <= value <= 9_007_199_254_740_991
+
+    if (not object_keys(value, 'schemaVersion sourceCommit buildIdentity databaseReadable jobFeed foregroundQueue runner')
+            or type(value['schemaVersion']) is not int or value['schemaVersion'] != 1
+            or any(value[field] != manifest[field] for field in ('sourceCommit', 'buildIdentity'))
+            or type(value['databaseReadable']) is not bool):
+        raise ValueError('Application observation identity is invalid.')
+    feed, queue, runner = value['jobFeed'], value['foregroundQueue'], value['runner']
+    if not value['databaseReadable'] and (feed is not None or queue is not None):
+        raise ValueError('Application evidence cannot exist without a readable database.')
+    if feed is not None and (not object_keys(feed, 'stale verificationAgeSeconds importGeneration') or type(feed['stale']) is not bool
+            or (feed['verificationAgeSeconds'] is None and not feed['stale'])
+            or (feed['verificationAgeSeconds'] is not None and (not age(feed['verificationAgeSeconds']) or feed['importGeneration'] is None))
+            or (feed['importGeneration'] is not None and (not isinstance(feed['importGeneration'], str)
+                or not re.fullmatch(r'[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}', feed['importGeneration'])))):
+        raise ValueError('Feed observation is invalid.')
+    if queue is not None and (not object_keys(queue, 'activeCount oldestAgeSeconds') or not age(queue['activeCount'])
+            or (queue['activeCount'] == 0) != (queue['oldestAgeSeconds'] is None)
+            or (queue['oldestAgeSeconds'] is not None and not age(queue['oldestAgeSeconds']))):
+        raise ValueError('Queue observation is invalid.')
+    capabilities = ('search', 'companyRequests', 'aiMatching')
+    if runner is not None and (not object_keys(runner, 'ready heartbeatAgeSeconds search companyRequests aiMatching')
+            or not age(runner['heartbeatAgeSeconds']) or any(type(runner[key]) is not bool for key in ('ready', *capabilities))
+            or (not runner['ready'] and any(runner[key] for key in capabilities))):
+        raise ValueError('Runner observation is invalid.')
+    return value
+
+
+def observation_as_api(argv, release, manifest, timeout, *, extra_env=None):
+    api = pwd.getpwnam(USER)
+    shared = grp.getgrnam(STATE_GROUP)
+    if not api.pw_uid or not shared.gr_gid:
+        raise ValueError('Dedicated identities are required for application observation.')
+    output = subprocess.run(argv,
+                            check=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            timeout=timeout, cwd=release / 'app', user=api.pw_uid, group=shared.gr_gid, extra_groups=[], umask=0o077,
+                            env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'HOME': '/nonexistent',
+                                 'JUSTUP_SOURCE_COMMIT': manifest['sourceCommit'], 'JUSTUP_BUILD_ID': manifest['buildIdentity'],
+                                 **(extra_env or {})}).stdout
+    if len(output) > 4096:
+        raise ValueError('Application observation exceeds its bound.')
+    return json.loads(output)
+
+
+def application_observation(release, manifest):
+    runner_uid = pwd.getpwnam(RUNNER_USER).pw_uid
+    report = observation_as_api([str(release / 'runtime/bin/node'), str(release / ALERT_INPUTS)],
+                                release, manifest, 10, extra_env={'JUSTUP_OBSERVE_RUNNER_UID': str(runner_uid)})
+    return validate_application_observation(report, manifest)
+
+
+def backup_observation(release, manifest):
+    # The API identity owns the backup directory and deletion generation. File
+    # reads and SQLite integrity checks stay in that role, including on errors.
+    argv = ['/usr/bin/python3', '-I', '-B', str(Path(__file__).with_name('preview-recovery.py')), 'observe-backups']
+    report = observation_as_api(argv, release, manifest, 30)
+    if (not isinstance(report, dict) or set(report) != {'latestAgeSeconds', 'snapshotCount'}
+            or type(report['latestAgeSeconds']) is not int or not 0 <= report['latestAgeSeconds'] <= 604800
+            or type(report['snapshotCount']) is not int or report['snapshotCount'] not in (1, 2)):
+        raise ValueError('Backup observation is invalid.')
+    return report
+
+
+def observation_free_space():
+    verify_storage(check_reserve=False)
+    return shutil.disk_usage(BASE).free
+
+
+def observe(build, expected_plan, host_fingerprint):
+    if (any(not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value)
+            for value in (build, expected_plan, host_fingerprint)) or os.geteuid() != 0
+            or platform.system() != 'Linux' or platform.machine() not in {'aarch64', 'arm64'}
+            or platform.node() != 'murmur-server' or digest('/etc/machine-id') != host_fingerprint):
+        raise ValueError('Observation requires the reviewed preview host, plan and build.')
+    self_cgroup()
+    artifact = artifact_module()
+    release = BASE / 'releases' / build
+
+    def check_identity():
+        if (any(os.path.lexists(BASE / name) for name in (UPGRADE_LOCK, '.preview-schema-migration.lock'))
+                or (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan):
+            raise ValueError('Observation requires a stable active build and installed plan.')
+
+    check_identity()
+    owned_path(release, directory=True)
+    manifest = artifact.verify_directory(release)
+    if manifest['buildIdentity'] != build or ALERT_INPUTS not in manifest['files']:
+        raise ValueError('The active release lacks the reviewed alert collector.')
+    started = time.time_ns() // 1_000_000
+    free_bytes = observation(observation_free_space)
+    result = {'schemaVersion': 1, 'sourceCommit': manifest['sourceCommit'], 'buildIdentity': build,
+              'planSha256': expected_plan, 'observedAtMs': started,
+              'units': {name: observation(lambda: unit_observation(unit)) for name, unit in OBSERVATION_UNITS.items()},
+              'resourceGuardHealthy': observation(lambda: guard(cleanup_logs=False)) is not None,
+              'previewFreeBytes': free_bytes, 'application': None, 'backup': None}
+    state_readonly = observation(lambda: bool(os.statvfs(BASE / 'state').f_flag & os.ST_RDONLY))
+    if free_bytes is not None and state_readonly:
+        result['application'] = observation(lambda: application_observation(release, manifest))
+        result['backup'] = observation(lambda: backup_observation(release, manifest))
+    check_identity()
+    result['durationMs'] = max(0, time.time_ns() // 1_000_000 - started)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'install-coverage', 'qualify-luna', 'qualify-jev', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'observe', 'stop', 'stage', 'switch', 'install-coverage', 'qualify-luna', 'qualify-jev', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
@@ -1500,6 +1642,8 @@ def main():
             result = guard(args.stop_on_failure)
         elif args.command == 'resource-guard':
             result = {'kernel': verify_caps(), 'storage': verify_storage()}
+        elif args.command == 'observe':
+            result = observe(args.build_identity, args.reviewed_plan_sha, args.host_machine_sha)
         elif args.command == 'stage':
             if args.bundle is None:
                 raise ValueError('Bundle path is required.')
