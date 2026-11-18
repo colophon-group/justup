@@ -258,6 +258,14 @@ be resolved and its accepted buffer to be drained. Empty open/pending pages are
 not exhaustion. Provider or budget pauses retain the condition and scan position.
 Current access, primary membership and evidence are rechecked before delivery.
 
+An exhausted visible scan reports `ai.status:insufficient_evidence` when an
+eligible position lacked enough evidence to confirm a match. This status gives
+the browser an evidence notice while preserving any already confirmed results.
+The same status reaches live snapshots. An exhausted scan without that
+limitation reports `complete`, so explicit rejections may produce a normal
+empty result. Outages stay paused with a retry. The uncertainty notice contains
+no position count, job identifier or hidden-cohort evidence.
+
 Random database-backed cursors reveal no job identifiers. They bind owner,
 search/revision, exact configuration, access mode, import generation and classifier
 version, expire after ten minutes and return 409 on stale state. Each scan keeps

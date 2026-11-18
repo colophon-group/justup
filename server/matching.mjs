@@ -236,7 +236,13 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     const all = rows(scan.id), remaining = all.filter((r) => r.position >= next), pending = remaining.some((r) => r.decision == null);
     let state, status, retryAfterMs = null;
     if (coverage.stale) { state = 'paused'; status = 'import_unavailable'; retryAfterMs = 5000; }
-    else if (!remaining.length) { state = 'exhausted'; status = 'complete'; }
+    else if (!remaining.length) {
+      state = 'exhausted';
+      // Report the limitation of this visible, primary-filtered scan. The
+      // separate hidden cohort must not affect it or reveal missing evidence.
+      status = all.some(row => row.decision === 'insufficient_evidence' && current.has(row.job_id))
+        ? 'insufficient_evidence' : 'complete';
+    }
     else if (!pending || remaining[0].decision != null) { state = 'open'; status = 'matching'; }
     else if (!available()) { state = 'paused'; status = 'dependency_unavailable'; retryAfterMs = 5000; }
     else if (scan.state === 'paused' && scan.retry_at > now()) { state = 'paused'; status = scan.pause_code; retryAfterMs = scan.retry_at - now(); }
