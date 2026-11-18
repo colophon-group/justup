@@ -84,7 +84,7 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
     const data = Buffer.from(JSON.stringify(value)).toString('base64url');
     return `${data}.${sign(data)}`;
   }
-  function decode(cursor, viewer) {
+  function decode(cursor, viewer, companyId) {
     if (typeof cursor !== 'string' || cursor.length > 2048) throw problem('invalid_cursor');
     const [data, signature, extra] = cursor.split('.');
     if (!data || !signature || extra) throw problem('invalid_cursor');
@@ -94,26 +94,26 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
     try { parsed = JSON.parse(Buffer.from(data, 'base64url').toString('utf8')); } catch { throw problem('invalid_cursor'); }
     if (parsed.v !== 1 || typeof parsed.id !== 'string' || !Number.isFinite(parsed.first)
         || !Number.isSafeInteger(parsed.createdAt)) throw problem('invalid_cursor');
-    if (parsed.generation !== generation() || parsed.access !== access(viewer)
+    if ((parsed.companyId ?? null) !== companyId || parsed.generation !== generation() || parsed.access !== access(viewer)
         || now() - parsed.createdAt >= cursorTtlMs || parsed.createdAt > now()) {
       throw problem('stale_cursor', 409, 'This feed changed. Reload it and try again.');
     }
     return parsed;
   }
-  function list({ viewer = null, cursor = null, limit = 12 } = {}) {
+  function list({ viewer = null, cursor = null, limit = 12, companyId = null } = {}) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw problem('invalid_limit');
     const importGeneration = generation();
-    const position = cursor == null ? null : decode(cursor, viewer);
+    const position = cursor == null ? null : decode(cursor, viewer, companyId);
     const at = now(), currentCoverage = coverageAt(at);
     const jobs = currentCoverage.stale ? [] : eligibleAt(viewer, at);
     if (generation() !== importGeneration) throw problem('stale_cursor', 409, 'This feed changed. Reload it and try again.');
     if (currentCoverage.stale) return { asOf: new Date(at).toISOString(), items: [],
       continuation: { cursor, state: 'paused', retryAfterMs: 5000 }, ai: { status: 'not_required' }, coverage: currentCoverage };
-    const matches = jobs.filter((j) => !position
-      || Date.parse(j.firstObserved) < position.first || (Date.parse(j.firstObserved) === position.first && j.id > position.id));
+    const matches = jobs.filter(j => (companyId === null || j.companyId === companyId) && (!position
+      || Date.parse(j.firstObserved) < position.first || (Date.parse(j.firstObserved) === position.first && j.id > position.id)));
     const page = matches.slice(0, limit), last = page.at(-1), more = matches.length > limit;
     return { asOf: new Date(at).toISOString(), items: page.map(publicJob), continuation: {
-      cursor: more ? encode({ v: 1, generation: importGeneration, access: access(viewer),
+      cursor: more ? encode({ v: 1, generation: importGeneration, access: access(viewer), ...(companyId === null ? {} : {companyId}),
         createdAt: position?.createdAt ?? at, first: Date.parse(last.firstObserved), id: last.id }) : null,
       state: more ? 'open' : 'exhausted', retryAfterMs: null,
     }, ai: { status: 'not_required' }, coverage: currentCoverage };
@@ -203,5 +203,6 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
       coverage:{state:'requested'},history:null,evidence:candidate.evidenceUrls.map(url=>({source:'company_request',url}))};
     db.prepare('INSERT INTO justup_requested_companies VALUES(?,?,?)').run(id,candidate.domain,JSON.stringify(value));return id;
   }
-  return { list, companies, accountCompanies, company, publishCompany,companySetup:setup.snapshot,ensureCompanySetup:setup.ensure,canonicalCompanyId:canonicalId, requestedCompanies:()=>db.prepare('SELECT data_json FROM justup_requested_companies ORDER BY id').all().map(r=>JSON.parse(r.data_json)), coverage, eligibleJobs, restrictedLatestJobs:()=>eligibleAt(null,now(),true), publicJob, generation };
+  const companyPositions = (id, options) => list({...options, companyId:company(id).id});
+  return { list, companies, accountCompanies, company, companyPositions, publishCompany,companySetup:setup.snapshot,ensureCompanySetup:setup.ensure,canonicalCompanyId:canonicalId, requestedCompanies:()=>db.prepare('SELECT data_json FROM justup_requested_companies ORDER BY id').all().map(r=>JSON.parse(r.data_json)), coverage, eligibleJobs, restrictedLatestJobs:()=>eligibleAt(null,now(),true), publicJob, generation };
 }

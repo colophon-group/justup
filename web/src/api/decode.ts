@@ -11,6 +11,8 @@ import type {
   CompanyHiringHistory,
   CompanyReport,
   CompanyRequest,
+  CompanyPositionsPage,
+  CompanySetup,
   CompanyRequestPrefill,
   CompanyWorkplaceMix,
   Coverage,
@@ -431,6 +433,16 @@ function decodeCompanySamples(o: Record<string, unknown>, asOf: string): Pick<Co
     hiringRoles: { state: "available", sampleSize, labelledSampleSize, unknownSampleSize: unknownRoleSampleSize, items },
     reportedSalaries: { state: "available", sampleSize, reportedSampleSize, groupedSampleSize, incompleteSampleSize, unknownSampleSize, groups } };
 }
+function decodeCompanySetup(value: unknown): CompanySetup {
+  const o = record(value, "company setup");
+  if (o.state === "queued" || o.state === "in_progress" || o.state === "blocked")
+    return {state:o.state, updatedAt:o.updatedAt === null ? null : date(o.updatedAt)};
+  if (o.state !== "monitoring") return fail("company setup state");
+  const updatedAt = date(o.updatedAt), verifiedAt = date(o.verifiedAt), expiresAt = date(o.expiresAt);
+  if (Date.parse(verifiedAt) > Date.parse(updatedAt) || Date.parse(updatedAt) >= Date.parse(expiresAt))
+    return fail("monitoring times");
+  return {state:o.state, updatedAt, verifiedAt, expiresAt};
+}
 export function decodeCompany(value: unknown): Company {
   const o = record(value, "company");
   const domain = safePublicCompanyDomain(o.domain), websiteUrl = safePublicCompanyURL(o.websiteUrl);
@@ -447,6 +459,7 @@ export function decodeCompany(value: unknown): Company {
     // report sourceChecks contract may supply those; do not retain them in hydration data.
     ...(Array.isArray(o.evidenceUrls) ? { evidenceUrls: o.evidenceUrls.map(safePublicCompanyURL).filter((url): url is string => url !== null) } : {}),
     ...optionalText(o, "lastSuccessfulCheckAt"),
+    ...(o.setup == null ? {} : {setup:decodeCompanySetup(o.setup)}),
   };
 }
 // Optional compiler hints cannot invalidate an otherwise usable warning.
@@ -725,6 +738,17 @@ export function decodeResults(value: unknown): ResultPage {
     })(),
   };
 }
+export function decodeCompanyPositions(value: unknown, companyId: string): CompanyPositionsPage {
+  const o = record(value, "company positions"), continuation = record(o.continuation, "position continuation");
+  if (continuation.state !== "open" && continuation.state !== "paused" && continuation.state !== "exhausted")
+    return fail("position continuation state");
+  const cursor = nullableText(continuation.cursor, "position cursor");
+  if ((continuation.state === "open" && !cursor) || (continuation.state === "exhausted" && cursor !== null))
+    return fail("position cursor");
+  const items = list(o.items, decodeJob, "company positions");
+  if (items.length > 12 || items.some(item => item.company.id !== companyId)) return fail("company position scope");
+  return {items, continuation:{state:continuation.state, cursor}};
+}
 export function decodeCompanyRequest(value: unknown): CompanyRequest {
   const o = record(value, "company request"),
     status = text(o.status, "request status");
@@ -754,6 +778,9 @@ export function decodeCompanyRequest(value: unknown): CompanyRequest {
     ...optionalText(o, "clarification"),
     ...optionalText(o, "reason"),
     ...optionalText(o, "message"),
+    ...optionalText(o, "scope"),
+    ...(o.setup == null || status !== "accepted" ? {} : {setup:decodeCompanySetup(o.setup)}),
+    ...(o.monitoringStartedAt == null || status !== "accepted" ? {} : {monitoringStartedAt:date(o.monitoringStartedAt)}),
     ...(o.taskId == null ? {} : { taskId: text(o.taskId, "request task") }),
     ...(companyId === null ? {} : { companyId }),
     ...(o.company == null ? {} : { company: decodeCompany(o.company) }),

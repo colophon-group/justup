@@ -1818,6 +1818,17 @@ export const messages = {
     "Monitoraggio attivo",
     "Seguimiento activo"
   ],
+  "Your company requests": ["Deine Firmenanfragen", "Tes demandes d’entreprise", "Le tue richieste di aziende", "Tus solicitudes de empresas"],
+  "Refresh company requests": ["Firmenanfragen aktualisieren", "Actualiser les demandes d’entreprise", "Aggiorna le richieste di aziende", "Actualizar solicitudes de empresas"],
+  "In the company catalogue": ["Im Firmenkatalog", "Dans le catalogue des entreprises", "Nel catalogo aziende", "En el catálogo de empresas"],
+  "Monitoring confirmed": ["Überwachung bestätigt", "Suivi confirmé", "Monitoraggio confermato", "Seguimiento confirmado"],
+  "Monitoring setup pending": ["Einrichtung der Überwachung ausstehend", "Configuration du suivi en attente", "Configurazione del monitoraggio in attesa", "Configuración del seguimiento pendiente"],
+  "Setting up monitoring": ["Überwachung wird eingerichtet", "Configuration du suivi en cours", "Configurazione del monitoraggio in corso", "Configurando el seguimiento"],
+  "Monitoring evidence unavailable": ["Überwachung derzeit nicht bestätigt", "Suivi actuellement non confirmé", "Monitoraggio attualmente non confermato", "Seguimiento sin confirmar por ahora"],
+  "View positions": ["Stellen ansehen", "Voir les offres", "Vedi le posizioni", "Ver las ofertas"],
+  "More positions": ["Weitere Stellen", "Plus d’offres", "Altre posizioni", "Más ofertas"],
+  "No positions in the current sample.": ["Keine Stellen in der aktuellen Stichprobe.", "Aucune offre dans l’échantillon actuel.", "Nessuna posizione nel campione attuale.", "No hay ofertas en la muestra actual."],
+  "Positions are temporarily unavailable.": ["Stellen sind vorübergehend nicht verfügbar.", "Les offres sont momentanément indisponibles.", "Le posizioni non sono disponibili al momento.", "Las ofertas no están disponibles temporalmente."],
   "Coverage not reported": [
     "Abdeckung nicht gemeldet",
     "Couverture non indiquée",

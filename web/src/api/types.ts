@@ -133,7 +133,11 @@ export interface Company {
   domain?: string;
   evidenceUrls?: string[];
   lastSuccessfulCheckAt?: string;
+  setup?: CompanySetup;
 }
+export type CompanySetup =
+  | { state: "queued" | "in_progress" | "blocked"; updatedAt: string | null }
+  | { state: "monitoring"; updatedAt: string; verifiedAt: string; expiresAt: string };
 // Public report projection. Historical analytics and private source identities stay out of hydration.
 export type CompanyRoleSample = { state: "unavailable" } | {
   state: "available";
@@ -273,6 +277,13 @@ export interface CompanyRequest {
   companyId?: string;
   company?: Company;
   taskId?: string | null;
+  scope?: string;
+  setup?: CompanySetup;
+  monitoringStartedAt?: string;
+}
+export interface CompanyPositionsPage {
+  items: Job[];
+  continuation: { state: "open" | "paused" | "exhausted"; cursor: string | null };
 }
 export type TaskResult =
   | { search: Search }

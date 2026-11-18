@@ -384,6 +384,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
             <CompanyPage
               key={`${epoch}:${route.id}`}
               follows={follows}
+              fullAccess={session?.access.fullAccess === true}
               client={client}
               id={route.id}
               initialCompany={initialPublicPage?.company?.id === route.id ? initialPublicPage.company : undefined}

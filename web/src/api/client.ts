@@ -4,6 +4,7 @@ import {
   decodeFollows,
   decodeCompany,
   decodeCompanyReport,
+  decodeCompanyPositions,
   decodeCompanyCataloguePage,
   decodeCompanyRequest,
   decodeHiringWire,
@@ -413,6 +414,10 @@ export class ApiClient {
   }
   getCompanyReport(companyId: string, signal?: AbortSignal) {
     return this.request(`/companies/${id(companyId)}/report`, value => decodeCompanyReport(value, companyId), { signal });
+  }
+  getCompanyPositions(companyId: string, cursor: string | null, signal?: AbortSignal) {
+    const query = cursor ? '?' + new URLSearchParams({cursor}) : '';
+    return this.request(`/companies/${id(companyId)}/positions${query}`, value => decodeCompanyPositions(value, companyId), {signal});
   }
   createCompanyRequest(
     body: {

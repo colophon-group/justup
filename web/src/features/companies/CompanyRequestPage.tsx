@@ -7,6 +7,7 @@ import type { CompanyRequestPrefill, Session } from '../../api/types';
 import { CompanyMark } from '../../shared/CompanyMark';
 import { coverageLabel, safeSourceUrl } from './presentation';
 import { useCompanyRequest } from './useCompanyRequest';
+import { CompanyRequestUpdates } from './CompanyRequestUpdates.tsx';
 
 export interface CompanyRequestPageProps {
   onAccepted?: (() => void) | undefined;
@@ -111,5 +112,6 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
         {flow.error && request?.status === 'pending' ? <button className="text-link" disabled={flow.busy} onClick={flow.reset}>{t("Try another lead")}</button> : null}
       </div>
     </div>
+    <CompanyRequestUpdates client={client} owner={session?.user?.id} active={active} latest={request} />
   </section>;
 }

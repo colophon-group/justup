@@ -64,7 +64,7 @@ export async function startVisitorRuntime({ now = Date.now, interpretIntent, cla
   const { createConfiguredApplication } = await load('main.mjs'), { createIntentService } = await load('intent.mjs'), { createMatchingService } = await load('matching.mjs');
   const origin = `https://127.0.0.1:${process.env.JUSTUP_ASSEMBLED_TEST_PORT || 4204}`;
   const generation = join(dir, 'private-generation'), backups = join(dir, 'backups'), status = join(dir, 'runner-status.json');
-  mkdirSync(backups); writeFileSync(generation, '00000000-0000-4000-8000-000000000000\n');
+  mkdirSync(backups); writeFileSync(generation, '00000000-0000-4000-8000-000000000000\n', {mode:0o600});
   let available = true, matchingAvailable = typeof classify === 'function', modelCalls = 0, busy = false, loss = null;
   const holds = [];
   const calls = [], modelInputs = [];
