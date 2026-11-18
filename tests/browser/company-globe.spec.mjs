@@ -205,7 +205,9 @@ test('narrow touch horizontal rotation preserves native vertical scrolling, pinc
 test('a second pinch contact outside the globe stops rotation while preserving native browser zoom', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
   const page = await context.newPage(); const errors = await open(page), target = globe(page), land = coast(page);
-  await target.scrollIntoViewIfNeeded(); await expect(target).toBeInViewport({ ratio: 1 });
+  // Leave room for the contact above the globe, independent of masthead height.
+  await target.evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
+  await expect(target).toBeInViewport({ ratio: 1 });
   const box = await target.boundingBox(), at = await center(page), secondY = box.y - 24;
   expect(secondY).toBeGreaterThan(0);
   const initial = await land.getAttribute('d'), zoom = await page.evaluate(() => visualViewport.scale);
