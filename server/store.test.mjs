@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import fs, { chmodSync, lstatSync, mkdtempSync, rmSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, DAY_MS } from './store.mjs';
@@ -18,6 +19,39 @@ function fixture(id = 'job-1', first = AT - 3 * DAY_MS) {
       bodySha256: 'a'.repeat(64), textSha256: createHash('sha256').update(text).digest('hex'), normalizationVersion: 1, bodyBytes: 400, truncated: false } };
 }
 const snapshot = (jobs = [fixture()], extra = {}) => ({ schemaVersion: 1, snapshotAt: iso(AT), verifiedAt: iso(AT), selection: { rule: 'fixture' }, jobs, observations: [], unknownIds: [], ...extra });
+
+test('a shared database reopens without changing modes on files owned by the other service', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'justup-shared-owner-'));
+  const path = join(directory, 'state.sqlite');
+  const files = new Set([path, `${path}-wal`, `${path}-shm`]);
+  const originalUmask = process.umask(0o007);
+  let api, runner;
+  try {
+    chmodSync(directory, 0o2770);
+    api = openStore(path, { sharedState: true });
+    api.db.exec('CREATE TABLE shared_probe (value TEXT);');
+    for (const file of files) assert.equal(lstatSync(file).mode & 0o7777, 0o660);
+
+    const originalChmod = fs.chmodSync;
+    t.mock.method(fs, 'chmodSync', (file, mode) => {
+      if (files.has(file)) throw Object.assign(new Error('Only the owner can change this mode.'), { code: 'EPERM' });
+      return originalChmod(file, mode);
+    });
+    syncBuiltinESMExports();
+
+    runner = openStore(path, { sharedState: true });
+    runner.db.prepare('INSERT INTO shared_probe VALUES (?)').run('runner');
+    assert.equal(api.db.prepare('SELECT value FROM shared_probe').get().value, 'runner');
+    for (const file of files) assert.equal(lstatSync(file).mode & 0o7777, 0o660);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    runner?.close();
+    api?.close();
+    process.umask(originalUmask);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('store isolates SQLite settings and strips unapproved imported fields', (t) => {
   const s = openStore(); t.after(() => s.close());
