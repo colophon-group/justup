@@ -26,7 +26,7 @@ const handleLocaleSeam = await localeSeam();
 const assets = { fetch: async request => {
   const path = resolve(files, '.' + new URL(request.url).pathname);
   if (!path.startsWith(files + sep)) return new Response('Not found', { status: 404 });
-  try { return new Response(await readFile(path), { headers: { 'Content-Type': ({ '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' })[extname(path)] || 'application/octet-stream' } }); }
+  try { return new Response(await readFile(path), { headers: { 'Content-Type': ({ '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' })[extname(path)] || 'application/octet-stream' } }); }
   catch { return new Response('Not found', { status: 404 }); }
 } };
 // Edge validates an HTTPS public origin; this local HTTP adapter preserves the origin contract internally.

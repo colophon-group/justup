@@ -14,6 +14,7 @@ import { SearchWorkspace } from "../features/search/SearchWorkspace.tsx";
 import { useRoute, pageHref, navigate } from "./useRoute.ts";
 import { applyPublicMetadata, publicMetadata, type PublicDocumentState } from '../public/metadata.ts';
 import type { PublicBootstrap } from "../public/bootstrap.ts";
+import wordmarkUrl from "./justup-wordmark.svg?inline";
 import { coverageDescription } from "../shared/coverage.ts";
 import { HiringWire } from "../features/news/HiringWire.tsx";
 import { DialogSuspension } from '../shared/Dialog.tsx';
@@ -323,7 +324,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
         </header>
         <div className="masthead">
           <a className="brand" href={pageHref("jobs", locale)} aria-label={t("Justup home")}>
-            JUST<span>UP.</span>
+            <img src={wordmarkUrl} alt="" width="606" height="198" />
           </a>
           <p className="motto">{t("Fresh work.")}<br />{t("Clear sources.")}</p>
           <span className="live">
