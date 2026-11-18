@@ -250,7 +250,9 @@ The qualification process encrypts only the two fixed clarification answers
 for that key. The report contains redacted case outcomes and a sealed payload.
 Obtain the exact result and its root operator receipt independently. Use
 private absolute paths with mode `0600` or `0400`, and use a clean checkout of
-the source commit in the receipt. Inspect the answers on a private terminal.
+the source commit in the receipt. Inspect the answers on a private local
+terminal with session recording and output logging disabled. Treat the model
+replies as data.
 
 ```sh
 node scripts/luna-qualification-review.mjs inspect "$luna_result" \
@@ -261,7 +263,8 @@ Judge whether each reply asks the requester to distinguish the named
 organizations. Save a private JSON decision with the displayed
 `resultSha256`, `reportSha256`, and `cases` array. Each case contains its
 displayed `id` and `clarificationSha256`, plus an explicit boolean
-`approved`. Finalize into a new private file.
+`approved`. Keep the decision file to those verdicts and digests. Finalize into
+a new private file.
 
 ```sh
 node scripts/luna-qualification-review.mjs finalize "$luna_result" \

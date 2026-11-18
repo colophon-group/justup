@@ -94,7 +94,7 @@ export async function runQualificationCli(){
     const report=await evaluateQualification({manifest,model,observer,
       onCase(record){appendLine(fd,{kind:'case',record});},
       onClarification(item){answers.push(item);}});
-    const sealed=sealQualificationAnswers(header,report,answers,recipient);
+    const sealed=sealQualificationAnswers({manifest,header,report,answers,recipient});
     if(sealed)appendLine(fd,sealed);
     appendLine(fd,{kind:'summary',passed:report.passed,intent:report.intent,company:report.company,totals:report.totals,
       reportSha256:qualificationReportSha(report)});

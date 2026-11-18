@@ -39,9 +39,17 @@ function associatedData(header, reportSha256) {
   return Buffer.from(JSON.stringify([...bindingKeys.map(key => header[key]), reportSha256]));
 }
 
-function checkedAnswers(report, answers) {
+function reviewCases(manifest, report) {
+  const expected = new Set(manifest.company.cases
+    .filter(entry => entry.expectedStatus === 'clarification').map(entry => entry.id));
   const pending = report.cases.filter(record => record.manualReviewPending);
-  if (pending.length > 2 || !Array.isArray(answers) || answers.length !== pending.length) fail();
+  if (expected.size !== 2 || pending.some(record => record.kind !== 'company' || record.repeatIndex !== 0
+        || !expected.delete(record.id) || !hash(record.clarificationSha256))) fail();
+  return pending;
+}
+
+function checkedAnswers(pending, answers) {
+  if (!Array.isArray(answers) || answers.length !== pending.length) fail();
   for (const [index, item] of answers.entries()) {
     const record = pending[index];
     if (!exact(item, ['id', 'clarificationSha256', 'answer']) || item.id !== record.id
@@ -56,8 +64,8 @@ function checkedAnswers(report, answers) {
 export const qualificationReportSha = report => sha(Buffer.from(JSON.stringify(report)));
 const oaep = { padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' };
 
-export function sealQualificationAnswers(header, report, answers, recipient) {
-  checkedAnswers(report, answers);
+export function sealQualificationAnswers({ manifest, header, report, answers, recipient }) {
+  checkedAnswers(reviewCases(manifest, report), answers);
   if (!answers.length) return null;
   if (header.reviewKeySha256 !== recipient.sha256) fail();
   const plaintext = Buffer.from(JSON.stringify(answers));
@@ -81,10 +89,11 @@ export function sealQualificationAnswers(header, report, answers, recipient) {
   }
 }
 
-export function openQualificationAnswers({ header, report, sealed }, privateKey) {
+export function openQualificationAnswers({ header, report, sealed }, privateKey, manifest) {
+  const pending = reviewCases(manifest, report);
   const key = createPrivateKey(privateKey);
   if (sha(publicBytes(createPublicKey(key))) !== header.reviewKeySha256) fail();
-  if (sealed === null) return checkedAnswers(report, []);
+  if (sealed === null) return checkedAnswers(pending, []);
   if (!exact(sealed, ['kind', 'version', 'wrappedKey', 'nonce', 'tag', 'ciphertext'])
       || sealed.kind !== 'sealed_clarifications' || sealed.version !== 1) fail();
   const nonce = bytes(sealed.nonce, 12), tag = bytes(sealed.tag, 16);
@@ -97,7 +106,7 @@ export function openQualificationAnswers({ header, report, sealed }, privateKey)
     decipher.setAAD(associatedData(header, qualificationReportSha(report)));
     decipher.setAuthTag(tag);
     const plaintext = Buffer.concat([decipher.update(bytes(sealed.ciphertext, 4800)), decipher.final()]);
-    try { return checkedAnswers(report, JSON.parse(plaintext)); }
+    try { return checkedAnswers(pending, JSON.parse(plaintext)); }
     finally { plaintext.fill(0); }
   } finally {
     secret.fill(0);

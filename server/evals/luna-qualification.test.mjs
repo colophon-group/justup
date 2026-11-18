@@ -179,7 +179,7 @@ test('sealed clarifications open only for their registered reviewer and exact ro
   const header={kind:'luna_qualification_start',version:2,runId:'a'.repeat(32),
     sourceCommit:'b'.repeat(40),buildIdentity:'c'.repeat(64),hostPlanSha256:'d'.repeat(64),
     manifestSha256,grantSha256:'e'.repeat(64),reviewKeySha256:reviewer.sha256};
-  const sealed=sealQualificationAnswers(header,report,answers,reviewer);
+  const sealed=sealQualificationAnswers({manifest,header,report,answers,recipient:reviewer});
   const reportSha256=qualificationReportSha(report);
   const bytes=Buffer.from([header,...report.cases.map(record=>({kind:'case',record})),sealed,
     {kind:'summary',passed:report.passed,intent:report.intent,company:report.company,totals:report.totals,reportSha256}]
@@ -189,14 +189,17 @@ test('sealed clarifications open only for their registered reviewer and exact ro
   const receipt={...identity,reportSha256,resultSha256:sha(bytes)};
   const evidence=parseQualificationResult(bytes,receipt);
   const key=privateKey.export({format:'pem',type:'pkcs8'});
-  assert.deepEqual(openQualificationAnswers(evidence,key),answers);
+  assert.deepEqual(openQualificationAnswers(evidence,key,manifest),answers);
   assert.throws(()=>parseQualificationResult(bytes,{...receipt,buildIdentity:'0'.repeat(64)}));
   assert.throws(()=>parseQualificationResult(Buffer.concat([bytes,Buffer.from('\n')]),receipt));
-  assert.throws(()=>openQualificationAnswers({...evidence,header:{...header,runId:'0'.repeat(32)}},key));
+  assert.throws(()=>openQualificationAnswers({...evidence,header:{...header,runId:'0'.repeat(32)}},key,manifest));
   const modifiedCipher=Buffer.from(sealed.ciphertext,'base64');
   modifiedCipher[0]^=1;
-  assert.throws(()=>openQualificationAnswers({...evidence,sealed:{...sealed,ciphertext:modifiedCipher.toString('base64')}},key));
-  assert.throws(()=>openQualificationAnswers(evidence,generateKeyPairSync('ed25519').privateKey.export({format:'pem',type:'pkcs8'})));
+  assert.throws(()=>openQualificationAnswers({...evidence,sealed:{...sealed,ciphertext:modifiedCipher.toString('base64')}},key,manifest));
+  assert.throws(()=>openQualificationAnswers(evidence,generateKeyPairSync('ed25519').privateKey.export({format:'pem',type:'pkcs8'}),manifest));
+  const wrongCase={...report,cases:report.cases.map(record=>record.id===answers[0].id?{...record,id:'unreviewed'}:record)};
+  assert.throws(()=>sealQualificationAnswers({manifest,header,report:wrongCase,answers,recipient:reviewer}));
+  assert.throws(()=>openQualificationAnswers({...evidence,report:wrongCase},key,manifest));
   const decisions={resultSha256:receipt.resultSha256,reportSha256,
     cases:answers.map(({id,clarificationSha256})=>({id,clarificationSha256,approved:true}))};
   const finalized=finalizeQualificationReview({evidence,answers,decisions,manifest,receipt});

@@ -63,7 +63,7 @@ function main([command, resultPath, receiptPath, keyPath, decisionsPath, output,
   if (sha256 !== evidence.header.manifestSha256) fail();
   const key = readPrivate(keyPath, 16_384);
   let answers;
-  try { answers = openQualificationAnswers(evidence, key); }
+  try { answers = openQualificationAnswers(evidence, key, manifest); }
   finally { key.fill(0); }
   if (!answers.length) fail();
   if (command === 'inspect') {
