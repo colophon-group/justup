@@ -436,6 +436,23 @@ class CoverageIntakeContracts(unittest.TestCase):
             self.install()
         self.assertFalse(self.destination.exists())
 
+    def test_keeps_an_immutable_period_that_appears_after_the_inventory_check(self):
+        target = self.destination / (self.period + '.json')
+        link = os.link
+
+        def publish_other_file(source, destination, **kwargs):
+            self.assertEqual(destination, target)
+            target.write_bytes(b'another retained artifact')
+            os.chown(target, os.getuid(), self.queue.stat().st_gid)
+            target.chmod(0o640)
+            return link(source, destination, **kwargs)
+
+        with patch.object(host.os, 'link', side_effect=publish_other_file):
+            with self.assertRaises(FileExistsError):
+                self.install()
+        self.assertEqual(target.read_bytes(), b'another retained artifact')
+        self.assertEqual(list(self.destination.iterdir()), [target])
+
     def test_refuses_aliases_and_never_evacuates_an_existing_period_to_make_room(self):
         self.install()
         target = self.destination / (self.period + '.json')

@@ -1057,7 +1057,11 @@ def install_coverage(stream, *, period, source_version, checksum, build, expecte
                     os.fchown(output.fileno(), OPERATOR_UID, queue_gid)
                     os.fchmod(output.fileno(), 0o640)
                     os.fsync(output.fileno())
-                os.replace(stage, target)
+                if current.resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan:
+                    raise ValueError('The build or host plan changed before coverage publication.')
+                # An exclusive link protects a period that appeared after the
+                # inventory read. The runner rejects the temporary second link.
+                os.link(stage, target, follow_symlinks=False)
             finally:
                 Path(stage).unlink(missing_ok=True)
         sync_directory(destination)
