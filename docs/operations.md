@@ -178,10 +178,12 @@ Codex stays pinned to official 0.159.2 Linux ARM64 and Node to 24.22.2. The comp
 Use the reviewed installed `preview-host.py` and the matching active backend
 artifact. Complete the dedicated model identity, retention and tool checks and
 verify its exact-build, exact-host-plan attestation. Stop the ordinary preview
-API, runner and tunnel for this measurement. Leave only the already-reviewed
-broker socket available to the qualification client. The operator command
-refuses an existing qualification unit and verifies the ordinary application
-units are inactive before consuming a grant.
+API, runner, tunnel and broker process for this measurement. Leave the
+already-reviewed broker socket active so the first connection starts the
+broker against the current release. Before consuming a grant, the operator
+command requires the application to be stopped and the broker's protected
+invocation directory empty. It also checks that the fixed transient service
+name is available.
 
 Prepare `/srv/justup_preview/queue/qualification` as root with the queue group
 and mode `0750`. Its `receipts` directory is root-owned mode `0700`, and its

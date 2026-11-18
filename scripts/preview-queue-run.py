@@ -167,8 +167,10 @@ def protected_qualification(cgroup, status):
 
 
 def verify_qualification_access():
-    for path in ('state', 'config', 'model', 'logs', 'queue/config', 'queue/budget', 'queue/work'):
-        if os.access(BASE / path, os.R_OK | os.X_OK):
+    directories = ('state', 'config', 'model', 'logs', 'queue/config', 'queue/budget', 'queue/work',
+                   'queue/source-coverage-v1', 'queue/source-coverage-v2', 'queue/qualification/receipts')
+    for path in directories:
+        if os.access(BASE / path, os.R_OK) or os.access(BASE / path, os.X_OK):
             raise ValueError('Luna qualification can reach a private runtime directory.')
     for family in (socket.AF_INET, socket.AF_INET6):
         try:

@@ -1032,6 +1032,21 @@ def luna_command(checksum):
     ]
 
 
+def require_idle_luna_broker():
+    if (call('systemctl', 'show', '--property=ActiveState', '--value',
+             'justup-preview-model.socket', capture=True) != 'active'
+            or call('systemctl', 'show', '--property=ActiveState', '--value',
+                    'justup-preview-model.service', capture=True) != 'inactive'):
+        raise ValueError('Luna qualification requires the active broker socket and a stopped broker.')
+    path = BASE / 'model/invocations'
+    meta = path.lstat()
+    model_uid = pwd.getpwnam(MODEL_USER).pw_uid
+    if (path.resolve(strict=True) != path or not stat.S_ISDIR(meta.st_mode) or meta.st_dev != BASE.stat().st_dev
+            or model_uid == 0 or meta.st_uid != model_uid or stat.S_IMODE(meta.st_mode) != 0o700
+            or next(path.iterdir(), None) is not None):
+        raise ValueError('Retained or unsafe broker invocations require operator review.')
+
+
 def run_luna_qualification(checksum, build, expected_plan):
     if any(not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value)
            for value in (checksum, build, expected_plan)):
@@ -1050,9 +1065,7 @@ def run_luna_qualification(checksum, build, expected_plan):
     for unit in APPLICATION_UNITS:
         if call('systemctl', 'show', '--property=ActiveState', '--value', unit, capture=True) not in {'inactive', 'failed'}:
             raise ValueError('Stop the ordinary preview application before qualification.')
-    if call('systemctl', 'show', '--property=ActiveState', '--value',
-            'justup-preview-model.socket', capture=True) != 'active':
-        raise ValueError('The reviewed broker socket must already be active.')
+    require_idle_luna_broker()
 
     folder = BASE / 'queue/qualification'
     queue_user = pwd.getpwnam(RUNNER_USER)
@@ -1076,6 +1089,7 @@ def run_luna_qualification(checksum, build, expected_plan):
             raise ValueError('Review retained qualification evidence before making another run.')
         if (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan:
             raise ValueError('The build or host plan changed before Luna qualification.')
+        require_idle_luna_broker()
         receipt = {'runId': run_id, 'grantSha256': checksum, 'buildIdentity': build, 'hostPlanSha256': expected_plan}
         write_update_file(proofs / (run_id + '.json'), (json.dumps(receipt, sort_keys=True) + '\n').encode(), 0o400)
         os.fsync(fd)

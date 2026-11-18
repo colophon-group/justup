@@ -366,6 +366,10 @@ class LunaSandboxContracts(unittest.TestCase):
             path.mkdir()
             path.chmod(0o700)
         os.chown(self.results, uid, gid)
+        self.invocations = self.base / 'model/invocations'
+        self.invocations.mkdir(parents=True)
+        self.invocations.chmod(0o700)
+        os.chown(self.invocations, uid, gid)
         self.manifest = {'buildIdentity': self.build, 'sourceCommit': 'c' * 40,
                          'files': {host.LUNA_MANIFEST: 'd' * 64}}
         instant = host.datetime.now(host.timezone.utc).timestamp()
@@ -425,6 +429,13 @@ class LunaSandboxContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'ordinary preview application'):
             self.run_qualification()
         self.active['justup-preview-runner.service'] = 'inactive'
+        self.active['justup-preview-model.service'] = 'active'
+        with self.assertRaisesRegex(ValueError, 'stopped broker'):
+            self.run_qualification()
+        self.active['justup-preview-model.service'] = 'inactive'
+        (self.invocations / 'retained').touch()
+        with self.assertRaisesRegex(ValueError, 'Retained or unsafe broker'):
+            self.run_qualification()
         self.active[host.LUNA_UNIT] = 'loaded'
         with self.assertRaisesRegex(ValueError, 'already loaded'):
             self.run_qualification()
@@ -439,6 +450,9 @@ class LunaSandboxContracts(unittest.TestCase):
         self.assertFalse(queue.protected_qualification(cgroup, status.replace('NoNewPrivs:\t1', 'NoNewPrivs:\t0')))
         self.assertFalse(queue.protected_qualification(cgroup, status.replace('0000\n', '0001\n')))
         with patch.object(queue.os, 'access', return_value=True), self.assertRaisesRegex(ValueError, 'private runtime'):
+            queue.verify_qualification_access()
+        search_only = lambda path, mode: path == queue.BASE / 'queue/config' and mode == os.X_OK
+        with patch.object(queue.os, 'access', side_effect=search_only), self.assertRaisesRegex(ValueError, 'private runtime'):
             queue.verify_qualification_access()
         with patch.object(queue.os, 'access', return_value=False), \
              patch.object(queue.socket, 'socket', side_effect=OSError(errno.EAFNOSUPPORT, 'fixture')):
