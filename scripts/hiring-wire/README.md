@@ -33,6 +33,8 @@ for protected configuration, recovery boundaries and verification limits.
 
 `node scripts/hiring-wire/check-snapshot.mjs /absolute/reviewed-snapshot.json --period 2026-11-02T00:00:00.000Z` validates a bounded source projection and prints aggregate counts and a hash. It does not import, publish or echo source identifiers. A valid file still needs the reviewed authoritative producer; syntax validation cannot establish source trust.
 
+`node scripts/hiring-wire/check-snapshot.mjs --artifact --source-version jobseek-coverage-v2 --period 2026-11-02T00:00:00.000Z < "$private_producer_wrapper"` validates the exact Jobseek wrapper, its inner hash and the compiled period. Use the [reviewed host handoff](../../docs/source-coverage.md#install-a-reviewed-weekly-artifact-on-preview) to install the verified bytes for the runner.
+
 The durable selection script is a small declarative recipe in `hiring_wire_tool_versions`. Sol reads, replaces and executes it through the exported narrow tools in `server/hiring-wire-editorial.mjs`. It controls shortlist filtering, sorting, the item budget and avoidance of recent selections. Arbitrary JavaScript, commands, paths and URLs are rejected. Each edition saves the exact recipe revision and content; the newest 32 working revisions remain available. Source changes use normal repository review, while bounded recipe updates form the editorial workspace.
 
 The server suite recursively discovers the Wire tests, including the CLI contract, with `node scripts/test-server.mjs`. Synthetic fixtures are test-only and cannot become shipped editions. No new package or permanent service is used.

@@ -26,6 +26,7 @@ import re
 import select
 import stat
 import time
+from datetime import date
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
@@ -58,6 +59,10 @@ FEED_ADDITIONS = {'scripts/preview-feed.py', *(f'deploy/justup-preview/{name}' f
 DRILL_ADDITIONS = {'scripts/preview-failure-drill.py'}
 BACKUP_ADDITIONS = {f'deploy/justup-preview/{name}' for name in BACKUP_UNITS}
 FEED_SOCKET = Path('/run/justup-preview-feed.sock')
+COVERAGE_ARTIFACT_BYTES = 6 * MIB
+COVERAGE_PERIODS_PER_VERSION = 4
+COVERAGE_DIRS = {'jobseek-coverage-v1': 'source-coverage-v1', 'jobseek-coverage-v2': 'source-coverage-v2'}
+COVERAGE_CHECKER = 'app/scripts/hiring-wire/check-snapshot.mjs'
 
 
 def call(*args, capture=False):
@@ -373,7 +378,7 @@ def artifact_module():
     return result
 
 
-def require_operator(cleanup=False):
+def require_operator(cleanup=False, *, cleanup_logs=True):
     if os.geteuid() != 0:
         raise ValueError('Deployment and teardown require the dedicated root operator step.')
     if any(os.path.lexists(BASE / name) for name in (UPGRADE_LOCK, '.preview-schema-migration.lock')):
@@ -384,7 +389,7 @@ def require_operator(cleanup=False):
         # owned marker. Lost reservation must not block safe normal unmount.
         _verify_storage(check_reserve=False, require_preallocation=False)
     else:
-        guard()
+        guard(cleanup_logs=cleanup_logs)
 
 
 def owned_path(path, *, directory=False):
@@ -958,6 +963,110 @@ def switch(build):
     return {'current': build, 'apiStopped': True, 'activated': False}
 
 
+def coverage_file(path, group):
+    meta = path.lstat()
+    if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != OPERATOR_UID or meta.st_gid != group
+            or stat.S_IMODE(meta.st_mode) != 0o640 or meta.st_nlink != 1
+            or not 0 < meta.st_size <= COVERAGE_ARTIFACT_BYTES
+            or not re.fullmatch(r'\d{4}-\d{2}-\d{2}\.json', path.name)
+            or date.fromisoformat(path.stem).weekday() != 0):
+        raise ValueError('Source coverage inventory contains an unsafe or unresolved entry.')
+
+
+def check_coverage_bytes(release, queue_uid, queue_gid, data, period_end, source_version):
+    # Use the retained, hash-verified decoder and fact compiler with no inherited
+    # provider environment or operator privileges.
+    return json.loads(subprocess.run(
+        [str(release / 'runtime/bin/node'), '--permission', '--allow-fs-read=' + str(release / 'app'),
+         str(release / COVERAGE_CHECKER), '--artifact', '--source-version', source_version, '--period', period_end],
+        input=data, cwd=release, env={'LANG': 'C.UTF-8', 'TZ': 'UTC'},
+        user=queue_uid, group=queue_gid, extra_groups=[], umask=0o077,
+        capture_output=True, check=True, timeout=30).stdout)
+
+
+def install_coverage(stream, *, period, source_version, checksum, build, expected_plan):
+    def is_sha(value):
+        return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value)
+
+    if (not all(map(is_sha, (checksum, build, expected_plan))) or source_version not in COVERAGE_DIRS
+            or not isinstance(period, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', period)
+            or date.fromisoformat(period).weekday() != 0):
+        raise ValueError('An exact UTC Monday, source version, transfer hash, build and host plan are required.')
+    require_operator(cleanup_logs=False)
+    artifact = artifact_module()
+    current = BASE / 'current'
+    release = BASE / 'releases' / build
+    if current.resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan:
+        raise ValueError('The active preview build or installed plan differs from the approved transfer.')
+    owned_path(release, directory=True)
+    manifest = artifact.verify_directory(release)
+    if manifest['buildIdentity'] != build or COVERAGE_CHECKER not in manifest['files']:
+        raise ValueError('The verified active release lacks the fixed coverage checker.')
+
+    queue = BASE / 'queue'
+    queue_user = pwd.getpwnam(RUNNER_USER)
+    queue_uid, queue_gid = queue_user.pw_uid, queue_user.pw_gid
+    if queue_uid == 0 or queue_gid == 0:
+        raise ValueError('Coverage validation requires the dedicated queue identity.')
+    meta = owned_path(queue, directory=True)
+    if meta.st_gid != queue_gid or stat.S_IMODE(meta.st_mode) != 0o750 or meta.st_dev != BASE.stat().st_dev:
+        raise ValueError('Queue storage differs from the guarded preview allocation.')
+
+    data = stream.read(COVERAGE_ARTIFACT_BYTES + 1)
+    if not 0 < len(data) <= COVERAGE_ARTIFACT_BYTES or hashlib.sha256(data).hexdigest() != checksum:
+        raise ValueError('Transfer bytes differ from the reviewed wrapper digest or byte cap.')
+    period_end = period + 'T00:00:00.000Z'
+    proof = check_coverage_bytes(release, queue_uid, queue_gid, data, period_end, source_version)
+    if (not isinstance(proof, dict) or set(proof) != {
+            'periodEnd', 'snapshotSha256', 'comparableCompanies', 'suppressedScopes'}
+            or proof['periodEnd'] != period_end or not is_sha(proof['snapshotSha256'])
+            or any(type(proof[name]) is not int or not 0 <= proof[name] <= maximum
+                   for name, maximum in (('comparableCompanies', 500), ('suppressedScopes', 2000)))):
+        raise ValueError('The retained coverage checker returned an invalid receipt.')
+
+    destination = queue / COVERAGE_DIRS[source_version]
+    fd = os.open(queue, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if current.resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan:
+            raise ValueError('The build or host plan changed during source verification.')
+        if not os.path.lexists(destination):
+            destination.mkdir(mode=0o700)
+            os.chown(destination, OPERATOR_UID, queue_gid)
+            destination.chmod(0o750)
+            os.fsync(fd)
+        meta = owned_path(destination, directory=True)
+        if meta.st_gid != queue_gid or stat.S_IMODE(meta.st_mode) != 0o750 or meta.st_dev != BASE.stat().st_dev:
+            raise ValueError('Source coverage storage differs from its protected directory contract.')
+        entries = list(destination.iterdir())
+        for entry in entries:
+            coverage_file(entry, queue_gid)
+        target = destination / (period + '.json')
+        replayed = target in entries
+        if replayed:
+            if digest(target) != checksum:
+                raise ValueError('An immutable artifact already exists for this version and period.')
+        else:
+            if len(entries) >= COVERAGE_PERIODS_PER_VERSION or shutil.disk_usage(BASE).free < 64 * MIB + len(data):
+                raise ValueError('Source coverage storage has reached its period or headroom limit.')
+            stage_fd, stage = tempfile.mkstemp(prefix='.coverage-', dir=destination)
+            try:
+                with os.fdopen(stage_fd, 'wb') as output:
+                    output.write(data)
+                    output.flush()
+                    os.fchown(output.fileno(), OPERATOR_UID, queue_gid)
+                    os.fchmod(output.fileno(), 0o640)
+                    os.fsync(output.fileno())
+                os.replace(stage, target)
+            finally:
+                Path(stage).unlink(missing_ok=True)
+        sync_directory(destination)
+    finally:
+        os.close(fd)
+    return {**proof, 'artifactSha256': checksum, 'buildIdentity': build, 'hostPlanSha256': expected_plan,
+            'sourceVersion': source_version, 'replayed': replayed}
+
+
 def installed_backup_units(expected_plan, *, skip_unowned=False):
     timer_link = UNIT_ROOT / 'timers.target.wants' / BACKUP_TIMER
     units_present = os.path.lexists(timer_link) or any(os.path.lexists(UNIT_ROOT / name) for name in BACKUP_UNITS)
@@ -1039,7 +1148,7 @@ def teardown(erase_data=False, expected_plan=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'install-coverage', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
@@ -1050,6 +1159,8 @@ def main():
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--sha256')
     parser.add_argument('--build-identity')
+    parser.add_argument('--period')
+    parser.add_argument('--source-version', choices=COVERAGE_DIRS)
     parser.add_argument('--erase-data', action='store_true')
     args = parser.parse_args()
     try:
@@ -1093,6 +1204,9 @@ def main():
             result = stage(args.bundle, args.sha256)
         elif args.command == 'switch':
             result = switch(args.build_identity)
+        elif args.command == 'install-coverage':
+            result = install_coverage(sys.stdin.buffer, period=args.period, source_version=args.source_version,
+                                      checksum=args.sha256, build=args.build_identity, expected_plan=args.reviewed_plan_sha)
         elif args.command == 'teardown':
             result = teardown(args.erase_data, args.reviewed_plan_sha)
         else:
