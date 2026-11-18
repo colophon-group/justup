@@ -800,7 +800,7 @@ def consume_batch(directory, manifest_path, manifest, digest, release, release_m
             if approval is not None:
                 digest_review = approval['originReviewSha256']
                 inherit['stdin'] = review.enter_context(open_origin_review(batch_id, digest_review))
-                argv += ['--origin-review-stdin', digest_review]
+                argv += ['--origin-review-stdin', digest_review, approval['candidateSha256']]
             result = run_as_api(argv, environment, release / 'app', 300, **inherit)
         if not isinstance(result, dict) or result.get('imported') is None or not latest_import_matches(digest, **match):
             raise FeedStageError('Application did not confirm the exact feed import.')
@@ -895,7 +895,10 @@ def approved_import_request():
     if (len(raw) != meta.st_size or type(version) is not int or version not in (1, 2)
             or set(request) != (keys | review_keys if version == 2 else keys)
             or any(not isinstance(request[key], str) or not SHA.fullmatch(request[key])
-                   for key in (review_keys | {'buildIdentity', 'planSha256'} if version == 2 else ('buildIdentity', 'planSha256')))):
+                   for key in ('buildIdentity', 'planSha256'))):
+        raise FeedStageError('The approved feed request is invalid.')
+    if version == 2 and not (all(request[key] is None for key in review_keys)
+                            or all(isinstance(request[key], str) and SHA.fullmatch(request[key]) for key in review_keys)):
         raise FeedStageError('The approved feed request is invalid.')
     validate_batch_reference(request['batchId'], request['manifestSha256'])
     validate_import_limit(request['maxJobs'])
@@ -916,8 +919,8 @@ def prepare_approved_batch(*, writer_fd):
         request = approved_import_request()
         if request is None:
             return {'status': 'waiting_for_approval'}
-        if request['schemaVersion'] != 1:
-            raise FeedStageError('Use a staging approval to prepare a feed candidate.')
+        if request['schemaVersion'] != 2 or request['originReviewSha256'] is not None:
+            raise FeedStageError('Use a preparation-only approval to prepare a feed candidate.')
         release = approved_release(request)
         batch_id, digest = request['batchId'], request['manifestSha256']
         if root_receipt(batch_id, digest) is not None:
@@ -936,6 +939,8 @@ def process_approved_batch(*, writer_fd):
         request = approved_import_request()
         if request is None:
             return {'status': 'waiting_for_approval'}
+        if request['schemaVersion'] == 2 and request['originReviewSha256'] is None:
+            return {'status': 'waiting_for_review'}
         release = approved_release(request)
         review = {'approval': request} if request['schemaVersion'] == 2 else {}
         result = process_batch_locked(request['batchId'], request['manifestSha256'], request['maxJobs'],

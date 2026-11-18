@@ -161,7 +161,9 @@ class ApprovedIntakeTests(unittest.TestCase):
             FEED.process_approved_batch(writer_fd=9)
 
     def test_prepare_only_pins_the_candidate_and_never_acknowledges(self):
-        self.approve()
+        self.approve({**self.request, 'schemaVersion': 2, 'candidateSha256': None, 'originReviewSha256': None})
+        self.assertEqual(FEED.process_approved_batch(writer_fd=9), {'status': 'waiting_for_review'})
+        self.authorize.assert_not_called()
         with patch.object(FEED, 'prepare_candidate', return_value={
                 'candidateSha256': 'e' * 64, 'manifestSha256': SHA, 'buildIdentity': 'b' * 64}) as prepare:
             result = FEED.prepare_approved_batch(writer_fd=9)
@@ -1013,7 +1015,8 @@ class ComposedImportTests(unittest.TestCase):
                         'schemaVersion': 1, 'batchId': 'd' * 32, 'manifestSha256': reconciled[3],
                         'buildIdentity': build, 'planSha256': 'f' * 64, 'maxJobs': 10,
                     }
-                    FEED.write_private(approval_path, json.dumps(approval).encode())
+                    FEED.write_private(approval_path, json.dumps({**approval, 'schemaVersion': 2,
+                                       'candidateSha256': None, 'originReviewSha256': None}).encode())
                     prepared = FEED.prepare_approved_batch(writer_fd=lease.fileno())
                     self.assertEqual(prepared['status'], 'prepared')
                     self.assertIsNone(FEED.root_receipt('d' * 32, reconciled[3]))
