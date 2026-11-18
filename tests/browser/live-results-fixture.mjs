@@ -10,7 +10,7 @@ export async function liveFixture() {
   const jobs = Array.from({ length: 24 }, (_, i) => ({ ...job(i + 1), firstObserved: new Date(Date.UTC(2026, 10, 1, 12, 0, -i)).toISOString() }));
   let preference = { accountId: 'reader', revision: 0, interfaceLocale: null, supportedInterfaceLocales: ['en', 'de', 'fr', 'it', 'es'], defaultInterfaceLocale: 'en', resolvedInterfaceLocale: 'en' };
   let streamFailure = null;
-  let current = jobs, workspace = { revision: 0, state: { activeSearchId: 'search-1', drafts: {} }, viewed: [], recoveredDrafts: [] }, staleCursor = false;
+  let current = jobs, settledAi = 'not_required', workspace = { revision: 0, state: { activeSearchId: 'search-1', drafts: {} }, viewed: [], recoveredDrafts: [] }, staleCursor = false;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const body = []; for await (const chunk of req) body.push(chunk);
@@ -39,7 +39,7 @@ export async function liveFixture() {
       if (staleCursor && url.searchParams.has('cursor')) { staleCursor = false; return json({ error: { code: 'stale_cursor', message: 'Import changed.' } }, 409); }
       const offset = Number(url.searchParams.get('cursor') || 0), items = current.slice(offset, offset + 12), more = offset + items.length < current.length;
       const searchId = url.pathname.split('/').at(-2);
-      return json({ searchId, revision: searches.find(item => item.id === searchId)?.revision ?? 1, items, continuation: { state: more ? 'open' : 'exhausted', cursor: more ? String(offset + items.length) : null }, ai: { status: 'not_required' } });
+      return json({ searchId, revision: searches.find(item => item.id === searchId)?.revision ?? 1, items, continuation: { state: more ? 'open' : 'exhausted', cursor: more ? String(offset + items.length) : null }, ai: { status: more && settledAi !== 'not_required' ? 'matching' : settledAi } });
     }
     if (url.pathname.startsWith('/api/')) return json({ items: [], nextCursor: null });
     let file = resolve(assets, '.' + url.pathname);
@@ -49,12 +49,12 @@ export async function liveFixture() {
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const snapshot = ({ items = current.slice(0, 96), retained = current.map(item => item.id), complete = true, reason = 'changed', revision = searches[0].revision, id = Buffer.from(String(++sequence).padStart(32, '0')).toString('base64url'), asOf = new Date(Date.UTC(2026, 10, 2, 12, 0, sequence)).toISOString() } = {}) => {
-    const event = { schemaVersion: 1, scope: 'active_search', searchId: 'search-1', revision, asOf, reason, searches: [{ searchId: 'search-1', revision, items, continuation: { state: current.length > items.length ? 'open' : 'exhausted', cursor: null, retryAfterMs: null }, ai: { status: 'not_required' }, hiddenMatches: { status: 'exact', count: 0 }, reconciliation: { complete, retainedItemIds: retained } }] };
+    const event = { schemaVersion: 1, scope: 'active_search', searchId: 'search-1', revision, asOf, reason, searches: [{ searchId: 'search-1', revision, items, continuation: { state: current.length > items.length ? 'open' : 'exhausted', cursor: null, retryAfterMs: null }, ai: { status: settledAi }, hiddenMatches: { status: 'exact', count: 0 }, reconciliation: { complete, retainedItemIds: retained } }] };
     for (const stream of connections) stream.res.write(`id: ${id}\nevent: snapshot\ndata: ${JSON.stringify(event)}\n\n`);
     return { id, event };
   };
   return { origin: `http://127.0.0.1:${server.address().port}`, calls, streams, jobs, snapshot,
-    setJobs(value) { current = value; }, setSession(value) { activeSession = value; }, setSearch(value) {
+    setJobs(value, aiStatus = 'not_required') { current = value; settledAi = aiStatus; }, setSession(value) { activeSession = value; }, setSearch(value) {
       searches = Array.isArray(value) ? value : [value];
       const ids = new Set(searches.map(item => item.id));
       workspace = { ...workspace, revision: workspace.revision + 1, state: { activeSearchId: ids.has(workspace.state.activeSearchId) ? workspace.state.activeSearchId : null, drafts: Object.fromEntries(Object.entries(workspace.state.drafts).filter(([id]) => id === 'new' || ids.has(id))) } };
