@@ -42,6 +42,42 @@ Start with one public-route and one non-mutating API check, each from two locati
 
 After the first two checks are qualified and headroom is confirmed, add a non-mutating `GET /api/v1/jobs` read-path check if needed to separate a functioning health endpoint from a broken customer job list. Do not create synthetic searches that enqueue work or spend model allowance.
 
+## Collect private host signals
+
+Use the exact observability-capable artifact and reviewed installed operator
+scripts. From the protected root environment on the reviewed preview host,
+run one bounded sample in the existing slice and save the JSON privately.
+
+```sh
+umask 077
+systemd-run --quiet --wait --pipe --collect --slice=justup-preview.slice \
+  --property=RuntimeMaxSec=60s --property=TimeoutStopSec=5s \
+  /usr/bin/python3 -I -B /srv/justup_preview/ops/preview-host.py observe \
+  --build-identity "$JUSTUP_PREVIEW_BUILD_ID" \
+  --reviewed-plan-sha "$JUSTUP_REVIEWED_PLAN_SHA" \
+  --host-machine-sha "$JUSTUP_PREVIEW_MACHINE_SHA" > "$JUSTUP_OBSERVATION_REPORT"
+```
+
+The report binds the sample to the active source, build and installed plan. It
+records fixed API, runner, tunnel, resource guard and timer states. The resource
+check runs without log cleanup or service stops. Free space is reported only for the
+verified preview mount. The backup check verifies the retained set and live
+deletion generation, then reports the latest usable age and snapshot count.
+
+The aggregate application read runs as the dedicated API user. It reports
+whether the current SQLite schema is readable, feed verification age and import generation, foreground
+queue age and the same-build runner heartbeat with capability flags. A stale
+private feed reports the age of the last full snapshot. A late heartbeat retains
+its age while capabilities close. Missing or invalid evidence is `null`, and an
+observed empty queue reports zero with no oldest age. The readout contains no
+request, account, job body, provider, or backup pathname data.
+
+Compare the report with the same-origin HTTP probes and verified database write
+readiness. An active service unit alone cannot establish these. Qualify sample
+time and backup-check overhead on the target before scheduling collection, then
+exercise data delivery, missing samples and phone paging under the approved
+Grafana route. This command is the manual host input to that process.
+
 ## Mac watcher
 
 `scripts/justup-incident-watch.py` is a one-shot watcher intended for a 120-second LaunchAgent interval. It uses a service account token with only `grafana-irm-app.alert-groups:read`, reads the [IRM alert-group list API](https://grafana.com/docs/grafana-cloud/observe-and-act/respond-to-incidents/reference/oncall-api/alertgroups/) with the exact Justup integration ID and `severity:critical` filter, and accepts only `new` or `acknowledged` groups. It never sends alert titles, payloads, logs or credentials to Codex. It sends one fixed prompt with a validated group ID to a dedicated chat.

@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync,writeFileSync,chmodSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createApiServices,createApiReadiness,readRunnerStatus } from './composition.mjs';
+import { createApiServices,createApiReadiness,readRunnerObservation,readRunnerStatus } from './composition.mjs';
 import { writeRunnerStatus,readRunnerConfig } from './runner-adapter.mjs';
 import { syntheticPolicyProof } from './policy-test-fixtures.mjs';
 const AT=Date.parse('2026-10-31T16:00:00Z'),sourceCommit='a'.repeat(40),buildIdentity='sha256:immutable';
@@ -18,6 +18,19 @@ test('missing/stale/wrong-build or malformed heartbeat fails closed without mode
 });
 test('fresh exact-build heartbeat exposes actual runner metadata and bounded boolean capabilities',t=>{
   const f=fixture(t);f.write();const r=createApiReadiness({config:f.config,now:()=>AT})();assert.equal(r.ready,true);assert.equal(r.runner.identity,'queue-build');assert.equal(r.runner.sourceCommit,sourceCommit);assert.equal(r.runner.buildIdentity,buildIdentity);assert.equal(r.runner.lastHeartbeat,new Date(AT).toISOString());assert.deepEqual(r.capabilities,{search:true,companyRequests:true,aiMatching:false});
+});
+test('private observation retains verified stale heartbeat age while API readiness stays closed', t => {
+  const f = fixture(t);
+  const options = { config: f.config, now: () => AT, expectedOwner: process.getuid() };
+  f.write({ updatedAt: new Date(AT - 125_000).toISOString() });
+  const observed = readRunnerObservation(options);
+  assert.equal(observed.ageMs, 125_000);
+  assert.equal(observed.ready, false);
+  assert.deepEqual(observed.capabilities, { search: false, companyRequests: false, aiMatching: false });
+  assert.equal(readRunnerStatus(options).lastHeartbeat, null);
+  assert.equal(readRunnerObservation({ ...options, expectedOwner: process.getuid() + 1 }), null);
+  f.write({ buildIdentity: 'wrong-build' });
+  assert.equal(readRunnerObservation(options), null);
 });
 test('API advertises queue availability and enqueues work without constructing inference providers',async t=>{
   const f=fixture(t);f.write();const db=new DatabaseSync(':memory:');t.after(()=>db.close());let serial=0;const queued=new Map();

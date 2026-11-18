@@ -14,17 +14,24 @@ import { createProductRecords } from './product-records.mjs';
 
 const disabled=()=>({search:false,companyRequests:false,aiMatching:false});
 export function runnerStatusPath(config){return config.runnerStatusPath??(typeof config.dbPath==='string'&&isAbsolute(config.dbPath)?join(dirname(config.dbPath),'runner-status.json'):null);}
-export function readRunnerStatus({config={},now=Date.now}={}){
-  const absent={ready:false,identity:null,sourceCommit:null,buildIdentity:null,lastHeartbeat:null,capabilities:disabled()};
+export function readRunnerObservation({config={},now=Date.now,expectedOwner}={}){
   try{
-    const path=runnerStatusPath(config);if(!isAbsolute(path)||!/^[a-f0-9]{40}$/.test(config.sourceCommit??'')||typeof config.buildIdentity!=='string'||!config.buildIdentity||config.buildIdentity.length>200)return absent;
-    const meta=lstatSync(path);if(!meta.isFile()||meta.isSymbolicLink()||meta.size>8192||(meta.mode&0o007)!==0)return absent;
+    const path=runnerStatusPath(config);if(!isAbsolute(path)||!/^[a-f0-9]{40}$/.test(config.sourceCommit??'')||typeof config.buildIdentity!=='string'||!config.buildIdentity||config.buildIdentity.length>200)return null;
+    const meta=lstatSync(path);if(!meta.isFile()||meta.isSymbolicLink()||meta.size>8192||(meta.mode&0o007)!==0
+      ||expectedOwner!==undefined&&(meta.uid!==expectedOwner||meta.nlink!==1))return null;
     const status=JSON.parse(readFileSync(path,'utf8'));
-    if(status.schemaVersion!==1||status.sourceCommit!==config.sourceCommit||status.buildIdentity!==config.buildIdentity||typeof status.identity!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(status.identity)||typeof status.ready!=='boolean'||typeof status.updatedAt!=='string')return absent;
-    const at=Date.parse(status.updatedAt);if(!Number.isFinite(at)||at>now()+1000||now()-at>30_000)return absent;
-    const c=status.capabilities;if(!c||!['aiMatching','companyRequests','search'].every(key=>typeof c[key]==='boolean')||Object.keys(c).some(key=>!['aiMatching','companyRequests','search','emailVerification','stripeBilling'].includes(key))||Object.values(c).some(v=>typeof v!=='boolean'))return absent;
-    return {ready:status.ready,identity:status.identity,sourceCommit:status.sourceCommit,buildIdentity:status.buildIdentity,lastHeartbeat:status.updatedAt,capabilities:status.ready?{...c}:disabled()};
-  }catch{return absent;}
+    if(status.schemaVersion!==1||status.sourceCommit!==config.sourceCommit||status.buildIdentity!==config.buildIdentity||typeof status.identity!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(status.identity)||typeof status.ready!=='boolean'||typeof status.updatedAt!=='string')return null;
+    const at=Date.parse(status.updatedAt),ageMs=now()-at;if(!Number.isSafeInteger(ageMs)||ageMs< -1000)return null;
+    const c=status.capabilities;if(!c||!['aiMatching','companyRequests','search'].every(key=>typeof c[key]==='boolean')||Object.keys(c).some(key=>!['aiMatching','companyRequests','search','emailVerification','stripeBilling'].includes(key))||Object.values(c).some(v=>typeof v!=='boolean'))return null;
+    return {ready:status.ready&&ageMs<=30_000,identity:status.identity,sourceCommit:status.sourceCommit,buildIdentity:status.buildIdentity,
+      lastHeartbeat:status.updatedAt,ageMs:Math.max(0,ageMs),capabilities:status.ready&&ageMs<=30_000?{...c}:disabled()};
+  }catch{return null;}
+}
+export function readRunnerStatus(options){
+  const observation=readRunnerObservation(options);
+  if(!observation||observation.ageMs>30_000)return {ready:false,identity:null,sourceCommit:null,buildIdentity:null,lastHeartbeat:null,capabilities:disabled()};
+  const {ageMs,...status}=observation;
+  return status;
 }
 export function createApiReadiness({config={},now=Date.now}={}){
   return ()=>{const {capabilities,...runner}=readRunnerStatus({config,now});return {ready:runner.ready,runner,capabilities};};

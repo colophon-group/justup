@@ -478,6 +478,11 @@ Backup expiry is physical cleanup; private deletion additionally invalidates and
 
 The CLI API logs only request ID, category, status and duration. The launcher accepts bounded JSON and drops other/raw output. It preserves only allowlisted categories, HTTP status, bounded numbers and generated request IDs. It never stores query/body/password/token/IP/provider output. Logs are mode 0600, at most 8 MiB/day for seven days; the minute guard prunes expired files and enforces the aggregate budget. Global journald settings remain unchanged. Record source verification age, queue depth, model latency/cost, pauses/failures, and Cloudflare/host usage from the actual integrated instrumentation; absent instrumentation is a verification gap, not a zero metric.
 
+Use the [private host observation](incident-alerting.md#collect-private-host-signals)
+to record unit, resource, backup, feed and foreground-queue evidence for the
+active immutable build. Combine it with the external checks and verify the
+delivery path before activating alerts.
+
 For local aggregate product and execution evidence, use the [product evidence guide](product-evidence.md). Its fixed private SQLite metadata is distinct from launcher logs: seven-day retention, 10,000 journey rows, 5,000 execution rows and 200 reference-only review candidates, with owner deletion/expiry/handoff. The default local CLI exports aggregates only; explicit reviewed synthetic/redacted case curation/export is separately bounded. No new service, public telemetry route, provider execution, schedule or resource allocation is enabled. Unknown per-call subscription cost remains null, and source-opening reports do not establish applications or hires.
 
 A guard failure stops only the explicitly named preview API, runner, tunnel, model socket and model service units. Investigate the actual kernel limits, root reserve and preview quota. Do not clear unrelated caches, resize the quota, restart the renderer or increase the allocation as an automatic recovery action. Viktor Shcherbakov owns incident coordination and policy review; use business@colophon-group.org for the operator contact. Actual policy approval and implemented retention/provider behavior remain release gates.
