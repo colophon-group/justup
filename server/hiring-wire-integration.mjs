@@ -2,9 +2,11 @@
 // Wire into the existing API/queue; this module starts no process or timer.
 import { isAbsolute,resolve } from 'node:path';
 import { createHiringWireService,WIRE_OWNER } from './hiring-wire.mjs';
+import { transaction } from './store.mjs';
 
 const DAY=86_400_000,MAX_ATTEMPTS=3,LAG=2*DAY;
 const RETRY_MS=[0,15*60_000,2*60*60_000];
+const SOURCE_POLL_MS=15*60_000;
 const exact=(value,keys)=>value!==null&&typeof value==='object'&&!Array.isArray(value)
   &&Object.getPrototypeOf(value)===Object.prototype&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
 const invalid=()=>new TypeError('Invalid Hiring Wire integration configuration.');
@@ -51,10 +53,12 @@ export async function createHiringWireRunner({db,tasks,now=Date.now,hiringWire,s
     next_attempt INTEGER NOT NULL,outcome TEXT NOT NULL
   ) STRICT;`);
   const scheduled=end=>db.prepare('SELECT * FROM hiring_wire_schedule WHERE period_end=?').get(end);
-  function beforeClaim() {
+  async function beforeClaim() {
     if(tasks.halted?.())return {state:'cleanup_unproven'};
     if(hiringWire?.enabled!==true)return {state:'disabled'};
-    const at=now(),end=hiringWirePeriodEnd(at),endAt=Date.parse(end);
+    if(!source)return {state:'source_unconfigured'};
+    let at=now();
+    const end=hiringWirePeriodEnd(at),endAt=Date.parse(end);
     if(at-endAt>LAG)return {state:'publication_window_closed',periodEnd:end};
     // One row per UTC week bounds restart/poll behavior independently of task
     // retention. No source history is inferred or synthesized by the schedule.
@@ -63,15 +67,18 @@ export async function createHiringWireRunner({db,tasks,now=Date.now,hiringWire,s
     let schedule=scheduled(end),task=schedule.task_id?tasks.get(WIRE_OWNER,schedule.task_id):null;
     if(task&&['pending','running'].includes(task.status))return {state:task.status,periodEnd:end};
     if(task?.status==='succeeded') {
-      if(schedule.outcome!=='published')db.prepare("UPDATE hiring_wire_schedule SET outcome='published' WHERE period_end=?").run(end);
+      if(schedule.outcome!=='published')db.prepare("UPDATE hiring_wire_schedule SET outcome='published' WHERE period_end=? AND task_id=?").run(end,task.id);
       return {state:'published',periodEnd:end};
     }
     if(task) {
       const outcome=task.status==='cancelled'?'cancelled':task.errorCode??'task_failed';
-      if(schedule.outcome!==outcome) {
+      if(schedule.outcome!==outcome&&!(schedule.outcome==='awaiting_source'&&outcome==='dependency_unavailable')) {
         const retryAt=Date.parse(task.updatedAt)+(RETRY_MS[schedule.attempts]??0);
-        db.prepare('UPDATE hiring_wire_schedule SET outcome=?,next_attempt=? WHERE period_end=?').run(outcome,retryAt,end);
-        schedule=scheduled(end);
+        const record=db.prepare(`UPDATE hiring_wire_schedule SET outcome=?,next_attempt=?
+          WHERE period_end=? AND task_id=? AND attempts=? AND next_attempt=? AND outcome=?`)
+          .run(outcome,retryAt,end,task.id,schedule.attempts,schedule.next_attempt,schedule.outcome);
+        if(!record.changes)return {state:scheduled(end)?.outcome??'task_unavailable',periodEnd:end};
+        schedule={...schedule,outcome,next_attempt:retryAt};
       }
       // Factual/quality/timeout/preemption failures require a decision. Only
       // unavailable dependencies get the fixed bounded automatic backoff.
@@ -79,23 +86,49 @@ export async function createHiringWireRunner({db,tasks,now=Date.now,hiringWire,s
     } else if(schedule.task_id) {
       // A removed terminal task is not permission to recreate an old edition.
       return {state:'task_unavailable',periodEnd:end};
-    } else if(schedule.attempts>0&&schedule.outcome!=='task_limit') {
+    } else if(schedule.attempts>0&&!['task_limit','awaiting_source'].includes(schedule.outcome)) {
       return {state:schedule.outcome,periodEnd:end};
     }
     if(schedule.attempts>=MAX_ATTEMPTS||at<schedule.next_attempt)return {state:schedule.outcome,periodEnd:end};
-    // enqueuePeriod has its own immediate transaction. A crash before the
-    // reference update rediscovers that same durable task, never a new turn.
-    try {
-      task=service.enqueuePeriod(end);
+    // A missing delivery never occupies the shared lease or spends an
+    // editorial retry. A frozen snapshot can be retried after inbox retirement.
+    const frozen=db.prepare('SELECT 1 FROM hiring_wire_editions WHERE period_end=? AND snapshot_sha256 IS NOT NULL').get(end);
+    if(!frozen&&typeof source.hasSnapshot==='function') {
+      const available=await source.hasSnapshot({periodEnd:end});
+      if(tasks.halted?.())return {state:'cleanup_unproven'};
+      at=now();
+      if(at<endAt||at-endAt>LAG)return {state:'publication_window_closed',periodEnd:end};
+      if(at<schedule.next_attempt)return {state:schedule.outcome,periodEnd:end};
+      if(!available) {
+        const wait=db.prepare(`UPDATE hiring_wire_schedule SET outcome='awaiting_source',next_attempt=?
+          WHERE period_end=? AND task_id IS ? AND attempts=? AND next_attempt=? AND outcome=?`)
+          .run(at+SOURCE_POLL_MS,end,schedule.task_id,schedule.attempts,schedule.next_attempt,schedule.outcome);
+        return {state:wait.changes?'awaiting_source':scheduled(end)?.outcome??'task_unavailable',periodEnd:end};
+      }
+    }
+    // Revalidate after file I/O. Queue admission and its schedule reference
+    // commit together, so a competing scheduler cannot skip task backoff.
+    return transaction(db,()=>{
+      if(tasks.halted?.())return {state:'cleanup_unproven'};
+      at=now();
+      if(at<endAt||at-endAt>LAG)return {state:'publication_window_closed',periodEnd:end};
+      const current=scheduled(end);
+      if(!current)return {state:'task_unavailable',periodEnd:end};
+      if(current.task_id!==schedule.task_id||current.attempts!==schedule.attempts
+        ||current.next_attempt!==schedule.next_attempt||current.outcome!==schedule.outcome||at<current.next_attempt) {
+        return {state:current.outcome,periodEnd:end};
+      }
+      try {task=service.enqueuePeriod(end);}
+      catch(error) {
+        const outcome=error?.code==='task_limit'?'task_limit':'invalid_output';
+        db.prepare('UPDATE hiring_wire_schedule SET attempts=min(3,attempts+1),outcome=?,next_attempt=? WHERE period_end=?')
+          .run(outcome,at+(RETRY_MS[schedule.attempts+1]??LAG),end);
+        return {state:outcome,periodEnd:end};
+      }
       db.prepare("UPDATE hiring_wire_schedule SET attempts=min(3,attempts+CASE WHEN task_id IS ? THEN 0 ELSE 1 END),task_id=?,outcome='queued' WHERE period_end=?")
         .run(task.id,task.id,end);
       return {state:task.status,periodEnd:end};
-    } catch(error) {
-      const outcome=error?.code==='task_limit'?'task_limit':'invalid_output';
-      db.prepare('UPDATE hiring_wire_schedule SET attempts=min(3,attempts+1),outcome=?,next_attempt=? WHERE period_end=?')
-        .run(outcome,at+(RETRY_MS[schedule.attempts+1]??LAG),end);
-      return {state:outcome,periodEnd:end};
-    }
+    });
   }
   return Object.freeze({runTask:service.runTask,beforeClaim});
 }

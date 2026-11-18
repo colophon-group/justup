@@ -44,14 +44,21 @@ call. No actual producer or complete 14-day history is assumed by this integrati
 
 Before claiming work, the runner computes the most recent Monday at 00:00 UTC.
 Within the consumer's fixed two-day publication window it records one durable
-schedule row and enqueues the same period through `enqueuePeriod`. The system
+schedule row and checks for the protected period file at most every 15 minutes.
+A missing, unsafe or unreadable file spends no task attempt and holds no lease. This
+leaves time for the producer's 24-hour export window and transfer. Once the
+file appears, the runner enqueues the period through `enqueuePeriod`. The task
+still reads, hashes and validates the artifact under its normal lease before
+asking for editorial work. Retries use the frozen snapshot after it has been
+recorded, including after inbox retirement. The system
 owner is `__hiring_wire__`; ordinary owners cannot enqueue this kind, and its
 task cannot produce a public task envelope. There is no public generation route.
 
 The schedule persists across restarts and retains 52 weeks of small metadata.
-If a process exits between task insertion and schedule-reference update, the
-idempotent period lookup rediscovers that same task. Polls do not create new
-tasks. Dependency-unavailable failures retry after 15 minutes and then two hours,
+Task insertion and its schedule reference commit together. An older pending
+task left without a reference is still recovered by its idempotent period key.
+Polls do not create new
+tasks. Dependency-unavailable task failures retry after 15 minutes and then two hours,
 with at most three scheduled attempts in the week. Queue-capacity admission
 uses the same bounded backoff. Factual, quality, cancellation, timeout and exhausted
 preemption failures require a decision and receive no automatic lucky retry.
