@@ -111,6 +111,26 @@ test('a newer origin verdict can correct a prior review without changing source 
   assert.deepEqual(admitted(), ['a']);
 });
 
+test('prior source membership still fences an exact omission of a policy-excluded posting', t => {
+  const store = openStore(); t.after(() => store.close());
+  const feed = createFeed({ db: store.db, now: () => at + 100 });
+  const source = posting('a');
+  const accepted = snapshot([source]);
+  store.importSnapshot(accepted, { originReview: review(accepted, { a: 'repost' }) });
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM justup_jobs').get().n, 0);
+
+  const removed = { ...snapshot([]), snapshotAt: iso(at + 10), verifiedAt: iso(at + 10) };
+  store.importSnapshot(removed, { originReview: { ...review(removed), reviewedAt: iso(at + 10) } });
+  assert.equal(store.db.prepare("SELECT omitted_at FROM justup_feed_omissions WHERE id='a'").get().omitted_at, at + 10);
+  const stale = { ...accepted, snapshotAt: iso(at + 20), verifiedAt: iso(at + 20) };
+  store.importSnapshot(stale, { originReview: { ...review(stale), reviewedAt: iso(at + 20) } });
+  assert.deepEqual(feed.eligibleJobs(), []);
+  const refreshed = { ...stale, snapshotAt: iso(at + 30), verifiedAt: iso(at + 30),
+    jobs: [{ ...source, evidence: { ...source.evidence, metadataFetchedAt: iso(at + 30) } }] };
+  store.importSnapshot(refreshed, { originReview: { ...review(refreshed), reviewedAt: iso(at + 30) } });
+  assert.deepEqual(feed.eligibleJobs().map(job => job.id), ['a']);
+});
+
 test('the operator import binds the review to exact snapshot bytes and a private regular file', t => {
   const dir = mkdtempSync(join(tmpdir(), 'justup-origin-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const dbPath = join(dir, 'state.sqlite'), candidatePath = join(dir, 'snapshot.json'), reviewPath = join(dir, 'review.json');

@@ -137,6 +137,9 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
       id TEXT PRIMARY KEY REFERENCES job_source_identities(id) ON DELETE CASCADE,
       omitted_at INTEGER NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS justup_feed_selected_source_ids (
+      id TEXT PRIMARY KEY REFERENCES job_source_identities(id) ON DELETE CASCADE
+    ) STRICT;
     PRAGMA user_version = ${SCHEMA_VERSION};
   `));
   // Retain source lifecycle independently from bounded bodies/metadata, including
@@ -236,10 +239,17 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
         const selectedIds = JSON.stringify(jobs.map(({ job }) => job.id));
         const omitted = `active=1 AND reserved=0 AND verified_at<>0
           AND id NOT IN (SELECT value FROM json_each(?))`;
-        db.prepare(`INSERT INTO justup_feed_omissions (id,omitted_at) SELECT id,? FROM justup_jobs WHERE ${omitted}
+        // Track source membership even when a verdict keeps a listing out of
+        // the retained result rows. Later source omissions still fence it.
+        db.prepare(`INSERT INTO justup_feed_omissions (id,omitted_at)
+          SELECT id,? FROM (SELECT id FROM justup_feed_selected_source_ids UNION
+            SELECT id FROM justup_jobs WHERE active=1 AND reserved=0 AND verified_at<>0)
+          WHERE id NOT IN (SELECT value FROM json_each(?))
           ON CONFLICT(id) DO UPDATE SET omitted_at=max(omitted_at,excluded.omitted_at)`).run(verifiedAt, selectedIds);
         db.prepare(`UPDATE justup_jobs SET verified_at=0 WHERE ${omitted}`).run(selectedIds);
         if (origin) {
+          db.exec('DELETE FROM justup_feed_selected_source_ids');
+          db.prepare('INSERT INTO justup_feed_selected_source_ids SELECT value FROM json_each(?)').run(selectedIds);
           const excluded = JSON.stringify(jobs.filter(({ job }) => !origin.direct.has(job.id)).map(({ job }) => job.id));
           db.prepare('UPDATE justup_jobs SET verified_at=0 WHERE active=1 AND reserved=0 AND id IN (SELECT value FROM json_each(?))').run(excluded);
         }
