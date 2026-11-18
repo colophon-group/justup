@@ -19,6 +19,11 @@ function resultsPath(search) {
   return `/api/v1/searches/${encodeURIComponent(search.id)}/results?revision=${search.revision}&limit=12`;
 }
 
+async function positionRow(page, jobId) {
+  const id = await page.evaluate(value => CSS.escape(value), jobId);
+  return page.locator(`[data-job=${id}]`);
+}
+
 async function viewSource(page, read, job) {
   const target = new URL(job.sourceUrl);
   if (target.protocol !== 'https:' || target.origin === new URL(page.url()).origin) {
@@ -28,8 +33,7 @@ async function viewSource(page, read, job) {
   const matchesSource = url => url.href === target.href;
   // Keep the actual outbound link and app write, with no request to the employer.
   const stopAtSource = route => route.fulfill({ body: '', contentType: 'text/html' });
-  const id = await page.evaluate(value => CSS.escape(value), job.id);
-  const row = page.locator(`[data-job=${id}]`);
+  const row = await positionRow(page, job.id);
   const posting = row.locator('a.posting-link');
   expect(await posting.evaluate((link, url) => link.href === url && link.target === '_blank', target.href)).toBe(true);
   let popup;
@@ -62,8 +66,15 @@ export async function exerciseReleaseReadingState(page, read, accepted, sourceUr
   const original = await json(read, resultsPath(accepted));
   const job = original.items?.find(item => item.sourceUrl === sourceUrl);
   const catalogue = await json(read, '/api/v1/search-options');
-  const language = catalogue.postingLanguages?.find(value => job?.postingLanguages?.includes(value.id))?.id;
-  if (!language) throw new Error('Choose a reviewed employer from the first results page with a selectable posting language.');
+  const rendered = new Set(await page.locator('[data-job]').evaluateAll(rows => rows.map(row => row.dataset.job)));
+  const alternatives = original.items?.filter(item => item.id !== job?.id && rendered.has(item.id)
+    && Array.isArray(item.postingLanguages)) ?? [];
+  const language = catalogue.postingLanguages?.find(value => job?.postingLanguages?.includes(value.id)
+    && alternatives.some(item => !item.postingLanguages.includes(value.id)))?.id;
+  const excluded = alternatives.find(item => !item.postingLanguages.includes(language));
+  if (!language || !excluded) {
+    throw new Error('Choose a reviewed posting with a selectable language and a rendered contrasting result from the first page.');
+  }
 
   await page.locator('#posting-languages').click();
   await page.locator(`#posting-language-dialog input[value=${JSON.stringify(language)}]`).check();
@@ -80,7 +91,8 @@ export async function exerciseReleaseReadingState(page, read, accepted, sourceUr
   await expect(page.locator('#posting-language-dialog')).toBeHidden();
   const filtered = await json(read, resultsPath(revised));
   expect(filtered.revision === revised.revision && filtered.items?.some(item => item.id === job.id)
-    && filtered.items.every(item => item.postingLanguages?.includes(language))).toBe(true);
+    && filtered.items.every(item => item.id !== excluded.id && item.postingLanguages?.includes(language))).toBe(true);
+  await expect(await positionRow(page, excluded.id)).toHaveCount(0);
   return { search: revised, language, viewed: await viewSource(page, read, job) };
 }
 

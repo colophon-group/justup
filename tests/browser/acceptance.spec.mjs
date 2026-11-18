@@ -151,6 +151,9 @@ for (const locale of GATE_LOCALES) {
       if (reading) {
         stage = 'reading preferences after sign-in';
         await admission();
+        const french = await read('/api/v1/session', { locale: 'fr' });
+        expect(french.status).toBe(200);
+        verifyPolicyState(config, french.json.policies, 'fr');
         await page.goto('/');
         await saveReleaseInterfaceLanguage(page, read, account.id);
         await relogin();
