@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 
 const KEY = /^[A-Za-z0-9_.:-]{1,128}$/;
+export const COMPANY_EVIDENCE_MAX_BYTES = 384 * 1024;
 const ATS = ['greenhouse.io', 'lever.co', 'workdayjobs.com', 'myworkdayjobs.com', 'smartrecruiters.com', 'ashbyhq.com', 'bamboohr.com', 'recruitee.com', 'personio.com', 'personio.de', 'teamtailor.com', 'icims.com', 'jobvite.com', 'successfactors.com', 'oraclecloud.com'];
 const problem = (code, status = 400, message = 'Invalid request.') => Object.assign(new Error(message), { code, status });
 const fold = (value) => value.trim().replace(/\s+/gu, ' ').toLocaleLowerCase('en');
@@ -76,7 +77,7 @@ function resolutionData(wrapper) {
       const initial = new URL(validateCompanyUrl(proof.url,{official:true}));
       const final = new URL(validateCompanyUrl(proof.finalUrl,{official:true}));
       if(!candidate.evidenceUrls.includes(initial.href)||!sameOfficialHost(initial.hostname,final.hostname)
-        ||proof.status!==200||!Number.isInteger(proof.bytes)||proof.bytes<1||proof.bytes>131072
+        ||proof.status!==200||!Number.isInteger(proof.bytes)||proof.bytes<1||proof.bytes>COMPANY_EVIDENCE_MAX_BYTES
         ||typeof proof.sha256!=='string'||!/^[a-f0-9]{64}$/.test(proof.sha256))throw problem('invalid_input');
     }
     return { status: 'candidate', candidate, clarification: null,provenance };
