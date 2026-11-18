@@ -486,6 +486,38 @@ class TransportTests(unittest.TestCase):
 
 
 class ImportSequenceTests(unittest.TestCase):
+    def test_operator_imports_with_private_config_owned_by_the_api_uid(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            config = base / 'config' / 'api.json'
+            config.parent.mkdir()
+            config.write_text(json.dumps({
+                'JUSTUP_ORIGIN': 'https://preview.example',
+                'JUSTUP_CSRF_SECRET': 'a' * 32,
+                'JUSTUP_CURSOR_SECRET': 'b' * 32,
+                'JUSTUP_TRUSTED_INGRESS_SECRET': 'c' * 42 + 'A',
+            }))
+            config.chmod(0o600)
+            manifest = {'sourceCommit': 'a' * 40, 'buildIdentity': SHA, 'files': {'app/server/ingress.mjs': SHA}}
+            api_uid, file_uid = 7101, 7101
+            original = Path.lstat
+
+            def owned_config(path):
+                meta = original(path)
+                if path != config:
+                    return meta
+                fields = list(meta)
+                fields[4] = file_uid
+                return os.stat_result(fields)
+
+            with patch.object(FEED, 'BASE', base), patch.object(FEED.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=api_uid)), \
+                 patch.object(os, 'getuid', return_value=0), patch.object(Path, 'lstat', autospec=True, side_effect=owned_config):
+                environment = FEED.node_import_environment(manifest)
+                self.assertEqual(environment['JUSTUP_ORIGIN'], 'https://preview.example')
+                file_uid = api_uid + 1
+                with self.assertRaisesRegex(ValueError, 'canonical private'):
+                    FEED.node_import_environment(manifest)
+
     def test_candidate_read_does_not_accept_a_replaced_path(self):
         with tempfile.TemporaryDirectory() as root:
             candidate = Path(root) / 'candidate.json'

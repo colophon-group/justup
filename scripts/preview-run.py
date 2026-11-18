@@ -212,11 +212,13 @@ def child_environment(config, manifest):
     return result
 
 
-def read_configuration(path):
+def read_configuration(path, *, owner_uid=None):
+    """Validate private API configuration for the launcher or its operator."""
     path = Path(path)
     meta = path.lstat()
+    expected_owner = os.getuid() if owner_uid is None else owner_uid
     if (path.resolve(strict=True) != path or not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1
-            or stat.S_IMODE(meta.st_mode) != 0o600 or meta.st_uid not in {0, os.getuid()} or meta.st_size > 16_384):
+            or stat.S_IMODE(meta.st_mode) != 0o600 or meta.st_uid not in {0, expected_owner} or meta.st_size > 16_384):
         raise ValueError('API config must be a canonical private regular file.')
     return json.loads(path.read_text())
 
