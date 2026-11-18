@@ -46,6 +46,76 @@ test('missing evidence pauses the feed while a fresh eligible zero completes', (
   assert.equal(completed.continuation.retryAfterMs, null);
   assert.equal(completed.coverage.stale, false);
 });
+test('committed imports disclose limited scope without leaking source selectors or counts', t => {
+  const { feed, add } = setup(t);
+  const selection = {
+    source: 'jobseek_feed_v1', limitedCoverage: false, sourceScopeRowCount: 1,
+    feed: { complete: true, fullSnapshotAt: iso(AT), scope: { kind: 'all_eligible' } },
+  };
+  add([['match', 3]], AT, selection);
+  const fresh = { kind: 'imported_snapshot', verifiedAt: iso(AT), stale: false };
+  assert.deepEqual(feed.list().coverage, fresh);
+  const limited = { ...fresh, state: 'limited_coverage' };
+  const selected = { kind: 'company_ids', requestedCount: 1, requestedSetSha256: 'a'.repeat(64) };
+  for (const entry of [
+    { ...selection, limitedCoverage: true },
+    { ...selection, feed: { ...selection.feed, scope: selected } },
+    { ...selection, sourceScopeRowCount: 3 },
+    { source: 'jobseek_public' },
+    {},
+  ]) {
+    add([['match', 3]], AT, entry);
+    assert.deepEqual(feed.list().coverage, limited);
+    assert.deepEqual(feed.list().items.map(job => job.id), ['match']);
+    assert.deepEqual(feed.companies().coverage, limited);
+  }
+  add([], AT, { ...selection, limitedCoverage: true });
+  assert.deepEqual(feed.list().coverage, limited);
+  assert.equal(feed.list().continuation.state, 'exhausted');
+});
+test('an omitted listing excluded by durable evidence cannot substantiate the declared count', t => {
+  const { s, feed, add, advance } = setup(t);
+  const selection = (at, count) => ({
+    source: 'jobseek_feed_v1', limitedCoverage: false, sourceScopeRowCount: count,
+    feed: { complete: true, fullSnapshotAt: iso(at), scope: { kind: 'all_eligible' } },
+  });
+  add([['match', 3]], AT, selection(AT, 1));
+  assert.equal(feed.coverage().state, undefined);
+  advance(60_000);
+  add([], AT + 60_000, selection(AT + 60_000, 0));
+  assert.equal(feed.coverage().state, undefined);
+  advance(60_000);
+  add([['match', 3, AT]], AT + 120_000, selection(AT + 120_000, 1));
+  assert.equal(s.generation().imported_count, 1);
+  assert.deepEqual(feed.list().items, []);
+  assert.equal(feed.coverage().state, 'limited_coverage');
+  advance(60_000);
+  add([['match', 3]], AT + 180_000, selection(AT + 180_000, 1));
+  assert.equal(feed.coverage().state, undefined);
+  assert.deepEqual(feed.list().items.map(job => job.id), ['match']);
+});
+test('a feed page retries when a new import commits between coverage and listings', t => {
+  const { s, feed, add } = setup(t);
+  const selection = {
+    source: 'jobseek_feed_v1', limitedCoverage: false, sourceScopeRowCount: 1,
+    feed: { complete: true, fullSnapshotAt: iso(AT), scope: { kind: 'all_eligible' } },
+  };
+  add([['match', 3]], AT, selection);
+  assert.equal(feed.coverage().state, undefined);
+  const prepare = s.db.prepare.bind(s.db);
+  let committed = false;
+  t.mock.method(s.db, 'prepare', sql => {
+    if (!committed && sql.startsWith('SELECT * FROM justup_jobs WHERE active=1')) {
+      committed = true;
+      add([], AT, { ...selection, limitedCoverage: true });
+    }
+    return prepare(sql);
+  });
+  assert.throws(() => feed.list(), { code: 'stale_cursor', status: 409 });
+  const page = feed.list();
+  assert.deepEqual(page.items, []);
+  assert.equal(page.coverage.state, 'limited_coverage');
+});
 test('change-only imports cannot extend the freshness of the last full source snapshot', (t) => {
   const { feed, add, advance } = setup(t);
   const selection = { source: 'jobseek_feed_v1', feed: { complete: true, fullSnapshotAt: iso(AT) } };
@@ -58,6 +128,7 @@ test('change-only imports cannot extend the freshness of the last full source sn
   advance(60 * 60_000);
   const paused = feed.list();
   assert.equal(paused.coverage.stale, true);
+  assert.equal(paused.coverage.state, 'import_unavailable');
   assert.equal(paused.coverage.verifiedAt, iso(AT));
   assert.deepEqual(paused.items, []);
   assert.deepEqual(paused.continuation, { cursor: null, state: 'paused', retryAfterMs: 5000 });

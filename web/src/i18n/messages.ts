@@ -1631,6 +1631,18 @@ export const messages = {
     "Per alcune posizioni, le informazioni disponibili non erano sufficienti a confermare una corrispondenza.",
     "En algunas ofertas faltaba información para confirmar que cumplían los requisitos."
   ],
+  "Search coverage is limited.": [
+    "Die Suche deckt nur einen Teil der Stellen ab.",
+    "La couverture de la recherche est limitée.",
+    "La copertura della ricerca è limitata.",
+    "La cobertura de la búsqueda es limitada."
+  ],
+  "No matches in the available listings.": [
+    "Keine Treffer unter den verfügbaren Stellen.",
+    "Aucun résultat parmi les offres disponibles.",
+    "Nessun risultato tra le offerte disponibili.",
+    "No hay coincidencias entre las ofertas disponibles."
+  ],
   "No matching positions found in the completed search.": [
     "In der abgeschlossenen Suche wurden keine passenden Stellen gefunden.",
     "Aucun poste correspondant trouvé dans la recherche terminée.",

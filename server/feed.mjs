@@ -14,10 +14,7 @@ export function publicJob(job) {
     seniority: job.seniority, salary: job.salary,
   };
 }
-function verifiedImportTime(row) {
-  if (!row) return null;
-  let selection;
-  try { selection = JSON.parse(row.selection_json); } catch { return null; }
+function verifiedImportTime(row, selection) {
   if (selection?.source !== 'jobseek_feed_v1') return row.verified_at;
   if (selection.feed?.complete !== true) return null;
   const full = selection.feed.fullSnapshotAt;
@@ -26,11 +23,20 @@ function verifiedImportTime(row) {
   if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== full || parsed > row.verified_at) return null;
   return parsed;
 }
-export function importedCoverage(row, at, ttl = DAY_MS) {
-  const verifiedAt = verifiedImportTime(row);
+export function importedCoverage(row, at, ttl = DAY_MS, countRetainedScope = () => undefined) {
+  let selection, verifiedAt = null;
+  if (row) {
+    try { selection = JSON.parse(row.selection_json); } catch { /* Unreadable import metadata. */ }
+    if (selection !== undefined) verifiedAt = verifiedImportTime(row, selection);
+  }
   const stale = verifiedAt == null || verifiedAt > at || at - verifiedAt >= ttl;
-  return { kind: 'imported_snapshot', verifiedAt: verifiedAt == null ? null : new Date(verifiedAt).toISOString(),
-    stale, ...(stale ? { state: 'import_unavailable', description: 'Imported listings need verification.' } : {}) };
+  const coverage = { kind: 'imported_snapshot', verifiedAt: verifiedAt == null ? null : new Date(verifiedAt).toISOString(), stale };
+  if (stale) return { ...coverage, state: 'import_unavailable', description: 'Imported listings need verification.' };
+
+  const entireSourceScope = selection?.source === 'jobseek_feed_v1' && selection.limitedCoverage === false
+    && selection.feed.scope?.kind === 'all_eligible' && selection.sourceScopeRowCount === row.imported_count
+    && row.unknown_count === 0 && countRetainedScope(row) === row.imported_count;
+  return entireSourceScope ? coverage : { ...coverage, state: 'limited_coverage' };
 }
 export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32), verificationTtlMs = DAY_MS, cursorTtlMs = 10 * 60_000 }) {
   if (!db || !Number.isSafeInteger(verificationTtlMs) || verificationTtlMs < 1 || verificationTtlMs > DAY_MS
@@ -42,8 +48,16 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   initializeCompanyProgress(db);
   const setup=createCompanyProgress({db,canonicalCompanyId:canonicalId,now});
   const latest = () => db.prepare('SELECT * FROM justup_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
+  const generation = () => latest()?.generation ?? null;
   const access = (viewer) => viewer?.account?.id && viewer.access?.fullAccess === true ? 'account' : 'guest';
-  const coverageAt = at => importedCoverage(latest(), at, verificationTtlMs);
+  // The import receipt counts candidate rows. Durable closure or omission
+  // evidence may keep some of those rows out of the committed selection.
+  const retainedScope = db.prepare(`SELECT (SELECT count(*) FROM justup_jobs
+    WHERE active=1 AND reserved=0 AND first_seen_at>=justup_imports.snapshot_at-?
+      AND first_seen_at<=justup_imports.snapshot_at AND verified_at>0 AND verified_at>? AND verified_at<=?) AS count
+    FROM justup_imports WHERE generation=? AND rowid=(SELECT max(rowid) FROM justup_imports)`);
+  const coverageAt = at => importedCoverage(latest(), at, verificationTtlMs,
+    row => retainedScope.get(14 * DAY_MS, at - verificationTtlMs, at, row.generation)?.count);
   const coverage = () => coverageAt(now());
   function eligibleAt(viewer, at, restrictedLatest=false) {
     if (coverageAt(at).stale) return [];
@@ -70,7 +84,7 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
     try { parsed = JSON.parse(Buffer.from(data, 'base64url').toString('utf8')); } catch { throw problem('invalid_cursor'); }
     if (parsed.v !== 1 || typeof parsed.id !== 'string' || !Number.isFinite(parsed.first)
         || !Number.isSafeInteger(parsed.createdAt)) throw problem('invalid_cursor');
-    if (parsed.generation !== latest()?.generation || parsed.access !== access(viewer)
+    if (parsed.generation !== generation() || parsed.access !== access(viewer)
         || now() - parsed.createdAt >= cursorTtlMs || parsed.createdAt > now()) {
       throw problem('stale_cursor', 409, 'This feed changed. Reload it and try again.');
     }
@@ -78,15 +92,18 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   }
   function list({ viewer = null, cursor = null, limit = 12 } = {}) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw problem('invalid_limit');
+    const importGeneration = generation();
     const position = cursor == null ? null : decode(cursor, viewer);
     const at = now(), currentCoverage = coverageAt(at);
+    const jobs = currentCoverage.stale ? [] : eligibleAt(viewer, at);
+    if (generation() !== importGeneration) throw problem('stale_cursor', 409, 'This feed changed. Reload it and try again.');
     if (currentCoverage.stale) return { asOf: new Date(at).toISOString(), items: [],
       continuation: { cursor, state: 'paused', retryAfterMs: 5000 }, ai: { status: 'not_required' }, coverage: currentCoverage };
-    const jobs = eligibleAt(viewer, at).filter((j) => !position
+    const matches = jobs.filter((j) => !position
       || Date.parse(j.firstObserved) < position.first || (Date.parse(j.firstObserved) === position.first && j.id > position.id));
-    const page = jobs.slice(0, limit), last = page.at(-1), more = jobs.length > limit;
+    const page = matches.slice(0, limit), last = page.at(-1), more = matches.length > limit;
     return { asOf: new Date(at).toISOString(), items: page.map(publicJob), continuation: {
-      cursor: more ? encode({ v: 1, generation: latest().generation, access: access(viewer),
+      cursor: more ? encode({ v: 1, generation: importGeneration, access: access(viewer),
         createdAt: position?.createdAt ?? at, first: Date.parse(last.firstObserved), id: last.id }) : null,
       state: more ? 'open' : 'exhausted', retryAfterMs: null,
     }, ai: { status: 'not_required' }, coverage: currentCoverage };
@@ -176,5 +193,5 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
       coverage:{state:'requested'},history:null,evidence:candidate.evidenceUrls.map(url=>({source:'company_request',url}))};
     db.prepare('INSERT INTO justup_requested_companies VALUES(?,?,?)').run(id,candidate.domain,JSON.stringify(value));return id;
   }
-  return { list, companies, accountCompanies, company, publishCompany,companySetup:setup.snapshot,ensureCompanySetup:setup.ensure,canonicalCompanyId:canonicalId, requestedCompanies:()=>db.prepare('SELECT data_json FROM justup_requested_companies ORDER BY id').all().map(r=>JSON.parse(r.data_json)), coverage, eligibleJobs, restrictedLatestJobs:()=>eligibleAt(null,now(),true), publicJob, generation: () => latest()?.generation ?? null };
+  return { list, companies, accountCompanies, company, publishCompany,companySetup:setup.snapshot,ensureCompanySetup:setup.ensure,canonicalCompanyId:canonicalId, requestedCompanies:()=>db.prepare('SELECT data_json FROM justup_requested_companies ORDER BY id').all().map(r=>JSON.parse(r.data_json)), coverage, eligibleJobs, restrictedLatestJobs:()=>eligibleAt(null,now(),true), publicJob, generation };
 }

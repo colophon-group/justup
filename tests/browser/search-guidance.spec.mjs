@@ -150,6 +150,35 @@ test("unverified empty import is paused until manual retry returns a genuinely c
   );
   await expect(page.locator("#resume-results")).toHaveCount(0);
 });
+test("limited fresh listings remain searchable and qualify an empty result", async ({ page }) => {
+  const fresh = { kind: "imported_snapshot", stale: false, verifiedAt: "2026-10-31T08:00:00.000Z" };
+  const limited = { ...fresh, state: "limited_coverage" };
+  const results = [
+    { ...completed(), coverage: limited },
+    { ...completed([]), coverage: limited },
+    { ...completed([]), coverage: fresh },
+  ];
+  let reads = 0;
+  await mockApi(page, {
+    "GET /searches": { items: [search()] },
+    "GET /searches/search-1/results": () => results[reads++],
+  });
+  await page.goto("/");
+  const status = page.locator("#feed-status");
+  await expect(page.locator("[data-job]")).toHaveCount(1);
+  await expect(status).toContainText("Search coverage is limited.");
+
+  const refresh = page.getByRole("button", { name: "Check for new positions" });
+  await refresh.click();
+  await expect(page.locator("[data-job]")).toHaveCount(0);
+  await expect(status).toContainText("No matches in the available listings.");
+  await expect(status).toContainText("Search coverage is limited.");
+  await expect(status).not.toContainText("completed search");
+
+  await refresh.click();
+  await expect(status).toContainText("No matching positions found in the completed search.");
+  await expect(status).not.toContainText("Search coverage is limited.");
+});
 test("a newly stale page clears visible jobs and discards unverified page items before cursor validation; retry can return the same ids", async ({
   page,
 }) => {

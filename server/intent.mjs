@@ -260,6 +260,9 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     const search=JSON.parse(r.accepted_json),configuration=configurationFor(ownerOf(ctx),search),limit=Number(ctx.url.searchParams.get('limit')??12),cursor=ctx.url.searchParams.get('cursor');
     if(!Number.isInteger(limit)||limit<1||limit>(snapshot?1000:50)) throw err('invalid_limit');
     const generation=feed.generation?.()??null,accessHash=hash({accountId:ownerOf(ctx),access:ctx.viewer?.access??null});
+    function assertGeneration() {
+      if(!snapshot&&(feed.generation?.()??null)!==generation)throw err('stale_cursor',409);
+    }
     const residual=Boolean(search.configuration.residualAi),coverage=feed.coverage();
     const table=residual?'justup_search_delegate_cursors':'justup_search_cursors';
     for(const name of ['justup_search_cursors','justup_search_delegate_cursors'])db.prepare(`DELETE FROM ${name} WHERE created_at<=?`).run(now()-600_000);
@@ -275,10 +278,12 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
     const hiddenMatches=coverage.stale||!coverage.verifiedAt||!hiddenJobs?{status:'unavailable',count:null}:residual?null:{status:'exact',count:hiddenJobs.length};
     const base={searchId:r.id,revision:r.revision,asOf:new Date(now()).toISOString(),coverage,hiddenMatches:hiddenMatches??{status:'pending',count:null},...(snapshot?{reconciliation:{complete:false,retainedItemIds:[]}}:{})};
     if(coverage.stale||!coverage.verifiedAt){
+      assertGeneration();
       const id=cursor??continuationToken(residual?delegateCursor:position);
       return {...base,items:[],continuation:{cursor:id,state:'paused',retryAfterMs:5000},ai:{status:residual?'dependency_unavailable':'not_required'},coverage:{...coverage,stale:true,state:'import_unavailable',description:'Imported listings need verification.'}};
     }
     const jobs=feed.eligibleJobs({viewer:ctx.viewer}).filter(j=>primaryMatches(j,configuration));
+    assertGeneration();
     const matchingPage=snapshot?matching?.snapshot:matching?.page;
     if(residual&&matchingPage){
       const page=await matchingPage({ownerId:ownerOf(ctx),searchId:r.id,revision:r.revision,configuration,jobs,viewer:ctx.viewer,cursor:delegateCursor,limit,coverage,generation,now});
@@ -289,7 +294,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       if(next!=null&&(typeof next!=='string'||next.length>2048))throw err('invalid_output',503,'Matching is temporarily unavailable.');
       const count=snapshot?matching.snapshotHiddenCount:matching.hiddenCount;
       const confirmed=hiddenJobs?count?.({ownerId:ownerOf(ctx),searchId:r.id,revision:r.revision,configuration,jobs:hiddenJobs,viewer:ctx.viewer,coverage,generation}):null;
-      if(!snapshot&&(feed.generation?.()??null)!==generation)throw err('stale_cursor',409);
+      assertGeneration();
       return {...base,...page,hiddenMatches:confirmed??{status:'unavailable',count:null},continuation:{...page.continuation,cursor:next==null?null:continuationToken(next)}};
     }
     if(residual){

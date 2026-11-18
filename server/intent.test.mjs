@@ -150,6 +150,22 @@ test('cursor binds revision, access and generation and never exposes internal bo
   const ctx=f.ctx('GET',`${path}&cursor=${page.continuation.cursor}`);ctx.viewer.access={kind:'expired'};f.setAccess({kind:'expired'});await assert.rejects(()=>f.service.route(ctx),{code:'stale_cursor'});
   f.setGeneration('g2');await assert.rejects(()=>f.route('GET',`${path}&cursor=${page.continuation.cursor}`),{status:409});
 });
+test('an import change during primary matching invalidates the result before publication', async t => {
+  const f = fixture(); t.after(() => f.db.close());
+  const created = await f.route('POST', '/searches', {query:'backend',requestKey:'one'});
+  await f.run(created.body.task.id);
+  const path = `/searches/${created.body.search.id}/results?revision=1`;
+  f.feed.eligibleJobs = () => {
+    f.setGeneration('g2');
+    f.feed.coverage = () => ({ stale:false,verifiedAt:new Date(at).toISOString(),state:'limited_coverage' });
+    return [];
+  };
+  await assert.rejects(() => f.route('GET',path), {code:'stale_cursor',status:409});
+  const page = (await f.route('GET',path)).body;
+  assert.equal(page.coverage.state,'limited_coverage');
+  assert.equal(page.continuation.state,'exhausted');
+  assert.deepEqual(page.items,[]);
+});
 test('stale or unverified source pauses before eligibility work and resumes without claiming exhaustion',async t=>{
   const f=fixture();t.after(()=>f.db.close());const created=await f.route('POST','/searches',{query:'backend',requestKey:'one'});await f.run(created.body.task.id);
   const original=f.feed.eligibleJobs;let calls=0;f.feed.eligibleJobs=(args)=>{calls++;return original(args);};const path=`/searches/${created.body.search.id}/results?revision=1`;
