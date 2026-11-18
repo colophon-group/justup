@@ -486,6 +486,24 @@ class TransportTests(unittest.TestCase):
 
 
 class ImportSequenceTests(unittest.TestCase):
+    def test_candidate_read_does_not_accept_a_replaced_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            candidate = Path(root) / 'candidate.json'
+            replacement = Path(root) / 'other.json'
+            FEED.write_private(candidate, b'first')
+            FEED.write_private(replacement, b'other')
+            opened = os.open
+
+            def replace_before_open(path, *args, **kwargs):
+                if Path(path) == candidate:
+                    os.replace(replacement, candidate)
+                return opened(path, *args, **kwargs)
+
+            with patch.object(FEED.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=os.geteuid())), \
+                    patch.object(FEED.os, 'open', side_effect=replace_before_open):
+                with self.assertRaisesRegex(FEED.FeedStageError, 'changed during the read'):
+                    FEED.candidate_digest(candidate)
+
     def test_child_stdout_is_capped_while_running(self):
         with tempfile.TemporaryDirectory() as root:
             with self.assertRaises(FEED.FeedStageError):

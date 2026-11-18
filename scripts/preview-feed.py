@@ -461,12 +461,43 @@ def candidate_marker_path(batch_id):
     return RECEIPTS / f'batch-{batch_id}-candidate.json'
 
 
-def candidate_digest(candidate):
+@contextmanager
+def open_candidate(candidate):
     owner = pwd.getpwnam('justup-preview-api').pw_uid
-    if checked_file(candidate, owner) > 64 * 1024 * 1024:
+    named = candidate.lstat()
+    if (not stat.S_ISREG(named.st_mode) or named.st_uid != owner or named.st_nlink != 1
+            or stat.S_IMODE(named.st_mode) != 0o600):
+        raise FeedStageError('Feed candidate is not a private regular file.')
+    if named.st_size > 64 * 1024 * 1024:
         raise FeedStageError('Feed candidate exceeds its limit.')
-    with candidate.open('rb') as handle:
-        return hashlib.file_digest(handle, 'sha256').hexdigest()
+    fd = os.open(candidate, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        actual = os.fstat(stream.fileno())
+        if ((actual.st_dev, actual.st_ino) != (named.st_dev, named.st_ino) or actual.st_nlink != 1
+                or stat.S_IMODE(actual.st_mode) != 0o600 or actual.st_size != named.st_size):
+            raise FeedStageError('The feed candidate changed during the read.')
+        yield stream, actual.st_size
+
+
+def copy_candidate(source, size, output=None):
+    digest = hashlib.sha256()
+    remaining = size
+    while remaining:
+        block = source.read(min(65536, remaining))
+        if not block:
+            raise FeedStageError('The feed candidate changed during the read.')
+        digest.update(block)
+        remaining -= len(block)
+        if output is not None:
+            output.write(block)
+    if source.read(1):
+        raise FeedStageError('The feed candidate changed during the read.')
+    return digest.hexdigest()
+
+
+def candidate_digest(candidate):
+    with open_candidate(candidate) as (source, size):
+        return copy_candidate(source, size)
 
 
 def candidate_marker(batch_id):
@@ -573,11 +604,12 @@ def store_receipt(batch_id, digest):
 
 
 def read_candidate(path, digest, expected_complete, limit):
-    owner = pwd.getpwnam('justup-preview-api').pw_uid
-    if checked_file(path, owner) > 64 * 1024 * 1024:
-        raise FeedStageError('Feed candidate exceeds the app import limit.')
     try:
-        value = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
+        with open_candidate(path) as (source, size):
+            raw = source.read(size + 1)
+        if len(raw) != size:
+            raise FeedStageError('The feed candidate changed during the read.')
+        value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique_object)
     except (OSError, UnicodeError, ValueError, RecursionError) as exc:
         raise FeedStageError('Feed candidate is invalid.') from exc
     staged = isinstance(value, dict) and value.get('stageVersion') == 1
@@ -704,28 +736,17 @@ def latest_import_matches(digest, *, approval=None):
 
 def promote_candidate(candidate, latest, *, expected_digest=None):
     owner = pwd.getpwnam('justup-preview-api')
-    checked_file(candidate, owner.pw_uid)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(dir=latest.parent, prefix='.latest-', delete=False) as output:
             temporary = Path(output.name)
             os.fchmod(output.fileno(), 0o600)
-            os.fchown(output.fileno(), owner.pw_uid, owner.pw_gid)
-            with candidate.open('rb') as source:
-                if expected_digest is None:
-                    shutil.copyfileobj(source, output, 65536)
-                else:
-                    digest = hashlib.sha256()
-                    total = 0
-                    for block in iter(lambda: source.read(65536), b''):
-                        total += len(block)
-                        if total > 64 * 1024 * 1024:
-                            raise FeedStageError('The reviewed candidate changed before promotion.')
-                        digest.update(block)
-                        output.write(block)
-                    if digest.hexdigest() != expected_digest:
-                        raise FeedStageError('The reviewed candidate changed before promotion.')
+            with open_candidate(candidate) as (source, size):
+                digest = copy_candidate(source, size, output)
+            if expected_digest is not None and digest != expected_digest:
+                raise FeedStageError('The reviewed candidate changed before promotion.')
             output.flush()
+            os.fchown(output.fileno(), owner.pw_uid, owner.pw_gid)
             os.fsync(output.fileno())
         os.replace(temporary, latest)
         fsync_dir(latest.parent)
