@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { createFeed } from './feed.mjs';
 import { DAY_MS, openStore } from './store.mjs';
 import { ORIGIN_POLICY_VERSION } from './posting-origin.mjs';
@@ -90,6 +91,26 @@ test('posting review requires exact identity, evidence for each verdict and the 
   assert.throws(() => store.importSnapshot({ ...candidate, selection: { ...candidate.selection, postingOriginReview: proof } }), { code: 'invalid_import' });
 });
 
+test('a newer origin verdict can correct a prior review without changing source lifecycle', t => {
+  const store = openStore(); t.after(() => store.close());
+  const feed = createFeed({ db: store.db, now: () => at + 100 });
+  const candidate = snapshot([posting('a')]);
+  const second = { ...review(candidate, { a: 'recruitment_agency' }), reviewedAt: iso(at + 10) };
+  const first = review(candidate);
+  const admitted = () => feed.eligibleJobs().map(job => job.id);
+  store.importSnapshot(candidate, { originReview: first });
+  assert.deepEqual(admitted(), ['a']);
+  const generation = store.importSnapshot(candidate, { originReview: second }).generation;
+  assert.deepEqual(admitted(), []);
+  assert.throws(() => store.importSnapshot(candidate, { originReview: first }), { code: 'stale_origin_review' });
+  assert.throws(() => store.importSnapshot(candidate, { originReview: { ...first, reviewedAt: iso(at + 10) } }), { code: 'stale_origin_review' });
+  assert.equal(store.importSnapshot(candidate, { originReview: second }).generation, generation);
+  assert.deepEqual(admitted(), []);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM justup_feed_omissions').get().n, 0);
+  store.importSnapshot(candidate, { originReview: { ...first, reviewedAt: iso(at + 20) } });
+  assert.deepEqual(admitted(), ['a']);
+});
+
 test('the operator import binds the review to exact snapshot bytes and a private regular file', t => {
   const dir = mkdtempSync(join(tmpdir(), 'justup-origin-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const dbPath = join(dir, 'state.sqlite'), candidatePath = join(dir, 'snapshot.json'), reviewPath = join(dir, 'review.json');
@@ -110,4 +131,7 @@ test('the operator import binds the review to exact snapshot bytes and a private
   assert.equal(JSON.parse(accepted.stdout).imported, 1);
   const store = openStore(dbPath); t.after(() => store.close());
   assert.equal(createFeed({ db: store.db }).coverage().postingOrigin, 'reviewed_direct_only');
+  const legacy = new DatabaseSync(dbPath); t.after(() => legacy.close());
+  assert.throws(() => legacy.prepare("INSERT INTO justup_imports VALUES ('unreviewed',1,1,'{}',0,0)").run(), /no such function/u);
+  assert.equal(legacy.prepare('SELECT count(*) AS n FROM justup_imports').get().n, 1);
 });

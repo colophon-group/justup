@@ -200,7 +200,7 @@ function readPostingOriginReview(path, bytes) {
     if (review?.snapshotSha256 !== createHash('sha256').update(bytes).digest('hex')) {
       throw new Error('Posting origin review refers to a different import file.');
     }
-    return review;
+    return { originReview: review, reviewSha256: createHash('sha256').update(raw).digest('hex') };
   } finally { closeSync(fd); }
 }
 export function configFromEnv(env = process.env) {
@@ -237,9 +237,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     console.log(JSON.stringify(await prepareRestoredDatabase({ dbPath: restored, migrateV1: args[2] === '--migrate-v1' })));
   } else if (args[0] === '--import' && (args.length === 2 || args.length === 4 && args[2] === '--origin-review')) {
     const bytes = readImportBytes(args[1]), snapshot = parseImportBytes(bytes);
-    const originReview = args.length === 4 ? readPostingOriginReview(args[3], bytes) : undefined;
+    const review = args.length === 4 ? readPostingOriginReview(args[3], bytes) : undefined;
     const store = openStore(config.dbPath, { sharedState: config.sharedState });
-    try { console.log(JSON.stringify(store.importSnapshot(snapshot, { originReview }))); }
+    try { console.log(JSON.stringify(store.importSnapshot(snapshot, review))); }
     finally { store.close(); }
   } else if (args.length === 0) {
     const application = await createConfiguredApplication({ config, logger: (event) => console.log(JSON.stringify(event)) });

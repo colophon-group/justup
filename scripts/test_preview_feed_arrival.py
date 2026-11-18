@@ -65,6 +65,8 @@ class PreviewFeedArrival(unittest.TestCase):
         staged = importer.import_feed_bundle(replacement, previous=staged, now=importer.utc(third["cutoffAt"]))
         final = importer.import_feed_bundle(arrived, previous=staged, now=importer.utc(last["cutoffAt"]))
         retained_sha = retain(cls.candidate, final)
+        cls.baseline_snapshot = root / "baseline.json"
+        retain(cls.baseline_snapshot, before)
         committed = root / "application.sqlite"
         result = subprocess.run(
             ["node", "--input-type=module", "--eval", """
@@ -119,6 +121,38 @@ try {
         self.assertEqual(result["arrivalManifestSha256"], self.arrival_digest)
         for private in (CANONICAL, fixtures.JOB_B, "Verifiable public role details"):
             self.assertNotIn(private, json.dumps(result))
+
+    def test_reviewed_arrival_requires_the_exact_receipt_and_direct_posting_verdict(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace).resolve()
+            live, backup, browser, review_path = [root / name for name in ("live.sqlite", "backup.sqlite", "browser.json", "review.json")]
+            candidate = json.loads(self.candidate.read_text())
+            review = {"schemaVersion": 1, "policyVersion": "direct-employer-v1", "manifestSha256": self.arrival_digest,
+                      "snapshotSha256": hashlib.sha256(self.candidate.read_bytes()).hexdigest(), "reviewedAt": "2026-10-31T16:02:00.000Z",
+                      "postings": [{key: job[key] for key in ("id", "companyId", "sourceUrl")} |
+                                   {"verdict": "direct_employer", "evidenceUrl": "https://employer.example/jobs"}
+                                   for job in candidate["jobs"]]}
+            retain(review_path, review)
+            args = ["node", "server/main.mjs", "--import"]
+            env = {"PATH": os.environ["PATH"], "JUSTUP_DB_PATH": str(live)}
+            before = subprocess.check_output([*args, str(self.baseline_snapshot)], cwd=APP, env=env, timeout=10)
+            after = subprocess.check_output([*args, str(self.candidate), "--origin-review", str(review_path)],
+                                            cwd=APP, env=env, timeout=10)
+            with closing(sqlite3.connect(live)) as source, closing(sqlite3.connect(backup)) as standalone:
+                source.backup(standalone)
+            backup.chmod(0o600)
+            observation = json.loads(self.browser.read_text())
+            observation["liveArrival"].update(baselineGeneration=json.loads(before)["generation"],
+                                              arrivalGeneration=json.loads(after)["generation"])
+            retain(browser, observation)
+            inputs = (browser, self.producer, self.receipts, backup, self.candidate)
+            self.assertTrue(PROOF.verify(*inputs, origin_review=review_path)["passed"])
+            with self.assertRaisesRegex(PROOF.source.ImportFailure, "needs its exact retained posting origin review"):
+                PROOF.verify(*inputs)
+            review["postings"][0]["evidenceUrl"] = "https://changed.example/jobs"
+            retain(review_path, review)
+            with self.assertRaisesRegex(PROOF.source.ImportFailure, "differs from the recorded review"):
+                PROOF.verify(*inputs, origin_review=review_path)
 
     def test_refuses_a_partial_batch_without_both_durable_acknowledgements(self):
         path = self.receipts / f"batch-{'2' * 32}.json"

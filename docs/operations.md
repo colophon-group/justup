@@ -411,6 +411,7 @@ Retain these inputs for one [deployed scheduled arrival](frontend-delivery.md#ob
 - The receiver's `batch-<id>.json` acknowledgement receipts for the interval and its `batch-<id>-candidate.json` markers for every batch after the baseline.
 - An existing standalone, deletion-safe SQLite backup whose retained import metadata contains both observed generations. Use the approved online backup procedure. A filesystem copy of a live database or a snapshot with WAL sidecars is unsafe.
 - The receiver's accepted normalized `latest.json` bytes for the arrival generation. Retain them before another batch replaces the file. These bytes may contain server-side listing text.
+- The exact protected posting origin review for a reviewed arrival generation. Supply it with `--origin-review` so the verifier can match the stored review digest and the arrived posting's direct-employer verdict.
 
 Run in the protected location where these inputs are already approved to coexist. Keep copies private and owned by the verifier's operator identity. Use the reviewed Justup checkout and pinned Node runtime.
 

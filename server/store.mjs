@@ -93,7 +93,7 @@ function normalizedJob(raw, snapshotAt, verifiedAt) {
       bodyBytes: evidence.bodyBytes, truncated: evidence.truncated, aiEligible: Boolean(bodyText && [...bodyText].length >= 200 && bodyFetchedAt != null),
       bodyError: evidence.bodyError == null ? null : string(evidence.bodyError, 100) },
   };
-  return { job, first, bodyText, textHash };
+  return { job, first, bodyText, textHash, sourceUrl: raw.sourceUrl };
 }
 export function openStore(path = ':memory:', { sharedState = false } = {}) {
   const mode = sharedState ? 0o660 : 0o600;
@@ -108,6 +108,8 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     }
   }
   const db = new DatabaseSync(path);
+  let acceptedOriginReview = false;
+  db.function('justup_has_posting_origin_review', () => Number(acceptedOriginReview));
   if (path !== ':memory:') chmodSync(path, mode);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA max_page_count = 262144;');
   if (path !== ':memory:') for (const file of [`${path}-wal`, `${path}-shm`]) if (existsSync(file)) chmodSync(file, mode);
@@ -151,7 +153,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
   function generation() {
     return db.prepare('SELECT * FROM justup_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   }
-  function importSnapshot(snapshot, { originReview } = {}) {
+  function importSnapshot(snapshot, { originReview, reviewSha256 } = {}) {
     if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.jobs) || snapshot.jobs.length > 1000
         || !Array.isArray(snapshot.observations ?? []) || (snapshot.observations ?? []).length > 1000
         || !Array.isArray(snapshot.unknownIds ?? []) || (snapshot.unknownIds ?? []).length > 1000) throw problem('invalid_import');
@@ -174,7 +176,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     let origin;
     if (originReview !== undefined) {
       try { origin = validatePostingOriginReview(originReview, { selection: snapshot.selection, jobs,
-        unknownCount: snapshot.unknownIds?.length ?? 0, verifiedAt, at: Date.now() }); }
+        unknownCount: snapshot.unknownIds?.length ?? 0, verifiedAt, at: Date.now(), reviewSha256 }); }
       catch { throw problem('invalid_origin_review'); }
     }
     const selection = boundedJson(origin ? { ...snapshot.selection, postingOriginReview: origin.record } : snapshot.selection ?? {}, 8192);
@@ -183,8 +185,16 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     return transaction(db, () => {
       const previous = generation();
       if ((previous?.verified_at ?? -1) > verifiedAt) throw problem('stale_import', 409, 'A newer import is already present.');
-      if (!origin && previous && Object.hasOwn(JSON.parse(previous.selection_json), 'postingOriginReview')) {
-        throw problem('origin_review_required', 409, 'This feed requires a current posting origin review.');
+      const previousReview = previous && JSON.parse(previous.selection_json)?.postingOriginReview;
+      if (previousReview) {
+        if (!origin) throw problem('origin_review_required', 409, 'This feed requires a current posting origin review.');
+        if (origin.record.reviewedAt < previousReview.reviewedAt
+            || origin.record.reviewedAt === previousReview.reviewedAt && origin.record.reviewSha256 !== previousReview.reviewSha256) {
+          throw problem('stale_origin_review', 409, 'A newer posting origin review is already present.');
+        }
+        if (origin.record.reviewSha256 === previousReview.reviewSha256) {
+          return { generation: previous.generation, imported: admittedJobs.length, observed: observations.length, unknown: snapshot.unknownIds?.length ?? 0 };
+        }
       }
       const existing = db.prepare('SELECT company_id,first_seen_at FROM job_source_identities WHERE id=?');
       const rememberIdentity = db.prepare(`INSERT INTO job_source_identities(id,company_id,first_seen_at,verified_at,active,reserved) VALUES(?,?,?,?,1,0)
@@ -223,14 +233,28 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
       // Omitted listings lose current verification, but absence supplies no
       // closure fact. Keep their catalogue metadata and immutable source history.
       if (privateFeed) {
-        const selectedIds = JSON.stringify(admittedJobs.map(({ job }) => job.id));
+        const selectedIds = JSON.stringify(jobs.map(({ job }) => job.id));
         const omitted = `active=1 AND reserved=0 AND verified_at<>0
           AND id NOT IN (SELECT value FROM json_each(?))`;
         db.prepare(`INSERT INTO justup_feed_omissions (id,omitted_at) SELECT id,? FROM justup_jobs WHERE ${omitted}
           ON CONFLICT(id) DO UPDATE SET omitted_at=max(omitted_at,excluded.omitted_at)`).run(verifiedAt, selectedIds);
         db.prepare(`UPDATE justup_jobs SET verified_at=0 WHERE ${omitted}`).run(selectedIds);
+        if (origin) {
+          const excluded = JSON.stringify(jobs.filter(({ job }) => !origin.direct.has(job.id)).map(({ job }) => job.id));
+          db.prepare('UPDATE justup_jobs SET verified_at=0 WHERE active=1 AND reserved=0 AND id IN (SELECT value FROM json_each(?))').run(excluded);
+        }
       }
-      db.prepare('INSERT INTO justup_imports VALUES (?, ?, ?, ?, ?, ?)').run(generationId, snapshotAt, verifiedAt, selection, jobs.length, snapshot.unknownIds?.length ?? 0);
+      if (origin) {
+        // A compatible older binary lacks this connection-local function.
+        // Its import must roll back even if the reporter is otherwise readable.
+        db.exec(`CREATE TRIGGER IF NOT EXISTS justup_require_posting_origin_review
+          BEFORE INSERT ON justup_imports WHEN justup_has_posting_origin_review() <> 1
+          BEGIN SELECT RAISE(ABORT, 'Posting origin review is required'); END;`);
+      }
+      acceptedOriginReview = Boolean(origin);
+      try {
+        db.prepare('INSERT INTO justup_imports VALUES (?, ?, ?, ?, ?, ?)').run(generationId, snapshotAt, verifiedAt, selection, jobs.length, snapshot.unknownIds?.length ?? 0);
+      } finally { acceptedOriginReview = false; }
       // Old import metadata is not needed for cursor validity or public evidence.
       db.prepare('DELETE FROM justup_imports WHERE rowid NOT IN (SELECT rowid FROM justup_imports ORDER BY rowid DESC LIMIT 32)').run();
       db.prepare('DELETE FROM justup_jobs WHERE first_seen_at < ?').run(snapshotAt - 30 * DAY_MS);
