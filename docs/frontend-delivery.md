@@ -248,7 +248,22 @@ Preflight requires live results in all five admitted locales. The English journe
 
 Choose the reviewed HTTPS employer posting from the first 12 canonical results, with a selectable language and another initially rendered result without that language. The English journey applies the language to the same search and verifies that the contrasting result disappears from both the canonical page and the rendered list. It activates the retained employer link and checks the viewed record. The browser opens the exact original destination and ends that navigation locally to avoid sending test traffic to the employer. After accepting the known-company request, it saves French as the interface language and signs out. It checks that private reading routes deny guest access, then signs back into the same account and verifies the stored language filter, original viewed timestamp, company follow and French interface. The check uses the two existing interpretations in the English journey.
 
-The full release report still needs a real feed arrival with reader position, focus and selection preserved, provider outage recovery, ambiguous-company research, resource and load limits, physical retention and deletion, and restore and rollback. `Preview / verified` requires the full gate and the release owner's review.
+The full release report also needs provider outage recovery, ambiguous-company research, resource and load limits, physical retention and deletion, and restore and rollback. `Preview / verified` requires the full gate and the release owner's review.
+
+### Observe a scheduled feed arrival in preview
+
+Run this journey separately from the five pinned-import journeys. Use the same reviewed exact frontend, API, runner, English policy and baseline import configuration. Add `scenario.liveArrivalAccountId` with the ID of an existing, approved disposable account. It needs current full access from the isolated access verification, one ready primary-only saved search with the reviewed `scenario.query`, and that search already selected in the saved workspace. Choose `scenario.sourceUrl` from its currently rendered results so it can serve as the reading anchor. The observer signs in and verifies revocation of its own session at the end. The approved account remains available for its separately tracked deletion.
+
+Set `JUSTUP_LIVE_ARRIVAL_USERNAME` and `JUSTUP_LIVE_ARRIVAL_PASSWORD` in the protected process environment. Start shortly before a qualified recurring import expected to include a newly observed match. The observer does not trigger an import, submit a search or invoke a model. It uses the real same-origin stream and waits up to 150 seconds after establishing the reader. The ordinary run still requires the invite and tests all five locales.
+
+```sh
+JUSTUP_ACCEPTANCE_CONFIG=/private/path/candidate-gate.json \
+  JUSTUP_ACCEPTANCE_JOURNEY=live-arrival npm run test:browser
+```
+
+The journey requires a posting first observed after the preceding search read. It checks the unchanged search revision, the same open stream, a fresh new import, canonical HTTP membership and the New cue. It also verifies that the selected row, focus, selected text and vertical position survive, and that the New cue focuses the arriving posting. A timeout or changed build, runner, policy or search fails the journey. The output records the two import generations, build identities, elapsed observation time and a digest of the public posting tuple. It omits the URL, posting ID, saved search and account credentials.
+
+Join the arrival generation to the protected `justup_imports` record and the [private feed receipt](operations.md#private-job-feed-handoff). Record the accepted producer manifest digest, complete selection, predecessor cursor and consumer acknowledgement for the scheduled transition. Verify that the retained source listing has the same SHA-256 of `JSON.stringify([id, sourceUrl, firstObserved])`, using the normalized URL and UTC millisecond timestamp imported into the API. If the browser window crosses multiple scheduled imports, establish which complete accepted batch first supplied that posting before treating this run as source evidence. The browser journey proves delivery and reader stability. The protected receipts and a separate recurrence check establish attribution and continuity.
 
 ## Promote the retained product artifact
 

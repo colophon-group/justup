@@ -16,6 +16,7 @@ export const GATE_LOCALES = Object.freeze(['en', 'de', 'fr', 'it', 'es']);
 const exactKeys = (value, keys) => record(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 const policyVersion = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(value);
 const hash = (value, length = 64) => typeof value === 'string' && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
+const importGeneration = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 function origin(value) {
   try {
     const url = new URL(value);
@@ -37,7 +38,7 @@ export function validateGateConfig(value) {
     && ['assetsSha256', 'workerSha256', 'artifactSha256', 'runtimeConfigSha256'].every(key => hash(f[key])), 'Supply exact frontend identities.');
   requireThat(record(api) && api.sourceCommit === f.sourceSha && api.schemaVersion === 2
     && plain(api.buildIdentity) && /^[A-Za-z0-9_.:-]{1,128}$/.test(api.runnerIdentity ?? '')
-    && /^[a-f0-9-]{36}$/.test(api.importGeneration ?? ''), 'Supply compatible API, runner and import identities.');
+    && importGeneration(api.importGeneration), 'Supply compatible API, runner and import identities.');
   validatePolicyEvidence(policies, value.origin);
   requireThat(record(scenario) && plain(scenario.query, 2000) && plain(scenario.warnedQuery, 2000)
     && scenario.query !== scenario.warnedQuery && plain(scenario.companyId)
@@ -130,6 +131,12 @@ export function requireInvite(value) {
   requireThat(plain(value, 256), 'Supply the preview invitation through the protected process environment.');
   return value;
 }
+export function requireLiveArrivalAccount(config, env) {
+  const id = config.scenario.liveArrivalAccountId, username = env.JUSTUP_LIVE_ARRIVAL_USERNAME, password = env.JUSTUP_LIVE_ARRIVAL_PASSWORD;
+  requireThat(plain(id, 128) && plain(username, 128) && plain(password, 256),
+    'Supply the reviewed disposable account ID and its protected live-arrival credentials.');
+  return { id, username, password };
+}
 const same = (a, b, keys) => record(a) && keys.every(key => a[key] === b[key]);
 function freshCoverage(value, now) {
   return record(value) && value.kind === 'imported_snapshot' && value.stale === false
@@ -167,12 +174,24 @@ export function verifyBuilds(config, frontend, api, health, now = Date.now()) {
 }
 // Build safety and policy admission are separate: owned-account deletion remains
 // available when policy approval is withdrawn, but never against another candidate.
-export async function verifyCandidateBuilds(config, get, now = Date.now) {
+async function readBuilds(get) {
   const frontend = await get('/__release/version');
   const api = await get('/api/v1/version');
   const health = await get('/api/v1/health');
   requireThat([frontend, api, health].every(response => response?.status === 200), 'Candidate identity HTTP status failed.');
-  verifyBuilds(config, frontend.json, api.json, health.json, typeof now === 'function' ? now() : now);
+  return [frontend.json, api.json, health.json];
+}
+export async function verifyCandidateBuilds(config, get, now = Date.now) {
+  const builds = await readBuilds(get);
+  verifyBuilds(config, ...builds, typeof now === 'function' ? now() : now);
+}
+// The arrival journey expects data to advance while the deployed builds stay fixed.
+export async function observeCandidateImport(config, get, now = Date.now) {
+  const builds = await readBuilds(get);
+  const generation = builds[1]?.importGeneration;
+  requireThat(importGeneration(generation), 'Missing or invalid observed import generation.');
+  verifyBuilds({ ...config, api: { ...config.api, importGeneration: generation } }, ...builds, now());
+  return generation;
 }
 // These seven fields are the authoritative server locale policy-state contract.
 const POLICY_STATE_FIELDS = ['locale', 'reviewed', 'reviewedLocale', 'fallback', 'version', 'privacyUrl', 'usageUrl'];

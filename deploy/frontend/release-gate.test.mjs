@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { digest as wireDigest } from '../../server/hiring-wire-facts.mjs';
-import { validateGateConfig, loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, verifyPublishedWire, cleanupCandidateAccount, cleanupAccount, disposableAccount } from '../../tests/browser/release-gate.mjs';
+import { validateGateConfig, loadGateConfig, requireInvite, preflight, observeCandidateImport, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, verifyPublishedWire, cleanupCandidateAccount, cleanupAccount, disposableAccount } from '../../tests/browser/release-gate.mjs';
 import { companyReportSample, hiringFootprintSample } from '../../tests/browser/company-report-fixture.mjs';
 
 const now = Date.parse('2026-10-31T12:00:00Z');
@@ -427,6 +427,24 @@ test('candidate identity evaluates heartbeat time after its bounded reads comple
   }, () => at);
 });
 
+test('live arrival accepts only an import advance on the exact healthy candidate', async () => {
+  const generation = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const f = fixture(), version = f.data['/api/v1/version'].json;
+  version.importGeneration = generation;
+  assert.equal(await observeCandidateImport(f.config, f.get, () => now), generation);
+  await assert.rejects(verifyCandidateBuilds(f.config, f.get, now), /import identity changed/);
+  for (const change of [
+    packet => { packet.data['/api/v1/version'].json.importGeneration = '-'.repeat(36); },
+    packet => { packet.data['/api/v1/version'].json.buildIdentity = 'another-build'; },
+    packet => { packet.data['/api/v1/health'].json.runner.identity = 'another-runner'; },
+    packet => { packet.data['/api/v1/health'].json.coverage.stale = true; },
+    packet => { packet.data['/__release/version'].json.runtimeConfigSha256 = '0'.repeat(64); },
+  ]) {
+    const packet = fixture(); change(packet);
+    await assert.rejects(observeCandidateImport(packet.config, packet.get, () => now));
+  }
+});
+
 test('cleanup retains exact candidate and account ownership guards independently of policy admission', async () => {
   for (const changed of ['build', 'owner']) {
     const f = fixture();
@@ -446,7 +464,8 @@ test('live mode disables automatic context copies and media while default CI kee
   const directory = mkdtempSync(join(tmpdir(), 'justup-gate-config-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'gate.json'); writeFileSync(path, JSON.stringify(fixture().config));
-  const names = ['JUSTUP_ACCEPTANCE_CONFIG', 'JUSTUP_ACCEPTANCE_INVITE', 'JUSTUP_SMOKE_URL', 'PLAYWRIGHT_NO_COPY_PROMPT'];
+  const names = ['JUSTUP_ACCEPTANCE_CONFIG', 'JUSTUP_ACCEPTANCE_INVITE', 'JUSTUP_ACCEPTANCE_JOURNEY', 'JUSTUP_LIVE_ARRIVAL_USERNAME',
+    'JUSTUP_LIVE_ARRIVAL_PASSWORD', 'JUSTUP_SMOKE_URL', 'PLAYWRIGHT_NO_COPY_PROMPT'];
   const old = Object.fromEntries(names.map(name => [name, process.env[name]]));
   try {
     for (const name of names) delete process.env[name];
@@ -454,6 +473,7 @@ test('live mode disables automatic context copies and media while default CI kee
     const normal = (await import(`${url}?fixture-contract`)).default;
     assert.equal(normal.use.trace, 'retain-on-failure');
     assert.ok(normal.testIgnore.includes('**/acceptance.spec.mjs'));
+    assert.ok(normal.testIgnore.includes('**/live-arrival-acceptance.spec.mjs'));
     process.env.JUSTUP_ACCEPTANCE_CONFIG = path;
     process.env.JUSTUP_ACCEPTANCE_INVITE = 'synthetic-invite';
     const live = (await import(`${url}?live-contract`)).default;
@@ -473,6 +493,20 @@ test('live mode disables automatic context copies and media while default CI kee
     process.env.JUSTUP_ACCEPTANCE_CONFIG = path;
     delete process.env.JUSTUP_ACCEPTANCE_INVITE;
     await assert.rejects(import(`${url}?missing-invite-contract`), /protected process environment/);
+    process.env.JUSTUP_ACCEPTANCE_JOURNEY = 'live-arrival';
+    await assert.rejects(import(`${url}?missing-arrival-credentials`), /protected live-arrival credentials/);
+    const arrival = fixture().config;
+    arrival.scenario.liveArrivalAccountId = 'synthetic-disposable-owner';
+    writeFileSync(path, JSON.stringify(arrival));
+    process.env.JUSTUP_LIVE_ARRIVAL_USERNAME = 'synthetic-account';
+    process.env.JUSTUP_LIVE_ARRIVAL_PASSWORD = 'synthetic-disposable-password';
+    const liveArrival = (await import(`${url}?live-arrival-contract`)).default;
+    assert.equal(liveArrival.testMatch, '**/live-arrival-acceptance.spec.mjs');
+    assert.equal(liveArrival.webServer, undefined);
+    assert.equal(liveArrival.use.trace, 'off');
+    const arrived = spawnSync(process.execPath, [join(process.cwd(), 'node_modules/@playwright/test/cli.js'), 'test', '--list'], { encoding: 'utf8', timeout: 10_000 });
+    assert.equal(arrived.status, 0, 'Arrival journey discovery failed.');
+    assert.match(arrived.stdout, /Total: 1 test in 1 file/);
   } finally {
     for (const [name, value] of Object.entries(old)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
