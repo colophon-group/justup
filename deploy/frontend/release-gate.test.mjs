@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { validateGateConfig, loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, cleanupCandidateAccount, cleanupAccount, disposableAccount } from '../../tests/browser/release-gate.mjs';
+import { digest as wireDigest } from '../../server/hiring-wire-facts.mjs';
+import { validateGateConfig, loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, verifyPublishedWire, cleanupCandidateAccount, cleanupAccount, disposableAccount } from '../../tests/browser/release-gate.mjs';
 import { companyReportSample, hiringFootprintSample } from '../../tests/browser/company-report-fixture.mjs';
 
 const now = Date.parse('2026-10-31T12:00:00Z');
@@ -25,22 +26,34 @@ function fixture() {
     privacyUrl: origin + policyPath('privacy', locale), usageUrl: origin + policyPath('usage', locale),
     privacySha256: digest(policyBytes(locale, 'privacy')), usageSha256: digest(policyBytes(locale, 'usage')),
   }]));
+  const newestWire = { state: 'published', edition: {
+    id: '2026-10-26', title: 'Hiring Wire',
+    period: { start: '2026-10-19T00:00:00.000Z', end: '2026-10-26T00:00:00.000Z', previousStart: '2026-10-12T00:00:00.000Z' },
+    snapshotAt: '2026-10-26T00:00:00.000Z', publishedAt: '2026-10-26T08:00:00.000Z', expiresAt: '2026-11-02T00:00:00.000Z',
+    methodology: 'Distinct newly observed listings on comparable career pages.',
+    items: [{ company: { id: 'company-fixed', name: 'Company', url: 'https://example.org/' },
+      headline: '2 newly observed listings, compared with 0 the previous week', scope: 'Comparable career pages',
+      activity: { current: 2, previous: 0, change: 2, percentageChange: null } }],
+  } };
   const config = {
     origin,
     frontend: { deploymentMode: 'preview', sourceSha: 'a'.repeat(40), treeSha: 'b'.repeat(40), assetsSha256: 'c'.repeat(64), workerSha256: 'd'.repeat(64), artifactSha256: 'e'.repeat(64), runtimeConfigSha256: 'f'.repeat(64) },
     api: { sourceCommit: 'a'.repeat(40), schemaVersion: 2, buildIdentity: 'build-fixed', runnerIdentity: 'runner-fixed', importGeneration: '00000000-0000-4000-8000-000000000000' },
     policies: { admittedLocales: entries, fallbackApprovals: {} },
     scenario: { query: 'Reviewed query', warnedQuery: 'Reviewed query plus unsupported requirement', companyId: 'company-fixed', companyName: 'Company', sourceUrl: 'https://employer.example/careers/one',
-      hiringFootprint: { observedCompanyId: 'company-fixed', unknownCompanyId: 'company-unknown', countryCode: 'CH', listingCount: 3 } },
+      hiringFootprint: { observedCompanyId: 'company-fixed', unknownCompanyId: 'company-unknown', countryCode: 'CH', listingCount: 3 },
+      hiringWire: { periodEnd: newestWire.edition.period.end, editionSha256: wireDigest(newestWire.edition) } },
   };
   const coverage = { kind: 'imported_snapshot', stale: false, verifiedAt: new Date(now - 1000).toISOString() };
   const runner = { ready: true, identity: 'runner-fixed', sourceCommit: config.api.sourceCommit, buildIdentity: config.api.buildIdentity, lastHeartbeat: new Date(now - 1000).toISOString() };
-  const sessions = Object.fromEntries(locales.map(locale => [locale, { status: 200, json: { user: null, access: { kind: 'guest', fullAccess: false, billingEnabled: false }, serverTime: new Date(now).toISOString(), authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true }, policies: runtimePolicy(entries[locale]), capabilities: { search: true, companyRequests: true, billing: false, sse: true, follows: true, viewed: true, preferences: true }, coverage } }]));
+  const sessions = Object.fromEntries(locales.map(locale => [locale, { status: 200, json: { user: null, access: { kind: 'guest', fullAccess: false, billingEnabled: false }, serverTime: new Date(now).toISOString(), authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true }, policies: runtimePolicy(entries[locale]), capabilities: { search: true, companyRequests: true, billing: false, sse: true, follows: true, viewed: true, preferences: true, hiringWire: true }, coverage } }]));
   const data = {
     '/__release/version': { status: 200, json: { ...config.frontend } },
     '/api/v1/version': { status: 200, json: { ...config.api, runner: { ...runner } } },
     '/api/v1/health': { status: 200, json: { ready: true, runner: { ...runner }, coverage } },
     '/api/v1/session': sessions.en,
+    '/api/v1/hiring-wire': { status: 200, json: newestWire },
+    '/api/v1/hiring-wire/editions/2026-10-26': { status: 200, json: structuredClone(newestWire) },
     '/api/v1/searches': { status: 401, json: { error: { code: 'unauthenticated' } } },
     '/api/v1/jobs?limit=12': { status: 200, json: { asOf: new Date(now).toISOString(), items: [{ firstObserved: new Date(now - 3 * 86_400_000).toISOString() }], coverage } },
     '/api/v1/companies?q=Company': { status: 200, json: { items: [{ id: 'company-fixed', name: 'Company', coverage: { state: 'imported_snapshot' } }] } },
@@ -157,6 +170,45 @@ test('stale application schema one is rejected in configured and deployed API id
     await assert.rejects(preflight(f.config, f.get, now));
     assert.equal(f.reads.some(read => read.path === '/api/v1/searches'), false);
   }
+});
+
+test('preflight pins an active factual Hiring Wire edition and its period-addressed copy', async () => {
+  const currentPath = '/api/v1/hiring-wire';
+  const namedPath = currentPath + '/editions/2026-10-26';
+  const current = f => f.data[currentPath].json.edition;
+  for (const change of [
+    f => { delete f.config.scenario.hiringWire; },
+    f => { f.config.scenario.hiringWire.periodEnd = '2026-10-27T00:00:00.000Z'; },
+    f => { f.config.scenario.hiringWire.periodEnd = '2026-11-02T00:00:00.000Z'; },
+    f => { f.config.scenario.hiringWire.editionSha256 = '7'.repeat(64); },
+    f => { f.sessions.de.json.capabilities.hiringWire = false; },
+    f => { f.data[currentPath].json = { state: 'unavailable', edition: null }; },
+    f => { current(f).items[0].activity = { current: 3, previous: 0, change: 3, percentageChange: null }; },
+    f => { current(f).items[0].privateScopeId = 'must-stay-private'; },
+    f => { f.data[namedPath].status = 404; },
+    f => { f.data[namedPath].json.edition.items[0].headline = 'Different retained facts'; },
+  ]) {
+    const f = fixture(); change(f);
+    await assert.rejects(preflight(f.config, f.get, now));
+    assert.equal(f.reads.some(read => read.path === '/api/v1/searches'), false);
+  }
+  const f = fixture();
+  const result = await preflight(f.config, f.get, now);
+  assert.deepEqual(result.wireEdition, current(f));
+  assert.deepEqual(f.reads.filter(read => read.path.startsWith(currentPath)).map(read => read.path), [currentPath, namedPath]);
+  const edition = current(f);
+  await assert.rejects(verifyPublishedWire(f.config.scenario.hiringWire, f.get, () => Date.parse(edition.expiresAt)));
+  await assert.rejects(verifyPublishedWire(f.config.scenario.hiringWire, f.get, () => Date.parse(edition.publishedAt) - 1));
+  let at = Date.parse(edition.expiresAt) - 1;
+  const advancingRead = async path => {
+    if (path === namedPath) at++;
+    return f.get(path);
+  };
+  await assert.rejects(verifyPublishedWire(f.config.scenario.hiringWire, advancingRead, () => at));
+  edition.publishedAt = '2026-10-28T00:00:00.001Z';
+  f.config.scenario.hiringWire.editionSha256 = wireDigest(edition);
+  f.data[namedPath].json = structuredClone(f.data[currentPath].json);
+  await assert.rejects(verifyPublishedWire(f.config.scenario.hiringWire, f.get, () => now));
 });
 
 test('the known country and fresh unknown sample must match the reviewed import before private work', async () => {

@@ -181,6 +181,10 @@ First run the exact-byte smoke above against the retained artifact. Then prepare
       "unknownCompanyId": "<distinct imported company with eligible listings and unknown countries>",
       "countryCode": "CH",
       "listingCount": 1
+    },
+    "hiringWire": {
+      "periodEnd": "<reviewed Monday UTC with millisecond precision>",
+      "editionSha256": "<canonical SHA-256 of the reviewed public edition object>"
     }
   }
 }
@@ -198,6 +202,17 @@ the expected import generation and country count. The English browser journey
 then verifies the highlight, keyboard reset and pointer rotation, the neutral
 unknown state, the textual alternatives with JavaScript disabled, and native
 touch rotation in a mobile profile with reduced motion.
+
+For `scenario.hiringWire`, use the current publication period and the
+canonical hash of the reviewed public edition object, using `digest(edition)`
+from `server/hiring-wire-facts.mjs`. Review the retained publication against
+its frozen [coverage and publication evidence](hiring-wire.md) before recording
+the hash. The gate verifies the matching current and period-addressed API
+responses, publication within 48 hours of the period end, and expiry one week
+after the period end. On the signed-out English homepage it checks the reviewed
+counts and company links, keyboard reading through the stories, and static
+reading and touch scrolling in a mobile profile with reduced motion. Retain the separate source
+history, Sol execution, and same-period replay results with the release report.
 
 The former English-only `policies.version`, `privacySha256` and `usageSha256` fields are no longer accepted. Migrate release evidence by listing **all five** interface locales in `policies.admittedLocales`, each with the seven exact server policy-state fields above and both approved document hashes. Locale keys and fields are strict; repeated JSON keys, including escaped equivalents, reject the file. Partial locale maps cannot pass full acceptance. The URLs must be the candidate origin’s exact English root or `.de.html`, `.fr.html`, `.it.html` and `.es.html` notice routes; query strings, fragments, foreign origins and alternate paths are rejected. The live UI journey always runs once for each of the five fixed locales; a scenario cannot narrow that set.
 
