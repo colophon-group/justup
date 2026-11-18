@@ -7,6 +7,7 @@ Installation remains an explicit root operation after review of its plan digest.
 from __future__ import annotations
 
 import argparse
+import base64
 import errno
 import fcntl
 import hashlib
@@ -42,6 +43,8 @@ BACKUP_TIMER = 'justup-preview-backup.timer'
 BACKUP_UNITS = (BACKUP_TIMER, BACKUP_SERVICE)
 LUNA_UNIT = 'justup-preview-luna-qualification.service'
 LUNA_MANIFEST = 'app/server/evals/luna-qualification-v1.json'
+LUNA_REVIEW = 'app/server/evals/luna-qualification-review.mjs'
+LUNA_RESULT_LIMIT = 512 * 1024
 APPLICATION_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service')
 STOP_UNITS = (*APPLICATION_UNITS, LUNA_UNIT,
               'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-feed.socket')
@@ -986,10 +989,11 @@ def luna_grant(prefix, checksum, manifest, expected_plan, queue_gid):
         raise ValueError('Luna qualification grant differs from the reviewed bytes.')
     value = json.loads(raw)
     identity = {'buildIdentity': manifest['buildIdentity'], 'sourceCommit': manifest['sourceCommit'],
-                'hostPlanSha256': expected_plan, 'manifestSha256': manifest['files'][LUNA_MANIFEST],
-                'kind': 'luna_qualification_once', 'schemaVersion': 1}
-    if (not isinstance(value, dict) or set(value) != set(identity) | {'runId', 'notBefore', 'expiresAt'}
-            or type(value['schemaVersion']) is not int or any(value[key] != item for key, item in identity.items())
+                'hostPlanSha256': expected_plan, 'manifestSha256': manifest['files'][LUNA_MANIFEST]}
+    if (not isinstance(value, dict)
+            or set(value) != set(identity) | {'kind', 'schemaVersion', 'runId', 'notBefore', 'expiresAt', 'reviewPublicKey'}
+            or type(value['schemaVersion']) is not int or value['schemaVersion'] != 2
+            or value['kind'] != 'luna_qualification_once' or any(value[key] != item for key, item in identity.items())
             or not isinstance(value['runId'], str) or not re.fullmatch(r'[0-9a-f]{32}', value['runId'])):
         raise ValueError('Luna qualification grant does not bind this build, plan and case manifest.')
     times = [value[name] for name in ('notBefore', 'expiresAt')]
@@ -999,7 +1003,39 @@ def luna_grant(prefix, checksum, manifest, expected_plan, queue_gid):
     start, end = (datetime.fromisoformat(instant).timestamp() for instant in times)
     if not start <= datetime.now(timezone.utc).timestamp() < end <= start + 300:
         raise ValueError('Luna qualification requires a current grant of at most five minutes.')
-    return value['runId']
+    encoded_key = value['reviewPublicKey']
+    if not isinstance(encoded_key, str) or len(encoded_key) > 684:
+        raise ValueError('Luna qualification requires a bounded reviewer public key.')
+    key = base64.b64decode(encoded_key, validate=True)
+    if not key or len(key) > 512 or base64.b64encode(key).decode('ascii') != encoded_key:
+        raise ValueError('Luna qualification requires a canonical reviewer public key.')
+    return {**identity, 'grantSha256': checksum, 'runId': value['runId'],
+            'reviewKeySha256': hashlib.sha256(key).hexdigest()}
+
+
+def luna_result_receipt(path, identity, queue_user):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != queue_user.pw_uid
+                or before.st_gid != queue_user.pw_gid or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_nlink != 1 or not 0 < before.st_size <= LUNA_RESULT_LIMIT):
+            raise ValueError('Luna result must be a single private bounded file.')
+        raw = stream.read(LUNA_RESULT_LIMIT + 1)
+        after = os.fstat(stream.fileno())
+        if (not raw.endswith(b'\n') or len(raw) != before.st_size or after.st_size != before.st_size
+                or before.st_mtime_ns != after.st_mtime_ns or before.st_ctime_ns != after.st_ctime_ns):
+            raise ValueError('Luna result changed during read or was incomplete.')
+        os.fsync(stream.fileno())
+    lines = raw[:-1].split(b'\n')
+    if not 2 <= len(lines) <= 45 or any(not line or len(line) > 8192 for line in lines):
+        raise ValueError('Luna result does not match its bounded record format.')
+    header, summary = json.loads(lines[0]), json.loads(lines[-1])
+    if (header != {'kind': 'luna_qualification_start', 'version': 2, **identity}
+            or not isinstance(summary, dict) or summary.get('kind') != 'summary'
+            or not isinstance(summary.get('reportSha256'), str) or not re.fullmatch(r'[a-f0-9]{64}', summary['reportSha256'])):
+        raise ValueError('Luna result lacks the exact run identity and terminal summary.')
+    return {**identity, 'resultSha256': hashlib.sha256(raw).hexdigest(), 'reportSha256': summary['reportSha256']}
 
 
 def luna_command(checksum):
@@ -1058,7 +1094,7 @@ def run_luna_qualification(checksum, build, expected_plan):
         raise ValueError('Luna qualification requires the exact active build and installed host plan.')
     owned_path(release, directory=True)
     manifest = artifact.verify_directory(release)
-    if manifest['buildIdentity'] != build or LUNA_MANIFEST not in manifest['files']:
+    if manifest['buildIdentity'] != build or not {LUNA_MANIFEST, LUNA_REVIEW} <= manifest['files'].keys():
         raise ValueError('The active preview release lacks the fixed Luna case inventory.')
     if call('systemctl', 'show', '--property=LoadState', '--value', LUNA_UNIT, capture=True) != 'not-found':
         raise ValueError('The fixed transient qualification name is already loaded.')
@@ -1081,20 +1117,24 @@ def run_luna_qualification(checksum, build, expected_plan):
             or result_meta.st_uid != queue_user.pw_uid or result_meta.st_gid != queue_user.pw_gid
             or stat.S_IMODE(result_meta.st_mode) != 0o700):
         raise ValueError('Luna qualification receipt and result storage must keep their dedicated owners and modes.')
-    run_id = luna_grant(folder, checksum, manifest, expected_plan, queue_user.pw_gid)
+    receipt = luna_grant(folder, checksum, manifest, expected_plan, queue_user.pw_gid)
+    run_id = receipt['runId']
     fd = os.open(proofs, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if sum(1 for _ in proofs.iterdir()) >= 32 or sum(1 for _ in results.iterdir()) >= 8:
+        if sum(1 for _ in proofs.iterdir()) > 30 or sum(1 for _ in results.iterdir()) >= 8:
             raise ValueError('Review retained qualification evidence before making another run.')
         if (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan:
             raise ValueError('The build or host plan changed before Luna qualification.')
         require_idle_luna_broker()
-        receipt = {'runId': run_id, 'grantSha256': checksum, 'buildIdentity': build, 'hostPlanSha256': expected_plan}
         write_update_file(proofs / (run_id + '.json'), (json.dumps(receipt, sort_keys=True) + '\n').encode(), 0o400)
         os.fsync(fd)
         subprocess.run(luna_command(checksum), check=True,
                        env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC'})
+        receipt = luna_result_receipt(results / ('luna-qualification-' + run_id + '.jsonl'), receipt, queue_user)
+        sync_directory(results)
+        write_update_file(proofs / (run_id + '.result.json'), (json.dumps(receipt, sort_keys=True) + '\n').encode(), 0o400)
+        os.fsync(fd)
     finally:
         os.close(fd)
     return receipt

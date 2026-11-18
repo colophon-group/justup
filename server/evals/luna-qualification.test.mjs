@@ -1,9 +1,12 @@
 // Provider-free qualification contracts. No socket, credentials or host calls.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { applyQualificationReview,createQualificationObserver,evaluateQualification,fixedQualificationManifest,validateQualificationManifest } from './luna-qualification.mjs';
 import { inQualificationSandbox,runQualificationCli,validateQualificationGrant } from './luna-qualification-cli.mjs';
+import { openQualificationAnswers, parseQualificationResult, qualificationReportSha,
+  qualificationReviewKey, sealQualificationAnswers } from './luna-qualification-review.mjs';
+import { finalizeQualificationReview } from '../../scripts/luna-qualification-review.mjs';
 
 const usage={inputTokens:12,cachedInputTokens:0,outputTokens:8,reasoningOutputTokens:2};
 const sha=value=>createHash('sha256').update(value).digest('hex');
@@ -157,11 +160,53 @@ test('ambiguous replies need independent review; declarative and irrelevant repl
 });
 test('one-use grant binds exact identity, manifest and a five-minute start window',()=>{
   const identity={sourceCommit:'a'.repeat(40),buildIdentity:'b'.repeat(64),hostPlanSha256:'c'.repeat(64),manifestSha256:'d'.repeat(64)};
-  const grant={schemaVersion:1,kind:'luna_qualification_once',runId:'e'.repeat(32),...identity,notBefore:'2026-11-04T06:00:00Z',expiresAt:'2026-11-04T06:04:00Z'};
+  const grant={schemaVersion:2,kind:'luna_qualification_once',runId:'e'.repeat(32),...identity,
+    notBefore:'2026-11-04T06:00:00Z',expiresAt:'2026-11-04T06:04:00Z',reviewPublicKey:'synthetic'};
   assert.deepEqual(validateQualificationGrant(grant,{...identity,now:Date.parse('2026-11-04T06:01:00Z')}),grant);
   assert.throws(()=>validateQualificationGrant(grant,{...identity,manifestSha256:'f'.repeat(64),now:Date.parse('2026-11-04T06:01:00Z')}),/unavailable/);
   assert.throws(()=>validateQualificationGrant(grant,{...identity,now:Date.parse('2026-11-04T06:04:00Z')}),/unavailable/);
   assert.throws(()=>validateQualificationGrant({...grant,expiresAt:'2026-11-04T06:06:00Z'},{...identity,now:Date.parse('2026-11-04T06:01:00Z')}),/unavailable/);
+});
+test('sealed clarifications open only for their registered reviewer and exact rooted report',async()=>{
+  const {manifest,sha256:manifestSha256}=fixedQualificationManifest();
+  const observer=createQualificationObserver(),answers=[];
+  const report=await evaluateQualification({manifest,model:fakeModel(manifest,observer),observer,
+    onClarification(item){answers.push(item);}});
+  assert.equal(answers.length,2);
+  const {publicKey,privateKey}=generateKeyPairSync('rsa',{modulusLength:3072});
+  const encoded=publicKey.export({format:'der',type:'spki'}).toString('base64');
+  const reviewer=qualificationReviewKey(encoded);
+  const header={kind:'luna_qualification_start',version:2,runId:'a'.repeat(32),
+    sourceCommit:'b'.repeat(40),buildIdentity:'c'.repeat(64),hostPlanSha256:'d'.repeat(64),
+    manifestSha256,grantSha256:'e'.repeat(64),reviewKeySha256:reviewer.sha256};
+  const sealed=sealQualificationAnswers(header,report,answers,reviewer);
+  const reportSha256=qualificationReportSha(report);
+  const bytes=Buffer.from([header,...report.cases.map(record=>({kind:'case',record})),sealed,
+    {kind:'summary',passed:report.passed,intent:report.intent,company:report.company,totals:report.totals,reportSha256}]
+    .map(record=>JSON.stringify(record)).join('\n')+'\n');
+  assert.ok(answers.every(({answer})=>!bytes.includes(answer)));
+  const {kind,version,...identity}=header;
+  const receipt={...identity,reportSha256,resultSha256:sha(bytes)};
+  const evidence=parseQualificationResult(bytes,receipt);
+  const key=privateKey.export({format:'pem',type:'pkcs8'});
+  assert.deepEqual(openQualificationAnswers(evidence,key),answers);
+  assert.throws(()=>parseQualificationResult(bytes,{...receipt,buildIdentity:'0'.repeat(64)}));
+  assert.throws(()=>parseQualificationResult(Buffer.concat([bytes,Buffer.from('\n')]),receipt));
+  assert.throws(()=>openQualificationAnswers({...evidence,header:{...header,runId:'0'.repeat(32)}},key));
+  const modifiedCipher=Buffer.from(sealed.ciphertext,'base64');
+  modifiedCipher[0]^=1;
+  assert.throws(()=>openQualificationAnswers({...evidence,sealed:{...sealed,ciphertext:modifiedCipher.toString('base64')}},key));
+  assert.throws(()=>openQualificationAnswers(evidence,generateKeyPairSync('ed25519').privateKey.export({format:'pem',type:'pkcs8'})));
+  const decisions={resultSha256:receipt.resultSha256,reportSha256,
+    cases:answers.map(({id,clarificationSha256})=>({id,clarificationSha256,approved:true}))};
+  const finalized=finalizeQualificationReview({evidence,answers,decisions,manifest,receipt});
+  assert.equal(finalized.report.passed,true);
+  assert.deepEqual(finalized.operatorReceipt,receipt);
+  assert.ok(answers.every(({answer})=>!JSON.stringify(finalized).includes(answer)));
+  assert.throws(()=>finalizeQualificationReview({evidence,answers,decisions:{...decisions,cases:decisions.cases.slice(1)},manifest,receipt}));
+  assert.throws(()=>finalizeQualificationReview({evidence,answers,decisions:{...decisions,resultSha256:'0'.repeat(64)},manifest,receipt}));
+  decisions.cases[0].approved=false;
+  assert.equal(finalizeQualificationReview({evidence,answers,decisions,manifest,receipt}).report.passed,false);
 });
 test('qualification rejects a plain shell even with an apparent launch environment',async()=>{
   const cgroup='0::/justup.slice/justup-preview.slice/justup-preview-luna-qualification.service\n';

@@ -114,7 +114,8 @@ function scoreCompany(value,entry){
     const clarification=rawClarification.trim();
     const subject=fold(entry.expectedSubject);
     const namesSubject=new RegExp(`(?:^|[^\\p{L}\\p{N}])${subject}(?=$|[^\\p{L}\\p{N}])`,'u').test(fold(clarification));
-    const manualReviewPending=data?.status==='clarification'&&data?.candidate===null&&namesSubject&&clarification.length<=300;
+    const manualReviewPending=data?.status==='clarification'&&data?.candidate===null&&namesSubject
+      &&rawClarification.isWellFormed()&&clarification.length<=300;
     return {correct:false,manualReviewPending,clarificationSha256:manualReviewPending?sha(Buffer.from(rawClarification)):null,
       guessedAmbiguous:data?.status==='candidate',unverifiedCandidate:data?.status==='candidate'&&!evidenceVerified,
       normalization:manualReviewPending?'manual_required':'incorrect',feedback:[]};
@@ -147,12 +148,12 @@ function aggregate(records,kind,section,repeatCaseId){
     nameOnlyDiscoveryCases:nameOnly.length,nameOnlyDiscoveryObserved,repeats:repeats.length,repeatConsistent,repeatLatencyRangeMs,usage,cost:null,passed};
 }
 
-export async function evaluateQualification({manifest,model,observer,onCase=()=>{},now=()=>performance.now()}){
+export async function evaluateQualification({manifest,model,observer,onCase=()=>{},onClarification=()=>{},now=()=>performance.now()}){
   validateQualificationManifest(manifest);
   if(!model?.available?.('search_intent')||!model?.available?.('company_resolution'))throw new Error('Both attested Luna profiles are required for qualification.');
   const caps=qualificationCapabilities(),records=[];
   async function runCase(kind,entry,repeatIndex){
-    observer.begin(kind,entry.id);const started=now();let score,code='provider_unavailable';
+    observer.begin(kind,entry.id);const started=now();let score,companyReply,code='provider_unavailable';
     try{
       if(kind==='intent'){
         let raw,compiled,previous;
@@ -163,7 +164,10 @@ export async function evaluateQualification({manifest,model,observer,onCase=()=>
           previous=validateModelData(raw,INTENT_SCHEMA).length?null:raw;
         }
         score=scoreIntent(raw,entry,caps);
-      }else score=scoreCompany(await model.resolveCompany({input:entry.input,domain:entry.domain??null,careerUrl:null,scope:null}),entry);
+      }else{
+        companyReply=await model.resolveCompany({input:entry.input,domain:entry.domain??null,careerUrl:null,scope:null});
+        score=scoreCompany(companyReply,entry);
+      }
       code='succeeded';
     }catch(error){score={correct:false,unsafeAcceptance:false,droppedRequirements:kind==='intent',guessedAmbiguous:false,unverifiedCandidate:false,normalization:'failed',feedback:[]};code=SAFE_CODES.has(error?.code)?error.code:'provider_unavailable';}
     const observed=observer.end(),durationMs=observed.durationMs??Math.max(0,Math.round(now()-started));
@@ -173,6 +177,9 @@ export async function evaluateQualification({manifest,model,observer,onCase=()=>
       clarificationSha256:score.clarificationSha256??null,discoveryRequired,normalization:score.normalization,feedback:score.feedback,
       durationMs,attempts:observed.attempts,webStarts:observed.webStarts,metricObserved:observed.metricObserved,usage:observed.usage??null};
     records.push(record);await onCase(record);
+    if(record.manualReviewPending)await onClarification({
+      id:record.id,clarificationSha256:record.clarificationSha256,answer:companyReply.data.clarification
+    });
     return code==='succeeded'&&observed.metricObserved&&observed.webStarts!==null&&observed.usage!==null&&record.normalization!=='rejected'&&!record.unsafeAcceptance&&!record.droppedRequirements&&!record.guessedAmbiguous&&!record.unverifiedCandidate;
   }
   let safe=true;

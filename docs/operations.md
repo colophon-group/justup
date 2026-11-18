@@ -188,17 +188,19 @@ name is available.
 Prepare `/srv/justup_preview/queue/qualification` as root with the queue group
 and mode `0750`. Its `receipts` directory is root-owned mode `0700`, and its
 `results` directory belongs to the dedicated queue UID and group, mode `0700`.
-Review the exact retained cohort and authorize one run. Place the approved
+Review the exact retained cohort and authorize one run. Obtain the independent
+reviewer's public key through the protected review procedure below. Place the approved
 `grant.json` in this directory as root, queue group, mode `0640` with one link.
 The grant contains exactly these fields.
 
 | Field | Required value |
 | --- | --- |
-| `schemaVersion`, `kind` | `1`, `luna_qualification_once` |
+| `schemaVersion`, `kind` | `2`, `luna_qualification_once` |
 | `runId` | Unique 32-character lowercase hexadecimal run identity |
 | `sourceCommit`, `buildIdentity` | Commit and backend build from the exact active manifest |
 | `hostPlanSha256` | Current installed operator plan digest |
 | `manifestSha256` | Manifest digest entry for `app/server/evals/luna-qualification-v1.json` |
+| `reviewPublicKey` | Canonical standard base64 of the reviewer's DER SubjectPublicKeyInfo for RSA-3072 with exponent 65537 |
 | `notBefore`, `expiresAt` | Canonical UTC bounds spanning at most five minutes for starting the run |
 
 Use the independently recorded SHA-256 of the grant's exact bytes. Run inside
@@ -221,14 +223,56 @@ service identity and denial of private runtime paths and Internet sockets.
 The operator tool leaves all application services and activation settings
 untouched. The resource guard includes the transient service in its stop path.
 
-Read the protected `results/luna-qualification-<runId>.jsonl` for outcome and
-report identity. A partial result indicates interruption or failure. Until
-independent clarification review is available, ambiguous results leave the
-company verdict pending and the command can exit nonzero with a complete
-redacted report. Keep receipts and results in protected storage. At eight
-results or 32 receipts, archive the exact retained evidence during reviewed
-maintenance and keep consumed run IDs retired. Verify these runtime boundaries
+The operator tool hashes the complete protected
+`results/luna-qualification-<runId>.jsonl` after the service exits. It retains
+that hash and the exact report identity in the root-owned
+`receipts/<runId>.result.json`. A partial file or missing terminal receipt leaves
+the measurement unverified. A completed measurement can still record failing
+gates. Keep the evidence in protected storage. Before eight results or 32
+receipt files are retained, archive exact older evidence during reviewed
+maintenance and keep consumed run IDs retired. Verify the runtime boundaries
 on the target host before using the report for any profile activation.
+
+#### Review the protected clarification answers
+
+The independent reviewer creates a run-specific RSA key in a private local
+directory. Share the public value for the root grant through the protected
+operator channel. Keep the private key on the reviewer's workstation.
+
+```sh
+umask 077
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$luna_review_private"
+openssl pkey -in "$luna_review_private" -pubout -outform DER \
+  | openssl base64 -A > "$luna_review_public"
+```
+
+The qualification process encrypts only the two fixed clarification answers
+for that key. The report contains redacted case outcomes and a sealed payload.
+Obtain the exact result and its root operator receipt independently. Use
+private absolute paths with mode `0600` or `0400`, and use a clean checkout of
+the source commit in the receipt. Inspect the answers on a private terminal.
+
+```sh
+node scripts/luna-qualification-review.mjs inspect "$luna_result" \
+  "$luna_operator_receipt" "$luna_review_private"
+```
+
+Judge whether each reply asks the requester to distinguish the named
+organizations. Save a private JSON decision with the displayed
+`resultSha256`, `reportSha256`, and `cases` array. Each case contains its
+displayed `id` and `clarificationSha256`, plus an explicit boolean
+`approved`. Finalize into a new private file.
+
+```sh
+node scripts/luna-qualification-review.mjs finalize "$luna_result" \
+  "$luna_operator_receipt" "$luna_review_private" "$luna_review_decisions" \
+  "$luna_reviewed_report"
+```
+
+Finalization authenticates the encrypted answers, checks their digests against
+the root-bound result and applies the explicit decisions to the existing
+quality gates. The final report contains digests and verdicts. Keep the private
+key and temporary review material under the approved retention policy.
 
 The fixed API composes only published Wire reads from its database and clock. The queue composes the protected source reader, editorial dispatcher and independently qualified Sol transport. Optional `hiringWire` is absent, exactly `{enabled:false}`, or exactly `{enabled:true,attestationPath,providerCatalogueSha256,modelUid,socketPath}`. The private proof is `/srv/justup_preview/model/config/hiring-wire-reviewed.json`; its queue-readable sanitized copy is `/srv/justup_preview/broker/hiring-wire-reviewed.json`. The socket remains `/srv/justup_preview/broker/model.sock`, and `modelUid` must name the existing dedicated model UID. Enabled configuration requires the complete Wire graph, integration/source modules and pinned Sol catalogue in the exact artifact. Both launchers require an independent root-owned immutable bounded proof with protected root-owned ancestors, matching this build/host, actual observed provider catalogue, fixed tools/descriptor and reviewed isolation, retention, quality and shared-slot evidence. A Luna proof or an enabled flag cannot qualify Wire; see [the runtime contract](hiring-wire-runtime.md).
 

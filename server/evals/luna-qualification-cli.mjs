@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { createBrokerExecutor } from '../model-broker.mjs';
 import { CODEX_VERSION,MODEL_CATALOGUE_SHA256,MODEL_PROFILES,createCodexModel } from '../model-runner.mjs';
 import { createQualificationObserver,evaluateQualification,fixedQualificationManifest } from './luna-qualification.mjs';
+import { qualificationReportSha, qualificationReviewKey, sealQualificationAnswers } from './luna-qualification-review.mjs';
 
 const BASE='/srv/justup_preview',ROOT=BASE+'/queue/qualification',GRANT=ROOT+'/grant.json',WORK=ROOT+'/results';
 const UNIT='justup-preview-luna-qualification.service';
@@ -16,11 +17,11 @@ const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const safeDate=value=>typeof value==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(value)&&Number.isFinite(Date.parse(value));
 
 export function validateQualificationGrant(value,{sourceCommit,buildIdentity,hostPlanSha256,manifestSha256,now=Date.now()}){
-  if(!plain(value)||Object.keys(value).sort().join(',')!=='buildIdentity,expiresAt,hostPlanSha256,kind,manifestSha256,notBefore,runId,schemaVersion,sourceCommit'
-    ||value.schemaVersion!==1||value.kind!=='luna_qualification_once'||!RUN.test(value.runId??'')
+  if(!plain(value)||Object.keys(value).sort().join(',')!=='buildIdentity,expiresAt,hostPlanSha256,kind,manifestSha256,notBefore,reviewPublicKey,runId,schemaVersion,sourceCommit'
+    ||value.schemaVersion!==2||value.kind!=='luna_qualification_once'||!RUN.test(value.runId??'')
     ||!OID.test(value.sourceCommit??'')||!SHA.test(value.buildIdentity??'')||!SHA.test(value.hostPlanSha256??'')||!SHA.test(value.manifestSha256??'')
     ||value.sourceCommit!==sourceCommit||value.buildIdentity!==buildIdentity||value.hostPlanSha256!==hostPlanSha256||value.manifestSha256!==manifestSha256
-    ||!safeDate(value.notBefore)||!safeDate(value.expiresAt))throw unavailable();
+    ||typeof value.reviewPublicKey!=='string'||!safeDate(value.notBefore)||!safeDate(value.expiresAt))throw unavailable();
   const start=Date.parse(value.notBefore),end=Date.parse(value.expiresAt);
   if(end<=start||end-start>300_000||now<start||now>=end)throw unavailable();
   return value;
@@ -76,21 +77,30 @@ export async function runQualificationCli(){
   const {manifest,sha256:manifestSha256}=fixedQualificationManifest();
   const grantSha256=process.env.JUSTUP_LUNA_GRANT_SHA256;
   const grant=validateQualificationGrant(readProtectedGrant(grantSha256),{...identity,manifestSha256});
+  const recipient=qualificationReviewKey(grant.reviewPublicKey);
   const path=outputPath(grant.runId);
   // Exclusive creation is the non-retry marker. A crash leaves a partial
   // redacted record and the same grant cannot be exercised a second time.
   const fd=openSync(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
   try{
-    const header={version:1,kind:'luna_qualification_start',runId:grant.runId,...identity,manifestSha256,grantSha256};
+    const header={version:2,kind:'luna_qualification_start',runId:grant.runId,...identity,manifestSha256,grantSha256,
+      reviewKeySha256:recipient.sha256};
     appendLine(fd,header);
     const observer=createQualificationObserver();
     const config=qualificationModelConfig(identity);
     const executor=createBrokerExecutor({socketPath:config.socketPath,onReply:observer.onReply});
     const model=createCodexModel({config,execute:executor,onMetric:observer.onMetric});
-    const report=await evaluateQualification({manifest,model,observer,onCase(record){appendLine(fd,{kind:'case',...record});}});
+    const answers=[];
+    const report=await evaluateQualification({manifest,model,observer,
+      onCase(record){appendLine(fd,{kind:'case',record});},
+      onClarification(item){answers.push(item);}});
+    const sealed=sealQualificationAnswers(header,report,answers,recipient);
+    if(sealed)appendLine(fd,sealed);
     appendLine(fd,{kind:'summary',passed:report.passed,intent:report.intent,company:report.company,totals:report.totals,
-      reportSha256:sha(Buffer.from(JSON.stringify(report)))});
-    return report.passed?0:2;
+      reportSha256:qualificationReportSha(report)});
+    // The caller may retain an unsuccessful measurement. Only the separate
+    // finalized report carries the qualification verdict.
+    return 0;
   }finally{closeSync(fd);}
 }
 
