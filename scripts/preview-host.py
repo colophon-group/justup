@@ -45,8 +45,10 @@ LUNA_UNIT = 'justup-preview-luna-qualification.service'
 LUNA_MANIFEST = 'app/server/evals/luna-qualification-v1.json'
 LUNA_REVIEW = 'app/server/evals/luna-qualification-review.mjs'
 LUNA_RESULT_LIMIT = 512 * 1024
+JEV_UNIT = 'justup-preview-jev-qualification.service'
+JEV_FIXTURE = 'app/server/evals/matching-cases-v1.json'
 APPLICATION_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service')
-STOP_UNITS = (*APPLICATION_UNITS, LUNA_UNIT,
+STOP_UNITS = (*APPLICATION_UNITS, LUNA_UNIT, JEV_UNIT,
               'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-feed.socket')
 ROOT_FLOOR = 8 * GIB
 DISK_LIMIT = 2 * GIB
@@ -1140,6 +1142,70 @@ def run_luna_qualification(checksum, build, expected_plan):
     return receipt
 
 
+def jev_command(checksum, build, expected_plan):
+    # Same queue identity and network restrictions as the regular runner. The
+    # synthetic suite only needs state, its ledger, and the ordinary provider.
+    masked = ('config', 'model', 'logs', 'broker/model.sock',
+              'queue/source-coverage-v1', 'queue/source-coverage-v2', 'queue/qualification')
+    restricted_paths = [f'-{BASE / path}' for path in masked]
+    restricted_paths += ['-/run/docker.sock', '-/var/run/docker.sock', '-/mnt/murmur', '-/root', '-/home']
+    return [
+        '/usr/bin/systemd-run', f'--unit={JEV_UNIT}', '--wait', '--pipe', '--collect', '--quiet', f'--slice={SLICE}',
+        f'--uid={RUNNER_USER}', f'--gid={RUNNER_USER}', '--service-type=exec',
+        '--property=RuntimeMaxSec=150s', '--property=TimeoutStopSec=15s', '--property=KillMode=control-group',
+        '--property=UMask=0007', '--property=NoNewPrivileges=yes', '--property=CapabilityBoundingSet=',
+        '--property=AmbientCapabilities=', '--property=ProtectSystem=strict', '--property=ProtectHome=yes',
+        '--property=PrivateDevices=yes', '--property=PrivateTmp=yes', '--property=TemporaryFileSystem=/tmp:ro /var/tmp:ro',
+        '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',
+        '--property=IPAddressDeny=127.0.0.0/8 ::1/128 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10',
+        '--property=IPAddressAllow=127.0.0.53/32', '--property=ProtectKernelTunables=yes',
+        '--property=ProtectKernelModules=yes', '--property=ProtectKernelLogs=yes', '--property=ProtectControlGroups=yes',
+        '--property=ProtectClock=yes', '--property=ProtectHostname=yes', '--property=RestrictSUIDSGID=yes',
+        '--property=RestrictRealtime=yes', '--property=LockPersonality=yes', '--property=SystemCallArchitectures=native',
+        '--property=LimitCORE=0', '--property=LimitNOFILE=256', '--property=LimitNPROC=64',
+        f'--property=WorkingDirectory={BASE / "current/app"}',
+        '--property=ReadWritePaths=' + ' '.join(str(BASE / path) for path in ('state', 'queue/budget')),
+        '--property=InaccessiblePaths=' + ' '.join(restricted_paths),
+        '/usr/bin/env', '-i', 'LANG=C.UTF-8', 'TZ=UTC', f'JUSTUP_JEV_REVIEWED_FIXTURE={checksum}',
+        f'JUSTUP_JEV_REVIEWED_BUILD={build}', f'JUSTUP_JEV_REVIEWED_PLAN={expected_plan}',
+        '/usr/bin/python3', '-I', str(BASE / 'ops/preview-queue-run.py'), '--qualify-jev',
+    ]
+
+
+def run_jev_qualification(checksum, build, expected_plan):
+    if any(not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value)
+           for value in (checksum, build, expected_plan)):
+        raise ValueError('Exact reviewed case, build and host plan hashes are required.')
+    require_operator(cleanup_logs=False)
+    artifact = artifact_module()
+    release = BASE / 'releases' / build
+    if (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan:
+        raise ValueError('JEV qualification requires the exact active build and installed host plan.')
+    owned_path(release, directory=True)
+    manifest = artifact.verify_directory(release)
+    if (manifest['buildIdentity'] != build or manifest['files'].get(JEV_FIXTURE) != checksum
+            or not artifact.JEV_QUALIFICATION_FILES <= manifest['files'].keys()):
+        raise ValueError('The active release differs from the reviewed JEV cases.')
+    if call('systemctl', 'show', '--property=LoadState', '--value', JEV_UNIT, capture=True) != 'not-found':
+        raise ValueError('The JEV qualification name is already loaded.')
+    for unit in (*APPLICATION_UNITS, LUNA_UNIT, 'justup-preview-model.service'):
+        if call('systemctl', 'show', '--property=ActiveState', '--value', unit, capture=True) not in {'inactive', 'failed'}:
+            raise ValueError('Stop the ordinary preview application before qualification.')
+    completed = subprocess.run(jev_command(checksum, build, expected_plan), stdin=subprocess.DEVNULL,
+                               capture_output=True, timeout=180,
+                               env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC'})
+    if len(completed.stdout) > 16 * 1024:
+        raise ValueError('Unexpected JEV qualification report size.')
+    result = json.loads(completed.stdout)
+    if (not isinstance(result, dict) or result.get('sourceCommit') != manifest['sourceCommit']
+            or result.get('buildIdentity') != build or result.get('hostPlanSha256') != expected_plan
+            or result.get('fixtureSha256') != checksum or result.get('status') not in {'pass', 'fail', 'insufficient_evidence'}
+            or (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan
+            or completed.returncode != (0 if result['status'] == 'pass' else 1)):
+        raise ValueError('The protected JEV qualification receipt differs from the reviewed execution.')
+    return result
+
+
 def check_coverage_bytes(release, queue_uid, queue_gid, data, period_end, source_version):
     # Use the retained, hash-verified decoder and fact compiler with no inherited
     # provider environment or operator privileges.
@@ -1319,7 +1385,7 @@ def teardown(erase_data=False, expected_plan=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'install-coverage', 'qualify-luna', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'install-coverage', 'qualify-luna', 'qualify-jev', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
@@ -1380,14 +1446,17 @@ def main():
                                       checksum=args.sha256, build=args.build_identity, expected_plan=args.reviewed_plan_sha)
         elif args.command == 'qualify-luna':
             result = run_luna_qualification(args.sha256, args.build_identity, args.reviewed_plan_sha)
+        elif args.command == 'qualify-jev':
+            result = run_jev_qualification(args.sha256, args.build_identity, args.reviewed_plan_sha)
         elif args.command == 'teardown':
             result = teardown(args.erase_data, args.reviewed_plan_sha)
         else:
             if os.geteuid() != 0:
                 raise ValueError('Stopping preview units requires root.')
             result = stop_preview()
-        print(json.dumps({'ok': True, 'result': result}, sort_keys=True))
-        return 0
+        ok = args.command != 'qualify-jev' or result['status'] == 'pass'
+        print(json.dumps({'ok': ok, 'result': result}, sort_keys=True))
+        return 0 if ok else 1
     except (ValueError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         # Do not publish raw command output, environment or provider responses.
         print(json.dumps({'ok': False, 'error': type(error).__name__}), file=sys.stderr)

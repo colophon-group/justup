@@ -31,6 +31,7 @@ LUNA_UNIT = 'justup-preview-luna-qualification.service'
 LUNA_ENTRYPOINT = 'app/server/evals/luna-qualification-cli.mjs'
 LUNA_FILES = {LUNA_ENTRYPOINT, 'app/server/evals/luna-qualification.mjs',
               'app/server/evals/luna-qualification-review.mjs', 'app/server/evals/luna-qualification-v1.json'}
+JEV_UNIT = 'justup-preview-jev-qualification.service'
 
 
 def budget_identity(budget):
@@ -108,7 +109,7 @@ def validate_configuration(config, manifest):
         if contract.validate_wire_configuration(wire, private=False, model_uid=model_uid):
             contract.validate_wire_inventory(manifest)
     jev = config.get('jev', {})
-    if not isinstance(jev, dict):
+    if not isinstance(jev, dict) or type(jev.get('qualificationOnly', False)) is not bool:
         raise ValueError('Queue provider configuration is unavailable.')
     if jev.get('enabled') is True:
         budget = jev.get('cumulativeBudget', {})
@@ -159,10 +160,10 @@ def artifact_module():
     return artifact
 
 
-def protected_qualification(cgroup, status):
+def protected_qualification(cgroup, status, unit=LUNA_UNIT):
     relative = next((line[3:] for line in cgroup.splitlines() if line.startswith('0::')), '')
     parts = Path(relative).parts
-    return (len(parts) >= 3 and parts[-2:] == ('justup-preview.slice', LUNA_UNIT)
+    return (len(parts) >= 3 and parts[-2:] == ('justup-preview.slice', unit)
             and re.search(r'^NoNewPrivs:\s+1$', status, re.MULTILINE) is not None
             and re.search(r'^CapEff:\s+0+$', status, re.MULTILINE) is not None)
 
@@ -198,6 +199,19 @@ def qualification_environment(manifest, host_plan):
             'JUSTUP_HOST_PLAN_SHA256': host_plan}
 
 
+def jev_qualification_environment(manifest, host_plan, artifact):
+    if (pwd.getpwuid(os.getuid()).pw_name != 'justup-preview-runner'
+            or not protected_qualification(Path('/proc/self/cgroup').read_text(),
+                                           Path('/proc/self/status').read_text(), JEV_UNIT)):
+        raise ValueError('JEV qualification requires its fixed hardened transient service.')
+    expected = ('JUSTUP_JEV_REVIEWED_BUILD', 'JUSTUP_JEV_REVIEWED_PLAN', 'JUSTUP_JEV_REVIEWED_FIXTURE')
+    fixture = manifest['files'].get('app/server/evals/matching-cases-v1.json')
+    if (tuple(os.environ.get(key) for key in expected) != (manifest['buildIdentity'], host_plan, fixture)
+            or not artifact.JEV_QUALIFICATION_FILES <= manifest['files'].keys()):
+        raise ValueError('JEV qualification differs from the reviewed build, host plan or cases.')
+    return {**child_environment(manifest, host_plan), 'JUSTUP_RUN_JEV_QUALIFICATION': 'true'}
+
+
 def acquire_broker_lock():
     # Both queue roles keep this lock across exec. The root-owned socket parent
     # has a stable inode, and neither role can replace it.
@@ -224,10 +238,18 @@ def execute_release(release, entrypoint, environment):
         os.close(lock)
 
 
+def validate_jev_operation(jev, qualification):
+    if qualification != jev.get('qualificationOnly', False) or (qualification and jev.get('enabled') is not True):
+        raise ValueError('The protected JEV configuration does not authorize this queue operation.')
+    if jev.get('enabled') is True:
+        validate_ledger(expected_identity=budget_identity(jev['cumulativeBudget']))
+
+
 def main():
     try:
         qualification = sys.argv[1:] == ['--qualify-model']
-        if sys.argv[1:] and not qualification:
+        jev_qualification = sys.argv[1:] == ['--qualify-jev']
+        if sys.argv[1:] and not (qualification or jev_qualification):
             raise ValueError('Unsupported queue launcher operation.')
         if os.getuid() == 0:
             raise ValueError('Queue requires a dedicated UID and group-readable state mask.')
@@ -242,7 +264,9 @@ def main():
         host_plan = artifact.read_host_plan(BASE)
         if qualification:
             return execute_release(release, LUNA_ENTRYPOINT, qualification_environment(manifest, host_plan))
-        artifact.check_database_schema(BASE / 'state/preview.sqlite', manifest, allow_missing=True)
+        environment = (jev_qualification_environment(manifest, host_plan, artifact) if jev_qualification
+                       else child_environment(manifest, host_plan))
+        artifact.check_database_schema(BASE / 'state/preview.sqlite', manifest, allow_missing=not jev_qualification)
         required = {'runner', 'runner-adapter', 'composition', 'model-broker', 'model-runner',
                     'intent', 'companies', 'matching', 'jev', 'jev-budget'}
         if not {f'app/server/{name}.mjs' for name in required} <= manifest['files'].keys():
@@ -257,9 +281,9 @@ def main():
             contract = model_contract()
             contract.validate_wire_attestation(contract.read_wire_attestation(config['hiringWire']['attestationPath']),
                                                config['hiringWire'], manifest, host_plan)
-        if config.get('jev', {}).get('enabled') is True:
-            validate_ledger(expected_identity=budget_identity(config['jev']['cumulativeBudget']))
-        return execute_release(release, 'app/server/runner.mjs', child_environment(manifest, host_plan))
+        validate_jev_operation(config.get('jev', {}), jev_qualification)
+        entrypoint = artifact.JEV_QUALIFICATION_ENTRYPOINT if jev_qualification else 'app/server/runner.mjs'
+        return execute_release(release, entrypoint, environment)
     except (ValueError, OSError, KeyError, json.JSONDecodeError):
         return 1
 
