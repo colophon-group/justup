@@ -44,7 +44,7 @@ function fixture() {
       hiringFootprint: { observedCompanyId: 'company-fixed', unknownCompanyId: 'company-unknown', countryCode: 'CH', listingCount: 3 },
       hiringWire: { periodEnd: newestWire.edition.period.end, editionSha256: wireDigest(newestWire.edition) } },
   };
-  const coverage = { kind: 'imported_snapshot', stale: false, verifiedAt: new Date(now - 1000).toISOString() };
+  const coverage = { kind: 'imported_snapshot', stale: false, verifiedAt: new Date(now - 1000).toISOString(), postingOrigin: 'reviewed_direct_only' };
   const runner = { ready: true, identity: 'runner-fixed', sourceCommit: config.api.sourceCommit, buildIdentity: config.api.buildIdentity, lastHeartbeat: new Date(now - 1000).toISOString() };
   const sessions = Object.fromEntries(locales.map(locale => [locale, { status: 200, json: { user: null, access: { kind: 'guest', fullAccess: false, billingEnabled: false }, serverTime: new Date(now).toISOString(), authentication: { method: 'username_password', loginEnabled: true, registrationEnabled: true }, policies: runtimePolicy(entries[locale]), capabilities: { search: true, visitorSearch: true, companyRequests: true, billing: false, sse: true, follows: true, viewed: true, preferences: true, hiringWire: true }, coverage } }]));
   const data = {
@@ -98,6 +98,7 @@ test('invalid configuration and mismatched deployed evidence fail before the reg
     f => { f.sessions.fr.json.capabilities.viewed = false; },
     f => { f.sessions.de.json.capabilities.preferences = false; },
     f => { f.data['/api/v1/session'].json.policies.reviewed = false; },
+    f => { f.data['/api/v1/jobs?limit=12'].json.coverage = { ...f.data['/api/v1/jobs?limit=12'].json.coverage, postingOrigin: 'reviewed_with_unknowns' }; },
     f => { f.data['/api/v1/searches'] = { status: 200, json: { items: [] } }; },
     f => { f.data['/api/v1/jobs?limit=12'].json.items[0].firstObserved = new Date(now - 86_400_000).toISOString(); },
     f => { f.data['/api/v1/jobs?limit=12'].json.items[0].firstObserved = new Date(now - 15 * 86_400_000).toISOString(); },

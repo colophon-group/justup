@@ -1,0 +1,113 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { createFeed } from './feed.mjs';
+import { DAY_MS, openStore } from './store.mjs';
+import { ORIGIN_POLICY_VERSION } from './posting-origin.mjs';
+
+const at = Date.now() - 1_000;
+const iso = time => new Date(time).toISOString();
+const manifestSha256 = 'a'.repeat(64);
+const account = { account: { id: 'test-account' }, access: { fullAccess: true } };
+
+function posting(id, age = 3) {
+  return {
+    id, companyId: `company-${id}`, companyName: `Example ${id}`, sourceUrl: `https://source.example/${id}`,
+    title: `Job ${id}`, firstObserved: iso(at - age * DAY_MS), active: true, reserved: false, hasContent: true,
+    locales: ['en'], locations: [], employmentTypes: [],
+    evidence: { source: 'jobseek_public', normalizationVersion: 1, metadataFetchedAt: iso(at),
+      textSha256: null, bodyBytes: 0, truncated: false },
+  };
+}
+
+function snapshot(jobs) {
+  return { schemaVersion: 1, snapshotAt: iso(at), verifiedAt: iso(at), jobs, selection: {
+    source: 'jobseek_feed_v1', limitedCoverage: false, sourceScopeRowCount: jobs.length,
+    feed: { complete: true, manifestSha256, fullSnapshotAt: iso(at), scope: { kind: 'all_eligible' } },
+  } };
+}
+
+function review(snapshot, verdicts = {}) {
+  return { schemaVersion: 1, policyVersion: ORIGIN_POLICY_VERSION, manifestSha256,
+    snapshotSha256: createHash('sha256').update(JSON.stringify(snapshot)).digest('hex'), reviewedAt: iso(at),
+    postings: snapshot.jobs.map(({ id, companyId, sourceUrl }) => {
+      const verdict = verdicts[id] ?? 'direct_employer';
+      return { id, companyId, sourceUrl, verdict, evidenceUrl: verdict === 'unknown' ? null : 'https://review.example/publisher' };
+    }) };
+}
+
+test('reviewed import excludes agency, repost and unknown listings from every access tier', t => {
+  const store = openStore(); t.after(() => store.close());
+  let clock = at;
+  const feed = createFeed({ db: store.db, now: () => clock });
+  const candidate = snapshot([posting('direct'), posting('agency', 1), posting('repost'), posting('unclear')]);
+  const verdicts = { agency: 'recruitment_agency', repost: 'repost', unclear: 'unknown' };
+  store.importSnapshot(candidate);
+  assert.deepEqual(feed.restrictedLatestJobs().map(job => job.id), ['agency']);
+
+  store.importSnapshot(candidate, { originReview: review(candidate, verdicts) });
+  assert.deepEqual(feed.list().items.map(job => job.id), ['direct']);
+  assert.deepEqual(feed.eligibleJobs({ viewer: account }).map(job => job.id), ['direct']);
+  assert.deepEqual(feed.restrictedLatestJobs(), []);
+  assert.equal(feed.coverage().postingOrigin, 'reviewed_with_unknowns');
+  assert.doesNotMatch(JSON.stringify(feed.list()), /review\.example|snapshotSha256/u);
+  assert.throws(() => store.importSnapshot(candidate), { code: 'origin_review_required' });
+  assert.deepEqual(feed.list().items.map(job => job.id), ['direct']);
+  assert.equal(store.db.prepare("SELECT active, closed_observed_at FROM justup_jobs WHERE id='agency'").get().closed_observed_at, null);
+
+  clock += DAY_MS;
+  assert.equal(feed.coverage().postingOrigin, undefined);
+  assert.equal(feed.list().continuation.state, 'paused');
+});
+
+test('posting review requires exact identity, evidence for each verdict and the complete source manifest', t => {
+  const store = openStore(); t.after(() => store.close());
+  const candidate = snapshot([posting('a'), posting('b')]);
+  for (const mutate of [
+    value => value.postings.pop(),
+    value => { value.postings[1] = value.postings[0]; },
+    value => { value.postings[0].companyId = 'other'; },
+    value => { value.postings[0].sourceUrl = 'https://source.example/other'; },
+    value => { value.postings[0].evidenceUrl = 'http://review.example/other'; },
+    value => { value.postings[0].verdict = 'unknown'; },
+    value => { value.manifestSha256 = 'b'.repeat(64); },
+    value => { value.reviewedAt = iso(at - 1); },
+  ]) {
+    const invalid = review(candidate); mutate(invalid);
+    assert.throws(() => store.importSnapshot(candidate, { originReview: invalid }), { code: 'invalid_origin_review' });
+    assert.equal(store.generation(), null);
+  }
+  const proof = review(candidate, { b: 'repost' });
+  store.importSnapshot(candidate, { originReview: proof });
+  const feed = createFeed({ db: store.db, now: () => at });
+  assert.equal(feed.coverage().postingOrigin, 'reviewed_direct_only');
+  assert.deepEqual(feed.eligibleJobs().map(job => job.id), ['a']);
+  assert.throws(() => store.importSnapshot({ ...candidate, selection: { ...candidate.selection, postingOriginReview: proof } }), { code: 'invalid_import' });
+});
+
+test('the operator import binds the review to exact snapshot bytes and a private regular file', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'justup-origin-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dbPath = join(dir, 'state.sqlite'), candidatePath = join(dir, 'snapshot.json'), reviewPath = join(dir, 'review.json');
+  const candidate = snapshot([posting('a')]), proof = review(candidate);
+  const script = fileURLToPath(new URL('./main.mjs', import.meta.url));
+  const run = path => spawnSync(process.execPath, [script, '--import', candidatePath, '--origin-review', path], {
+    env: { PATH: process.env.PATH, JUSTUP_DB_PATH: dbPath }, encoding: 'utf8', timeout: 10_000,
+  });
+  writeFileSync(candidatePath, JSON.stringify(candidate) + '\n');
+  writeFileSync(reviewPath, JSON.stringify(proof), { mode: 0o600 });
+  assert.match(run(reviewPath).stderr, /different import file/u);
+  writeFileSync(candidatePath, JSON.stringify(candidate));
+  const alias = join(dir, 'review-link.json'); symlinkSync(reviewPath, alias);
+  assert.notEqual(run(alias).status, 0);
+  chmodSync(reviewPath, 0o644); assert.match(run(reviewPath).stderr, /private posting origin review/u);
+  chmodSync(reviewPath, 0o600);
+  const accepted = run(reviewPath); assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(JSON.parse(accepted.stdout).imported, 1);
+  const store = openStore(dbPath); t.after(() => store.close());
+  assert.equal(createFeed({ db: store.db }).coverage().postingOrigin, 'reviewed_direct_only');
+});
