@@ -104,11 +104,12 @@ export function ResultFeed({
         <button className="text-link" id="resume-results" onClick={retry}>{t("Check again")}</button>
       </>
     );
-  else if (feed.continuation.state === "exhausted")
-    status = feed.jobs.length
-      ? t("You’re through the available matches.")
-      : t("No matching positions found in the completed search.");
-  else
+  else if (feed.continuation.state === "exhausted") {
+    if (feed.ai.status === "insufficient_evidence")
+      status = t("Some positions lacked enough evidence to confirm a match.");
+    else if (feed.jobs.length) status = t("You’re through the available matches.");
+    else status = t("No matching positions found in the completed search.");
+  } else
     status = (
       <>
         {t("More results are not available yet.")}{" "}

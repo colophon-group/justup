@@ -25,7 +25,8 @@ FULL_SUITES = ("typecheck", "build", "web", "deployment", "server", "python", "b
 IMPACT = {
     "docs": (),
     "web": ("typecheck", "build", "web", "deployment", "browser"),
-    "server": ("build", "server", "deployment", "python"),
+    # The web contract suite consumes real server feed and company-report output.
+    "server": ("build", "web", "server", "deployment", "python"),
     "shared": FULL_SUITES,
     "python": ("build", "python", "deployment"),
     "deployment": ("build", "deployment", "server", "python", "browser"),
@@ -339,7 +340,8 @@ def selftest() -> None:
     assert select(["deploy/justup-preview/limits.test.mjs", "scripts/preview-install.sh"], "dev", False)[:2] == (("build", "deployment", "server", "python", "browser"), False)
     assert select(["scripts/import-jobs.py", "scripts/test_import_jobs.py"], "dev", False)[:2] == (("build", "deployment", "python"), False)
     assert select(["scripts/import-jobs.py"], "main", False)[:2] == (FULL_SUITES, True)
-    assert select(["server/auth.mjs", "server/auth.test.mjs"], "dev", False)[:2] == (("build", "deployment", "server", "python"), False)
+    for path in ("server/auth.mjs", "server/store.mjs", "server/feed.mjs", "server/company-reports.mjs"):
+        assert select([path], "dev", False)[:2] == (("build", "web", "deployment", "server", "python"), False)
     for path in ("server/geonames-country-codes.mjs", "server/geonames-country-codes.d.mts"):
         assert select([path], "dev", False)[:2] == (FULL_SUITES, False)
     for suites in IMPACT.values():

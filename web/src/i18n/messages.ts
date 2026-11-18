@@ -1625,6 +1625,12 @@ export const messages = {
     "Hai visto tutti i risultati disponibili.",
     "Has visto todos los resultados disponibles."
   ],
+  "Some positions lacked enough evidence to confirm a match.": [
+    "Bei einigen Stellen reichten die Angaben nicht aus, um einen Treffer zu bestätigen.",
+    "Pour certains postes, les informations disponibles n’ont pas permis de confirmer une correspondance.",
+    "Per alcune posizioni, le informazioni disponibili non erano sufficienti a confermare una corrispondenza.",
+    "En algunas ofertas faltaba información para confirmar que cumplían los requisitos."
+  ],
   "No matching positions found in the completed search.": [
     "In der abgeschlossenen Suche wurden keine passenden Stellen gefunden.",
     "Aucun poste correspondant trouvé dans la recherche terminée.",

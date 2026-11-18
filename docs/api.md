@@ -146,6 +146,13 @@ Results example:
 
 Use continuation states `open`, `pending`, `paused`, `exhausted`, `failed`. Empty pending/open batches are not exhaustion. Cursors bind revision, scan position, access mode and imported evidence generation; stale cursors return 409. Ordering is descending source first-observed time with stable posting ID as tie-breaker.
 
+For residual matching, an exhausted visible scan reports `ai.status:"complete"`
+or `ai.status:"insufficient_evidence"`. The latter indicates that some positions
+within the user's current results scope lacked enough evidence to confirm a
+match. It can accompany confirmed results and supplies no count or identity of
+uncertain positions. Hidden match evidence uses the separate `hiddenMatches`
+contract. This distinction also applies to live snapshots.
+
 Missing or stale imported evidence returns an empty `paused` page with `retryAfterMs:5000`, never a completed zero-result search. Coverage has `stale:true`, an `import_unavailable` state and a short description explaining that imported listings need verification; `verifiedAt` can be null. Preserve cursor ownership, revision and generation validation before returning the pause. Do not run matching against unavailable evidence. Residual AI reports `dependency_unavailable`; a search without residual AI retains `not_required`. Show the source reason with the existing manual retry action. Fresh data with no eligible matches can return `exhausted`.
 
 Residual matching runs only after freshness and primary filters. JEV returns accept/reject/insufficient-evidence; provider failure is separate. Cached decisions bind condition, evidence hash and classifier version, scoped for account deletion. Batch enough candidates for low acceptance rates within bounded concurrency/work budgets. Deliver a resolved newest-first prefix; never substitute unevaluated candidates. Pauses and outages retain scan position and active AI requirements.

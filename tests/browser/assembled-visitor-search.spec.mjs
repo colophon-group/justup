@@ -140,9 +140,67 @@ for (const decision of ['accepted', 'insufficient_evidence']) test(`real hidden 
     const id = runtime.db.prepare('SELECT id FROM justup_searches').get().id;
     const result = await page.request.get(`${runtime.origin}/api/v1/visitor/searches/${id}/results?revision=1`);
     const body = await result.json(); expect(body.continuation.state).toBe('exhausted');
+    expect(body.ai).toEqual({ status: 'complete' });
     expect(body.hiddenMatches).toEqual(decision === 'accepted' ? { status: 'exact', count: 1 } : { status: 'lower_bound', count: 0 });
     expect(JSON.stringify(body)).not.toContain('withheld-private'); expect(runtime.modelCalls()).toBe(1);
 
+  } finally { release(); }
+});
+
+const visibleCheckOutcomes = [
+  { decision: 'mixed', status: 'insufficient_evidence', state: 'exhausted', visible: true,
+    message: 'Some positions lacked enough evidence to confirm a match.' },
+  { decision: 'insufficient_evidence', status: 'insufficient_evidence', state: 'exhausted', visible: false,
+    message: 'Some positions lacked enough evidence to confirm a match.' },
+  { decision: 'rejected', status: 'complete', state: 'exhausted', visible: false,
+    message: 'No matching positions found in the completed search.' },
+  { decision: 'outage', status: 'provider_unavailable', state: 'paused', visible: false,
+    message: 'Search paused. There may be more matches.' },
+];
+
+for (const outcome of visibleCheckOutcomes) test(`visible residual ${outcome.decision} renders its own outcome after pending`, async ({ page }) => {
+  const at = Date.now();
+  let markStarted, release;
+  const started = new Promise(resolve => { markStarted = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  runtime = await startVisitorRuntime({ now: () => at, interpretIntent: () => interpretation(true), classify: async ({ jobs }) => {
+    const visible = jobs.some(job => job.id === 'assembled-engineer' || job.id === 'boundary');
+    if (visible) {
+      markStarted();
+      await held;
+      if (outcome.decision === 'outage') throw new Error('Synthetic provider outage');
+    }
+    const decision = visible ? outcome.decision : 'rejected';
+    return { decisions: jobs.map(job => {
+      if (decision !== 'mixed') return { id: job.id, decision };
+      return { id: job.id, decision: job.id === 'assembled-engineer' ? 'accepted' : 'insufficient_evidence' };
+    }) };
+  } });
+  try {
+    importCohorts(at);
+    await page.goto(runtime.origin);
+    const query = 'Engineer four day working week';
+    await submit(page, query);
+    await started;
+    const status = page.locator('#feed-status');
+    await expect(page.locator('#live-status')).toContainText('Live results connected.');
+    await expect(status).toContainText('Still checking for matching positions…');
+    await expect(page.locator('[data-job]')).toHaveCount(0);
+    release();
+    await expect(status).toContainText(outcome.message, { timeout: 10_000 });
+    await expect(page.locator('[data-job]')).toHaveCount(outcome.visible ? 1 : 0);
+    if (outcome.visible) await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible();
+    if (outcome.state === 'paused') await expect(page.locator('#resume-results')).toBeVisible();
+    await expect(page.locator('#query')).toHaveValue(query);
+    const search = runtime.db.prepare('SELECT id,revision FROM justup_searches').get();
+    const response = await page.request.get(`${runtime.origin}/api/v1/visitor/searches/${search.id}/results?revision=${search.revision}`);
+    expect(response.status()).toBe(200);
+    const result = await response.json();
+    expect(result.ai).toEqual({ status: outcome.status });
+    expect(result.continuation.state).toBe(outcome.state);
+    expect(result.items.map(job => job.id)).toEqual(outcome.visible ? ['assembled-engineer'] : []);
+    expect(JSON.stringify(result)).not.toMatch(/withheld-private|bodyText|Synthetic provider outage/);
+    expect(runtime.modelCalls()).toBe(1);
   } finally { release(); }
 });
 

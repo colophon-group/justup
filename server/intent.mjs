@@ -289,6 +289,7 @@ export function createIntentService({db,feed,tasks,config={},now=Date.now,before
       if(next!=null&&(typeof next!=='string'||next.length>2048))throw err('invalid_output',503,'Matching is temporarily unavailable.');
       const count=snapshot?matching.snapshotHiddenCount:matching.hiddenCount;
       const confirmed=hiddenJobs?count?.({ownerId:ownerOf(ctx),searchId:r.id,revision:r.revision,configuration,jobs:hiddenJobs,viewer:ctx.viewer,coverage,generation}):null;
+      if(!snapshot&&(feed.generation?.()??null)!==generation)throw err('stale_cursor',409);
       return {...base,...page,hiddenMatches:confirmed??{status:'unavailable',count:null},continuation:{...page.continuation,cursor:next==null?null:continuationToken(next)}};
     }
     if(residual){

@@ -173,6 +173,11 @@ test('injected matching owns its opaque continuation and receives only eligible 
   const paused=(await f.route('GET',`${path}&cursor=${first.continuation.cursor}`)).body;assert.equal(paused.continuation.state,'paused');assert.equal(paused.continuation.cursor,first.continuation.cursor);assert.equal(paused.ai.status,'dependency_unavailable');assert.equal(eligibleCalls,0);assert.equal(matchingCalls,0);
   f.feed.coverage=()=>({stale:false,verifiedAt:new Date(at).toISOString()});await f.route('GET',`${path}&cursor=${paused.continuation.cursor}`);
   assert.deepEqual(supplied.jobs.map(j=>j.id),['a']);assert.equal(supplied.cursor,'matching-cursor');
+  matching.page=async()=>{
+    f.setGeneration('g2');
+    return {items:[],continuation:{state:'exhausted',cursor:null,retryAfterMs:null},ai:{status:'insufficient_evidence'}};
+  };
+  await assert.rejects(()=>f.route('GET',`${path}&cursor=${first.continuation.cursor}`),{code:'stale_cursor',status:409});
 });
 test('account deletion composes synchronously and backup-barrier failure preserves private data',async t=>{
   const f=fixture();t.after(()=>f.db.close());const a=await f.route('POST','/searches',{query:'backend',requestKey:'one'});

@@ -28,7 +28,7 @@ function job(id, first = AT - 3 * DAY, title = 'Engineer') {
       bodyBytes: Buffer.byteLength(bodyText), normalizationVersion: 1, truncated: false, aiEligible: true } };
 }
 async function setup(t, options = {}) {
-  const { verificationTtlMs, persistent = false, policyLocales,
+  const { verificationTtlMs, persistent = false, policyLocales, classifyDecision = () => 'accepted',
     policyAssetProof=syntheticPolicyProof({origin:ORIGIN,sourceCommit:'a'.repeat(40),version:'fixture'}),...transportOptions } = options;
   const directory = persistent ? mkdtempSync(join(tmpdir(), 'justup-live-results-')) : null;
   const storage = directory ? { dbPath: join(directory, 'store.sqlite'), privateGenerationPath: join(directory, 'private-generation'), backupDir: join(directory, 'backups') } : {};
@@ -43,7 +43,7 @@ async function setup(t, options = {}) {
       identity = createVisitorIdentity(deps);
       const ownership = { ownerAuthority: identity.principal, visitorIdentity: identity, taskAdmission: identity.admitMatching };
       matching = createMatchingService({ ...deps, ...ownership, provider: { available: () => providerAvailable,
-        classify: async ({ jobs }) => ({ decisions: jobs.map(j => ({ id: j.id, decision: 'accepted' })) }) } });
+        classify: async ({ jobs }) => ({ decisions: jobs.map(j => ({ id: j.id, decision: classifyDecision(j) })) }) } });
       intent = createIntentService({ ...deps, ...ownership, matching });
       const visitor = createVisitorService({ ...deps, identity, intent, matching });
       live = createLiveResultsService({ ...deps, intent });
@@ -145,7 +145,8 @@ test('closure, fourteen-day expiry and paid downgrade remove now-ineligible iden
 });
 
 test('residual snapshots wait for newest resolution, retain older accepted matches and never move ordinary delivery', async t => {
-  const s = await setup(t); s.importJobs([job('first', AT - 3 * DAY), job('second', AT - 4 * DAY), job('excluded', AT - 5 * DAY, 'Designer')]); s.search('a', 'search-a', true);
+  const s = await setup(t, { classifyDecision: j => j.id === 'newest' ? 'insufficient_evidence' : 'accepted' });
+  s.importJobs([job('first', AT - 3 * DAY), job('second', AT - 4 * DAY), job('excluded', AT - 5 * DAY, 'Designer')]); s.search('a', 'search-a', true);
   const stream = await s.connect(); const pending = await stream.next(); assert.deepEqual(ids(pending), []); assert.equal(pending.data.searches[0].continuation.state, 'pending');
   const scan = s.app.store.db.prepare("SELECT id FROM justup_match_scans WHERE cohort='visible'").get();
   s.app.store.db.prepare("UPDATE justup_match_jobs SET decision='accepted' WHERE scan_id=? AND position=1").run(scan.id);
@@ -164,6 +165,12 @@ test('residual snapshots wait for newest resolution, retain older accepted match
   assert.equal(refreshed.data.searches[0].continuation.state, 'pending');
   assert.equal(refreshed.data.searches[0].reconciliation.complete, true);
   assert.deepEqual(new Set(refreshed.data.searches[0].reconciliation.retainedItemIds), new Set(['first','second']));
+  await s.work();
+  const uncertain = await stream.next();
+  assert.equal(uncertain.data.searches[0].continuation.state, 'exhausted');
+  assert.deepEqual(uncertain.data.searches[0].ai, { status: 'insufficient_evidence' });
+  assert.deepEqual(ids(uncertain), ['first', 'second']);
+  assert.ok(!JSON.stringify(uncertain).includes('newest'));
 });
 
 test('search revision, cross-owner identity and logout cannot authorize stale rows', async t => {

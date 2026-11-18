@@ -93,6 +93,24 @@ test('weak, missing, oversized and truncated evidence cannot be confidently acce
   const result = s.page(); await s.run();
   const end = s.page({ cursor: result.continuation.cursor });
   assert.deepEqual(end.items.map((j) => j.id), [makeJob(4).id]); assert.equal(end.continuation.state, 'exhausted');
+  assert.deepEqual(end.ai, { status: 'insufficient_evidence' });
+});
+
+test('only complete visible evidence checks distinguish confirmed zero from uncertainty', async (t) => {
+  for (const decision of ['rejected', 'insufficient_evidence']) {
+    const s = setup(t, { count: 2, decisions: () => decision });
+    const first = s.page();
+    assert.deepEqual(first.ai, { status: 'matching' });
+    await s.run();
+    const result = s.page({ cursor: first.continuation.cursor });
+    assert.deepEqual(result.items, []);
+    assert.equal(result.continuation.state, 'exhausted');
+    const status = decision === 'rejected' ? 'complete' : 'insufficient_evidence';
+    assert.deepEqual(result.ai, { status });
+    const snapshot = s.service.snapshot({ ownerId: owner, searchId: 'search-1', revision: 1,
+      configuration, jobs: s.jobs(), viewer });
+    assert.deepEqual(snapshot.ai, { status });
+  }
 });
 
 test('provider failure pauses and retains the condition, cursor, scan position and unresolved rows', async (t) => {
@@ -104,6 +122,7 @@ test('provider failure pauses and retains the condition, cursor, scan position a
   const s = setup(t, { count: 2, provider }); const first = s.page(); const task = await s.run();
   assert.equal(task.status, 'warning'); assert.equal(task.output.pause, 'provider_unavailable');
   const paused = s.page({ cursor: first.continuation.cursor }); assert.equal(paused.continuation.state, 'paused'); assert.deepEqual(paused.items, []);
+  assert.deepEqual(paused.ai, { status: 'provider_unavailable' });
   assert.equal(s.db.prepare('SELECT count(*) AS n FROM justup_match_jobs WHERE decision IS NULL').get().n, 2);
   assert.equal(s.db.prepare('SELECT condition FROM justup_match_scans').get().condition, configuration.residualAi.condition);
   failing = false; s.advance(5001); s.page({ cursor: paused.continuation.cursor }); await s.run();
@@ -190,6 +209,21 @@ test('delivery rechecks eligible/primary membership and evidence before serializ
   assert.throws(()=>s.page({cursor:result.continuation.cursor,jobs:[s.jobs()[0],s.jobs()[2]]}),{code:'stale_cursor'});
   const end = s.page({ jobs: [s.jobs()[0], s.jobs()[2]] });
   assert.deepEqual(end.items.map((j) => j.id), [makeJob(1).id]);
+});
+
+test('visible uncertainty stays bound to unchanged evidence during a feed update', async (t) => {
+  const s = setup(t, { count: 1, decisions: () => 'insufficient_evidence' });
+  const first = s.page();
+  await s.run();
+  const [original] = s.jobs();
+  const updated = { ...original, bodyText: 'Updated posting evidence. '.repeat(8) };
+  let reads = 0;
+  s.feed.eligibleJobs = () => ++reads === 1 ? [original] : [updated];
+
+  const result = s.service.page({ ownerId: owner, searchId: 'search-1', revision: 1, configuration,
+    jobs: [original], viewer, cursor: first.continuation.cursor });
+  assert.deepEqual(result.items, []);
+  assert.deepEqual(result.ai, { status: 'complete' });
 });
 
 test('exact decisions deduplicate repeated searches but invalidate changed condition/evidence/version', async (t) => {

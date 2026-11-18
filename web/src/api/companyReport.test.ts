@@ -178,7 +178,7 @@ test('newer per-record evidence does not overwrite or invalidate the separate fu
     firstObserved: iso(at - 3 * 86_400_000), lastObserved: null, active: true, reserved: false, hasContent: true, locales: [], locations: [], employmentTypes: [], seniority: null,
     salary: null, bodyText: null, evidence: { source: 'jobseek_public', metadataFetchedAt: iso(observedAt), bodyFetchedAt: null, bodyUrl: null, bodySha256: null, textSha256: null, bodyBytes: 0, normalizationVersion: 1, truncated: false } });
   const load = (observedAt: number) => store.importSnapshot({ schemaVersion: 1, snapshotAt: iso(observedAt), verifiedAt: iso(observedAt), jobs: [job(observedAt)], observations: [], unknownIds: [],
-    selection: { source: 'jobseek_feed_v1', feed: { fullSnapshotAt: iso(fullAt) } } });
+    selection: { source: 'jobseek_feed_v1', feed: { complete: true, fullSnapshotAt: iso(fullAt) } } });
   try {
     load(fullAt); load(changedAt);
     const feed = createFeed({ db: store.db, now: () => at });
