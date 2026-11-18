@@ -29,7 +29,8 @@ BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49'
 BUDGET_IDENTITIES = {'canonical-v1': 'jev-evaluation-budget', 'legacy-v1': 'demo-jev-evaluation-budget'}
 LUNA_UNIT = 'justup-preview-luna-qualification.service'
 LUNA_ENTRYPOINT = 'app/server/evals/luna-qualification-cli.mjs'
-LUNA_FILES = {LUNA_ENTRYPOINT, 'app/server/evals/luna-qualification.mjs', 'app/server/evals/luna-qualification-v1.json'}
+LUNA_FILES = {LUNA_ENTRYPOINT, 'app/server/evals/luna-qualification.mjs',
+              'app/server/evals/luna-qualification-review.mjs', 'app/server/evals/luna-qualification-v1.json'}
 
 
 def budget_identity(budget):

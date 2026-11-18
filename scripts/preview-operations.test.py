@@ -371,13 +371,15 @@ class LunaSandboxContracts(unittest.TestCase):
         self.invocations.chmod(0o700)
         os.chown(self.invocations, uid, gid)
         self.manifest = {'buildIdentity': self.build, 'sourceCommit': 'c' * 40,
-                         'files': {host.LUNA_MANIFEST: 'd' * 64}}
+                         'files': {host.LUNA_MANIFEST: 'd' * 64, host.LUNA_REVIEW: 'f' * 64}}
+        self.runner = SimpleNamespace(pw_uid=uid, pw_gid=gid)
         instant = host.datetime.now(host.timezone.utc).timestamp()
         utc = lambda offset: host.datetime.fromtimestamp(instant + offset, host.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        self.grant = {'kind': 'luna_qualification_once', 'schemaVersion': 1, 'runId': 'e' * 32,
+        self.grant = {'kind': 'luna_qualification_once', 'schemaVersion': 2, 'runId': 'e' * 32,
                       'buildIdentity': self.build, 'sourceCommit': self.manifest['sourceCommit'],
                       'hostPlanSha256': self.plan, 'manifestSha256': self.manifest['files'][host.LUNA_MANIFEST],
-                      'notBefore': utc(-30), 'expiresAt': utc(180)}
+                      'notBefore': utc(-30), 'expiresAt': utc(180),
+                      'reviewPublicKey': base64.b64encode(b'fixture subject public key').decode('ascii')}
         self.grant_path = self.folder / 'grant.json'
         self.grant_path.write_text(json.dumps(self.grant))
         os.chown(self.grant_path, os.getuid(), gid)
@@ -441,6 +443,29 @@ class LunaSandboxContracts(unittest.TestCase):
             self.run_qualification()
         self.assertFalse(list(self.proofs.iterdir()))
         self.launch.assert_not_called()
+
+    def test_root_result_receipt_binds_bytes_and_rejects_incomplete_or_linked_output(self):
+        path = self.results / ('luna-qualification-' + self.grant['runId'] + '.jsonl')
+        identity = host.luna_grant(self.folder, self.checksum, self.manifest, self.plan, self.runner.pw_gid)
+        first = json.dumps({'version': 2, 'kind': 'luna_qualification_start', **identity}) + '\n'
+        summary = json.dumps({'kind': 'summary', 'reportSha256': '1' * 64}) + '\n'
+        path.write_text(first)
+        os.chown(path, self.runner.pw_uid, self.runner.pw_gid)
+        path.chmod(0o600)
+        with self.assertRaises(ValueError):
+            host.luna_result_receipt(path, identity, self.runner)
+        path.write_text(first + summary)
+        alias = self.results / 'another-link'
+        os.link(path, alias)
+        with self.assertRaisesRegex(ValueError, 'single private bounded file'):
+            host.luna_result_receipt(path, identity, self.runner)
+        alias.unlink()
+        receipt = self.run_qualification()
+        self.assertEqual(receipt['reportSha256'], '1' * 64)
+        self.assertEqual(receipt['resultSha256'], host.digest(path))
+        root_record = self.proofs / (self.grant['runId'] + '.result.json')
+        self.assertEqual(json.loads(root_record.read_text()), receipt)
+        self.assertEqual(stat.S_IMODE(root_record.stat().st_mode), 0o400)
 
     def test_queue_role_attests_actual_cgroup_privileges_and_network_denial(self):
         cgroup = '0::/justup.slice/justup-preview.slice/' + queue.LUNA_UNIT + '\n'
@@ -2171,6 +2196,7 @@ process.stdout.write('actual_node_policy_configuration_matches\n');
         manifest, _ = payload()
         for name in artifact.QUALIFICATION_FILES:
             self.assertTrue(artifact.allowed(name))
+        self.assertTrue(artifact.allowed(artifact.QUALIFICATION_REVIEW))
         incomplete = deepcopy(manifest)
         incomplete['files']['app/server/evals/luna-qualification-cli.mjs'] = 'a' * 64
         with patch.dict(artifact.CODEX_FILES, {name: artifact.sha(data) for name, data in CODEX_FIXTURES.items()}):
