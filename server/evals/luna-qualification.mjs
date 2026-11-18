@@ -66,24 +66,30 @@ export function qualificationCapabilities(){
   ],false);
 }
 
+const USAGE_FIELDS=['inputTokens','cachedInputTokens','outputTokens','reasoningOutputTokens'];
+function measuredUsage(usage){
+  return plain(usage)&&USAGE_FIELDS.every(key=>Number.isSafeInteger(usage[key])&&usage[key]>=0)
+    &&usage.inputTokens>0&&usage.outputTokens>0;
+}
+
 export function createQualificationObserver(){
   let current=null;
   return {
     begin(kind,id){if(current)throw new Error('A Luna case is already active.');current={kind,id,replies:[],metrics:[]};},
     onReply(value){
-      if(!current||!plain(value)||value.schemaId!==(current.kind==='intent'?'intent':'company')||!Number.isSafeInteger(value.toolCalls)||value.toolCalls<0||value.toolCalls>(current.kind==='intent'?0:2)||!plain(value.usage)||current.replies.length>=(current.kind==='intent'?2:1))throw new Error('Luna broker reply counters are unavailable.');
+      if(!current||!plain(value)||value.schemaId!==(current.kind==='intent'?'intent':'company')||!Number.isSafeInteger(value.toolCalls)||value.toolCalls<0||value.toolCalls>(current.kind==='intent'?0:2)||!measuredUsage(value.usage)||current.replies.length>=(current.kind==='intent'?2:1))throw new Error('Luna broker reply counters are unavailable.');
       current.replies.push({toolCalls:value.toolCalls});
     },
     onMetric(value){
       if(!current||current.metrics.length>=(current.kind==='intent'?2:1)||!plain(value)||value.kind!==(current.kind==='intent'?'search_intent':'company_resolution')||!Number.isSafeInteger(value.durationMs)||value.durationMs<0||typeof value.code!=='string')throw new Error('Luna model counters are unavailable.');
       const usage=value.usage;
-      if(usage!==null&&(!plain(usage)||['inputTokens','cachedInputTokens','outputTokens','reasoningOutputTokens'].some(key=>!Number.isSafeInteger(usage[key])||usage[key]<0)))throw new Error('Luna model usage is unavailable.');
-      current.metrics.push({durationMs:value.durationMs,code:SAFE_CODES.has(value.code)||value.code==='succeeded'?value.code:'provider_unavailable',usage:usage===null?null:Object.fromEntries(['inputTokens','cachedInputTokens','outputTokens','reasoningOutputTokens'].map(key=>[key,usage[key]]))});
+      if(usage!==null&&!measuredUsage(usage))throw new Error('Luna model usage is unavailable.');
+      current.metrics.push({durationMs:value.durationMs,code:SAFE_CODES.has(value.code)||value.code==='succeeded'?value.code:'provider_unavailable',usage:usage===null?null:Object.fromEntries(USAGE_FIELDS.map(key=>[key,usage[key]]))});
     },
     end(){
       if(!current)throw new Error('No Luna case is active.');
       const complete=current.metrics.length>0&&current.metrics.length===current.replies.length&&current.metrics.every(metric=>metric.usage!==null&&metric.code==='succeeded');
-      const usage=complete?Object.fromEntries(['inputTokens','cachedInputTokens','outputTokens','reasoningOutputTokens'].map(key=>[key,current.metrics.reduce((sum,metric)=>sum+metric.usage[key],0)])):null;
+      const usage=complete?Object.fromEntries(USAGE_FIELDS.map(key=>[key,current.metrics.reduce((sum,metric)=>sum+metric.usage[key],0)])):null;
       const result={durationMs:current.metrics.reduce((sum,metric)=>sum+metric.durationMs,0),usage,
         webStarts:complete?current.replies.reduce((sum,reply)=>sum+reply.toolCalls,0):null,
         metricObserved:complete,attempts:current.metrics.length};

@@ -154,7 +154,8 @@ export function executeCodex({executable,args,cwd,env,stdin,signal,timeoutMs=45_
       if(e.type==='error'||e.type==='turn.failed') return stop('provider_unavailable');
       if(e.type==='turn.started'&&++turns>1) return stop('tool_limit');
       if(e.type==='turn.completed') {
-        if(usage||!plain(e.usage)||!['input_tokens','output_tokens'].every(k=>Number.isSafeInteger(e.usage[k])&&e.usage[k]>=0)) return stop('invalid_output');
+        // Codex emits zero totals when no usage update was received.
+        if(usage||!plain(e.usage)||!['input_tokens','output_tokens'].every(k=>Number.isSafeInteger(e.usage[k])&&e.usage[k]>0)) return stop('invalid_output');
         if(['cached_input_tokens','reasoning_output_tokens'].some(k=>e.usage[k]!=null&&(!Number.isSafeInteger(e.usage[k])||e.usage[k]<0)))return stop('invalid_output');
         usage={inputTokens:e.usage.input_tokens,cachedInputTokens:e.usage.cached_input_tokens??0,outputTokens:e.usage.output_tokens,reasoningOutputTokens:e.usage.reasoning_output_tokens??0};
         if(usage.outputTokens>maxOutputTokens) return stop('token_limit');
