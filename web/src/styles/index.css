@@ -24,11 +24,29 @@ a:hover, button:hover:not(:disabled) { text-decoration: underline; text-underlin
 .topbar nav a[aria-current] { text-decoration: underline; text-underline-offset: 7px; }
 #edition-date { margin-right: auto; font-size: 10px; }
 .account, .header-sign-in { display: inline-flex; align-items: center; gap: 7px; border: 1px solid; padding: 7px 9px; font-size: 11px; font-weight: 700; }
-.masthead { display: flex; align-items: flex-end; gap: 33px; padding: 25px 0 24px; border-bottom: 4px solid; }
-.brand { font: 900 clamp(88px, 11vw, 154px)/.83 var(--display); letter-spacing: -5px; white-space: nowrap; }
-.brand span { color: var(--cream); }
-.brand:hover { text-decoration: none; }
-.motto { margin: 0 0 0 4px; font-size: 13px; font-weight: 700; line-height: 1.5; }
+.masthead {
+  display: flex;
+  align-items: flex-end;
+  gap: clamp(16px, 3vw, 33px);
+  padding: 0 14px 8px 0;
+  overflow: clip;
+  isolation: isolate;
+  border-bottom: 4px solid;
+  background: var(--cream);
+}
+.brand { position: relative; display: block; flex: none; width: clamp(285px, 42vw, 484px); }
+.brand img { display: block; width: 100%; height: auto; }
+.brand:focus-visible { outline-offset: -4px; }
+/* The ray artwork extends two wordmark widths on either side of the link. */
+.brand::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0 -200%;
+  background: url("./masthead-rays.svg") center / 100% 100% no-repeat;
+  pointer-events: none;
+}
+.motto { margin: 0; font-size: 13px; font-weight: 700; line-height: 1.45; }
 .live { margin-left: auto; display: flex; align-items: center; gap: 9px; background: var(--ink); color: var(--cream); padding: 9px 12px; font-size: 10px; letter-spacing: .7px; white-space: nowrap; }
 .live i { display: block; width: 7px; height: 7px; border-radius: 50%; background: var(--paper); animation: live-pulse 2.8s ease-in-out infinite; }
 .wire-slot { height: 49px; }
@@ -273,6 +291,7 @@ input[type=checkbox]:checked::after { content: ''; width: 4px; height: 8px; bord
   .paper { padding-inline: 30px; }
   .topbar #edition-date { display: none; }
   .topbar nav { margin-right: auto; }
+  .motto { font-size: 11px; }
   .search-workspace { grid-template-columns: 210px minmax(0, 1fr); gap: 28px; }
   .is-first-search .search-main, .landing-overview { gap: 35px; }
   .column-labels, .job { grid-template-columns: 56px minmax(0, 1fr) 165px 32px; }
@@ -284,9 +303,9 @@ input[type=checkbox]:checked::after { content: ''; width: 4px; height: 8px; bord
   .topbar { gap: 10px; min-height: 55px; }
   .topbar nav { font-size: 11px; gap: 16px; }
   .header-sign-in, .account { font-size: 10px; padding: 8px; }
-  .masthead { flex-wrap: wrap; gap: 16px 20px; padding: 23px 0 20px; }
-  .brand { font-size: clamp(84px, 23vw, 140px); letter-spacing: -4px; }
-  .motto { font-size: 10px; margin-left: auto; }
+  .masthead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 0 10px 10px; }
+  .brand { grid-column: 1 / -1; justify-self: center; width: min(100%, 454px); }
+  .motto { font-size: 10px; }
   .live { margin-left: 0; font-size: 9px; padding: 7px 9px; }
   .page { padding-top: 24px; }
   .search-workspace { display: block; margin-bottom: 25px; }
