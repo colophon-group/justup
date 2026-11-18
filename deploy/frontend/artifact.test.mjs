@@ -9,6 +9,7 @@ import { prepare, verifyArtifact, digest } from '../../scripts/frontend-prepare.
 import { smoke } from '../../scripts/frontend-smoke.mjs';
 import { createHandler } from './worker.mjs';
 const root = new URL('../../', import.meta.url);
+const committedIndex = '<h1>Committed</h1><script type="module" src="/assets/app.fixture.js"></script>';
 
 test('explicit API-off preview retains bytes, refuses production and verifies unavailable APIs without a health claim', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'justup-api-off-'));
@@ -35,6 +36,14 @@ test('explicit API-off preview retains bytes, refuses production and verifies un
     };
     const report = await smoke(config.vars.PUBLIC_ORIGIN, artifact, remote);
     assert.equal(report.result, 'passed'); assert.equal(report.apiState, 'disabled'); assert.equal(report.completeReleaseGate, false);
+    await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, async url => {
+      if (new URL(url).pathname !== '/') return remote(url);
+      const document = await (await remote(url)).text();
+      return new Response(document.replace('<script src="/assets/app.fixture.js"></script>', ''), { headers });
+    }), /Public document does not use retained entry asset: assets\/app\.fixture\.js/);
+    await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, url =>
+      new URL(url).pathname === '/assets/lazy.fixture.js' ? new Response('changed lazy bytes', { headers }) : remote(url),
+    ), /Wrong asset bytes: assets\/lazy\.fixture\.js/);
     await assert.rejects(smoke(config.vars.PUBLIC_ORIGIN, artifact, url => new URL(url).pathname === '/api/v1/health' ? new Response('{}', { headers }) : remote(url)), /Expected 503/);
     const accidental = { ...config, vars: { ...config.vars } }; delete accidental.vars.API_DISABLED;
     await writeFile(join(artifact, 'wrangler.json'), JSON.stringify(accidental));
@@ -54,7 +63,7 @@ async function fixture(temporary) {
   await writeFile(join(repository, 'server/unrelated.mjs'), 'throw new Error("Unrelated server file");');
   await writeFile(join(repository, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.0.0', private: true, scripts: { build: 'node web/build-fixture.mjs' } }));
   await writeFile(join(repository, 'package-lock.json'), JSON.stringify({ name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'fixture', version: '1.0.0' } } }));
-  await writeFile(join(repository, 'web/index.html'), '<h1>Committed</h1>');
+  await writeFile(join(repository, 'web/index.html'), committedIndex);
   for (const name of ['privacy.html', 'usage.html']) await writeFile(join(repository, 'web/public', name), '<h1>Policy</h1>');
   await writeFile(join(repository, 'web/build-fixture.mjs'), `
     import {mkdirSync,copyFileSync,writeFileSync,existsSync} from 'node:fs';
@@ -66,6 +75,7 @@ async function fixture(temporary) {
     copyFileSync('web/index.html','web/dist/index.html');
     for(const name of ['privacy.html','usage.html']) copyFileSync('web/public/'+name,'web/dist/'+name);
     writeFileSync('web/dist/assets/app.fixture.js',JSON.stringify({privateBuildValue:process.env.VITE_PRIVATE_CANARY??null, knownCountry:isKnownCountryCode('CH')}));
+    writeFileSync('web/dist/assets/lazy.fixture.js','export const deferred = true;');
   `);
   await writeFile(join(repository, 'deploy/frontend/worker.mjs'), await readFile(new URL('deploy/frontend/worker.mjs', root)));
   git('add', '.'); git('commit', '-qm', 'Fixture');
@@ -83,9 +93,9 @@ test('artifact builds committed source, ignores dirty input and filters operator
     const first = join(temporary, 'first'), second = join(temporary, 'second');
     const release = await prepare(sha, first, repository);
     assert.deepEqual(await prepare(sha, second, repository), release);
-    assert.equal(await readFile(join(first, 'assets/index.html'), 'utf8'), '<h1>Committed</h1>');
+    assert.equal(await readFile(join(first, 'assets/index.html'), 'utf8'), committedIndex);
     assert.deepEqual(JSON.parse(await readFile(join(first, 'assets/assets/app.fixture.js'), 'utf8')), { privateBuildValue: null, knownCountry: true });
-    assert.equal(release.assets.length, 4);
+    assert.equal(release.assets.length, 5);
     await assert.rejects(prepare(sha, first, repository), /must not exist/);
     await assert.rejects(prepare('HEAD', join(temporary, 'bad'), repository), /exact/);
     await assert.rejects(prepare(sha, join(repository, 'artifact'), repository), /outside the source/);
