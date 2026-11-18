@@ -5,6 +5,7 @@ import { verifyPublicFootprint } from './release-footprint.mjs';
 import { accountStreamUrl, openReleaseStream, verifyReleaseStreamReconnect } from './release-live-results.mjs';
 import { exerciseReleaseReadingState, saveReleaseInterfaceLanguage, verifyReleaseReadingState } from './release-reading-preferences.mjs';
 import { verifyWireStrip } from './release-wire.mjs';
+import { exerciseVisitorSearch, verifyVisitorHandoff } from './release-visitor.mjs';
 
 for (const locale of GATE_LOCALES) {
   test(`${locale} fixed deployed candidate completes its disposable-account search and request journey`, async ({ browser }) => {
@@ -16,7 +17,7 @@ for (const locale of GATE_LOCALES) {
     const context = await browser.newContext({ baseURL: config.origin, viewport: { width: 1280, height: 1100 }, locale, reducedMotion: 'reduce' });
     const page = await context.newPage();
     page.setDefaultTimeout(10_000);
-    let stage = 'read-only preflight', failedStage = null, cleanupFailed = false;
+    let stage = 'read-only preflight', failedStage = null, cleanupFailed = false, visitorSearch, visitorAttempted = false;
     const read = async (path, presentation) => {
       // Explicit route presentation is request-only; preflight never writes a preference cookie.
       const headers = path.startsWith('/api/') ? { 'X-Justup-Locale': presentation?.locale ?? locale } : undefined;
@@ -29,7 +30,7 @@ for (const locale of GATE_LOCALES) {
       return { status: response.status(), json, bytes };
     };
     const mutation = async (path, body, csrf) => {
-      const response = await context.request.fetch(path, { method: path === '/api/v1/account' ? 'DELETE' : 'POST',
+      const response = await context.request.fetch(path, { method: ['/api/v1/account', '/api/v1/visitor/session'].includes(path) ? 'DELETE' : 'POST',
         headers: { Origin: config.origin, 'X-CSRF-Token': csrf, 'X-Justup-Locale': locale }, data: body, timeout: 10_000, maxRedirects: 0 });
       return { status: response.status(), json: await response.json() };
     };
@@ -71,8 +72,17 @@ for (const locale of GATE_LOCALES) {
         stage = 'public hiring footprint';
         await verifyPublicFootprint(browser, page, config);
       }
-      stage = 'disposable account registration';
+      if (locale === 'fr') {
+        stage = 'signed-out search and limited results';
+        await admission();
+      }
       await page.goto(`${prefix}/`);
+      if (locale === 'fr') {
+        visitorAttempted = true;
+        visitorSearch = await exerciseVisitorSearch(page, read, config.scenario);
+      }
+
+      stage = 'disposable account registration';
       await page.locator('#header-sign-in').click();
       await page.locator('#auth-register').check();
       await page.locator('#auth-username').fill(account.username);
@@ -88,6 +98,11 @@ for (const locale of GATE_LOCALES) {
       const registeredSession = await registered.json();
       expect(ownSession(registeredSession, account)).toBe(true);
       account.id = registeredSession.user.id;
+      if (visitorSearch) {
+        stage = 'visitor search and draft handoff';
+        if (registeredSession.visitorHandoff?.status === 'complete') visitorAttempted = false;
+        await verifyVisitorHandoff(page, read, visitorSearch, registeredSession);
+      }
       verifyPolicyState(config, registeredSession.policies, locale);
       const billing = config.billingMode === 'stripe_test' ? await read('/api/v1/account/billing') : undefined;
       verifyDisposableAccountAccess(config, registeredSession, billing);
@@ -99,10 +114,13 @@ for (const locale of GATE_LOCALES) {
       }
 
       stage = 'real interpreted search and source';
-      await page.locator('#query').fill(config.scenario.query);
       const submitSearch = () => page.locator('#job-search button[type=submit]').click();
-      const opening = locale === 'en' ? await openReleaseStream(page, config.origin, submitSearch) : null;
-      if (opening === null) await submitSearch();
+      let opening = null;
+      if (!visitorSearch) {
+        await page.locator('#query').fill(config.scenario.query);
+        if (locale === 'en') opening = await openReleaseStream(page, config.origin, submitSearch);
+        else await submitSearch();
+      }
       await page.locator('#search-results').waitFor({ state: 'visible', timeout: 90_000 });
       await page.locator('#search-results').scrollIntoViewIfNeeded();
       await expect.poll(async () => page.locator('a.posting-link').evaluateAll((links, expected) => links.some(link => link.href === expected), config.scenario.sourceUrl), { timeout: 15_000 }).toBe(true);
@@ -214,6 +232,21 @@ for (const locale of GATE_LOCALES) {
           });
         }
       } catch { cleanupFailed = true; }
+      if (visitorAttempted) {
+        try {
+          await identity();
+          const guest = await session();
+          if (guest.user !== null) throw new Error('Could not verify disposable visitor ownership.');
+          if (guest.visitor !== null) {
+            const removed = await mutation('/api/v1/visitor/session', undefined, guest.csrfToken);
+            if (removed.status !== 200 || removed.json?.deleted !== true || (await session()).visitor !== null) {
+              throw new Error('Could not verify disposable visitor deletion.');
+            }
+          } else if (visitorSearch) {
+            throw new Error('Could not confirm the previous visitor handoff or deletion.');
+          }
+        } catch { cleanupFailed = true; }
+      }
       try { await context.close(); } catch { cleanupFailed = true; }
     }
     if (failedStage || cleanupFailed) throw new Error(`Deployed acceptance failed at ${failedStage ?? 'cleanup'}${cleanupFailed ? '; disposable-account cleanup needs private operator verification' : ''}.`);

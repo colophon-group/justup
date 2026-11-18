@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { startVisitorRuntime } from '../assembled/visitor-runtime.mjs';
+import { exerciseVisitorSearch, verifyVisitorHandoff } from './release-visitor.mjs';
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 1100 } });
 let runtime;
 test.afterEach(async () => { await runtime?.close(); runtime = undefined; });
@@ -35,6 +36,30 @@ async function login(page) {
   await page.locator('#auth-password').fill('Synthetic-local-account-password'); await page.locator('#auth-submit').click();
   await expect(page.locator('#header-sign-in')).toBeHidden();
 }
+test('release visitor checks preserve a ready search and an unsent draft during registration', async ({ page }) => {
+  const at = Date.now();
+  runtime = await startVisitorRuntime({ now: () => at, interpretIntent: () => interpretation() });
+  importCohorts(at);
+  await page.goto(runtime.origin + '/fr/');
+  const read = async path => {
+    const response = await page.request.get(runtime.origin + path, { headers: { 'X-Justup-Locale': 'fr' } });
+    return { status: response.status(), json: await response.json() };
+  };
+  const visitor = await exerciseVisitorSearch(page, read, {
+    query: 'Engineer', sourceUrl: 'https://example.org/careers/assembled-engineer', companyId: 'assembled'
+  }, () => at);
+  await page.locator('#header-sign-in').click();
+  await page.locator('#auth-register').check();
+  await page.locator('#auth-username').fill('release-visitor-fixture');
+  await page.locator('#auth-password').fill('Synthetic-visitor-fixture-password');
+  const registered = page.waitForResponse(response =>
+    new URL(response.url()).pathname === '/api/v1/auth/register' && response.request().method() === 'POST');
+  await page.locator('#auth-submit').click();
+  const response = await registered;
+  expect(response.status()).toBe(201);
+  await verifyVisitorHandoff(page, read, visitor, await response.json());
+  expect(runtime.modelCalls()).toBe(1);
+});
 test('real invalid refinement preserves accepted criteria, rows and raw text through limited-account handoff and logout', async ({ page }) => {
   const at = Date.now();
   runtime = await startVisitorRuntime({ now: () => at, interpretIntent: input => input.query.includes('invalid') ? { invalid: true } : interpretation() });
