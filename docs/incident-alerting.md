@@ -52,6 +52,7 @@ run one bounded sample in the existing slice and save the JSON privately.
 umask 077
 systemd-run --quiet --wait --pipe --collect --slice=justup-preview.slice \
   --property=RuntimeMaxSec=60s --property=TimeoutStopSec=5s \
+  --property=ReadOnlyPaths=/srv/justup_preview/state \
   /usr/bin/python3 -I -B /srv/justup_preview/ops/preview-host.py observe \
   --build-identity "$JUSTUP_PREVIEW_BUILD_ID" \
   --reviewed-plan-sha "$JUSTUP_REVIEWED_PLAN_SHA" \
@@ -62,7 +63,9 @@ The report binds the sample to the active source, build and installed plan. It
 records fixed API, runner, tunnel, resource guard and timer states. The resource
 check runs without log cleanup or service stops. Free space is reported only for the
 verified preview mount. The backup check verifies the retained set and live
-deletion generation, then reports the latest usable age and snapshot count.
+deletion generation under the dedicated API user, then reports the latest usable
+age and snapshot count. Application and backup probes require a verified mount
+and a read-only view of the state directory.
 
 The aggregate application read runs as the dedicated API user. It reports
 whether the current SQLite schema is readable, feed verification age and import generation, foreground
@@ -71,6 +74,10 @@ private feed reports the age of the last full snapshot. A late heartbeat retains
 its age while capabilities close. Missing or invalid evidence is `null`, and an
 observed empty queue reports zero with no oldest age. The readout contains no
 request, account, job body, provider, or backup pathname data.
+
+The read-only mount blocks new SQLite sidecars. A stopped application without
+the live database's WAL coordination files can report an unavailable database.
+The backup check reads completed, digest-verified snapshots as immutable files.
 
 Compare the report with the same-origin HTTP probes and verified database write
 readiness. An active service unit alone cannot establish these. Qualify sample

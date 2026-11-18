@@ -2604,6 +2604,34 @@ class RecoveryContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'private deletion'):
                 recovery.backup_status(folder, barrier, 'a' * 40, 'b' * 64, 3600, now=1001)
 
+    def test_observe_backups_checks_wal_snapshot_twice_without_changing_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db, folder, barrier = self.fixture(root)
+            with closing(sqlite3.connect(db)) as live:
+                self.assertEqual(live.execute('PRAGMA journal_mode=WAL').fetchone(), ('wal',))
+                snapshot = self.make_backup(db, folder, barrier)
+            # The API-owned backup validator must stay non-mutating when the
+            # source SQLite header records WAL journal mode.
+            self.assertEqual(snapshot.read_bytes()[18:20], b'\x02\x02')
+            before = {item.name: item.read_bytes() for item in folder.iterdir()}
+            env = {'JUSTUP_SOURCE_COMMIT': 'a' * 40, 'JUSTUP_BUILD_ID': 'b' * 64}
+            with patch.object(recovery, 'SCHEDULED_BASE', root), patch.dict(os.environ, env, clear=True), \
+                    patch.object(recovery.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=101)), \
+                    patch.object(recovery.os, 'getuid', return_value=101), patch.object(recovery.os, 'geteuid', return_value=101), \
+                    patch.object(recovery.time, 'time', return_value=1050):
+                for _ in range(2):
+                    self.assertEqual(recovery.observe_backups(), {'latestAgeSeconds': 50, 'snapshotCount': 1})
+                    self.assertEqual({item.name: item.read_bytes() for item in folder.iterdir()}, before)
+                with recovery.backup_lock(folder), self.assertRaisesRegex(ValueError, 'already running'):
+                    recovery.observe_backups()
+                with patch.object(recovery.os, 'geteuid', return_value=0), self.assertRaises(ValueError):
+                    recovery.observe_backups()
+                for malformed in ('[]', ' '*4097):
+                    snapshot.with_suffix('.json').write_text(malformed)
+                    with self.assertRaises(ValueError):
+                        recovery.observe_backups()
+
     def test_backup_status_cli_exits_nonzero_without_usable_snapshot(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -2768,7 +2796,7 @@ class ObservationContracts(unittest.TestCase):
             self.assertNotIn('private-canary', str(failure.exception))
         api = SimpleNamespace(pw_uid=101)
         runner = SimpleNamespace(pw_uid=102)
-        with patch.object(host.pwd, 'getpwnam', side_effect=[api, runner]), \
+        with patch.object(host.pwd, 'getpwnam', side_effect=[runner, api]), \
                 patch.object(host.grp, 'getgrnam', return_value=SimpleNamespace(gr_gid=103)), \
                 patch.object(host.subprocess, 'run', return_value=SimpleNamespace(stdout=json.dumps(self.application).encode())) as child:
             actual = host.application_observation(Path('/preview/releases') / self.build, self.manifest)
@@ -2781,6 +2809,25 @@ class ObservationContracts(unittest.TestCase):
             self.assertEqual([options['user'], options['group'], options['extra_groups'], options['timeout']], [101, 103, [], 10])
             self.assertEqual(set(options['env']), {'PATH', 'LANG', 'TZ', 'HOME', 'JUSTUP_SOURCE_COMMIT',
                                                    'JUSTUP_BUILD_ID', 'JUSTUP_OBSERVE_RUNNER_UID'})
+
+    def test_backup_child_runs_as_api_uid_and_missing_nss_identity_yields_no_sample(self):
+        release = Path('/preview/releases') / self.build
+        output = {'latestAgeSeconds': 17, 'snapshotCount': 1}
+        with patch.object(host.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=101)), \
+                patch.object(host.grp, 'getgrnam', return_value=SimpleNamespace(gr_gid=103)), \
+                patch.object(host.subprocess, 'run', return_value=SimpleNamespace(stdout=json.dumps(output).encode())) as child:
+            self.assertEqual(host.backup_observation(release, self.manifest), output)
+            argv, = child.call_args.args
+            self.assertEqual(argv[:3], ['/usr/bin/python3', '-I', '-B'])
+            self.assertTrue(argv[3].endswith('/preview-recovery.py'))
+            self.assertEqual(argv[4:], ['observe-backups'])
+            kwargs = child.call_args.kwargs
+            self.assertEqual((kwargs['user'], kwargs['group'], kwargs['extra_groups'], kwargs['timeout']), (101, 103, [], 30))
+            self.assertNotIn('JUSTUP_OBSERVE_RUNNER_UID', kwargs['env'])
+            child.return_value.stdout = b'{"latestAgeSeconds":17,"snapshotCount":1,"file":"private"}'
+            self.assertIsNone(host.observation(lambda: host.backup_observation(release, self.manifest)))
+        with patch.object(host.pwd, 'getpwnam', side_effect=KeyError('private OS identity details')):
+            self.assertIsNone(host.observation(lambda: host.backup_observation(release, self.manifest)))
 
     def test_cgroup_and_missing_unit_states_are_distinct(self):
         tunnel = host.OBSERVATION_UNITS['tunnel']
@@ -2810,9 +2857,10 @@ class ObservationContracts(unittest.TestCase):
                     patch.object(host, 'artifact_module', return_value=mock_artifact), \
                     patch.object(host, 'unit_observation', return_value='active') as units, \
                     patch.object(host, 'guard', side_effect=ValueError('guard unavailable')) as guard, \
-                    patch.object(host, 'observation_free_space', return_value=66 * host.MIB), \
-                    patch.object(host, 'application_observation', return_value=self.application), \
-                    patch.object(host, 'backup_observation', side_effect=ValueError('private backup path')):
+                    patch.object(host, 'observation_free_space', return_value=66 * host.MIB) as space, \
+                    patch.object(host.os, 'statvfs', return_value=SimpleNamespace(f_flag=os.ST_RDONLY)) as state_mount, \
+                    patch.object(host, 'application_observation', return_value=self.application) as application, \
+                    patch.object(host, 'backup_observation', side_effect=ValueError('private backup path')) as backup:
                 report = host.observe(self.build, self.plan, self.machine)
                 self.assertEqual(report['application'], self.application)
                 self.assertFalse(report['resourceGuardHealthy'])
@@ -2824,6 +2872,18 @@ class ObservationContracts(unittest.TestCase):
                 self.assertEqual(units.call_count, len(host.OBSERVATION_UNITS))
                 with self.assertRaises(ValueError):
                     host.observe(self.build, '0' * 64, self.machine)
+                space.return_value = None
+                report = host.observe(self.build, self.plan, self.machine)
+                self.assertIsNone(report['application'])
+                self.assertIsNone(report['backup'])
+                application.assert_called_once()
+                backup.assert_called_once()
+                space.return_value = 66 * host.MIB
+                state_mount.return_value = SimpleNamespace(f_flag=0)
+                report = host.observe(self.build, self.plan, self.machine)
+                self.assertEqual(report['previewFreeBytes'], 66 * host.MIB)
+                self.assertIsNone(report['application'])
+                self.assertIsNone(report['backup'])
                 mock_artifact.read_host_plan = Mock(side_effect=[self.plan, '0' * 64])
                 with self.assertRaises(ValueError):
                     host.observe(self.build, self.plan, self.machine)

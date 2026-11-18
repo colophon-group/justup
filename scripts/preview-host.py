@@ -1459,7 +1459,7 @@ ALERT_INPUTS = 'app/server/alert-signals-cli.mjs'
 def observation(read):
     try:
         return read()
-    except (ValueError, OSError, sqlite3.Error, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (ValueError, OSError, KeyError, sqlite3.Error, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
 
 
@@ -1514,31 +1514,39 @@ def validate_application_observation(value, manifest):
     return value
 
 
-def application_observation(release, manifest):
-    api, runner = pwd.getpwnam(USER), pwd.getpwnam(RUNNER_USER)
+def observation_as_api(argv, release, manifest, timeout, *, extra_env=None):
+    api = pwd.getpwnam(USER)
     shared = grp.getgrnam(STATE_GROUP)
-    if not api.pw_uid or not runner.pw_uid or api.pw_uid == runner.pw_uid or not shared.gr_gid:
+    if not api.pw_uid or not shared.gr_gid:
         raise ValueError('Dedicated identities are required for application observation.')
-    output = subprocess.run([str(release / 'runtime/bin/node'), str(release / ALERT_INPUTS)],
+    output = subprocess.run(argv,
                             check=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                            timeout=10, cwd=release / 'app', user=api.pw_uid, group=shared.gr_gid, extra_groups=[], umask=0o077,
+                            timeout=timeout, cwd=release / 'app', user=api.pw_uid, group=shared.gr_gid, extra_groups=[], umask=0o077,
                             env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'HOME': '/nonexistent',
                                  'JUSTUP_SOURCE_COMMIT': manifest['sourceCommit'], 'JUSTUP_BUILD_ID': manifest['buildIdentity'],
-                                 'JUSTUP_OBSERVE_RUNNER_UID': str(runner.pw_uid)}).stdout
+                                 **(extra_env or {})}).stdout
     if len(output) > 4096:
         raise ValueError('Application observation exceeds its bound.')
-    return validate_application_observation(json.loads(output), manifest)
+    return json.loads(output)
 
 
-def backup_observation(manifest):
-    # The existing validator verifies file digests, SQLite integrity, exact
-    # build identity and the live deletion generation without retaining names.
-    spec = importlib.util.spec_from_file_location('preview_recovery', Path(__file__).with_name('preview-recovery.py'))
-    recovery = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(recovery)
-    report = recovery.backup_status(BASE / 'state/backups', BASE / 'state/private-generation',
-                                    manifest['sourceCommit'], manifest['buildIdentity'], recovery.MAX_AGE)
-    return {'latestAgeSeconds': report['latestAgeSeconds'], 'snapshotCount': report['snapshotCount']}
+def application_observation(release, manifest):
+    runner_uid = pwd.getpwnam(RUNNER_USER).pw_uid
+    report = observation_as_api([str(release / 'runtime/bin/node'), str(release / ALERT_INPUTS)],
+                                release, manifest, 10, extra_env={'JUSTUP_OBSERVE_RUNNER_UID': str(runner_uid)})
+    return validate_application_observation(report, manifest)
+
+
+def backup_observation(release, manifest):
+    # The API identity owns the backup directory and deletion generation. File
+    # reads and SQLite integrity checks stay in that role, including on errors.
+    argv = ['/usr/bin/python3', '-I', '-B', str(Path(__file__).with_name('preview-recovery.py')), 'observe-backups']
+    report = observation_as_api(argv, release, manifest, 30)
+    if (not isinstance(report, dict) or set(report) != {'latestAgeSeconds', 'snapshotCount'}
+            or type(report['latestAgeSeconds']) is not int or not 0 <= report['latestAgeSeconds'] <= 604800
+            or type(report['snapshotCount']) is not int or report['snapshotCount'] not in (1, 2)):
+        raise ValueError('Backup observation is invalid.')
+    return report
 
 
 def observation_free_space():
@@ -1567,13 +1575,16 @@ def observe(build, expected_plan, host_fingerprint):
     if manifest['buildIdentity'] != build or ALERT_INPUTS not in manifest['files']:
         raise ValueError('The active release lacks the reviewed alert collector.')
     started = time.time_ns() // 1_000_000
+    free_bytes = observation(observation_free_space)
     result = {'schemaVersion': 1, 'sourceCommit': manifest['sourceCommit'], 'buildIdentity': build,
               'planSha256': expected_plan, 'observedAtMs': started,
               'units': {name: observation(lambda: unit_observation(unit)) for name, unit in OBSERVATION_UNITS.items()},
               'resourceGuardHealthy': observation(lambda: guard(cleanup_logs=False)) is not None,
-              'previewFreeBytes': observation(observation_free_space),
-              'application': observation(lambda: application_observation(release, manifest)),
-              'backup': observation(lambda: backup_observation(manifest))}
+              'previewFreeBytes': free_bytes, 'application': None, 'backup': None}
+    state_readonly = observation(lambda: bool(os.statvfs(BASE / 'state').f_flag & os.ST_RDONLY))
+    if free_bytes is not None and state_readonly:
+        result['application'] = observation(lambda: application_observation(release, manifest))
+        result['backup'] = observation(lambda: backup_observation(release, manifest))
     check_identity()
     result['durationMs'] = max(0, time.time_ns() // 1_000_000 - started)
     return result

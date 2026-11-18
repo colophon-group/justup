@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -34,11 +35,22 @@ BACKUP_NAME = re.compile(r'^backup-[0-9]{8}T[0-9]{6}Z-[a-f0-9-]{36}\.sqlite$')
 SCHEDULED_BASE = Path('/srv/justup_preview/state')
 
 
+def small_regular_text(path, limit):
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+        meta = os.fstat(stream.fileno())
+        if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 or meta.st_size > limit:
+            raise ValueError('Backup evidence file is not a bounded regular file.')
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError('Backup evidence file exceeds its limit.')
+    return data.decode('utf-8')
+
+
 def generation(path):
-    path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise ValueError('A current, independent deletion barrier is required.')
-    value = path.read_text().strip()
+    try:
+        value = small_regular_text(path, 128).strip()
+    except OSError as error:
+        raise ValueError('A current, independent deletion barrier is required.') from error
     if str(uuid.UUID(value)) != value:
         raise ValueError('Deletion generation must be a canonical UUID.')
     return value
@@ -94,10 +106,11 @@ def check_folder(folder):
 
 
 @contextmanager
-def readonly(path):
+def readonly(path, *, immutable=False):
     if Path(path).is_symlink() or not Path(path).is_file():
         raise ValueError('Database must be an existing regular file.')
-    with closing(sqlite3.connect('file:' + quote(str(Path(path).resolve()), safe='/') + '?mode=ro', uri=True)) as connection:
+    options = '?mode=ro&immutable=1' if immutable else '?mode=ro'
+    with closing(sqlite3.connect('file:' + quote(str(Path(path).resolve()), safe='/') + options, uri=True)) as connection:
         yield connection
 
 
@@ -232,9 +245,9 @@ def validate_restore(snapshot, barrier, now=None):
     if not BACKUP_NAME.fullmatch(snapshot.name):
         raise ValueError('Restore only an owned preview backup name.')
     current = stable_generation(barrier)
-    info = json.loads(snapshot.with_suffix('.json').read_text())
+    info = json.loads(small_regular_text(snapshot.with_suffix('.json'), 4096))
     now = time.time() if now is None else now
-    if info.get('formatVersion') != 1 or info.get('privateGeneration') != current:
+    if not isinstance(info, dict) or info.get('formatVersion') != 1 or info.get('privateGeneration') != current:
         raise ValueError('Snapshot predates a private deletion or lacks its current independent barrier.')
     created_at = info.get('createdAtUnix')
     if type(created_at) not in (int, float) or not math.isfinite(created_at):
@@ -244,7 +257,9 @@ def validate_restore(snapshot, barrier, now=None):
         raise ValueError('Snapshot is expired or from the future.')
     if snapshot.stat().st_size > MAX_BACKUP or file_digest(snapshot) != info.get('databaseSha256'):
         raise ValueError('Snapshot is oversized or its digest differs.')
-    with readonly(snapshot) as db:
+    if any(os.path.lexists(str(snapshot) + suffix) for suffix in ('-wal', '-shm', '-journal')):
+        raise ValueError('A completed backup must be independent of SQLite sidecars.')
+    with readonly(snapshot, immutable=True) as db:
         actual_schema = db.execute('PRAGMA user_version').fetchone()[0]
         if actual_schema not in {1, APPLICATION_SCHEMA} or info.get('schemaVersion', 1) != actual_schema:
             raise ValueError('Snapshot schema epoch is unsupported or differs from its metadata.')
@@ -256,7 +271,11 @@ def validate_restore(snapshot, barrier, now=None):
 
 def backup_status(folder, barrier, source_commit, build_identity, max_age_seconds, now=None):
     """Read-only health proof for the retained, deletion-safe backup set."""
-    folder = check_folder(folder)
+    with backup_lock(folder) as locked:
+        return _backup_status_unlocked(locked, barrier, source_commit, build_identity, max_age_seconds, now)
+
+
+def _backup_status_unlocked(folder, barrier, source_commit, build_identity, max_age_seconds, now):
     if type(max_age_seconds) is not int or not 0 < max_age_seconds <= MAX_AGE:
         raise ValueError('Backup freshness limit must be within the retention period.')
     now = time.time() if now is None else now
@@ -301,7 +320,7 @@ def restore(snapshot, barrier, destination, prepare_command, now=None, migrate_v
     try:
         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         os.close(fd)
-        with readonly(snapshot) as source, closing(sqlite3.connect(destination)) as target:
+        with readonly(snapshot, immutable=True) as source, closing(sqlite3.connect(destination)) as target:
             source.backup(target, pages=128)
         # The installed auth-owned command must remove ALL restored sessions and
         # check schema compatibility. Its fixed argv is reviewed with that build;
@@ -416,6 +435,16 @@ def migrate_live(database, folder, barrier, target_manifest, migration_command, 
     return {**receipt, 'backup': saved['backup'], 'activated': False, 'writersStopped': True}
 
 
+def observe_backups():
+    uid = pwd.getpwnam('justup-preview-api').pw_uid
+    source, build = os.environ.get('JUSTUP_SOURCE_COMMIT', ''), os.environ.get('JUSTUP_BUILD_ID', '')
+    if (not uid or os.getuid() != uid or os.geteuid() != uid or not re.fullmatch(r'[a-f0-9]{40}', source)
+            or not re.fullmatch(r'[a-f0-9]{64}', build)):
+        raise ValueError('Backup observation requires the dedicated preview API identity and active build.')
+    report = backup_status(SCHEDULED_BASE / 'backups', SCHEDULED_BASE / 'private-generation', source, build, MAX_AGE)
+    return {'latestAgeSeconds': report['latestAgeSeconds'], 'snapshotCount': report['snapshotCount']}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
@@ -426,6 +455,7 @@ def main():
     make.add_argument('--source-commit', required=True)
     make.add_argument('--build-identity', required=True)
     sub.add_parser('scheduled-backup')
+    sub.add_parser('observe-backups')
     check = sub.add_parser('check-restore')
     check.add_argument('--snapshot', type=Path, required=True)
     check.add_argument('--generation', type=Path, required=True)
@@ -448,6 +478,9 @@ def main():
     clean.add_argument('--backup-dir', type=Path, required=True)
     args = parser.parse_args()
     try:
+        if args.command == 'observe-backups':
+            print(json.dumps(observe_backups(), sort_keys=True))
+            return 0
         paths = ([SCHEDULED_BASE / 'preview.sqlite', SCHEDULED_BASE / 'backups', SCHEDULED_BASE / 'private-generation']
                  if args.command == 'scheduled-backup' else
                  [getattr(args, key) for key in ('database', 'backup_dir', 'generation', 'snapshot', 'destination') if hasattr(args, key)])
