@@ -11,9 +11,9 @@ import {privateGeneration} from '../../server/processing-admission.mjs';
 import {createCompanyProgress} from '../../server/company-progress.mjs';
 
 const unavailable=()=>{throw Object.assign(new Error('Company setup is unavailable.'),{code:'dependency_unavailable'});};
-function protectedFile(path,mode,{optional=false,shared=false}={}) {
+function protectedFile(path,modes,{optional=false,shared=false}={}) {
   let metadata;try{metadata=lstatSync(path);}catch(error){if(optional&&error.code==='ENOENT')return null;throw error;}
-  if(!isAbsolute(path)||realpathSync(path)!==path||!metadata.isFile()||metadata.nlink!==1||(metadata.mode&0o777)!==mode
+  if(!isAbsolute(path)||realpathSync(path)!==path||!metadata.isFile()||metadata.nlink!==1||!modes.includes(metadata.mode&0o7777)
       ||metadata.uid!==process.getuid()&&!(shared&&process.getgroups().includes(metadata.gid)))unavailable();
   return metadata;
 }
@@ -28,16 +28,17 @@ export function companySetupCommand({env=process.env,args=process.argv.slice(2),
   const shared=env.JUSTUP_SHARED_STATE==='true',directory=dirname(path),parent=lstatSync(directory),fileMode=shared?0o660:0o600;
   if(realpathSync(directory)!==directory||!parent.isDirectory()||(parent.mode&0o7777)!==(shared?0o2770:0o700)
       ||parent.uid!==process.getuid()&&!(shared&&parent.uid===0&&process.getgroups().includes(parent.gid)))unavailable();
-  const original=protectedFile(path,fileMode,{shared});
-  for(const suffix of ['-wal','-shm'])protectedFile(path+suffix,fileMode,{shared,optional:true});
+  const original=protectedFile(path,[fileMode],{shared});
+  for(const suffix of ['-wal','-shm'])protectedFile(path+suffix,[fileMode],{shared,optional:true});
   const generationPath=env.JUSTUP_PRIVATE_GENERATION_PATH??join(directory,'private-generation');
-  protectedFile(generationPath,0o600);
+  const generationFile=protectedFile(generationPath,shared?[0o600,0o640]:[0o600]);
+  if((generationFile.mode&0o7777)===0o640&&(dirname(generationPath)!==directory||generationFile.gid!==parent.gid))unavailable();
   const generationConfig={dbPath:path,privateGenerationPath:generationPath},generation=privateGeneration(generationConfig);
   if(!generation)unavailable();
   const priorUmask=process.umask(shared?0o007:0o077);let db;
   try {
     db=new DatabaseSync(path,{readOnly:input.kind==='pending'});
-    const opened=protectedFile(path,fileMode,{shared});if(opened.dev!==original.dev||opened.ino!==original.ino)unavailable();
+    const opened=protectedFile(path,[fileMode],{shared});if(opened.dev!==original.dev||opened.ino!==original.ino)unavailable();
     assertCurrentSchema(db);db.exec('PRAGMA busy_timeout=5000');
     db.exec(input.kind==='pending'?'BEGIN':'BEGIN IMMEDIATE');
     try {

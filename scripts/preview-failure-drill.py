@@ -7,11 +7,13 @@ unit action. The output contains only bounded unit and release identity fields.
 from __future__ import annotations
 
 import argparse
+import grp
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
+import pwd
 import re
 import stat
 import subprocess
@@ -52,10 +54,11 @@ def owned_regular(path, maximum):
     return path
 
 
-def private_regular(path, maximum):
+def checked_generation(path, api_uid, api_gid, state_gid):
     meta = path.lstat()
-    if (not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1
-            or meta.st_mode & 0o077 or meta.st_size > maximum):
+    allowed = {(0o600, api_gid), (0o600, state_gid), (0o640, state_gid)}
+    if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != api_uid or meta.st_nlink != 1
+            or (stat.S_IMODE(meta.st_mode), meta.st_gid) not in allowed or meta.st_size > 128):
         raise ValueError('The private deletion generation is unsafe.')
     return path
 
@@ -100,7 +103,8 @@ def capture(kind, expected_plan, expected_machine):
     manifest = owned_regular(BASE / link / 'manifest.json', 1024 * 1024)
     if json.loads(manifest.read_text()).get('buildIdentity') != link.removeprefix('releases/'):
         raise ValueError('Current manifest identity differs from the selected build.')
-    generation = private_regular(GENERATION, 4096)
+    api = pwd.getpwnam('justup-preview-api')
+    generation = checked_generation(GENERATION, api.pw_uid, api.pw_gid, grp.getgrnam('justup-preview-state').gr_gid)
     unit = UNITS[kind]
     state = show(unit)
     if (state['LoadState'] != 'loaded' or state['FragmentPath'] != '/etc/systemd/system/' + unit

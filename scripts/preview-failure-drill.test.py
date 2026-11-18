@@ -107,6 +107,8 @@ class DrillEvidence(unittest.TestCase):
             marker.write_text(json.dumps({'formatVersion': 1, 'planSha256': 'a' * 64}))
             generation = base / 'generation'
             generation.write_text('generation-one')
+            generation.chmod(0o640)
+            owner = generation.stat()
             service = {'LoadState': 'loaded', 'ActiveState': 'active', 'SubState': 'running',
                        'MainPID': '101', 'NRestarts': '0', 'InvocationID': 'f' * 32,
                        'Result': 'success', 'FragmentPath': '/etc/systemd/system/justup-preview-api.service',
@@ -129,11 +131,15 @@ class DrillEvidence(unittest.TestCase):
                   patch.object(drill.platform, 'node', return_value='murmur-server'),
                   patch.object(drill, 'inside_slice', return_value=True),
                   patch.object(drill, 'owned_regular', side_effect=lambda path, maximum: path),
-                  patch.object(drill, 'private_regular', side_effect=lambda path, maximum: path),
+                  patch.object(drill.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=owner.st_uid, pw_gid=owner.st_gid)),
+                  patch.object(drill.grp, 'getgrnam', return_value=SimpleNamespace(gr_gid=owner.st_gid)),
                   patch.object(drill, 'show', side_effect=fake_show),
                   patch.object(drill, 'sha', side_effect=lambda path: 'b' * 64
                                if path == Path('/etc/machine-id') else actual_sha(path))):
                 evidence = drill.capture('api', 'a' * 64, 'b' * 64)
+                generation.chmod(0o660)
+                with self.assertRaisesRegex(ValueError, 'deletion generation'):
+                    drill.capture('api', 'a' * 64, 'b' * 64)
             self.assertEqual(evidence['releaseLink'], 'releases/' + build)
             self.assertEqual(evidence['service']['MainPID'], '101')
             self.assertEqual(evidence['generationSha256'], actual_sha(generation))
