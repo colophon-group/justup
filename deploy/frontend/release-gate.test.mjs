@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { digest as wireDigest } from '../../server/hiring-wire-facts.mjs';
-import { validateGateConfig, loadGateConfig, requireInvite, preflight, observeCandidateImport, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, verifyPublishedWire, cleanupCandidateAccount, cleanupAccount, disposableAccount } from '../../tests/browser/release-gate.mjs';
+import { validateGateConfig, loadGateConfig, requireInvite, preflight, logoutArrivalSession, observeCandidateImport, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, verifyPublishedWire, cleanupCandidateAccount, cleanupAccount, disposableAccount } from '../../tests/browser/release-gate.mjs';
 import { companyReportSample, hiringFootprintSample } from '../../tests/browser/company-report-fixture.mjs';
 
 const now = Date.parse('2026-10-31T12:00:00Z');
@@ -442,6 +442,31 @@ test('live arrival accepts only an import advance on the exact healthy candidate
   ]) {
     const packet = fixture(); change(packet);
     await assert.rejects(observeCandidateImport(packet.config, packet.get, () => now));
+  }
+});
+
+test('live arrival revokes its own session on an unhealthy exact build and refuses other builds or owners', async () => {
+  const account = { id: 'synthetic-owner', username: 'synthetic-account' };
+  for (const failure of [null, 'build', 'owner']) {
+    const f = fixture();
+    f.data['/api/v1/health'] = { status: 503, json: { ready: false } };
+    f.data['/api/v1/version'].json.runner = { ready: false };
+    f.data['/api/v1/version'].json.importGeneration = null;
+    if (failure === 'build') f.data['/api/v1/version'].json.buildIdentity = 'another-build';
+    let user = { ...account, ...(failure === 'owner' ? { id: 'foreign-owner' } : {}) }, logouts = 0;
+    const logout = logoutArrivalSession(f.config, account, { read: f.get,
+      session: async () => ({ user, csrfToken: 'synthetic-token' }),
+      logout: async csrf => {
+        assert.equal(csrf, 'synthetic-token');
+        logouts++;
+        user = null;
+        return 200;
+      },
+    });
+    if (failure) await assert.rejects(logout, /changed|foreign account/);
+    else await logout;
+    assert.equal(logouts, failure === null ? 1 : 0);
+    assert.deepEqual(f.reads.map(read => read.path), ['/__release/version', '/api/v1/version']);
   }
 });
 

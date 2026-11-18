@@ -161,9 +161,13 @@ async function verifyHiringFootprints(config, read, now) {
       'The expected hiring country or sampled listing count changed.');
   }
 }
-export function verifyBuilds(config, frontend, api, health, now = Date.now()) {
+function verifyArtifactIdentity(config, frontend, api) {
   requireThat(same(frontend, config.frontend, Object.keys(config.frontend)), 'Frontend identity changed.');
-  requireThat(same(api, config.api, ['sourceCommit', 'schemaVersion', 'buildIdentity', 'importGeneration']), 'API or import identity changed.');
+  requireThat(same(api, config.api, ['sourceCommit', 'schemaVersion', 'buildIdentity']), 'API identity changed.');
+}
+export function verifyBuilds(config, frontend, api, health, now = Date.now()) {
+  verifyArtifactIdentity(config, frontend, api);
+  requireThat(api.importGeneration === config.api.importGeneration, 'The import identity changed.');
   for (const runner of [api?.runner, health?.runner]) {
     requireThat(record(runner) && runner.ready === true && runner.identity === config.api.runnerIdentity
       && runner.sourceCommit === config.api.sourceCommit && runner.buildIdentity === config.api.buildIdentity
@@ -174,12 +178,17 @@ export function verifyBuilds(config, frontend, api, health, now = Date.now()) {
 }
 // Build safety and policy admission are separate: owned-account deletion remains
 // available when policy approval is withdrawn, but never against another candidate.
-async function readBuilds(get) {
+async function readArtifactIdentity(get) {
   const frontend = await get('/__release/version');
   const api = await get('/api/v1/version');
+  requireThat([frontend, api].every(response => response?.status === 200), 'Candidate identity HTTP status failed.');
+  return [frontend.json, api.json];
+}
+async function readBuilds(get) {
+  const identity = await readArtifactIdentity(get);
   const health = await get('/api/v1/health');
-  requireThat([frontend, api, health].every(response => response?.status === 200), 'Candidate identity HTTP status failed.');
-  return [frontend.json, api.json, health.json];
+  requireThat(health?.status === 200, 'Candidate identity HTTP status failed.');
+  return [...identity, health.json];
 }
 export async function verifyCandidateBuilds(config, get, now = Date.now) {
   const builds = await readBuilds(get);
@@ -300,6 +309,16 @@ export function disposableAccount() {
 export function ownSession(session, account) {
   return Boolean(session?.user && session.user.username === account.username && plain(session.user.id)
     && (account.id === null || account.id === session.user.id));
+}
+// Revocation is available during a data, runner or policy outage. Still pin the
+// frontend/API and refuse any session outside the reviewed disposable account.
+export async function logoutArrivalSession(config, account, api) {
+  verifyArtifactIdentity(config, ...await readArtifactIdentity(api.read));
+  const session = await api.session();
+  if (session?.user === null) return;
+  requireThat(ownSession(session, account), 'Refused to sign out a foreign account.');
+  requireThat(await api.logout(session.csrfToken) === 200 && (await api.session()).user === null,
+    'The disposable session was not revoked.');
 }
 // Finally-only cleanup preserves the exact candidate and own-account checks, not
 // admission to new processing. No policy check belongs before this deletion attempt.

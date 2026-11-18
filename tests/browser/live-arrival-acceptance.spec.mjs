@@ -1,6 +1,6 @@
 // Explicit preview journey using an existing disposable account and a scheduled import.
 import { test } from '@playwright/test';
-import { loadGateConfig, observeCandidateImport, ownSession, requireLiveArrivalAccount, verifyCandidateBuilds, verifyPolicyState } from './release-gate.mjs';
+import { loadGateConfig, logoutArrivalSession, observeCandidateImport, ownSession, requireLiveArrivalAccount, verifyCandidateBuilds, verifyPolicyState } from './release-gate.mjs';
 import { openReleaseStream, verifyReleaseFeedArrival } from './release-live-results.mjs';
 
 test('the fixed preview delivers a newly observed job without moving the reader', async ({ browser }) => {
@@ -30,6 +30,10 @@ test('the fixed preview delivers a newly observed job without moving the reader'
     verifyPolicyState(config, session.policies, 'en');
     if (!ownSession(session, account) || session.access?.fullAccess !== true || session.capabilities?.sse !== true) {
       throw new Error('The dedicated account needs current full access and live results.');
+    }
+    const preferences = await request('/api/v1/preferences');
+    if (preferences.status !== 200 || preferences.json?.accountId !== account.id || ![null, 'en'].includes(preferences.json.interfaceLocale)) {
+      throw new Error('The dedicated account must admit an English workspace stream.');
     }
   };
   const savedSearch = async () => {
@@ -72,13 +76,8 @@ test('the fixed preview delivers a newly observed job without moving the reader'
   } finally {
     try {
       if (attemptedLogin) {
-        await observe();
-        const session = await readSession();
-        if (session.user !== null) {
-          if (!ownSession(session, account)) throw new Error('Refused to sign out a foreign account.');
-          const logout = await changeSession('/api/v1/session/logout', {}, session.csrfToken);
-          if (logout.status !== 200 || (await readSession()).user !== null) throw new Error('The disposable session was not revoked.');
-        }
+        await logoutArrivalSession(config, account, { read: request, session: readSession,
+          logout: async csrf => (await changeSession('/api/v1/session/logout', {}, csrf)).status });
       }
     } catch { cleanupFailed = true; }
     try { await context.close(); } catch { cleanupFailed = true; }
