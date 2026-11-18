@@ -51,14 +51,14 @@ class PreviewFeedArrival(unittest.TestCase):
         baseline, first = fixtures.write_feed_bundle(cls.producer, [fixtures.feed_posting()], batch_id="1" * 32)
         partial, second = fixtures.write_feed_bundle(cls.producer, [posting], batch_id="2" * 32, kind="changes",
                                                       from_cursor=first["toCursor"], complete=False,
-                                                      cutoff="2026-10-31T16:01:00.000Z", source_count=2)
+                                                      cutoff="2026-10-31T16:01:00.345678Z", source_count=2)
         replacement, third = fixtures.write_feed_bundle(cls.producer, [
             {**posting, "title": "Senior Engineer", "updatedAt": "2026-10-31T16:01:15.000Z"},
         ], batch_id="3" * 32, kind="changes", from_cursor=second["toCursor"], complete=False,
-            cutoff="2026-10-31T16:01:20.000Z", source_count=2)
+            cutoff="2026-10-31T16:01:20.654321Z", source_count=2)
         arrived, last = fixtures.write_feed_bundle(cls.producer, [], batch_id="4" * 32, kind="changes",
                                                     from_cursor=third["toCursor"],
-                                                    cutoff="2026-10-31T16:01:30.000Z", source_count=2)
+                                                    cutoff="2026-10-31T16:01:30.123456Z", source_count=2)
         importer = fixtures.IMPORT
         before = importer.import_feed_bundle(baseline, now=fixtures.NOW)
         staged = importer.import_feed_bundle(partial, previous=before, now=importer.utc(second["cutoffAt"]))
@@ -157,6 +157,17 @@ try {
         candidate["jobs"][0]["title"] = "Another normalized candidate"
         retain(self.candidate, candidate)
         with self.assertRaisesRegex(PROOF.source.ImportFailure, "differs from its acceptance marker"):
+            self.run_proof()
+
+    def test_requires_the_final_posting_evidence_to_match_the_exact_source_cutoff(self):
+        candidate = self.restore(self.candidate)
+        job = next(item for item in candidate["jobs"] if item["id"] == fixtures.JOB_B)
+        job["evidence"]["metadataFetchedAt"] = "2026-10-31T16:01:20.654999Z"
+        path = self.receipts / f"batch-{'4' * 32}-candidate.json"
+        marker = self.restore(path)
+        marker["candidateSha256"] = retain(self.candidate, candidate)
+        retain(path, marker)
+        with self.assertRaisesRegex(PROOF.source.ImportFailure, "does not support the observed public posting"):
             self.run_proof()
 
     def test_every_complete_application_import_in_the_window_needs_a_source_receipt(self):

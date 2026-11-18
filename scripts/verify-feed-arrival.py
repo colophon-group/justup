@@ -134,7 +134,7 @@ def candidate_posting(path, marker, observation, arrival):
             evidence = row.get("evidence", {}).get("metadataFetchedAt")
             require(all(isinstance(row.get(key), str) and len(row[key]) <= 2048
                         for key in ("id", "sourceUrl", "companyId"))
-                    and source.iso(source.utc(evidence)) == evidence, "Invalid normalized public posting.")
+                    and isinstance(evidence, str) and len(evidence) <= 32, "Invalid normalized public posting.")
             jobs.append([row["id"], row["sourceUrl"], row["firstObserved"], row["companyId"], evidence])
     node = shutil.which("node")
     require(node is not None, "Use the reviewed preview Node runtime.")
@@ -233,13 +233,13 @@ def verify(browser, producer, receipts, database, candidate):
                     and baseline_time < first <= cutoff):
                 # Replacing a posting on a later page refreshes its evidence,
                 # even if its public ID, URL and first-observed time are equal.
-                justified_by, supplied_at = digest, source.iso(cutoff)
+                justified_by, supplied_at = digest, cutoff
             else:
                 justified_by = supplied_at = None
         require(not (manifest["complete"] and digest != arrival_sha and justified_by is not None),
                 "An earlier complete batch makes the posting's arrival generation ambiguous.")
         previous = manifest
-    require(imported == len(imports) and justified_by is not None and supplied_at == target_evidence_at,
+    require(imported == len(imports) and justified_by is not None and supplied_at == source.utc(target_evidence_at),
             "The complete import interval does not support the observed public posting.")
     return {"schemaVersion": 1, "scope": "scheduled_feed_arrival", "passed": True, "completeReleaseGate": False,
             "sourceCommit": observation["sourceCommit"], "frontendArtifactSha256": observation["frontendArtifactSha256"],
