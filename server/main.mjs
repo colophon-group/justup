@@ -5,7 +5,7 @@ import { mkdirSync, chmodSync, fchmodSync, fchownSync, readFileSync, readSync, s
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, resolve, isAbsolute, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { openStore } from './store.mjs';
+import { openStore, transaction } from './store.mjs';
 import { SCHEMA_VERSION, migrateDatabaseFile } from './schema.mjs';
 import { createFeed } from './feed.mjs';
 import { createTasks } from './tasks.mjs';
@@ -112,7 +112,9 @@ export function createDeletionBarrier({ generationPath, backupDir, dbPath, db, s
   if (sharedState && configured) {
     // Older installs used an API-private generation. Give the existing state
     // group read access at startup without rotating it or touching backups.
-    try { absentPending(); validate(true); } catch { /* Readiness keeps unsafe storage closed. */ }
+    try {
+      transaction(db, () => { absentPending(); validate(true); });
+    } catch { /* Readiness keeps unsafe storage closed. */ }
   }
   return { ready: () => { try { validate(); absentPending(); return !ownedMarker; } catch { return false; } },
     beforePrivateDelete, afterPrivateTransaction };
