@@ -153,7 +153,7 @@ const visibleCheckOutcomes = [
   { decision: 'insufficient_evidence', status: 'insufficient_evidence', state: 'exhausted', visible: false,
     message: 'Some positions lacked enough evidence to confirm a match.' },
   { decision: 'rejected', status: 'complete', state: 'exhausted', visible: false,
-    message: 'No matching positions found in the completed search.' },
+    message: 'No matches in the available listings.' },
   { decision: 'outage', status: 'provider_unavailable', state: 'paused', visible: false,
     message: 'Search paused. There may be more matches.' },
 ];
@@ -188,6 +188,7 @@ for (const outcome of visibleCheckOutcomes) test(`visible residual ${outcome.dec
     await expect(page.locator('[data-job]')).toHaveCount(0);
     release();
     await expect(status).toContainText(outcome.message, { timeout: 10_000 });
+    await expect(status).toContainText('Search coverage is limited.');
     await expect(page.locator('[data-job]')).toHaveCount(outcome.visible ? 1 : 0);
     if (outcome.visible) await expect(page.locator('[data-job="assembled-engineer"]')).toBeVisible();
     if (outcome.state === 'paused') await expect(page.locator('#resume-results')).toBeVisible();
@@ -197,6 +198,7 @@ for (const outcome of visibleCheckOutcomes) test(`visible residual ${outcome.dec
     expect(response.status()).toBe(200);
     const result = await response.json();
     expect(result.ai).toEqual({ status: outcome.status });
+    expect(result.coverage).toMatchObject({ stale: false, state: 'limited_coverage' });
     expect(result.continuation.state).toBe(outcome.state);
     expect(result.items.map(job => job.id)).toEqual(outcome.visible ? ['assembled-engineer'] : []);
     expect(JSON.stringify(result)).not.toMatch(/withheld-private|bodyText|Synthetic provider outage/);
