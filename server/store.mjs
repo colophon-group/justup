@@ -1,6 +1,6 @@
 // Application SQLite storage and allowlisted imports. Read when changing the
 // snapshot format, migrations or freshness/source-identity rules.
-import { lstatSync, chmodSync, existsSync } from 'node:fs';
+import { lstatSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
@@ -95,25 +95,38 @@ function normalizedJob(raw, snapshotAt, verifiedAt) {
   };
   return { job, first, bodyText, textHash, sourceUrl: raw.sourceUrl };
 }
+function applyStorageMode(path, mode, allowMissing = false) {
+  let info;
+  try { info = lstatSync(path); } catch (error) {
+    if (allowMissing && error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error('Unsafe application storage file.');
+  // A peer service can use a group-private file but cannot change its mode.
+  if ((info.mode & 0o7777) !== mode) chmodSync(path, mode);
+}
+
 export function openStore(path = ':memory:', { sharedState = false } = {}) {
   const mode = sharedState ? 0o660 : 0o600;
+  const sidecars = [`${path}-wal`, `${path}-shm`];
   if (path !== ':memory:') {
     const directory = lstatSync(dirname(resolve(path)));
     if (!directory.isDirectory() || directory.isSymbolicLink()
         || (sharedState && ((directory.mode & 0o7777) !== 0o2770 || process.umask() !== 0o007))) throw new Error('Shared application storage requires a setgid 02770 directory and umask 0007.');
-    for (const file of [path, `${path}-wal`, `${path}-shm`]) {
-      let info; try { info = lstatSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      if (!info.isFile() || info.isSymbolicLink()) throw new Error('Unsafe application storage file.');
-      chmodSync(file, mode);
-    }
+    for (const file of [path, ...sidecars]) applyStorageMode(file, mode, true);
   }
   const db = new DatabaseSync(path);
   let acceptedOriginReview = false;
-  db.function('justup_has_posting_origin_review', () => Number(acceptedOriginReview));
-  if (path !== ':memory:') chmodSync(path, mode);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA max_page_count = 262144;');
-  if (path !== ':memory:') for (const file of [`${path}-wal`, `${path}-shm`]) if (existsSync(file)) chmodSync(file, mode);
-  try { assertCurrentSchema(db, { allowEmpty: true }); } catch (error) { db.close(); throw error; }
+  try {
+    db.function('justup_has_posting_origin_review', () => Number(acceptedOriginReview));
+    if (path !== ':memory:') applyStorageMode(path, mode);
+    db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA max_page_count = 262144;');
+    if (path !== ':memory:') for (const file of sidecars) applyStorageMode(file, mode, true);
+    assertCurrentSchema(db, { allowEmpty: true });
+  } catch (error) {
+    db.close();
+    throw error;
+  }
   transaction(db, () => db.exec(`
     CREATE TABLE IF NOT EXISTS justup_imports (
       generation TEXT PRIMARY KEY, snapshot_at INTEGER NOT NULL, verified_at INTEGER NOT NULL,
