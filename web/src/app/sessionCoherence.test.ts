@@ -23,15 +23,16 @@ test('nearest deadline follows server time and includes the complete request ela
 test('the direct-source claim needs a supported review and bounded server-time expiry', () => {
   const coverage = { kind: 'imported_snapshot', stale: false, verifiedAt: iso(-1_000),
     postingOrigin: 'reviewed_direct_only', postingOriginExpiresAt: iso(5_000) };
-  assert.equal(postingOriginDeadline(decodeSession({ ...wire(), coverage }), 10_000), 15_000);
+  const started = { wall: 10_000, monotonic: 400 };
+  assert.deepEqual(postingOriginDeadline(decodeSession({ ...wire(), coverage }), started), { wall: 15_000, monotonic: 5400 });
   for (const patch of [{ stale: true }, { postingOrigin: 'reviewed_with_unknowns' }, { postingOrigin: 'new_policy' },
     { postingOriginExpiresAt: undefined }, { postingOriginExpiresAt: 'invalid' }, { postingOriginExpiresAt: iso(0) },
     { verifiedAt: iso(1) }, { postingOriginExpiresAt: iso(86_400_000) }, { state: 'import_unavailable' }]) {
     const session = decodeSession({ ...wire(), coverage: { ...coverage, ...patch } });
     assert.equal(session.coverage?.kind, 'imported_snapshot');
-    assert.equal(postingOriginDeadline(session, 10_000), null);
+    assert.equal(postingOriginDeadline(session, started), null);
   }
-  assert.equal(postingOriginDeadline(decodeSession({ ...wire(), serverTime: undefined, coverage }), 10_000), null);
+  assert.equal(postingOriginDeadline(decodeSession({ ...wire(), serverTime: undefined, coverage }), started), null);
 });
 
 test('a capped early wake leaves the real long-lived deadline unconsumed', () => {

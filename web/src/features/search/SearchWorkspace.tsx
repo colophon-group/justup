@@ -6,6 +6,7 @@ import type { ApiClient } from "../../api/client.ts";
 import type { CompanyRequestPrefill, Session } from "../../api/types.ts";
 import { Dialog } from "../../shared/Dialog.tsx";
 import { LandingOverview } from "./LandingOverview.tsx";
+import type { PostingOriginDeadline } from '../../app/sessionCoherence.ts';
 import { ResultFeed } from "./ResultFeed.tsx";
 import { TypingExample } from "./TypingExample.tsx";
 import { PostingLanguages } from "./PostingLanguages.tsx";
@@ -15,7 +16,7 @@ interface Props {
   followInvalidation: FollowControl["invalidation"];
   client: ApiClient;
   session: Session | null;
-  verifiedSourceUntil: number | null;
+  verifiedSourceUntil: PostingOriginDeadline | null;
   active: boolean;
   reducedMotion: boolean;
   onSignIn: (reason?: string) => void;

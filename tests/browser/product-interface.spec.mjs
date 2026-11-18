@@ -61,6 +61,27 @@ test('a session revalidation withdraws the origin claim when the current review 
   await expect(heading).toHaveText('The original source.');
 });
 
+test('a backward wall-clock change cannot revive an expired claim after returning to jobs', async ({ page }) => {
+  const browserTime = Date.parse('2030-01-01T12:00:00Z');
+  await page.clock.install({ time: browserTime });
+  const calls = await mockApi(page, { 'GET /session': session({ serverTime: new Date(postingOriginAt).toISOString(), coverage: verifiedOrigin }) });
+  await page.goto('/');
+  const source = page.locator('#landing-posting-origin').getByRole('heading');
+  await expect(source).toHaveText('No agencies. No reposts.');
+  const sessionReads = calls.filter(call => call.key === 'GET /session').length;
+  await page.clock.setSystemTime(browserTime - 30_000);
+  await page.getByRole('link', { name: 'Browse included companies' }).click();
+  await expect(page).toHaveURL(/\/companies$/u);
+  await page.clock.runFor(6000);
+  await page.evaluate(() => {
+    history.pushState(null, '', '/#jobs');
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(source).toBeVisible();
+  await expect(source).toHaveText('The original source.');
+  expect(calls.filter(call => call.key === 'GET /session')).toHaveLength(sessionReads);
+});
+
 test('checking new positions refreshes the accepted revision without interpreting the unsent draft', async ({ page }) => {
   let results = 0;
   const calls = await mockApi(page, {

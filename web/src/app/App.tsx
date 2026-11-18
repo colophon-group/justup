@@ -44,7 +44,8 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
     [epoch, setEpoch] = useState(0),
     [searchGeneration, setSearchGeneration] = useState(0);
   const [quarantined, setQuarantined] = useState(false);
-  const [sessionStartedAt, setSessionStartedAt] = useState(0);
+  const [sessionRequestStart, setSessionRequestStart] = useState({ wall: 0, monotonic: 0 });
+  const sessionStartedAt = sessionRequestStart.wall;
   const heldFocus = useRef<{ element: HTMLElement | null; x: number; y: number; selection: [number | null, number | null] | null } | null>(null);
   const consumedDeadline = useRef<string | null>(null);
   const ownershipUncertain = useRef(false);
@@ -118,14 +119,14 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
     setQuarantined(Boolean(previous) && !keepVisitorEditor);
     const controller = new AbortController();
     sessionRequest.current = controller;
-    const startedAt = Date.now();
+    const started = { wall: Date.now(), monotonic: performance.now() };
     setConnecting(true);
     if (!previous) setNotice("Connecting to the edition…");
     try {
       const next = await client.getSession(controller.signal);
       if (generation !== requestGeneration.current || controller.signal.aborted)
         return;
-      if (expiredSessionSnapshot(next, startedAt)) throw new Error("Your session expired. Reconnect before signing in again.");
+      if (expiredSessionSnapshot(next, started.wall)) throw new Error("Your session expired. Reconnect before signing in again.");
       const changedOwner = sessionOwner(previous) !== sessionOwner(next);
       // A retired owned visitor intentionally receives a new unallocated hint
       // and CSRF seed. Preserve that local editor only for this owned renewal.
@@ -147,7 +148,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
       sessionRef.current = next;
       client.setSession(next, Boolean(reclaimedVisitor || sameGuestBootstrap));
       setSession(next);
-      setSessionStartedAt(startedAt);
+      setSessionRequestStart(started);
       setQuarantined(false);
       ownershipUncertain.current = false;
       setNotice("");
@@ -359,7 +360,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
             followInvalidation={follows.invalidation}
             client={client}
             session={session}
-            verifiedSourceUntil={quarantined ? null : postingOriginDeadline(session, sessionStartedAt)}
+            verifiedSourceUntil={quarantined ? null : postingOriginDeadline(session, sessionRequestStart)}
             active={route.page === "jobs"}
             reducedMotion={reducedMotion}
             onSignIn={openSignIn}

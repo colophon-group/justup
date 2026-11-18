@@ -1,6 +1,7 @@
 import { pageHref } from '../../app/useRoute.ts';
 import { useInterfaceLocale } from "../../i18n/LocaleProvider.tsx";
 import { useEffect, useState } from 'react';
+import type { PostingOriginDeadline } from '../../app/sessionCoherence.ts';
 const features = [
   [
     "No sponsored listings.",
@@ -24,17 +25,21 @@ const verifiedSource = [
   "This verified edition lists jobs directly from employers. Open the original posting to read more and apply.",
 ] as const;
 
-export function LandingOverview({ verifiedSourceUntil }: { verifiedSourceUntil: number | null }) {
+export function LandingOverview({ verifiedSourceUntil }: { verifiedSourceUntil: PostingOriginDeadline | null }) {
   const { t, locale } = useInterfaceLocale();
-  const [confirmedUntil, setConfirmedUntil] = useState<number | null>(null);
+  const [confirmedUntil, setConfirmedUntil] = useState<PostingOriginDeadline | null>(null);
+  const wall = verifiedSourceUntil?.wall ?? null, monotonic = verifiedSourceUntil?.monotonic ?? null;
   useEffect(() => {
-    const remaining = verifiedSourceUntil === null ? 0 : verifiedSourceUntil - Date.now();
+    if (wall === null || monotonic === null) { setConfirmedUntil(null); return; }
+    // Use both clocks so background sleep or a backwards wall-clock change
+    // cannot extend an earlier source verification window.
+    const remaining = Math.min(wall - Date.now(), monotonic - performance.now());
     if (remaining <= 0) { setConfirmedUntil(null); return; }
-    setConfirmedUntil(verifiedSourceUntil);
+    setConfirmedUntil({ wall, monotonic });
     const timer = window.setTimeout(() => setConfirmedUntil(null), remaining);
     return () => window.clearTimeout(timer);
-  }, [verifiedSourceUntil]);
-  const verified = confirmedUntil !== null && confirmedUntil === verifiedSourceUntil;
+  }, [wall, monotonic]);
+  const verified = confirmedUntil !== null && confirmedUntil.wall === wall && confirmedUntil.monotonic === monotonic;
   return (
     <section
       className="landing-overview"
