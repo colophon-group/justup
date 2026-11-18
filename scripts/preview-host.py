@@ -1503,11 +1503,15 @@ def observation(read):
 
 
 def unit_observation(unit):
-    result = subprocess.run(['/usr/bin/systemctl', 'show', '--property=LoadState,ActiveState,ControlGroup', unit],
+    service = unit.endswith('.service')
+    properties = ['LoadState', 'ActiveState']
+    if service:
+        properties.append('ControlGroup')
+    result = subprocess.run(['/usr/bin/systemctl', 'show', f'--property={",".join(properties)}', unit],
                             capture_output=True, text=True, timeout=3)
     lines = result.stdout.splitlines()
     fields = dict(line.split('=', 1) for line in lines)
-    if len(lines) != 3 or len(result.stdout) > 1024 or set(fields) != {'LoadState', 'ActiveState', 'ControlGroup'}:
+    if len(lines) != len(properties) or len(result.stdout) > 1024 or set(fields) != set(properties):
         raise ValueError('Unit observation is incomplete.')
     if fields['LoadState'] == 'not-found':
         return 'missing'
@@ -1515,7 +1519,7 @@ def unit_observation(unit):
     if (result.returncode != 0 or fields['LoadState'] != 'loaded'
             or state not in {'active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading'}):
         raise ValueError('Unit observation is invalid.')
-    if unit.endswith('.service') and state == 'active' and Path(fields['ControlGroup']).parts[-2:] != (SLICE, unit):
+    if service and state == 'active' and Path(fields['ControlGroup']).parts[-2:] != (SLICE, unit):
         raise ValueError('Active unit is outside the preview slice.')
     return state
 
