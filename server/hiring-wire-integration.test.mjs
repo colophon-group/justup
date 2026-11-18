@@ -21,10 +21,10 @@ function state(t,{path=':memory:',at=AT}={}) {
   let instant=at;const now=()=>instant,tasks=createTasks({db,now});
   return {db,tasks,now,setNow:value=>instant=value};
 }
-function fakes({snapshot=()=>{const value=wireFixture();value.sourceVersion=SOURCE_COVERAGE_VERSION;return value;},step,cancel}={}) {
+function fakes({snapshot=()=>{const value=wireFixture();value.sourceVersion=SOURCE_COVERAGE_VERSION;return value;},step,cancel,hasSnapshot=async()=>true}={}) {
   let reads=0,calls=0,cancels=0,turn=0;
   return {reads:()=>reads,calls:()=>calls,cancels:()=>cancels,factories:{
-    source:()=>({authoritative:true,version:SOURCE_COVERAGE_VERSION,readSnapshot:async()=>{reads++;return snapshot();}}),
+    source:()=>({authoritative:true,version:SOURCE_COVERAGE_VERSION,hasSnapshot,readSnapshot:async()=>{reads++;return snapshot();}}),
     transport:({config})=>{
       assert.equal(config.buildIdentity,identity.buildIdentity);assert.equal(config.hostPlanSha256,identity.hostPlanSha256);
       return {qualified:()=>true,executionId:()=>`integration-execution-${++turn}`,
@@ -67,7 +67,7 @@ test('default disabled runner schedules nothing and public reader ignores privat
   const s=state(t),deps={db:s.db,now:s.now};
   for(const key of ['hiringWire','sourceCoverage','buildIdentity','hostPlanSha256'])Object.defineProperty(deps,key,{get(){throw Error('private configuration read');}});
   const api=createHiringWireApi(deps),wire=await createHiringWireRunner(s);
-  assert.deepEqual(wire.beforeClaim(),{state:'disabled'});assert.equal(published(api).state,'unavailable');
+  assert.deepEqual(await wire.beforeClaim(),{state:'disabled'});assert.equal(published(api).state,'unavailable');
   assert.deepEqual(Object.keys(api).sort(),['capabilities','publicRoute']);
   assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,0);
 });
@@ -77,7 +77,7 @@ test('enabled weekly path publishes synthetic facts once across SQLite restart a
   const {runner,wire,api}=await composition(s,fake);
   assert.equal(await runner.runOnce(),true);assert.equal(published(api).edition.items[0].activity.current,3);
   assert.equal(fake.reads(),1);assert.equal(fake.calls(),1);assert.equal(fake.cancels(),1);
-  for(let i=0;i<20;i++)assert.equal(wire.beforeClaim().state,'published');
+  for(let i=0;i<20;i++)assert.equal((await wire.beforeClaim()).state,'published');
   assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
   s.db.close();
   const restarted=state(t,{path}),next=await composition(restarted,fake);
@@ -88,41 +88,120 @@ test('enabled weekly path publishes synthetic facts once across SQLite restart a
   assert.equal(next.api.publicRoute({method:'GET',path:'/hiring-wire/editions/2026-11-02'}).body.state,'published');
   for(const method of ['POST','PUT','DELETE'])assert.equal(next.api.publicRoute({method,path:'/hiring-wire'}),null);
 });
-test('missing source makes zero editorial calls and dependency retries stop after bounded backoff',async t=>{
+test('an unconfigured source reserves no publication attempt',async t=>{
   const s=state(t),fake=fakes(),{runner,wire,api}=await composition(s,fake,{sourceCoverage:undefined});
-  await runner.runOnce();assert.equal(published(api).state,'unavailable');
-  assert.equal(wire.beforeClaim().state,'dependency_unavailable');
-  for(let i=0;i<100;i++)wire.beforeClaim();
-  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
-  s.setNow(AT+15*60_000);await runner.runOnce();wire.beforeClaim();
-  s.setNow(AT+15*60_000+2*60*60_000);await runner.runOnce();wire.beforeClaim();
-  s.setNow(AT+86_400_000);for(let i=0;i<100;i++)wire.beforeClaim();
-  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,3);
+  assert.equal(await runner.runOnce(),false);assert.equal(published(api).state,'unavailable');
+  assert.deepEqual(await wire.beforeClaim(),{state:'source_unconfigured'});
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,0);
   assert.equal(fake.calls(),0);assert.equal(fake.reads(),0);
+});
+test('a source delivered late on Monday publishes after durable bounded polling',async t=>{
+  const s=state(t),exportedAt=Date.parse(END)+22*3_600_000;
+  let ready=false,probes=0;
+  const fake=fakes({
+    hasSnapshot:async input=>{assert.deepEqual(input,{periodEnd:END});probes++;return ready;},
+    snapshot:()=>({...wireFixture(),sourceVersion:SOURCE_COVERAGE_VERSION,generatedAt:new Date(exportedAt).toISOString()}),
+  });
+  const initial=await composition(s,fake);
+  assert.equal(await initial.runner.runOnce(),false);
+  const foreground=s.tasks.enqueue({ownerId:'fixture-foreground',kind:'search_intent',requestKey:'ready-query',payload:{}});
+  const shared=createRunner({tasks:s.tasks,handlers:{search_intent:async()=>({status:'succeeded',output:{ready:true}})},beforeClaim:initial.wire.beforeClaim});
+  assert.equal(await shared.runOnce(),true);
+  assert.equal(s.tasks.get('fixture-foreground',foreground.id).status,'succeeded');
+  for(let i=0;i<100;i++)assert.equal((await initial.wire.beforeClaim()).state,'awaiting_source');
+  assert.equal(probes,1);assert.equal(fake.reads(),0);assert.equal(fake.calls(),0);
+  assert.equal(s.db.prepare('SELECT attempts FROM hiring_wire_schedule').get().attempts,0);
+  s.setNow(exportedAt+60_000);ready=true;
+  const resumed=await composition(s,fake);
+  assert.equal(await resumed.runner.runOnce(),true);
+  assert.equal(published(resumed.api).state,'published');
+  assert.equal(s.db.prepare('SELECT attempts FROM hiring_wire_schedule').get().attempts,1);
+  assert.equal(probes,2);assert.equal(fake.reads(),1);assert.equal(fake.calls(),1);
+});
+test('dependency retries use the frozen snapshot and stop after bounded backoff',async t=>{
+  const s=state(t);
+  let probes=0;
+  const fake=fakes({
+    hasSnapshot:async()=>++probes===1,
+    step:()=>{throw Object.assign(new Error(),{code:'dependency_unavailable'});},
+  });
+  const {runner,wire,api}=await composition(s,fake);
+  await runner.runOnce();assert.equal(published(api).state,'unavailable');
+  assert.equal((await wire.beforeClaim()).state,'dependency_unavailable');
+  for(let i=0;i<100;i++)await wire.beforeClaim();
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
+  s.setNow(AT+15*60_000);await runner.runOnce();await wire.beforeClaim();
+  s.setNow(AT+15*60_000+2*60*60_000);await runner.runOnce();await wire.beforeClaim();
+  s.setNow(AT+86_400_000);for(let i=0;i<100;i++)await wire.beforeClaim();
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,3);
+  assert.equal(fake.calls(),3);assert.equal(fake.reads(),1);assert.equal(probes,1);
+});
+test('a stale missing-file probe cannot move an enqueued edition back to waiting',async t=>{
+  const s=state(t);
+  let startProbe,finishProbe;
+  const entered=new Promise(resolve=>{startProbe=resolve;});
+  const missing=new Promise(resolve=>{finishProbe=resolve;});
+  const first=await composition(s,fakes({hasSnapshot:async()=>{startProbe();return missing;}}));
+  const second=await composition(s,fakes());
+  const probing=first.wire.beforeClaim();
+  await entered;
+  try {assert.equal((await second.wire.beforeClaim()).state,'pending');}
+  finally {finishProbe(false);}
+  assert.equal((await probing).state,'queued');
+  assert.equal(s.db.prepare('SELECT attempts FROM hiring_wire_schedule').get().attempts,1);
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
+});
+test('a disappearing source does not let a terminal task reset the polling interval',async t=>{
+  const s=state(t),missing=Object.assign(new Error(),{code:'dependency_unavailable'});
+  let probes=0,ready=true;
+  const fake=fakes({hasSnapshot:async()=>{probes++;return ready;},snapshot:()=>{throw missing;}});
+  const {runner,wire}=await composition(s,fake);
+  await runner.runOnce();ready=false;
+  assert.equal((await wire.beforeClaim()).state,'dependency_unavailable');
+  s.setNow(AT+15*60_000);
+  assert.equal((await wire.beforeClaim()).state,'awaiting_source');
+  for(let i=0;i<100;i++)assert.equal((await wire.beforeClaim()).state,'awaiting_source');
+  assert.equal(probes,2);
+  assert.equal(s.db.prepare('SELECT attempts FROM hiring_wire_schedule').get().attempts,1);
+  assert.equal(fake.reads(),1);assert.equal(fake.calls(),0);
+  s.setNow(Date.parse(END)+2*86_400_000+1);
+  assert.equal((await wire.beforeClaim()).state,'publication_window_closed');
+  assert.equal(probes,2);
 });
 test('actual transport with missing independent proof makes zero broker or editorial calls',async t=>{
   const s=state(t),fake=fakes();delete fake.factories.transport;
   const {runner,wire,api}=await composition(s,fake);
-  await runner.runOnce();assert.equal(wire.beforeClaim().state,'dependency_unavailable');
+  await runner.runOnce();assert.equal((await wire.beforeClaim()).state,'dependency_unavailable');
   assert.equal(published(api).state,'unavailable');assert.equal(fake.reads(),1);assert.equal(fake.calls(),0);
 });
 test('invalid facts and unsupported editorial output never get an automatic lucky retry',async t=>{
   for(const mode of ['facts','quality'])await t.test(mode,async t=>{
     const s=state(t),fake=fakes(mode==='facts'?{snapshot:()=>({...wireFixture(),sourceVersion:SOURCE_COVERAGE_VERSION,privateQuery:'forbidden'})}:{step:()=>({type:'final',data:{snapshotId:'invented',items:[]}})});
     const {runner,wire,api}=await composition(s,fake);await runner.runOnce();
-    assert.equal(wire.beforeClaim().state,'invalid_output');
-    s.setNow(AT+86_400_000);for(let i=0;i<100;i++)wire.beforeClaim();
+    assert.equal((await wire.beforeClaim()).state,'invalid_output');
+    s.setNow(AT+86_400_000);for(let i=0;i<100;i++)await wire.beforeClaim();
     assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);assert.equal(published(api).state,'unavailable');
   });
 });
 test('scheduler restart rediscovers an enqueued task if its durable reference write was interrupted',async t=>{
   const s=state(t),fake=fakes(),first=await composition(s,fake);
-  first.wire.beforeClaim();const task=s.db.prepare('SELECT id FROM justup_tasks').get().id;
+  await first.wire.beforeClaim();const task=s.db.prepare('SELECT id FROM justup_tasks').get().id;
   s.db.prepare("UPDATE hiring_wire_schedule SET task_id=NULL,attempts=0,outcome='pending'").run();
-  const restarted=await composition(s,fake);restarted.wire.beforeClaim();
+  const restarted=await composition(s,fake);await restarted.wire.beforeClaim();
   assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
   assert.equal(s.db.prepare('SELECT task_id FROM hiring_wire_schedule').get().task_id,task);
   await restarted.runner.runOnce();assert.equal(fake.calls(),1);
+});
+test('writing the schedule reference and queue task is atomic',async t=>{
+  const s=state(t),fake=fakes(),{wire}=await composition(s,fake);
+  s.db.exec(`CREATE TRIGGER reject_wire_schedule_reference BEFORE UPDATE OF task_id ON hiring_wire_schedule
+    WHEN NEW.task_id IS NOT NULL BEGIN SELECT RAISE(ABORT,'injected reference failure'); END;`);
+  await assert.rejects(wire.beforeClaim(),/injected reference failure/);
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,0);
+  assert.equal(s.db.prepare('SELECT attempts FROM hiring_wire_schedule').get().attempts,0);
+  s.db.exec('DROP TRIGGER reject_wire_schedule_reference');
+  assert.equal((await wire.beforeClaim()).state,'pending');
+  assert.equal(s.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,1);
 });
 test('configuration pins source version and rejects JSON identity or caller-selected modules',async t=>{
   const s=state(t);
@@ -169,28 +248,28 @@ test('cleanup failure after lease expiry durably halts claim/recovery/scheduling
   assert.equal(s.tasks.complete(held.id,held.lease_token,{status:'succeeded'}),false);
   assert.equal(s.tasks.pauseWire(held.id,held.lease_token),false);
   s.tasks.enqueue({ownerId:'account',kind:'search_intent',requestKey:'foreground',payload:{}});
-  assert.equal(await runner.runOnce(),false);assert.deepEqual(wire.beforeClaim(),{state:'cleanup_unproven'});
+  assert.equal(await runner.runOnce(),false);assert.deepEqual(await wire.beforeClaim(),{state:'cleanup_unproven'});
   assert.equal(s.db.prepare('SELECT count(*) n FROM hiring_wire_cleanup_halt').get().n,1);
   runner.stop();s.db.close();
   const restarted=state(t,{path,at:AT+86_400_000}),next=await composition(restarted,fake);
   restarted.tasks.recover();assert.equal(restarted.tasks.claim({workerId:'restart'}),null);
   assert.equal(restarted.tasks.get('__hiring_wire__',held.id).status,'running');
-  assert.deepEqual(next.wire.beforeClaim(),{state:'cleanup_unproven'});
+  assert.deepEqual(await next.wire.beforeClaim(),{state:'cleanup_unproven'});
   assert.equal(await next.runner.runOnce(),false);assert.equal(fake.calls(),1);
   assert.equal(restarted.db.prepare('SELECT count(*) n FROM justup_tasks').get().n,2);
   assert.equal(restarted.db.prepare('SELECT count(*) n FROM hiring_wire_schedule').get().n,1);
   restarted.setNow(AT-1000);restarted.tasks.recover();
   assert.equal(next.runner.ready(),false);assert.equal(restarted.tasks.claim({workerId:'clock-rollback'}),null);
-  assert.deepEqual(next.wire.beforeClaim(),{state:'cleanup_unproven'});assert.equal(fake.calls(),1);
+  assert.deepEqual(await next.wire.beforeClaim(),{state:'cleanup_unproven'});assert.equal(fake.calls(),1);
 });
 test('reopened expired Wire ownership seals a halt before readiness or a new weekly tick',async t=>{
   const directory=mkdtempSync(join(tmpdir(),'wire-expired-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
   const path=join(directory,'queue.sqlite'),s=state(t,{path}),fake=fakes(),{wire}=await composition(s,fake);
-  wire.beforeClaim();const held=s.tasks.claim({workerId:'suspended',leaseMs:1000});
+  await wire.beforeClaim();const held=s.tasks.claim({workerId:'suspended',leaseMs:1000});
   const foreground=s.tasks.enqueue({ownerId:'account',kind:'search_intent',requestKey:'foreground',payload:{}});
   s.db.close();
   const restarted=state(t,{path,at:AT+7*86_400_000}),next=await composition(restarted,fake);
-  assert.deepEqual(next.wire.beforeClaim(),{state:'cleanup_unproven'});
+  assert.deepEqual(await next.wire.beforeClaim(),{state:'cleanup_unproven'});
   assert.equal(next.runner.ready(),false);restarted.tasks.recover();assert.equal(await next.runner.runOnce(),false);
   assert.equal(restarted.tasks.claim({workerId:'restart'}),null);
   assert.equal(restarted.tasks.get('__hiring_wire__',held.id).status,'running');

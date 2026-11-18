@@ -2,10 +2,10 @@
 // Inject it only from trusted runner composition, never from a request.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, open } from 'node:fs/promises';
+import { access, lstat, open } from 'node:fs/promises';
 import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 
-const REAL_FILESYSTEM = Object.freeze({ lstat, open });
+const REAL_FILESYSTEM = Object.freeze({ access, lstat, open });
 
 export const SOURCE_COVERAGE_VERSION = 'jobseek-coverage-v1';
 export const SOURCE_COVERAGE_VERSIONS = Object.freeze([SOURCE_COVERAGE_VERSION, 'jobseek-coverage-v2']);
@@ -103,13 +103,25 @@ function createReader({ directory, sourceVersion = SOURCE_COVERAGE_VERSION } = {
   return Object.freeze({
     authoritative: true,
     version: sourceVersion,
+    async hasSnapshot({ periodEnd } = {}) {
+      const date = periodDate(periodEnd);
+      const path = join(directory, `${date}.json`);
+      try {
+        await protectedDirectory(directory, filesystem);
+        protectedMetadata(await filesystem.lstat(path), 'file');
+        await filesystem.access(path, constants.R_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     async readSnapshot({ periodEnd, signal } = {}) {
       const date = periodDate(periodEnd);
       if (signal?.aborted) throw failure('task_timeout');
       try {
         await protectedDirectory(directory, filesystem);
         const path = join(directory, `${date}.json`);
-        const handle = await filesystem.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const handle = await filesystem.open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
         try {
           protectedMetadata(await handle.stat(), 'file');
           const chunks = [];

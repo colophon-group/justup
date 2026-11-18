@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, chmod, lstat, mkdir, open, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, chmod, lstat, mkdir, open, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -49,6 +49,7 @@ function withUid(stat, uid) {
 
 function filesystemFixture({ uidForPath = () => 0, fileUid = 0 } = {}) {
   return {
+    access,
     lstat: async path => withUid(await lstat(path), uidForPath(path)),
     open: async (...args) => {
       const handle = await open(...args);
@@ -73,6 +74,29 @@ test('reads exact Jobseek bytes with Unicode and ampersands without reserializin
   assert.equal(source.authoritative, true);
   assert.equal(source.version, SOURCE_COVERAGE_VERSION);
   assert.deepEqual(await source.readSnapshot({ periodEnd: PERIOD_END }), snapshot());
+});
+test('the period probe waits for a private file the runner can read before opening any bytes', async t => {
+  const path = await directory(t);
+  const filesystem = filesystemFixture();
+  let opens = 0, readable = false;
+  const reader = fixtureReader(path, {
+    ...filesystem,
+    async access(...args) {
+      if (!readable) throw Object.assign(new Error(), { code: 'EACCES' });
+      return filesystem.access(...args);
+    },
+    open(...args) { opens++; return filesystem.open(...args); },
+  });
+  assert.equal(await reader.hasSnapshot({periodEnd:PERIOD_END}), false);
+  const file = await publish(path, artifact(Buffer.from(JSON.stringify(snapshot()))), 0o644);
+  assert.equal(await reader.hasSnapshot({periodEnd:PERIOD_END}), false);
+  await chmod(file, 0o600);
+  assert.equal(await reader.hasSnapshot({periodEnd:PERIOD_END}), false);
+  readable = true;
+  assert.equal(await reader.hasSnapshot({periodEnd:PERIOD_END}), true);
+  assert.equal(opens, 0);
+  assert.deepEqual(await reader.readSnapshot({periodEnd:PERIOD_END}), snapshot());
+  assert.equal(opens, 1);
 });
 
 test('preserves unknown scope evidence without inventing a verification timestamp', async t => {
