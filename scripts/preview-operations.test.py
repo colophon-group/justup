@@ -2867,6 +2867,18 @@ class ObservationContracts(unittest.TestCase):
         with patch.object(host.subprocess, 'run', return_value=SimpleNamespace(stdout=missing, returncode=1)):
             self.assertEqual(host.unit_observation(tunnel), 'missing')
 
+    def test_timers_report_active_state_without_a_service_cgroup(self):
+        for name, state in (('guardTimer', 'active'), ('backupTimer', 'inactive')):
+            with self.subTest(timer=name):
+                unit = host.OBSERVATION_UNITS[name]
+                result = f'LoadState=loaded\nActiveState={state}\n'
+                with patch.object(host.subprocess, 'run', return_value=SimpleNamespace(stdout=result, returncode=0)) as command:
+                    self.assertEqual(host.unit_observation(unit), state)
+                    self.assertIn('--property=LoadState,ActiveState', command.call_args.args[0])
+                    command.return_value.stdout = result.replace('LoadState=loaded', 'LoadState=not-found')
+                    command.return_value.returncode = 1
+                    self.assertEqual(host.unit_observation(unit), 'missing')
+
     def test_observation_keeps_other_results_when_guard_or_backup_fails_and_refuses_moved_identity(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp).resolve()
