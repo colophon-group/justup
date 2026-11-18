@@ -167,6 +167,15 @@ test('stdin, stdout, stderr, time and observed output-token budgets fail closed'
   await assert.rejects(()=>fake('setTimeout(()=>{},2000);',{timeoutMs:25}),{code:'task_timeout'});
   await assert.rejects(()=>fake(emit(),{maxOutputTokens:1}),{code:'token_limit'});
 });
+test('a native completion needs measured input and output token counts',async()=>{
+  for(const [input_tokens,output_tokens] of [[0,0],[0,4],[123,0]]){
+    const usage={input_tokens,output_tokens,cached_input_tokens:0,reasoning_output_tokens:0};
+    const events=[...messages.slice(0,-1),{type:'turn.completed',usage}];
+    await assert.rejects(()=>fake(emit(events)),{code:'invalid_output'});
+  }
+  const events=[...messages.slice(0,-1),{type:'turn.completed',usage:{input_tokens:123,output_tokens:4}}];
+  assert.deepEqual((await fake(emit(events))).usage,{inputTokens:123,cachedInputTokens:0,outputTokens:4,reasoningOutputTokens:0});
+});
 test('deadline terminates the process group and descendants cannot leave late writes',async t=>{
   const dir=mkdtempSync(join(tmpdir(),'justup-model-')),marker=join(dir,'late');t.after(()=>rmSync(dir,{recursive:true,force:true}));
   const descendant=`process.on('SIGTERM',()=>{});setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'bad'),500);`;

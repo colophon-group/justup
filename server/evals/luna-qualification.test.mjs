@@ -64,6 +64,20 @@ test('fake product-model path scores exact requirements and emits only redacted 
   assert.equal(report.intent.cost,null);assert.equal(report.company.cost,null);
   assert.equal(report.intent.repeats,2);assert.equal(report.company.repeats,2);
 });
+test('qualification rejects a zero usage placeholder in either observation',()=>{
+  const observer=createQualificationObserver();
+  const reply={schemaId:'intent',toolCalls:0,usage};
+  const metric={kind:'search_intent',code:'succeeded',durationMs:25,usage};
+  const zero={inputTokens:0,cachedInputTokens:0,outputTokens:0,reasoningOutputTokens:0};
+  observer.begin('intent','missing-reply-usage');
+  assert.throws(()=>observer.onReply({...reply,usage:zero}),/reply counters are unavailable/);
+  observer.onMetric(metric);
+  assert.equal(observer.end().metricObserved,false);
+  observer.begin('intent','missing-metric-usage');
+  observer.onReply(reply);
+  assert.throws(()=>observer.onMetric({...metric,usage:zero}),/model usage is unavailable/);
+  assert.equal(observer.end().metricObserved,false);
+});
 test('a name-only candidate with no observed native web start cannot pass',async()=>{
   const {manifest}=fixedQualificationManifest(),observer=createQualificationObserver();
   const report=await evaluateQualification({manifest,model:fakeModel(manifest,observer,{zeroDiscoveryCaseId:'cloudflare'}),observer});
