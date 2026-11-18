@@ -1,7 +1,7 @@
 // Compose the Justup API. Direct execution requires explicit isolated storage
 // and build configuration; import createApplication to add reviewed feature services.
 import { createServer } from 'node:http';
-import { mkdirSync, chmodSync, readFileSync, statSync, lstatSync, readdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, unlinkSync, accessSync, fstatSync, realpathSync, constants } from 'node:fs';
+import { mkdirSync, chmodSync, readFileSync, readSync, statSync, lstatSync, readdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, unlinkSync, accessSync, fstatSync, realpathSync, constants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, resolve, isAbsolute, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -188,20 +188,27 @@ function readImportBytes(path) {
 }
 export function readImportFile(path) { return parseImportBytes(readImportBytes(path)); }
 
-function readPostingOriginReview(path, bytes) {
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+function readPostingOriginReview(path, bytes, approval) {
+  // The protected controller supplies only an already-open, bounded review
+  // file through standard input and carries its approved digest separately.
+  const fd = path === null ? 0 : openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = fstatSync(fd), limit = 5 * 1024 * 1024;
-    if (!info.isFile() || info.nlink !== 1 || info.uid !== process.geteuid() || (info.mode & 0o777) !== 0o600
+    if (!info.isFile() || info.nlink !== 1 || (path !== null && info.uid !== process.geteuid()) || (info.mode & 0o777) !== 0o600
         || info.size < 1 || info.size > limit) throw new Error('Use a private posting origin review file.');
-    const raw = readFileSync(fd);
+    const buffer = Buffer.alloc(info.size + 1);
+    const raw = buffer.subarray(0, readSync(fd, buffer));
     if (raw.length !== info.size) throw new Error('Posting origin review changed during the read.');
+    const reviewSha256 = createHash('sha256').update(raw).digest('hex');
+    if (approval && reviewSha256 !== approval.reviewSha256) throw new Error('Posting origin review differs from its approval.');
+    const snapshotSha256 = createHash('sha256').update(bytes).digest('hex');
+    if (approval && snapshotSha256 !== approval.snapshotSha256) throw new Error('Job import differs from its approval.');
     const review = parseImportBytes(raw);
-    if (review?.snapshotSha256 !== createHash('sha256').update(bytes).digest('hex')) {
+    if (review?.snapshotSha256 !== snapshotSha256) {
       throw new Error('Posting origin review refers to a different import file.');
     }
-    return { originReview: review, reviewSha256: createHash('sha256').update(raw).digest('hex') };
-  } finally { closeSync(fd); }
+    return { originReview: review, reviewSha256 };
+  } finally { if (path !== null) closeSync(fd); }
 }
 export function configFromEnv(env = process.env) {
   return validatePolicyConfig(validateTrustedIngressConfig({
@@ -235,9 +242,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     const restored = resolve(args[1]);
     if (restored === resolve(config.dbPath) || !lstatSync(restored).isFile() || lstatSync(restored).isSymbolicLink()) throw new Error('Use a separate restored application database file.');
     console.log(JSON.stringify(await prepareRestoredDatabase({ dbPath: restored, migrateV1: args[2] === '--migrate-v1' })));
-  } else if (args[0] === '--import' && (args.length === 2 || args.length === 4 && args[2] === '--origin-review')) {
+  } else if (args[0] === '--import' && (args.length === 2 || args.length === 4 && args[2] === '--origin-review'
+      || args.length === 5 && args[2] === '--origin-review-stdin')) {
     const bytes = readImportBytes(args[1]), snapshot = parseImportBytes(bytes);
-    const review = args.length === 4 ? readPostingOriginReview(args[3], bytes) : undefined;
+    let review;
+    if (args[2] === '--origin-review') review = readPostingOriginReview(args[3], bytes);
+    if (args[2] === '--origin-review-stdin') review = readPostingOriginReview(null, bytes, { reviewSha256: args[3], snapshotSha256: args[4] });
     const store = openStore(config.dbPath, { sharedState: config.sharedState });
     try { console.log(JSON.stringify(store.importSnapshot(snapshot, review))); }
     finally { store.close(); }

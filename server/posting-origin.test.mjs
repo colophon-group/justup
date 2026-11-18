@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,4 +154,24 @@ test('the operator import binds the review to exact snapshot bytes and a private
   const legacy = new DatabaseSync(dbPath); t.after(() => legacy.close());
   assert.throws(() => legacy.prepare("INSERT INTO justup_imports VALUES ('unreviewed',1,1,'{}',0,0)").run(), /no such function/u);
   assert.equal(legacy.prepare('SELECT count(*) AS n FROM justup_imports').get().n, 1);
+});
+
+test('a descriptor-backed review must match the separately approved snapshot before any database write', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'justup-origin-approval-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dbPath = join(dir, 'state.sqlite'), candidatePath = join(dir, 'snapshot.json'), reviewPath = join(dir, 'review.json');
+  const approved = review(snapshot([posting('approved')]));
+  const replaced = snapshot([posting('replacement')]), paired = review(replaced);
+  const raw = JSON.stringify(paired), digest = createHash('sha256').update(raw).digest('hex');
+  writeFileSync(candidatePath, JSON.stringify(replaced));
+  writeFileSync(reviewPath, raw, { mode: 0o600 });
+  const fd = openSync(reviewPath, 'r');
+  try {
+    const script = fileURLToPath(new URL('./main.mjs', import.meta.url));
+    const result = spawnSync(process.execPath, [script, '--import', candidatePath, '--origin-review-stdin', digest, approved.snapshotSha256], {
+      env: { PATH: process.env.PATH, JUSTUP_DB_PATH: dbPath }, stdio: [fd, 'pipe', 'pipe'], encoding: 'utf8', timeout: 10_000,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Job import differs from its approval/u);
+    assert.equal(existsSync(dbPath), false);
+  } finally { closeSync(fd); }
 });
