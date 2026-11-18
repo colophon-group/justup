@@ -1,6 +1,7 @@
 // Product state follows server evidence independently of the deployment's audience.
 import { expect, test } from '@playwright/test';
 import { mockApi, session, search, job, completed } from './api-fixture.mjs';
+import { translate } from '../../web/src/i18n/messages.ts';
 
 test.beforeEach(async ({ page }) => { await page.setViewportSize({ width: 1280, height: 1100 }); });
 
@@ -30,6 +31,34 @@ test('missing coverage metadata is omitted while legal links stay available', as
   await expect(page.locator('#coverage-disclosure')).toHaveCount(0);
   await expect(page.locator('.policy-footer a[href="/privacy.html"]')).toBeVisible();
   await expect(page.locator('.policy-footer a[href="/usage.html"]')).toBeVisible();
+});
+
+const postingOriginAt = Date.parse('2026-11-01T12:00:00Z');
+const verifiedOrigin = { kind: 'imported_snapshot', stale: false, verifiedAt: new Date(postingOriginAt - 1000).toISOString(),
+  postingOrigin: 'reviewed_direct_only', postingOriginExpiresAt: new Date(postingOriginAt + 5000).toISOString() };
+
+for (const locale of ['en', 'de', 'fr', 'it', 'es']) test(`the landing page displays its verified origin claim in ${locale}`, async ({ page }) => {
+  await page.clock.install({ time: new Date('2030-01-01T12:00:00Z') });
+  await mockApi(page, { 'GET /session': session({ serverTime: new Date(postingOriginAt).toISOString(), coverage: verifiedOrigin }) });
+  await page.goto(locale === 'en' ? '/' : `/${locale}/`);
+  const source = page.locator('#landing-posting-origin');
+  await expect(source.getByRole('heading')).toHaveText(translate(locale, 'No agencies. No reposts.'));
+  await expect(source.getByRole('paragraph')).toHaveText(translate(locale, 'This verified edition lists jobs directly from employers. Open the original posting to read more and apply.'));
+  if (locale === 'en') {
+    await page.clock.runFor(6000);
+    await expect(source.getByRole('heading')).toHaveText('The original source.');
+  }
+});
+
+test('a session revalidation withdraws the origin claim when the current review has unknowns', async ({ page }) => {
+  let coverage = verifiedOrigin;
+  await mockApi(page, { 'GET /session': () => session({ serverTime: new Date(postingOriginAt).toISOString(), coverage }) });
+  await page.goto('/');
+  const heading = page.locator('#landing-posting-origin').getByRole('heading');
+  await expect(heading).toHaveText('No agencies. No reposts.');
+  coverage = { ...verifiedOrigin, postingOrigin: 'reviewed_with_unknowns' };
+  await page.evaluate(() => window.dispatchEvent(new Event('pageshow')));
+  await expect(heading).toHaveText('The original source.');
 });
 
 test('checking new positions refreshes the accepted revision without interpreting the unsent draft', async ({ page }) => {

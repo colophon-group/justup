@@ -15,6 +15,7 @@ interface Props {
   followInvalidation: FollowControl["invalidation"];
   client: ApiClient;
   session: Session | null;
+  verifiedSourceUntil: number | null;
   active: boolean;
   reducedMotion: boolean;
   onSignIn: (reason?: string) => void;
@@ -29,6 +30,7 @@ export function SearchWorkspace({
   client,
   followInvalidation,
   session,
+  verifiedSourceUntil,
   active,
   reducedMotion,
   onSignIn,
@@ -333,7 +335,7 @@ export function SearchWorkspace({
           </div>
         </div>
       </div>
-      {state.searches.length ? null : <LandingOverview />}
+      {state.searches.length ? null : <LandingOverview verifiedSourceUntil={active ? verifiedSourceUntil : null} />}
       {search?.status === "ready" ? (
         <ResultFeed
           key={`${session?.access.fullAccess}:${session?.access.kind}:${session?.access.until ?? ''}`}

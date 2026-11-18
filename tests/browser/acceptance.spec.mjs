@@ -6,6 +6,7 @@ import { accountStreamUrl, openReleaseStream, verifyReleaseStreamReconnect } fro
 import { exerciseReleaseReadingState, saveReleaseInterfaceLanguage, verifyReleaseReadingState } from './release-reading-preferences.mjs';
 import { verifyWireStrip } from './release-wire.mjs';
 import { cleanupVisitorSearch, exerciseVisitorSearch, verifyVisitorHandoff } from './release-visitor.mjs';
+import { translate } from '../../web/src/i18n/messages.ts';
 
 for (const locale of GATE_LOCALES) {
   test(`${locale} fixed deployed candidate completes its disposable-account search and request journey`, async ({ browser }) => {
@@ -77,6 +78,8 @@ for (const locale of GATE_LOCALES) {
         await admission();
       }
       await page.goto(`${prefix}/`);
+      stage = 'verified posting origin disclosure';
+      await expect(page.locator('#landing-posting-origin').getByRole('heading')).toHaveText(translate(locale, 'No agencies. No reposts.'));
       if (locale === 'fr') {
         visitorAttempted = true;
         visitorSearch = await exerciseVisitorSearch(page, read, config.scenario);

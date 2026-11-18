@@ -2007,6 +2007,18 @@ export const messages = {
     "La fonte originale.",
     "La fuente original."
   ],
+  "No agencies. No reposts.": [
+    "Keine Personalvermittlungen. Keine Zweitveröffentlichungen.",
+    "Pas d’agences de recrutement. Pas d’annonces republiées.",
+    "Nessuna agenzia di reclutamento. Nessun annuncio ripubblicato.",
+    "Sin agencias de contratación. Sin anuncios republicados."
+  ],
+  "This verified edition lists jobs directly from employers. Open the original posting to read more and apply.": [
+    "Diese geprüfte Ausgabe zeigt Stellen direkt von Arbeitgebern. Öffne das Originalinserat, um mehr zu erfahren und dich zu bewerben.",
+    "Cette édition vérifiée présente des offres publiées directement par les employeurs. Ouvre l’annonce d’origine pour en savoir plus et postuler.",
+    "Questa edizione verificata presenta offerte pubblicate direttamente dai datori di lavoro. Apri l’annuncio originale per saperne di più e candidarti.",
+    "Esta edición verificada recoge ofertas publicadas directamente por los empleadores. Abre el anuncio original para saber más y presentar tu candidatura."
+  ],
   "Each result links to its reported employer source. Read the full description and apply there.": [
     "Jeder Treffer verlinkt auf die gemeldete Arbeitgeberquelle. Lies die vollständige Beschreibung und bewirb dich dort.",
     "Chaque résultat renvoie à la source employeur indiquée. Lis la description complète et postule là-bas.",

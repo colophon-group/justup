@@ -18,7 +18,7 @@ import { coverageDescription } from "../shared/coverage.ts";
 import { HiringWire } from "../features/news/HiringWire.tsx";
 import { DialogSuspension } from '../shared/Dialog.tsx';
 import { sessionOwner } from '../api/sessionOwner.ts';
-import { confirmsCredentialRecovery, expiredSessionSnapshot, keepsOwnedVisitorEditor, nextSessionDeadline, openSessionSignals, sessionDeadlineRemaining } from './sessionCoherence.ts';
+import { confirmsCredentialRecovery, expiredSessionSnapshot, keepsOwnedVisitorEditor, nextSessionDeadline, openSessionSignals, postingOriginDeadline, sessionDeadlineRemaining } from './sessionCoherence.ts';
 
 export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap | undefined }) {
   const { t, locale, explicitRequestLocale, notice: localizeNotice } = useInterfaceLocale();
@@ -359,6 +359,7 @@ export function App({ initialPublicPage }: { initialPublicPage?: PublicBootstrap
             followInvalidation={follows.invalidation}
             client={client}
             session={session}
+            verifiedSourceUntil={quarantined ? null : postingOriginDeadline(session, sessionStartedAt)}
             active={route.page === "jobs"}
             reducedMotion={reducedMotion}
             onSignIn={openSignIn}

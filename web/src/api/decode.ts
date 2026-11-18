@@ -171,7 +171,13 @@ export function decodeHiringWire(value: unknown): HiringWire {
 }
 export function decodeCoverage(value: unknown): Coverage {
   const o = record(value, "coverage");
+  let postingOrigin: Pick<Coverage, "postingOrigin" | "postingOriginExpiresAt"> = {};
+  if (o.postingOrigin === "reviewed_direct_only" || o.postingOrigin === "reviewed_with_unknowns") {
+    try { postingOrigin = { postingOrigin: o.postingOrigin, postingOriginExpiresAt: date(o.postingOriginExpiresAt) }; }
+    catch { /* Optional review evidence must be usable before enabling the claim. */ }
+  }
   return {
+    ...postingOrigin,
     ...optionalText(o, "state"),
     ...optionalText(o, "kind"),
     ...optionalText(o, "description"),
