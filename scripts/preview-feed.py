@@ -35,6 +35,7 @@ RECEIPTS = BASE / 'config/feed-receipts'
 SOCKET = Path('/run/justup-preview-feed.sock')
 MAGIC = b'JUF1\n'
 MAX_MANIFEST = 1024 * 1024
+MAX_ORIGIN_REVIEW = 5 * 1024 * 1024
 MAX_PART = 64 * 1024 * 1024
 MAX_BATCH = 128 * 1024 * 1024
 MIN_FREE_AFTER = 64 * 1024 * 1024
@@ -497,6 +498,50 @@ def bind_candidate_build(batch_id, candidate, source_digest, build_identity):
         fsync_dir(RECEIPTS)
     elif marker != expected:
         raise FeedStageError('Feed candidate was prepared by another release or changed after preparation.')
+    return expected
+
+
+def accepted_origin_review(batch_id):
+    path = RECEIPTS / f'batch-{batch_id}-accepted-origin.sha256'
+    if not path.exists() and not path.is_symlink():
+        return None
+    if checked_file(path, 0) != 64:
+        raise FeedStageError('Accepted posting origin review marker is invalid.')
+    digest = path.read_text(encoding='ascii')
+    if not SHA.fullmatch(digest):
+        raise FeedStageError('Accepted posting origin review marker is invalid.')
+    return digest
+
+
+def bind_accepted_origin_review(batch_id, digest):
+    accepted = accepted_origin_review(batch_id)
+    if accepted is not None and accepted != digest:
+        raise FeedStageError('The batch already has a different accepted posting origin review.')
+    if accepted is None:
+        path = RECEIPTS / f'batch-{batch_id}-accepted-origin.sha256'
+        temporary = RECEIPTS / f'.{path.name}.tmp'
+        if temporary.exists() or temporary.is_symlink():
+            checked_file(temporary, 0)
+            temporary.unlink()
+        write_private(temporary, digest.encode('ascii'))
+        os.replace(temporary, path)
+    fsync_dir(RECEIPTS)
+
+
+@contextmanager
+def open_origin_review(batch_id, digest):
+    path = RECEIPTS / f'batch-{batch_id}-origin-review.json'
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600 or not 1 <= info.st_size <= MAX_ORIGIN_REVIEW):
+            raise FeedStageError('Posting origin review is not a bounded private root-owned regular file.')
+        raw = stream.read(MAX_ORIGIN_REVIEW + 1)
+        if len(raw) != info.st_size or not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), digest):
+            raise FeedStageError('Posting origin review differs from the approved digest.')
+        stream.seek(0)
+        yield stream
 
 
 def require_source_digest(actual, expected):
@@ -562,7 +607,7 @@ def active_release(expected_plan=None):
     return release, manifest
 
 
-def run_as_api(argv, environment, cwd, timeout, demote=None, *, pass_fds=()):
+def run_as_api(argv, environment, cwd, timeout, demote=None, *, pass_fds=(), stdin=subprocess.DEVNULL):
     if demote is None:
         user = pwd.getpwnam('justup-preview-api')
         groups = os.getgrouplist(user.pw_name, user.pw_gid)
@@ -572,7 +617,7 @@ def run_as_api(argv, environment, cwd, timeout, demote=None, *, pass_fds=()):
             os.setgid(user.pw_gid)
             os.setuid(user.pw_uid)
 
-    child = subprocess.Popen(argv, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+    child = subprocess.Popen(argv, cwd=cwd, env=environment, stdin=stdin,
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                              preexec_fn=demote, start_new_session=True, pass_fds=pass_fds)
     output = bytearray()
@@ -616,27 +661,45 @@ def run_as_api(argv, environment, cwd, timeout, demote=None, *, pass_fds=()):
         raise FeedStageError('Feed import returned an invalid receipt.') from exc
 
 
-def latest_import_matches(digest):
+def latest_import_selection(*, fail_closed=False):
     path = BASE / 'state/preview.sqlite'
     if not path.is_file() or path.is_symlink():
-        return False
+        if fail_closed and (path.exists() or path.is_symlink()):
+            raise FeedStageError('Could not verify the current committed feed import.')
+        return None
     database = None
     try:
         database = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
         row = database.execute('SELECT selection_json FROM justup_imports ORDER BY rowid DESC LIMIT 1').fetchone()
         if row is None:
-            return False
+            return None
         selection = json.loads(row[0])
-        feed = selection.get('feed') if isinstance(selection, dict) else None
-        return isinstance(feed, dict) and feed.get('manifestSha256') == digest
+        if fail_closed and not isinstance(selection, dict):
+            raise FeedStageError('Could not verify the current committed feed import.')
+        return selection if isinstance(selection, dict) else None
     except (sqlite3.Error, ValueError, TypeError, RecursionError):
-        return False
+        if fail_closed:
+            raise FeedStageError('Could not verify the current committed feed import.') from None
+        return None
     finally:
         if database is not None:
             database.close()
 
 
-def promote_candidate(candidate, latest):
+def latest_import_matches(digest, *, approval=None):
+    selection = latest_import_selection() or {}
+    feed = selection.get('feed')
+    if not isinstance(feed, dict) or feed.get('manifestSha256') != digest:
+        return False
+    origin = selection.get('postingOriginReview')
+    if approval is None:
+        return 'postingOriginReview' not in selection
+    return isinstance(origin, dict) and origin.get('policyVersion') == 'direct-employer-v1' \
+        and origin.get('manifestSha256') == digest and origin.get('snapshotSha256') == approval['candidateSha256'] \
+        and origin.get('reviewSha256') == approval['originReviewSha256']
+
+
+def promote_candidate(candidate, latest, *, expected_digest=None):
     owner = pwd.getpwnam('justup-preview-api')
     checked_file(candidate, owner.pw_uid)
     temporary = None
@@ -646,7 +709,19 @@ def promote_candidate(candidate, latest):
             os.fchmod(output.fileno(), 0o600)
             os.fchown(output.fileno(), owner.pw_uid, owner.pw_gid)
             with candidate.open('rb') as source:
-                shutil.copyfileobj(source, output, 65536)
+                if expected_digest is None:
+                    shutil.copyfileobj(source, output, 65536)
+                else:
+                    digest = hashlib.sha256()
+                    total = 0
+                    for block in iter(lambda: source.read(65536), b''):
+                        total += len(block)
+                        if total > 64 * 1024 * 1024:
+                            raise FeedStageError('The reviewed candidate changed before promotion.')
+                        digest.update(block)
+                        output.write(block)
+                    if digest.hexdigest() != expected_digest:
+                        raise FeedStageError('The reviewed candidate changed before promotion.')
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, latest)
@@ -666,8 +741,8 @@ def node_import_environment(release_manifest):
     return runner.child_environment(config, release_manifest)
 
 
-def consume_batch(directory, manifest_path, manifest, digest, release, release_manifest,
-                  inbox, max_jobs, *, writer_fd=None):
+def prepare_candidate(directory, manifest_path, manifest, digest, release, release_manifest,
+                      inbox, max_jobs, *, writer_fd=None):
     candidate = directory / 'candidate.json'
     inherit_writer = {'pass_fds': (writer_fd,)} if writer_fd is not None else {}
     batch_id = directory.name.removeprefix('batch-')
@@ -682,7 +757,7 @@ def consume_batch(directory, manifest_path, manifest, digest, release, release_m
         fsync_dir(directory)
     if candidate.exists() or candidate.is_symlink():
         read_candidate(candidate, digest, manifest['complete'], max_jobs)
-        bind_candidate_build(batch_id, candidate, digest, release_manifest['buildIdentity'])
+        return bind_candidate_build(batch_id, candidate, digest, release_manifest['buildIdentity'])
     else:
         argv = ['/usr/bin/python3', str(release / 'app/scripts/import-jobs.py'),
                 '--feed-manifest', str(manifest_path), '--max-jobs', str(max_jobs),
@@ -699,15 +774,40 @@ def consume_batch(directory, manifest_path, manifest, digest, release, release_m
                 or result.get('importable') != manifest['complete']):
             raise FeedStageError('Feed adapter receipt differs from source batch.')
         read_candidate(candidate, digest, manifest['complete'], max_jobs)
-        bind_candidate_build(batch_id, candidate, digest, release_manifest['buildIdentity'])
-    if manifest['complete'] and not latest_import_matches(digest):
+        return bind_candidate_build(batch_id, candidate, digest, release_manifest['buildIdentity'])
+
+
+def consume_batch(directory, manifest_path, manifest, digest, release, release_manifest,
+                  inbox, max_jobs, *, writer_fd=None, approval=None):
+    batch_id = directory.name.removeprefix('batch-')
+    if approval is not None and not manifest['complete']:
+        raise FeedStageError('A partial source page cannot carry a posting origin review.')
+    marker = prepare_candidate(directory, manifest_path, manifest, digest, release, release_manifest,
+                               inbox, max_jobs, writer_fd=writer_fd)
+    candidate = directory / 'candidate.json'
+    match = {'approval': approval} if approval is not None else {}
+    if approval is not None and marker['candidateSha256'] != approval['candidateSha256']:
+        raise FeedStageError('Prepared feed candidate differs from the approved review input.')
+    if manifest['complete'] and not latest_import_matches(digest, **match):
+        current = (latest_import_selection(fail_closed=approval is not None) or {}).get('feed')
+        if isinstance(current, dict) and current.get('manifestSha256') == digest:
+            raise FeedStageError('Committed feed import differs from the approved posting origin review.')
         environment = node_import_environment(release_manifest)
         argv = [str(release / 'runtime/bin/node'), str(release / release_manifest['entrypoint']),
                 '--import', str(candidate)]
-        result = run_as_api(argv, environment, release / 'app', 300, **inherit_writer)
-        if not isinstance(result, dict) or result.get('imported') is None or not latest_import_matches(digest):
+        inherit = {'pass_fds': (writer_fd,)} if writer_fd is not None else {}
+        with ExitStack() as review:
+            if approval is not None:
+                digest_review = approval['originReviewSha256']
+                inherit['stdin'] = review.enter_context(open_origin_review(batch_id, digest_review))
+                argv += ['--origin-review-stdin', digest_review]
+            result = run_as_api(argv, environment, release / 'app', 300, **inherit)
+        if not isinstance(result, dict) or result.get('imported') is None or not latest_import_matches(digest, **match):
             raise FeedStageError('Application did not confirm the exact feed import.')
-    promote_candidate(candidate, inbox / 'latest.json')
+    if approval is not None:
+        bind_accepted_origin_review(batch_id, approval['originReviewSha256'])
+    promotion = {'expected_digest': approval['candidateSha256']} if approval is not None else {}
+    promote_candidate(candidate, inbox / 'latest.json', **promotion)
     store_receipt(batch_id, digest)
     return {'status': 'imported' if manifest['complete'] else 'staged_for_catchup',
             'manifestSha256': digest, 'releaseBuildIdentity': release_manifest['buildIdentity']}
@@ -740,7 +840,10 @@ def validate_import_limit(max_jobs):
         raise FeedStageError('Feed import limit must be 1..1000.')
 
 
-def process_batch_locked(batch_id, expected_digest, max_jobs, *, release=None, writer_fd=None):
+def process_batch_locked(batch_id, expected_digest, max_jobs, *, release=None, writer_fd=None, approval=None):
+    accepted_review = accepted_origin_review(batch_id)
+    if accepted_review is not None and (approval is None or accepted_review != approval['originReviewSha256']):
+        raise FeedStageError('The batch already has a different accepted posting origin review.')
     if root_receipt(batch_id, expected_digest) is not None:
         result = {'status': 'already_accepted', 'manifestSha256': expected_digest}
         if release is not None:
@@ -749,11 +852,15 @@ def process_batch_locked(batch_id, expected_digest, max_jobs, *, release=None, w
                     or marker['buildIdentity'] != release[1]['buildIdentity']):
                 raise FeedStageError('The accepted batch belongs to a different build.')
             result['releaseBuildIdentity'] = marker['buildIdentity']
+        if approval is not None and (accepted_review is None or marker['candidateSha256'] != approval['candidateSha256']):
+            raise FeedStageError('The accepted batch does not match the approved posting origin review.')
         return result
     inbox = private_inbox(INBOX)
     staged = authorized_batch(batch_id, expected_digest)
     release = active_release() if release is None else release
     writer = {'writer_fd': writer_fd} if writer_fd is not None else {}
+    if approval is not None:
+        writer['approval'] = approval
     return consume_batch(*staged, *release, inbox, max_jobs, **writer)
 
 
@@ -782,15 +889,44 @@ def approved_import_request():
         request = json.loads(raw.decode('utf-8'), object_pairs_hook=unique_object)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise FeedStageError('The approved feed request is invalid.') from exc
-    if (len(raw) != meta.st_size or not isinstance(request, dict)
-            or set(request) != {'schemaVersion', 'batchId', 'manifestSha256', 'buildIdentity', 'planSha256', 'maxJobs'}
-            or type(request['schemaVersion']) is not int or request['schemaVersion'] != 1
+    keys = {'schemaVersion', 'batchId', 'manifestSha256', 'buildIdentity', 'planSha256', 'maxJobs'}
+    review_keys = {'candidateSha256', 'originReviewSha256'}
+    version = request.get('schemaVersion') if isinstance(request, dict) else None
+    if (len(raw) != meta.st_size or type(version) is not int or version not in (1, 2)
+            or set(request) != (keys | review_keys if version == 2 else keys)
             or any(not isinstance(request[key], str) or not SHA.fullmatch(request[key])
-                   for key in ('buildIdentity', 'planSha256'))):
+                   for key in (review_keys | {'buildIdentity', 'planSha256'} if version == 2 else ('buildIdentity', 'planSha256')))):
         raise FeedStageError('The approved feed request is invalid.')
     validate_batch_reference(request['batchId'], request['manifestSha256'])
     validate_import_limit(request['maxJobs'])
     return request
+
+
+def approved_release(request):
+    release = active_release(request['planSha256'])
+    if release[1]['buildIdentity'] != request['buildIdentity']:
+        raise FeedStageError('The approved feed request names a different active build.')
+    return release
+
+
+def prepare_approved_batch(*, writer_fd):
+    if os.geteuid() != 0:
+        raise FeedStageError('Approved feed preparation requires the operator.')
+    with import_lock():
+        request = approved_import_request()
+        if request is None:
+            return {'status': 'waiting_for_approval'}
+        if request['schemaVersion'] != 1:
+            raise FeedStageError('Use a staging approval to prepare a feed candidate.')
+        release = approved_release(request)
+        batch_id, digest = request['batchId'], request['manifestSha256']
+        if root_receipt(batch_id, digest) is not None:
+            raise FeedStageError('This feed batch already has an acknowledgement.')
+        inbox = private_inbox(INBOX)
+        batch = authorized_batch(batch_id, digest)
+        marker = prepare_candidate(*batch, *release, inbox, request['maxJobs'], writer_fd=writer_fd)
+        return {'status': 'prepared', 'complete': batch[2]['complete'], 'batchId': batch_id,
+                **{key: marker[key] for key in ('candidateSha256', 'manifestSha256', 'buildIdentity')}}
 
 
 def process_approved_batch(*, writer_fd):
@@ -800,11 +936,10 @@ def process_approved_batch(*, writer_fd):
         request = approved_import_request()
         if request is None:
             return {'status': 'waiting_for_approval'}
-        release = active_release(request['planSha256'])
-        if release[1]['buildIdentity'] != request['buildIdentity']:
-            raise FeedStageError('The approved feed request names a different active build.')
+        release = approved_release(request)
+        review = {'approval': request} if request['schemaVersion'] == 2 else {}
         result = process_batch_locked(request['batchId'], request['manifestSha256'], request['maxJobs'],
-                                      release=release, writer_fd=writer_fd)
+                                      release=release, writer_fd=writer_fd, **review)
         receipt = root_receipt(request['batchId'], request['manifestSha256'])
         if receipt is None:
             raise FeedStageError('The approved import has no durable acknowledgement.')
@@ -956,6 +1091,7 @@ def main(argv=None):
     import_parser.add_argument('--manifest-sha256', required=True)
     import_parser.add_argument('--max-jobs', type=int, default=500)
     command.add_parser('import-approved')
+    command.add_parser('prepare-approved')
     for name in ('receipt', 'retire-accepted'):
         batch_parser = command.add_parser(name)
         batch_parser.add_argument('--batch-id', required=True)
@@ -984,9 +1120,10 @@ def main(argv=None):
             with host_module().data_writer_lock() as writer_fd:
                 result = process_batch(args.batch_id, args.manifest_sha256, args.max_jobs, writer_fd=writer_fd)
             print(json.dumps(result, separators=(',', ':')))
-        elif args.command == 'import-approved':
+        elif args.command in ('import-approved', 'prepare-approved'):
+            action = process_approved_batch if args.command == 'import-approved' else prepare_approved_batch
             with host_module().data_writer_lock() as writer_fd:
-                result = process_approved_batch(writer_fd=writer_fd)
+                result = action(writer_fd=writer_fd)
             print(json.dumps(result, separators=(',', ':')))
         elif args.command == 'receipt':
             print(json.dumps(show_receipt(args.batch_id, args.manifest_sha256), separators=(',', ':')))

@@ -160,6 +160,17 @@ class ApprovedIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(FEED.FeedStageError, 'no durable acknowledgement'):
             FEED.process_approved_batch(writer_fd=9)
 
+    def test_prepare_only_pins_the_candidate_and_never_acknowledges(self):
+        self.approve()
+        with patch.object(FEED, 'prepare_candidate', return_value={
+                'candidateSha256': 'e' * 64, 'manifestSha256': SHA, 'buildIdentity': 'b' * 64}) as prepare:
+            result = FEED.prepare_approved_batch(writer_fd=9)
+        self.assertEqual(result, {'status': 'prepared', 'complete': True, 'batchId': BATCH_ID,
+                                  'candidateSha256': 'e' * 64, 'manifestSha256': SHA, 'buildIdentity': 'b' * 64})
+        prepare.assert_called_once_with(*self.batch, *self.release, self.inbox, 300, writer_fd=9)
+        self.assertIsNone(FEED.root_receipt(BATCH_ID, SHA))
+        self.consume.assert_not_called()
+
     def test_invalid_permissions_fields_and_special_files_fail_closed(self):
         for value in ({**self.request, 'maxJobs': True}, {**self.request, 'path': '/not-used'},
                       {**self.request, 'manifestSha256': 'wrong'}):
@@ -997,11 +1008,46 @@ class ComposedImportTests(unittest.TestCase):
                         patch.object(FEED, 'batch_files', side_effect=lambda batch_id: read_batch(batch_id, inbox)), \
                         patch.object(FEED, 'active_release', return_value=(release, release_manifest)) as approved_release, \
                         (base / 'fixture-writer').open('wb') as lease:
-                    FEED.write_private(receipts / 'next-import.json', json.dumps({
+                    approval_path = receipts / 'next-import.json'
+                    approval = {
                         'schemaVersion': 1, 'batchId': 'd' * 32, 'manifestSha256': reconciled[3],
                         'buildIdentity': build, 'planSha256': 'f' * 64, 'maxJobs': 10,
-                    }).encode())
+                    }
+                    FEED.write_private(approval_path, json.dumps(approval).encode())
+                    prepared = FEED.prepare_approved_batch(writer_fd=lease.fileno())
+                    self.assertEqual(prepared['status'], 'prepared')
+                    self.assertIsNone(FEED.root_receipt('d' * 32, reconciled[3]))
+                    self.assertEqual(imports(), 2)
+                    normalized = json.loads((reconciled[0] / 'candidate.json').read_text())
+                    review = {'schemaVersion': 1, 'policyVersion': 'direct-employer-v1',
+                              'manifestSha256': reconciled[3], 'snapshotSha256': prepared['candidateSha256'],
+                              'reviewedAt': now.strftime('%Y-%m-%dT%H:%M:%S.000Z'), 'postings': [
+                                  {**{key: row[key] for key in ('id', 'sourceUrl', 'companyId')},
+                                   'verdict': 'direct_employer', 'evidenceUrl': 'https://employer.example/jobs'}
+                                  for row in normalized['jobs']]}
+                    raw = json.dumps(review).encode()
+                    origin_path = receipts / f"batch-{'d' * 32}-origin-review.json"
+                    FEED.write_private(origin_path, raw)
+                    approved = {**approval, 'schemaVersion': 2, 'candidateSha256': prepared['candidateSha256'],
+                                'originReviewSha256': hashlib.sha256(raw).hexdigest()}
+                    approval_path.write_text(json.dumps({**approved, 'candidateSha256': '0' * 64}))
+                    with self.assertRaisesRegex(FEED.FeedStageError, 'approved review input'):
+                        FEED.process_approved_batch(writer_fd=lease.fileno())
+                    approval_path.write_text(json.dumps({**approved, 'originReviewSha256': '0' * 64}))
+                    with self.assertRaisesRegex(FEED.FeedStageError, 'differs from the approved digest'):
+                        FEED.process_approved_batch(writer_fd=lease.fileno())
+                    approval_path.write_text(json.dumps(approved))
+                    with patch.object(FEED, 'bind_accepted_origin_review', side_effect=OSError('Interrupted before receipt.')):
+                        with self.assertRaises(OSError):
+                            FEED.process_approved_batch(writer_fd=lease.fileno())
+                    self.assertEqual(imports(), 3)
+                    self.assertIsNone(FEED.root_receipt('d' * 32, reconciled[3]))
+                    approval_path.write_text(json.dumps({**approved, 'originReviewSha256': '0' * 64}))
+                    with self.assertRaisesRegex(FEED.FeedStageError, 'Committed feed import differs'):
+                        FEED.process_approved_batch(writer_fd=lease.fileno())
+                    approval_path.write_text(json.dumps(approved))
                     applied = FEED.process_approved_batch(writer_fd=lease.fileno())
+                    origin_path.unlink()
                     replayed = FEED.process_approved_batch(writer_fd=lease.fileno())
                     self.assertEqual((applied['status'], replayed['status']), ('imported', 'already_accepted'))
                     self.assertEqual(applied['receipt'], {'schemaVersion': 1, 'manifestSha256': reconciled[3]})
@@ -1010,6 +1056,7 @@ class ComposedImportTests(unittest.TestCase):
                 self.assertEqual(imports(), 3)
                 live = public_jobs()
                 self.assertFalse(live['coverage']['stale'])
+                self.assertEqual(live['coverage']['postingOrigin'], 'reviewed_direct_only')
                 self.assertEqual([item['id'] for item in live['items']], [IMPORT_FIXTURES.JOB_B])
                 self.assertEqual(live['items'][0]['firstObserved'], IMPORT_FIXTURES.IMPORT.iso(
                     IMPORT_FIXTURES.IMPORT.utc(posting_times['firstSeenAt'])))
