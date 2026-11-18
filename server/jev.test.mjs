@@ -6,8 +6,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { createJevClient, JEV_MODEL, planJevBatch, parseJevResponse } from './jev.mjs';
 import { unapprovedJevBudgetTemplate, JEV_BUDGET_RESOURCE } from './jev-budget.mjs';
+import { qualifyJevHeldout } from './evals/jev-qualification.mjs';
+import { assertQualificationService } from './evals/jev-qualification-cli.mjs';
 
 const at = Date.parse('2026-10-31T16:00:00Z');
 const job = (id = 'synthetic-1', bodyText = 'The role includes a documented four day working week. '.repeat(5)) => ({
@@ -47,6 +51,74 @@ test('disabled, unapproved, missing-price and missing-budget configurations make
     await assert.rejects(client.classify({ ownerId: 'owner', condition: 'Four day week', jobs: [job()] }), { code: 'dependency_unavailable' });
     assert.equal(calls, 0);
   }
+});
+
+test('held-out qualification runs the fixed ternary batches three times over the normal guarded transport', async (t) => {
+  const config = configuration(), ledger = installLedger(t, config);
+  const db = new DatabaseSync(':memory:'); t.after(() => db.close());
+  const cases = JSON.parse(readFileSync(new URL('./evals/matching-cases-v1.json', import.meta.url))).cases;
+  const calls = [];
+  const report = await qualifyJevHeldout({ db, config, fetch: async (_url, { body }) => {
+    const request = JSON.parse(body);
+    const heldout = cases.filter(row => row.split === 'heldout' && row.condition === request.state.query);
+    assert.equal(heldout.length, 3);
+    assert.equal(Object.keys(request.questions).length, 3);
+    const answers = Object.fromEntries(Object.entries(request.questions).map(([key, question]) => {
+      const entry = heldout.find(row => question.instructions.job.descriptionText.endsWith(row.evidence));
+      assert(entry); return [key, response({ questions: { [key]: question } }, entry.expected).answers[key]];
+    }));
+    calls.push(request.state.query);
+    const reservations = ledger.rows().filter(row => row.kind === 'reserve');
+    assert.equal(reservations.length, calls.length);
+    return Response.json({ ...response(request), answers });
+  } });
+  assert.equal(new Set(calls).size, 2);
+  assert.deepEqual(calls, [...calls.slice(0, 2), ...calls.slice(0, 2), ...calls.slice(0, 2)]);
+  assert.equal(report.status, 'pass');
+  assert.equal(report.completedCalls, 6);
+  assert.equal(report.exactDecisions, 18);
+  assert.equal(report.acceptedPrecision, 1);
+  assert.equal(report.ambiguousFalseAccepts, 0);
+  assert.equal(report.knownCostNanodollars, 6 * 300 * 42);
+  assert.equal(report.confirmedReservedNanodollars, 6 * 64_000 * 42);
+  assert(report.repeated.every(row => row.observed.length === 3 && !row.varies));
+  assert(report.p95Ms >= report.p50Ms && report.p50Ms >= 0);
+  assert(!JSON.stringify(report).includes(cases.at(-1).evidence));
+});
+
+test('held-out qualification cannot pass on empty acceptance, false accepts or an interrupted matrix', async (t) => {
+  for (const scenario of ['abstain', 'false-accept', 'provider-error', 'unapproved', 'budget', 'cancelled']) {
+    const config = { ...configuration(), maxRetries: 1, authorizationApproved: scenario !== 'unapproved' };
+    installLedger(t, config, scenario === 'budget' ? 64_000 * 42 : 500_000_000);
+    const db = new DatabaseSync(':memory:'); t.after(() => db.close());
+    let calls = 0;
+    const report = await qualifyJevHeldout({ db, config, ...(scenario === 'cancelled' ? { signal: AbortSignal.abort() } : {}),
+      fetch: async (_url, { body }) => {
+        calls++;
+        if (scenario === 'provider-error' && calls === 2) return new Response(null, { status: 503 });
+        return Response.json(response(JSON.parse(body), scenario === 'false-accept' ? 'accepted' : 'insufficient_evidence'));
+      } });
+    assert.equal(report.status, scenario === 'false-accept' ? 'fail' : 'insufficient_evidence', scenario);
+    assert.equal(calls, { abstain: 6, 'false-accept': 6, 'provider-error': 2, unapproved: 0, budget: 1, cancelled: 0 }[scenario], scenario);
+    assert.equal(report.interruption?.code, { 'provider-error': 'provider_unavailable', unapproved: 'dependency_unavailable', budget: 'budget_exhausted', cancelled: 'cancelled' }[scenario], scenario);
+    if (scenario === 'abstain') assert.equal(report.acceptedPrecision, null);
+    if (scenario === 'false-accept') assert.equal(report.ambiguousFalseAccepts, 6);
+    if (scenario === 'provider-error') {
+      assert.equal(report.completedCalls, 1);
+      assert.deepEqual(report.interruption, { code: 'provider_unavailable', attempts: 1, ambiguousAttempts: 1 });
+    }
+  }
+});
+
+test('a direct qualification command cannot replace the fixed service boundary with an environment flag', () => {
+  assert.throws(assertQualificationService, /required/u);
+  const entrypoint = fileURLToPath(new URL('./evals/jev-qualification-cli.mjs', import.meta.url));
+  const run = spawnSync(process.execPath, [entrypoint], { encoding: 'utf8',
+    env: { JUSTUP_RUN_JEV_QUALIFICATION: 'true', JUSTUP_RUNNER_CONFIG: '/private-canary' } });
+  assert.equal(run.status, 1);
+  assert.equal(run.stdout, '');
+  assert.match(run.stderr, /JEV qualification stopped before a complete report/u);
+  assert.doesNotMatch(run.stderr, /private-canary/u);
 });
 
 test('ternary requests omit identities/URLs and response order does not change candidate IDs', async (t) => {

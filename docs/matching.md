@@ -303,10 +303,19 @@ and do not measure model accuracy.
 No real-provider latency, token cost, acceptance rate or accuracy has
 been measured. Before public sharing, reviewed queue-only delivery of the approved
 existing key, verified pricing and the initialized cumulative ledger must enable
-a bounded benchmark on the actual eligible job slice. Repeat
-the reviewed held-out cases at least three times, require no false acceptance on
-ambiguous cases and perfect acceptance precision in this small gate, and report
-variance plus sample size. Also measure actual-slice acceptance, throughput,
+a bounded benchmark. The [protected held-out command](operations.md#run-the-protected-jev-held-out-check)
+runs the six held-out cases three times through the ordinary JEV protocol. It
+groups cases by residual condition and makes at most six sequential calls without
+retries. The fixed synthetic excerpts share neutral context to meet the ordinary
+minimum evidence length. The report retains per-case decisions and variation,
+sample sizes, latency, reported token usage, known cost and confirmed budget
+reservations for completed calls. Its interruption field describes an unsuccessful
+attempt. Check the durable ledger for the full reserved amount. Passing requires
+completed repeats, at least one accepted positive,
+perfect acceptance precision and no false acceptance on ambiguous cases. An
+interruption or universal abstention cannot qualify the provider.
+
+Also measure actual-slice acceptance, throughput,
 p50/p95 latency, priced usage, ready-buffer starvation and failure recovery.
 Agree numeric responsiveness and spending ceilings from that evidence. A model
 or prompt change requires a version change and rerunning those evaluations.

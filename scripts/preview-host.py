@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare and verify the fixed preview host boundary; read the operations guide first.
 
-No command contacts a provider or accepts an arbitrary device, mount or unit name.
-Installation remains an explicit root operation after review of its plan digest.
+No command accepts an arbitrary device, mount, provider or unit name. Installation
+and fixed provider qualification require an explicit protected root operation.
 """
 from __future__ import annotations
 
@@ -45,8 +45,10 @@ LUNA_UNIT = 'justup-preview-luna-qualification.service'
 LUNA_MANIFEST = 'app/server/evals/luna-qualification-v1.json'
 LUNA_REVIEW = 'app/server/evals/luna-qualification-review.mjs'
 LUNA_RESULT_LIMIT = 512 * 1024
+JEV_UNIT = 'justup-preview-jev-qualification.service'
+JEV_FIXTURE = 'app/server/evals/matching-cases-v1.json'
 APPLICATION_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service')
-STOP_UNITS = (*APPLICATION_UNITS, LUNA_UNIT,
+STOP_UNITS = (*APPLICATION_UNITS, LUNA_UNIT, JEV_UNIT,
               'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-feed.socket')
 ROOT_FLOOR = 8 * GIB
 DISK_LIMIT = 2 * GIB
@@ -1140,6 +1142,135 @@ def run_luna_qualification(checksum, build, expected_plan):
     return receipt
 
 
+def jev_command(checksum, build, expected_plan):
+    # Same queue identity and network restrictions as the regular runner. The
+    # synthetic suite only needs state, its ledger, and the ordinary provider.
+    masked = ('config', 'model', 'logs', 'broker/model.sock',
+              'queue/source-coverage-v1', 'queue/source-coverage-v2', 'queue/qualification')
+    restricted_paths = [f'-{BASE / path}' for path in masked]
+    restricted_paths += ['-/run/docker.sock', '-/var/run/docker.sock', '-/mnt/murmur', '-/root', '-/home']
+    return [
+        '/usr/bin/systemd-run', f'--unit={JEV_UNIT}', '--wait', '--pipe', '--collect', '--quiet', f'--slice={SLICE}',
+        f'--uid={RUNNER_USER}', f'--gid={RUNNER_USER}', '--service-type=exec',
+        '--property=RuntimeMaxSec=150s', '--property=TimeoutStopSec=15s', '--property=KillMode=control-group',
+        '--property=UMask=0007', '--property=NoNewPrivileges=yes', '--property=CapabilityBoundingSet=',
+        '--property=AmbientCapabilities=', '--property=ProtectSystem=strict', '--property=ProtectHome=yes',
+        '--property=PrivateDevices=yes', '--property=PrivateTmp=yes', '--property=TemporaryFileSystem=/tmp:ro /var/tmp:ro',
+        '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',
+        '--property=IPAddressDeny=127.0.0.0/8 ::1/128 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10',
+        '--property=IPAddressAllow=127.0.0.53/32', '--property=ProtectKernelTunables=yes',
+        '--property=ProtectKernelModules=yes', '--property=ProtectKernelLogs=yes', '--property=ProtectControlGroups=yes',
+        '--property=ProtectClock=yes', '--property=ProtectHostname=yes', '--property=RestrictSUIDSGID=yes',
+        '--property=RestrictRealtime=yes', '--property=LockPersonality=yes', '--property=SystemCallArchitectures=native',
+        '--property=LimitCORE=0', '--property=LimitNOFILE=256', '--property=LimitNPROC=64',
+        f'--property=WorkingDirectory={BASE / "current/app"}',
+        '--property=ReadWritePaths=' + ' '.join(str(BASE / path) for path in ('state', 'queue/budget')),
+        '--property=InaccessiblePaths=' + ' '.join(restricted_paths),
+        '/usr/bin/env', '-i', 'LANG=C.UTF-8', 'TZ=UTC', f'JUSTUP_JEV_REVIEWED_FIXTURE={checksum}',
+        f'JUSTUP_JEV_REVIEWED_BUILD={build}', f'JUSTUP_JEV_REVIEWED_PLAN={expected_plan}',
+        '/usr/bin/python3', '-I', str(BASE / 'ops/preview-queue-run.py'), '--qualify-jev',
+    ]
+
+
+def validate_jev_receipt(report):
+    outcomes = {'accepted', 'rejected', 'insufficient_evidence'}
+    cases = {'held-positive-oncall', 'held-negative-oncall', 'held-unknown-oncall',
+             'held-positive-conflict', 'held-negative-conflict', 'held-unknown-injection'}
+    numbers = {'requiredCalls', 'completedCalls', 'expectedDecisions', 'observedDecisions', 'exactDecisions',
+               'ambiguousFalseAccepts', 'inputTokens', 'outputTokens', 'knownCostNanodollars',
+               'confirmedReservedNanodollars'}
+    expected = numbers | {'schemaVersion', 'sourceCommit', 'buildIdentity', 'hostPlanSha256', 'fixtureSha256',
+                          'startedAt', 'finishedAt', 'status', 'model', 'classifierVersion', 'acceptedPrecision',
+                          'p50Ms', 'p95Ms', 'repeated', 'attempts', 'interruption'}
+
+    def valid_count(value):
+        return type(value) is int and 0 <= value <= 500_000_000
+
+    def valid_object(value, keys):
+        return isinstance(value, dict) and set(value) == keys
+
+    def valid_list(value, maximum):
+        return isinstance(value, list) and len(value) <= maximum
+
+    def member(value, choices):
+        return isinstance(value, str) and value in choices
+
+    dates = ('startedAt', 'finishedAt')
+    if (not valid_object(report, expected) or type(report['schemaVersion']) is not int or report['schemaVersion'] != 1
+            or report['model'] != 'jev-1.14.0'
+            or report['classifierVersion'] != 'jev-1.14.0/justup-residual-v1/evidence-v1/threshold-0.9'
+            or not member(report['status'], {'pass', 'fail', 'insufficient_evidence'})
+            or any(not isinstance(report[key], str) or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z', report[key]) for key in dates)
+            or (report['acceptedPrecision'] is not None
+                and (type(report['acceptedPrecision']) not in (int, float) or not 0 <= report['acceptedPrecision'] <= 1))
+            or any(not valid_count(report[key]) for key in numbers)
+            or any(report[key] is not None and not valid_count(report[key]) for key in ('p50Ms', 'p95Ms'))
+            or not valid_list(report['attempts'], 6) or not valid_list(report['repeated'], 6)):
+        raise ValueError('Unexpected JEV qualification report fields.')
+    if (report['requiredCalls'] != 6 or report['expectedDecisions'] != 18
+            or report['completedCalls'] != len(report['attempts'])
+            or report['observedDecisions'] != 3 * report['completedCalls']):
+        raise ValueError('Unexpected JEV qualification sample size.')
+    metrics = {'round', 'elapsedMs', 'inputTokens', 'outputTokens', 'costNanodollars', 'reservedNanodollars'}
+    for row in report['attempts']:
+        if (not valid_object(row, metrics | {'outcomes'}) or any(not valid_count(row[key]) for key in metrics)
+                or row['round'] not in (1, 2, 3) or not valid_list(row['outcomes'], 3) or len(row['outcomes']) != 3
+                or any(not valid_object(code, {'caseId', 'expected', 'observed'}) or not member(code['caseId'], cases)
+                       or not member(code['expected'], outcomes) or not member(code['observed'], outcomes) for code in row['outcomes'])):
+            raise ValueError('Unexpected JEV qualification case receipt.')
+    for row in report['repeated']:
+        if (not valid_object(row, {'caseId', 'observed', 'varies'}) or not member(row['caseId'], cases)
+                or type(row['varies']) is not bool or not valid_list(row['observed'], 3)
+                or any(not member(value, outcomes) for value in row['observed'])):
+            raise ValueError('Unexpected JEV qualification repeat receipt.')
+    interruption = report['interruption']
+    errors = {'cancelled', 'qualification_contract', 'dependency_unavailable', 'budget_exhausted', 'budget_unavailable',
+              'budget_locked', 'invalid_request', 'invalid_response', 'provider_timeout', 'provider_unavailable',
+              'provider_rejected', 'usage_overrun'}
+    if interruption is not None and (
+            not valid_object(interruption, {'code', 'attempts', 'ambiguousAttempts'}) or not member(interruption['code'], errors)
+            or any(interruption[key] is not None and not valid_count(interruption[key]) for key in ('attempts', 'ambiguousAttempts'))):
+        raise ValueError('Unexpected JEV qualification interruption receipt.')
+    if report['status'] == 'pass' and (report['completedCalls'] != 6 or report['acceptedPrecision'] != 1
+                                       or report['ambiguousFalseAccepts'] != 0 or interruption is not None):
+        raise ValueError('Incomplete JEV qualification cannot pass.')
+
+
+def run_jev_qualification(checksum, build, expected_plan):
+    if any(not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value)
+           for value in (checksum, build, expected_plan)):
+        raise ValueError('Exact reviewed case, build and host plan hashes are required.')
+    require_operator(cleanup_logs=False)
+    artifact = artifact_module()
+    release = BASE / 'releases' / build
+    if (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan:
+        raise ValueError('JEV qualification requires the exact active build and installed host plan.')
+    owned_path(release, directory=True)
+    manifest = artifact.verify_directory(release)
+    if (manifest['buildIdentity'] != build or manifest['files'].get(JEV_FIXTURE) != checksum
+            or not artifact.JEV_QUALIFICATION_FILES <= manifest['files'].keys()):
+        raise ValueError('The active release differs from the reviewed JEV cases.')
+    if call('systemctl', 'show', '--property=LoadState', '--value', JEV_UNIT, capture=True) != 'not-found':
+        raise ValueError('The JEV qualification name is already loaded.')
+    for unit in (*APPLICATION_UNITS, LUNA_UNIT, 'justup-preview-model.service'):
+        if call('systemctl', 'show', '--property=ActiveState', '--value', unit, capture=True) not in {'inactive', 'failed'}:
+            raise ValueError('Stop the ordinary preview application before qualification.')
+    completed = subprocess.run(jev_command(checksum, build, expected_plan), stdin=subprocess.DEVNULL,
+                               capture_output=True, timeout=180,
+                               env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC'})
+    if len(completed.stdout) > 16 * 1024:
+        raise ValueError('Unexpected JEV qualification report size.')
+    result = json.loads(completed.stdout)
+    validate_jev_receipt(result)
+    if (result.get('sourceCommit') != manifest['sourceCommit']
+            or result.get('buildIdentity') != build or result.get('hostPlanSha256') != expected_plan
+            or result.get('fixtureSha256') != checksum
+            or (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan
+            or completed.returncode != (0 if result['status'] == 'pass' else 1)):
+        raise ValueError('The protected JEV qualification receipt differs from the reviewed execution.')
+    return result
+
+
 def check_coverage_bytes(release, queue_uid, queue_gid, data, period_end, source_version):
     # Use the retained, hash-verified decoder and fact compiler with no inherited
     # provider environment or operator privileges.
@@ -1319,7 +1450,7 @@ def teardown(erase_data=False, expected_plan=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'install-coverage', 'qualify-luna', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'install-coverage', 'qualify-luna', 'qualify-jev', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
@@ -1380,14 +1511,17 @@ def main():
                                       checksum=args.sha256, build=args.build_identity, expected_plan=args.reviewed_plan_sha)
         elif args.command == 'qualify-luna':
             result = run_luna_qualification(args.sha256, args.build_identity, args.reviewed_plan_sha)
+        elif args.command == 'qualify-jev':
+            result = run_jev_qualification(args.sha256, args.build_identity, args.reviewed_plan_sha)
         elif args.command == 'teardown':
             result = teardown(args.erase_data, args.reviewed_plan_sha)
         else:
             if os.geteuid() != 0:
                 raise ValueError('Stopping preview units requires root.')
             result = stop_preview()
-        print(json.dumps({'ok': True, 'result': result}, sort_keys=True))
-        return 0
+        ok = args.command != 'qualify-jev' or result['status'] == 'pass'
+        print(json.dumps({'ok': ok, 'result': result}, sort_keys=True))
+        return 0 if ok else 1
     except (ValueError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         # Do not publish raw command output, environment or provider responses.
         print(json.dumps({'ok': False, 'error': type(error).__name__}), file=sys.stderr)

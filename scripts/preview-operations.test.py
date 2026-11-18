@@ -2208,6 +2208,114 @@ process.stdout.write('actual_node_policy_configuration_matches\n');
                 patch.object(queue.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='another-user')):
             self.assertEqual(queue.main(), 1)
 
+    def test_jev_qualification_binds_the_reviewed_candidate_and_safe_transient_unit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            build, plan, cases = 'b' * 64, 'a' * 64, 'd' * 64
+            release = base / 'releases' / build
+            release.mkdir(parents=True)
+            (base / 'current').symlink_to(release)
+            manifest = {'buildIdentity': build, 'sourceCommit': 'c' * 40,
+                        'files': dict.fromkeys(artifact.JEV_QUALIFICATION_FILES, cases)}
+            decisions = ('accepted', 'rejected', 'insufficient_evidence')
+            case_ids = ('held-positive-oncall', 'held-negative-oncall', 'held-unknown-oncall',
+                        'held-positive-conflict', 'held-negative-conflict', 'held-unknown-injection')
+            attempts = [{'round': number, 'elapsedMs': 100, 'inputTokens': 300, 'outputTokens': 24,
+                         'costNanodollars': 300 * 42, 'reservedNanodollars': 64_000 * 42,
+                         'outcomes': [{'caseId': case_id, 'expected': decision, 'observed': decision}
+                                      for case_id, decision in zip(group, decisions)]}
+                        for number in range(1, 4) for group in (case_ids[:3], case_ids[3:])]
+            report = {'buildIdentity': build, 'sourceCommit': manifest['sourceCommit'],
+                      'hostPlanSha256': plan, 'fixtureSha256': cases, 'status': 'pass', 'schemaVersion': 1,
+                      'startedAt': '2026-11-18T03:00:00.000Z', 'finishedAt': '2026-11-18T03:00:01.000Z',
+                      'model': 'jev-1.14.0', 'classifierVersion': 'jev-1.14.0/justup-residual-v1/evidence-v1/threshold-0.9',
+                      'requiredCalls': 6, 'completedCalls': 6, 'expectedDecisions': 18, 'observedDecisions': 18,
+                      'exactDecisions': 18, 'acceptedPrecision': 1, 'ambiguousFalseAccepts': 0, 'inputTokens': 1800,
+                      'outputTokens': 144, 'knownCostNanodollars': 6 * 300 * 42,
+                      'confirmedReservedNanodollars': 6 * 64_000 * 42, 'p50Ms': 100, 'p95Ms': 100,
+                      'repeated': [{'caseId': case_id, 'observed': [decision] * 3, 'varies': False}
+                                   for case_id, decision in zip(case_ids, decisions * 2)],
+                      'attempts': attempts, 'interruption': None}
+            verified = SimpleNamespace(read_host_plan=lambda _: plan, verify_directory=lambda _: manifest,
+                                       JEV_QUALIFICATION_FILES=artifact.JEV_QUALIFICATION_FILES)
+            states = {host.JEV_UNIT: 'not-found'}
+            with patch.object(host, 'BASE', base), patch.object(host, 'OPERATOR_UID', os.getuid()), \
+                    patch.object(host, 'require_operator') as guard, \
+                    patch.object(host, 'artifact_module', return_value=verified), \
+                    patch.object(host, 'call', side_effect=lambda *args, **_: states.get(args[-1], 'inactive')), \
+                    patch.object(host.subprocess, 'run') as launch:
+                with self.assertRaises(ValueError):
+                    host.run_jev_qualification('e' * 64, build, plan)
+                states['justup-preview-runner.service'] = 'active'
+                with self.assertRaises(ValueError):
+                    host.run_jev_qualification(cases, build, plan)
+                launch.assert_not_called()
+                states['justup-preview-runner.service'] = 'inactive'
+                launch.return_value = SimpleNamespace(returncode=0, stdout=json.dumps(report).encode())
+                self.assertEqual(host.run_jev_qualification(cases, build, plan), report)
+                guard.assert_called_with(cleanup_logs=False)
+                command, = launch.call_args.args
+                self.assertIn(host.JEV_UNIT, host.STOP_UNITS)
+                self.assertIn('--property=RuntimeMaxSec=150s', command)
+                self.assertIn('--property=NoNewPrivileges=yes', command)
+                self.assertIn('--property=ReadWritePaths=' + ' '.join(str(base / path) for path in ('state', 'queue/budget')), command)
+                self.assertIn('JUSTUP_JEV_REVIEWED_FIXTURE=' + cases, command)
+                self.assertEqual(launch.call_args.kwargs['stdin'], subprocess.DEVNULL)
+                self.assertEqual(set(launch.call_args.kwargs['env']), {'PATH', 'LANG', 'TZ'})
+                self.assertEqual(command[-1], '--qualify-jev')
+                launch.return_value = SimpleNamespace(returncode=1, stdout=json.dumps(report).encode())
+                with self.assertRaises(ValueError):
+                    host.run_jev_qualification(cases, build, plan)
+                failed = {**report, 'status': 'insufficient_evidence', 'acceptedPrecision': None}
+                launch.return_value = SimpleNamespace(returncode=1, stdout=json.dumps(failed).encode())
+                self.assertEqual(host.run_jev_qualification(cases, build, plan), failed)
+                unsafe_top_level = {**report, 'providerResponse': 'private canary'}
+                unsafe_nested = deepcopy(report)
+                unsafe_nested['attempts'][0]['outcomes'][0]['evidence'] = 'private canary'
+                for unsafe in (unsafe_top_level, unsafe_nested):
+                    launch.return_value = SimpleNamespace(returncode=0, stdout=json.dumps(unsafe).encode())
+                    with self.assertRaises(ValueError) as failure:
+                        host.run_jev_qualification(cases, build, plan)
+                    self.assertNotIn('private canary', str(failure.exception))
+
+    def test_jev_qualification_child_rejects_review_mismatch_and_partial_assets(self):
+        manifest, _ = payload()
+        manifest['files'].update(dict.fromkeys(artifact.JEV_QUALIFICATION_FILES, 'd' * 64))
+        plan = 'a' * 64
+        expected = {'JUSTUP_JEV_REVIEWED_BUILD': manifest['buildIdentity'], 'JUSTUP_JEV_REVIEWED_PLAN': plan,
+                    'JUSTUP_JEV_REVIEWED_FIXTURE': 'd' * 64, 'TYPESAFE_AI_TOKEN': 'must not leak'}
+        for name in artifact.JEV_QUALIFICATION_FILES:
+            self.assertTrue(artifact.allowed(name))
+        with patch.object(queue.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='justup-preview-runner')), \
+                patch.object(queue.Path, 'read_text', return_value='kernel metadata'), \
+                patch.object(queue, 'protected_qualification', return_value=True) as sandbox, \
+                patch.dict(os.environ, expected, clear=True):
+            environment = queue.jev_qualification_environment(manifest, plan, artifact)
+            self.assertEqual(sandbox.call_args.args[-1], host.JEV_UNIT)
+            self.assertEqual(environment['JUSTUP_RUN_JEV_QUALIFICATION'], 'true')
+            self.assertFalse(environment.keys() & expected.keys())
+            with self.assertRaises(ValueError):
+                queue.jev_qualification_environment(manifest, 'e' * 64, artifact)
+            del manifest['files'][artifact.JEV_QUALIFICATION_ENTRYPOINT]
+            with self.assertRaises(ValueError):
+                queue.jev_qualification_environment(manifest, plan, artifact)
+        with patch.dict(artifact.CODEX_FILES, {name: artifact.sha(data) for name, data in CODEX_FIXTURES.items()}):
+            with self.assertRaisesRegex(ValueError, 'complete evaluator'):
+                artifact.validate_manifest(manifest)
+
+    def test_jev_qualification_only_configuration_cannot_start_ordinary_queue(self):
+        identity = {'resourceId': queue.BUDGET_RESOURCE, 'resourceSlug': 'jev-evaluation-budget'}
+        configured = {'enabled': True, 'qualificationOnly': True, 'cumulativeBudget': {'approval': identity}}
+        with patch.object(queue, 'validate_ledger') as validate:
+            for config, qualification in [(configured, False), ({**configured, 'enabled': False}, True), ({}, True)]:
+                with self.assertRaises(ValueError):
+                    queue.validate_jev_operation(config, qualification)
+            validate.assert_not_called()
+            queue.validate_jev_operation(configured, True)
+            validate.assert_called_once_with(expected_identity=identity)
+            queue.validate_jev_operation({**configured, 'qualificationOnly': False}, False)
+            self.assertEqual(validate.call_count, 2)
+
     def test_queue_requires_existing_private_ledger_and_never_creates_or_repairs_it(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()

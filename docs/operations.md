@@ -299,6 +299,37 @@ The initial cumulative allowance is at most $0.50, shared across all Justup user
 
 Frontend-owned Cloudflare routing must use the approved free allowance, fixed candidate frontend deployment and an exact API route to loopback 8787 through a bounded tunnel. Do not expose the host port publicly or touch the renderer's ingress. The selected transport must support SSE. Accountless Cloudflare Quick Tunnels do not support SSE and cannot serve the first-release transport contract. Any temporary candidate origin still needs fixed routing and actual SSE header, first-event/reconnect latency, access and buffering evidence. Changing tunnel/provider configuration requires its own reviewed action; this guide activates none. Missing tunnel configuration or unproven runner/provider readiness blocks the complete preview, and does not justify a paid substitute.
 
+### Run the protected JEV held-out check
+
+After reviewing the exact backend build, installed operator scripts, case bytes,
+account price, protected key delivery and remaining allowance, prepare the normal
+queue `jev` configuration with `enabled:true` and `qualificationOnly:true`.
+Install the reviewed scripts and select the exact artifact before using this
+configuration. The updated queue launcher refuses ordinary startup while this
+flag is set. The isolated run uses the current preview SQLite database for the
+normal account and project accounting and the same cumulative ledger across
+restarts. A fixed synthetic accounting identity holds no private account data.
+
+Stop the preview API, runner, tunnel and any model qualification work. Run the
+following from the protected root operator environment after those conditions
+pass. Take the three hashes from the exact reviewed manifest and installation
+receipt. Save standard output in a root-private evidence path.
+
+```sh
+umask 077
+systemd-run --quiet --wait --pipe --collect --slice=justup-preview.slice \
+  /usr/bin/python3 /srv/justup_preview/ops/preview-host.py qualify-jev \
+  --sha256 "$JUSTUP_JEV_CASES_SHA256" --build-identity "$JUSTUP_PREVIEW_BUILD_ID" \
+  --reviewed-plan-sha "$JUSTUP_REVIEWED_PLAN_SHA" > "$JUSTUP_JEV_REPORT"
+```
+
+The command starts one bounded transient queue process and no ordinary workers.
+Six 64,000-token reservations cost at most 16,128,000 nanodollars at the pinned
+confirmed rate. An interrupted attempt may still consume a reservation. Check
+the durable ledger and partial evidence before authorizing another run. Preserve
+failure reports and any retained ledger lock. Keep matching disabled following
+this check until the actual-slice benchmark, policy and preview gates pass.
+
 ## Select and verify a candidate
 
 The application database and artifact epoch is 2. Fresh empty storage initializes it directly. Existing epoch-1 storage requires the explicit stopped-writer [schema migration](schema.md) against the exact staged target before selecting it. Keep current protected operator tools installed independently of the selected application release; API/queue launchers inspect the actual database epoch before executing application code.

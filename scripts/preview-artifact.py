@@ -38,6 +38,9 @@ QUALIFICATION_FILES = {'app/server/evals/luna-qualification.mjs',
                        'app/server/evals/luna-qualification-cli.mjs',
                        'app/server/evals/luna-qualification-v1.json'}
 QUALIFICATION_REVIEW = 'app/server/evals/luna-qualification-review.mjs'
+JEV_QUALIFICATION_ENTRYPOINT = 'app/server/evals/jev-qualification-cli.mjs'
+JEV_QUALIFICATION_FILES = {JEV_QUALIFICATION_ENTRYPOINT, 'app/server/evals/jev-qualification.mjs',
+                           'app/server/evals/matching-cases-v1.json'}
 CODEX_FILES = {
     CODEX_ENTRYPOINT: '113aa5d5952a6fd3950a88323219747d0c91978ebee948509a540c8a460e59a3',
     'runtime/codex/codex-resources/bwrap': 'c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4',
@@ -117,7 +120,8 @@ def allowed(path):
                      'app/scripts/hiring-wire/enqueue.mjs', 'app/scripts/hiring-wire/check-snapshot.mjs',
                      'app/scripts/company-requests/setup.mjs',
                      'app/server/model-schemas/intent.schema.json', 'app/server/model-schemas/company.schema.json',
-                     'app/server/model-schemas/company-discovery.schema.json', QUALIFICATION_REVIEW} or path in CODEX_FILES or path in QUALIFICATION_FILES or
+                     'app/server/model-schemas/company-discovery.schema.json', QUALIFICATION_REVIEW} or path in CODEX_FILES
+            or path in QUALIFICATION_FILES or path in JEV_QUALIFICATION_FILES or
             (path.startswith('app/server/') and not path.startswith(('app/server/evals/', 'app/server/demo-'))
              and path.endswith('.mjs') and not path.endswith(('.test.mjs', '-fixtures.mjs'))))
 
@@ -193,6 +197,8 @@ def validate_manifest(manifest):
         raise ValueError('Model runtime is missing its immutable model catalogue asset.')
     if (QUALIFICATION_FILES & files.keys() or QUALIFICATION_REVIEW in files) and not QUALIFICATION_FILES <= files.keys():
         raise ValueError('Luna qualification requires the complete fixed evaluator and case manifest.')
+    if JEV_QUALIFICATION_FILES & files.keys() and not JEV_QUALIFICATION_FILES <= files.keys():
+        raise ValueError('JEV qualification requires its complete evaluator and case manifest.')
     wire_transport = {'app/server/' + name + '.mjs' for name in ('hiring-wire-codex', 'hiring-wire-codex-policy', 'hiring-wire-codex-broker')}
     if (bool(wire_transport & files.keys()) and (not WIRE_MODULES <= files.keys() or files.get(WIRE_CATALOGUE) != WIRE_CATALOGUE_SHA256)
             or WIRE_CATALOGUE in files and files[WIRE_CATALOGUE] != WIRE_CATALOGUE_SHA256):

@@ -69,6 +69,7 @@ export function createBillingRunnerHooks({billing,onTaskFinished,beforeClaim}){
 }
 export async function createRunnerDependencies(){
   const config=readRunnerConfig();
+  if(config.jev?.qualificationOnly===true)throw new Error('The JEV configuration is reserved for protected qualification.');
   // Shared-state startup checks the service's operator-owned umask; never change
   // a caller's process mask silently or point this at another application's DB.
   if(config.sharedState===true&&(process.umask()&0o070)!==0)throw new Error('Shared runner state requires group access.');
