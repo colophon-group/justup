@@ -4,6 +4,7 @@ from contextlib import closing
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -51,12 +52,17 @@ class PreviewFeedArrival(unittest.TestCase):
         partial, second = fixtures.write_feed_bundle(cls.producer, [posting], batch_id="2" * 32, kind="changes",
                                                       from_cursor=first["toCursor"], complete=False,
                                                       cutoff="2026-10-31T16:01:00.000Z", source_count=2)
-        arrived, last = fixtures.write_feed_bundle(cls.producer, [], batch_id="3" * 32, kind="changes",
-                                                    from_cursor=second["toCursor"],
+        replacement, third = fixtures.write_feed_bundle(cls.producer, [
+            {**posting, "title": "Senior Engineer", "updatedAt": "2026-10-31T16:01:15.000Z"},
+        ], batch_id="3" * 32, kind="changes", from_cursor=second["toCursor"], complete=False,
+            cutoff="2026-10-31T16:01:20.000Z", source_count=2)
+        arrived, last = fixtures.write_feed_bundle(cls.producer, [], batch_id="4" * 32, kind="changes",
+                                                    from_cursor=third["toCursor"],
                                                     cutoff="2026-10-31T16:01:30.000Z", source_count=2)
         importer = fixtures.IMPORT
         before = importer.import_feed_bundle(baseline, now=fixtures.NOW)
         staged = importer.import_feed_bundle(partial, previous=before, now=importer.utc(second["cutoffAt"]))
+        staged = importer.import_feed_bundle(replacement, previous=staged, now=importer.utc(third["cutoffAt"]))
         final = importer.import_feed_bundle(arrived, previous=staged, now=importer.utc(last["cutoffAt"]))
         retained_sha = retain(cls.candidate, final)
         committed = root / "application.sqlite"
@@ -76,16 +82,16 @@ try {
         cls.database.chmod(0o600)
         baseline_generation, final_generation = json.loads(result.stdout)
         accepted = []
-        for path, cutoff in ((baseline, first["cutoffAt"]), (partial, second["cutoffAt"]), (arrived, last["cutoffAt"])):
+        for path, manifest in ((baseline, first), (partial, second), (replacement, third), (arrived, last)):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             accepted.append({"manifest": str(path.relative_to(cls.producer)), "sha256": digest,
-                             "acceptedAt": cutoff, "backupVerifiedAt": None})
+                             "acceptedAt": manifest["cutoffAt"], "backupVerifiedAt": None})
             retain(cls.receipts / f"{path.parent.name}.json", {"schemaVersion": 1, "manifestSha256": digest})
             retain(cls.receipts / f"{path.parent.name}-candidate.json", {"schemaVersion": 1, "manifestSha256": digest,
                    "candidateSha256": retained_sha if path == arrived else "b" * 64,
                    "buildIdentity": BUILD if path != baseline else "c" * 64})
-        cls.partial_digest = accepted[1]["sha256"]
-        cls.arrival_digest = accepted[2]["sha256"]
+        cls.partial_digest = accepted[2]["sha256"]
+        cls.arrival_digest = accepted[3]["sha256"]
         retain(cls.producer / "state.json", {"schemaVersion": 1, "cursor": last["toCursor"], "scope": last["scope"],
                                             "pending": None, "accepted": accepted})
         retain(cls.browser, {"liveArrival": {
@@ -107,7 +113,7 @@ try {
         result = self.run_proof()
         self.assertTrue(result["passed"])
         self.assertFalse(result["completeReleaseGate"])
-        self.assertEqual(result["acceptedBatches"], 3)
+        self.assertEqual(result["acceptedBatches"], 4)
         self.assertEqual(result["completeImports"], 2)
         self.assertEqual(result["postingSourceManifestSha256"], self.partial_digest)
         self.assertEqual(result["arrivalManifestSha256"], self.arrival_digest)
@@ -139,7 +145,7 @@ try {
             self.run_proof()
 
     def test_refuses_a_candidate_from_a_different_build(self):
-        path = self.receipts / f"batch-{'3' * 32}-candidate.json"
+        path = self.receipts / f"batch-{'4' * 32}-candidate.json"
         marker = self.restore(path)
         marker["buildIdentity"] = "f" * 64
         retain(path, marker)
@@ -187,3 +193,13 @@ try {
         self.addCleanup(wal.unlink)
         with self.assertRaisesRegex(PROOF.source.ImportFailure, "standalone preview database backup"):
             self.run_proof()
+
+    def test_rejects_a_named_pipe_without_waiting_for_a_writer(self):
+        fifo = self.browser.with_name("browser-fifo")
+        os.mkfifo(fifo, 0o600)
+        self.addCleanup(fifo.unlink)
+        result = subprocess.run([sys.executable, str(SCRIPT), "--browser", str(fifo), "--producer", str(self.producer),
+                                 "--receipts", str(self.receipts), "--database", str(self.database),
+                                 "--candidate", str(self.candidate)], capture_output=True, text=True, timeout=3)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("private and regular", result.stderr)

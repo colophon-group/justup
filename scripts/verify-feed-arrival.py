@@ -131,9 +131,11 @@ def candidate_posting(path, marker, observation, arrival):
     jobs = []
     for row in output["jobs"]:
         if row.get("firstObserved") == observation["firstObserved"]:
+            evidence = row.get("evidence", {}).get("metadataFetchedAt")
             require(all(isinstance(row.get(key), str) and len(row[key]) <= 2048
-                        for key in ("id", "sourceUrl", "companyId")), "Invalid normalized public posting.")
-            jobs.append([row["id"], row["sourceUrl"], row["firstObserved"], row["companyId"]])
+                        for key in ("id", "sourceUrl", "companyId"))
+                    and source.iso(source.utc(evidence)) == evidence, "Invalid normalized public posting.")
+            jobs.append([row["id"], row["sourceUrl"], row["firstObserved"], row["companyId"], evidence])
     node = shutil.which("node")
     require(node is not None, "Use the reviewed preview Node runtime.")
     match = subprocess.run(
@@ -172,13 +174,14 @@ def verify(browser, producer, receipts, database, candidate):
     final_marker = batch_marker(receipts, arrival_batch, arrival_sha)
     require(final_marker["buildIdentity"] == observation["apiBuildIdentity"],
             "The arrived import belongs to another API build.")
-    target_id, target_url, target_first, target_company = candidate_posting(candidate, final_marker["candidateSha256"], observation, imports[-1])
+    target_id, target_url, target_first, target_company, target_evidence_at = candidate_posting(
+        candidate, final_marker["candidateSha256"], observation, imports[-1])
     scope = imports[0][3]["feed"].get("scope")
     limit = imports[0][3]["feed"].get("limit")
     full_at = source.utc(imports[0][3]["feed"].get("fullSnapshotAt"))
     baseline_time = source.utc(observation["baselineAsOf"])
     previous = None
-    justified_by = None
+    justified_by = supplied_at = None
     imported = 0
     for entry in window:
         path = producer / entry["manifest"]
@@ -203,7 +206,7 @@ def verify(browser, producer, receipts, database, candidate):
                 "Source completion and cursor cutoff disagree.")
         if manifest["kind"] == "snapshot":
             full_at = cutoff
-            justified_by = None
+            justified_by = supplied_at = None
         if manifest["complete"]:
             require(imported < len(imports), "A complete source batch is missing from the observed database history.")
             snapshot, verified, _, selection = imports[imported]
@@ -228,13 +231,15 @@ def verify(browser, producer, receipts, database, candidate):
             if (row["active"] and not row["reserved"] and row["hasContent"] and row["companyId"] == target_company
                     and row["sourceUrl"] == target_url and source.iso(first) == target_first
                     and baseline_time < first <= cutoff):
-                justified_by = justified_by or digest
+                # Replacing a posting on a later page refreshes its evidence,
+                # even if its public ID, URL and first-observed time are equal.
+                justified_by, supplied_at = digest, source.iso(cutoff)
             else:
-                justified_by = None
+                justified_by = supplied_at = None
         require(not (manifest["complete"] and digest != arrival_sha and justified_by is not None),
                 "An earlier complete batch makes the posting's arrival generation ambiguous.")
         previous = manifest
-    require(imported == len(imports) and justified_by is not None,
+    require(imported == len(imports) and justified_by is not None and supplied_at == target_evidence_at,
             "The complete import interval does not support the observed public posting.")
     return {"schemaVersion": 1, "scope": "scheduled_feed_arrival", "passed": True, "completeReleaseGate": False,
             "sourceCommit": observation["sourceCommit"], "frontendArtifactSha256": observation["frontendArtifactSha256"],
