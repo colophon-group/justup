@@ -309,7 +309,9 @@ groups cases by residual condition and makes at most six sequential calls withou
 retries. The fixed synthetic excerpts share neutral context to meet the ordinary
 minimum evidence length. The report retains per-case decisions and variation,
 sample sizes, latency, reported token usage, known cost and confirmed budget
-reservations. Passing requires completed repeats, at least one accepted positive,
+reservations for completed calls. Its interruption field describes an unsuccessful
+attempt. Check the durable ledger for the full reserved amount. Passing requires
+completed repeats, at least one accepted positive,
 perfect acceptance precision and no false acceptance on ambiguous cases. An
 interruption or universal abstention cannot qualify the provider.
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare and verify the fixed preview host boundary; read the operations guide first.
 
-No command contacts a provider or accepts an arbitrary device, mount or unit name.
-Installation remains an explicit root operation after review of its plan digest.
+No command accepts an arbitrary device, mount, provider or unit name. Installation
+and fixed provider qualification require an explicit protected root operation.
 """
 from __future__ import annotations
 
@@ -1172,6 +1172,70 @@ def jev_command(checksum, build, expected_plan):
     ]
 
 
+def validate_jev_receipt(report):
+    outcomes = {'accepted', 'rejected', 'insufficient_evidence'}
+    cases = {'held-positive-oncall', 'held-negative-oncall', 'held-unknown-oncall',
+             'held-positive-conflict', 'held-negative-conflict', 'held-unknown-injection'}
+    numbers = {'requiredCalls', 'completedCalls', 'expectedDecisions', 'observedDecisions', 'exactDecisions',
+               'ambiguousFalseAccepts', 'inputTokens', 'outputTokens', 'knownCostNanodollars',
+               'confirmedReservedNanodollars'}
+    expected = numbers | {'schemaVersion', 'sourceCommit', 'buildIdentity', 'hostPlanSha256', 'fixtureSha256',
+                          'startedAt', 'finishedAt', 'status', 'model', 'classifierVersion', 'acceptedPrecision',
+                          'p50Ms', 'p95Ms', 'repeated', 'attempts', 'interruption'}
+
+    def valid_count(value):
+        return type(value) is int and 0 <= value <= 500_000_000
+
+    def valid_object(value, keys):
+        return isinstance(value, dict) and set(value) == keys
+
+    def valid_list(value, maximum):
+        return isinstance(value, list) and len(value) <= maximum
+
+    def member(value, choices):
+        return isinstance(value, str) and value in choices
+
+    dates = ('startedAt', 'finishedAt')
+    if (not valid_object(report, expected) or type(report['schemaVersion']) is not int or report['schemaVersion'] != 1
+            or report['model'] != 'jev-1.14.0'
+            or report['classifierVersion'] != 'jev-1.14.0/justup-residual-v1/evidence-v1/threshold-0.9'
+            or not member(report['status'], {'pass', 'fail', 'insufficient_evidence'})
+            or any(not isinstance(report[key], str) or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z', report[key]) for key in dates)
+            or (report['acceptedPrecision'] is not None
+                and (type(report['acceptedPrecision']) not in (int, float) or not 0 <= report['acceptedPrecision'] <= 1))
+            or any(not valid_count(report[key]) for key in numbers)
+            or any(report[key] is not None and not valid_count(report[key]) for key in ('p50Ms', 'p95Ms'))
+            or not valid_list(report['attempts'], 6) or not valid_list(report['repeated'], 6)):
+        raise ValueError('Unexpected JEV qualification report fields.')
+    if (report['requiredCalls'] != 6 or report['expectedDecisions'] != 18
+            or report['completedCalls'] != len(report['attempts'])
+            or report['observedDecisions'] != 3 * report['completedCalls']):
+        raise ValueError('Unexpected JEV qualification sample size.')
+    metrics = {'round', 'elapsedMs', 'inputTokens', 'outputTokens', 'costNanodollars', 'reservedNanodollars'}
+    for row in report['attempts']:
+        if (not valid_object(row, metrics | {'outcomes'}) or any(not valid_count(row[key]) for key in metrics)
+                or row['round'] not in (1, 2, 3) or not valid_list(row['outcomes'], 3) or len(row['outcomes']) != 3
+                or any(not valid_object(code, {'caseId', 'expected', 'observed'}) or not member(code['caseId'], cases)
+                       or not member(code['expected'], outcomes) or not member(code['observed'], outcomes) for code in row['outcomes'])):
+            raise ValueError('Unexpected JEV qualification case receipt.')
+    for row in report['repeated']:
+        if (not valid_object(row, {'caseId', 'observed', 'varies'}) or not member(row['caseId'], cases)
+                or type(row['varies']) is not bool or not valid_list(row['observed'], 3)
+                or any(not member(value, outcomes) for value in row['observed'])):
+            raise ValueError('Unexpected JEV qualification repeat receipt.')
+    interruption = report['interruption']
+    errors = {'cancelled', 'qualification_contract', 'dependency_unavailable', 'budget_exhausted', 'budget_unavailable',
+              'budget_locked', 'invalid_request', 'invalid_response', 'provider_timeout', 'provider_unavailable',
+              'provider_rejected', 'usage_overrun'}
+    if interruption is not None and (
+            not valid_object(interruption, {'code', 'attempts', 'ambiguousAttempts'}) or not member(interruption['code'], errors)
+            or any(interruption[key] is not None and not valid_count(interruption[key]) for key in ('attempts', 'ambiguousAttempts'))):
+        raise ValueError('Unexpected JEV qualification interruption receipt.')
+    if report['status'] == 'pass' and (report['completedCalls'] != 6 or report['acceptedPrecision'] != 1
+                                       or report['ambiguousFalseAccepts'] != 0 or interruption is not None):
+        raise ValueError('Incomplete JEV qualification cannot pass.')
+
+
 def run_jev_qualification(checksum, build, expected_plan):
     if any(not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value)
            for value in (checksum, build, expected_plan)):
@@ -1197,9 +1261,10 @@ def run_jev_qualification(checksum, build, expected_plan):
     if len(completed.stdout) > 16 * 1024:
         raise ValueError('Unexpected JEV qualification report size.')
     result = json.loads(completed.stdout)
-    if (not isinstance(result, dict) or result.get('sourceCommit') != manifest['sourceCommit']
+    validate_jev_receipt(result)
+    if (result.get('sourceCommit') != manifest['sourceCommit']
             or result.get('buildIdentity') != build or result.get('hostPlanSha256') != expected_plan
-            or result.get('fixtureSha256') != checksum or result.get('status') not in {'pass', 'fail', 'insufficient_evidence'}
+            or result.get('fixtureSha256') != checksum
             or (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan
             or completed.returncode != (0 if result['status'] == 'pass' else 1)):
         raise ValueError('The protected JEV qualification receipt differs from the reviewed execution.')

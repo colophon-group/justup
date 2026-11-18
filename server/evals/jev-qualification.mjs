@@ -75,7 +75,7 @@ function score(attempts, requiredCalls) {
   const acceptedPrecision = accepts.length ? correctAccepts / accepts.length : null;
   const status = accepts.length > correctAccepts ? 'fail'
     : attempts.length === requiredCalls && accepts.length ? 'pass' : 'insufficient_evidence';
-  return { status, requiredCalls, observedCalls: attempts.length, expectedDecisions: requiredCalls * 3,
+  return { status, requiredCalls, completedCalls: attempts.length, expectedDecisions: requiredCalls * 3,
     observedDecisions: outcomes.length, exactDecisions: outcomes.filter(row => row.expected === row.observed).length,
     acceptedPrecision, ambiguousFalseAccepts, inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'),
     knownCostNanodollars: sum('costNanodollars'), confirmedReservedNanodollars: sum('reservedNanodollars'),

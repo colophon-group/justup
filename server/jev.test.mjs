@@ -6,9 +6,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { createJevClient, JEV_MODEL, planJevBatch, parseJevResponse } from './jev.mjs';
 import { unapprovedJevBudgetTemplate, JEV_BUDGET_RESOURCE } from './jev-budget.mjs';
 import { qualifyJevHeldout } from './evals/jev-qualification.mjs';
+import { assertQualificationService } from './evals/jev-qualification-cli.mjs';
 
 const at = Date.parse('2026-10-31T16:00:00Z');
 const job = (id = 'synthetic-1', bodyText = 'The role includes a documented four day working week. '.repeat(5)) => ({
@@ -72,7 +75,7 @@ test('held-out qualification runs the fixed ternary batches three times over the
   assert.equal(new Set(calls).size, 2);
   assert.deepEqual(calls, [...calls.slice(0, 2), ...calls.slice(0, 2), ...calls.slice(0, 2)]);
   assert.equal(report.status, 'pass');
-  assert.equal(report.observedCalls, 6);
+  assert.equal(report.completedCalls, 6);
   assert.equal(report.exactDecisions, 18);
   assert.equal(report.acceptedPrecision, 1);
   assert.equal(report.ambiguousFalseAccepts, 0);
@@ -100,7 +103,22 @@ test('held-out qualification cannot pass on empty acceptance, false accepts or a
     assert.equal(report.interruption?.code, { 'provider-error': 'provider_unavailable', unapproved: 'dependency_unavailable', budget: 'budget_exhausted', cancelled: 'cancelled' }[scenario], scenario);
     if (scenario === 'abstain') assert.equal(report.acceptedPrecision, null);
     if (scenario === 'false-accept') assert.equal(report.ambiguousFalseAccepts, 6);
+    if (scenario === 'provider-error') {
+      assert.equal(report.completedCalls, 1);
+      assert.deepEqual(report.interruption, { code: 'provider_unavailable', attempts: 1, ambiguousAttempts: 1 });
+    }
   }
+});
+
+test('a direct qualification command cannot replace the fixed service boundary with an environment flag', () => {
+  assert.throws(assertQualificationService, /required/u);
+  const entrypoint = fileURLToPath(new URL('./evals/jev-qualification-cli.mjs', import.meta.url));
+  const run = spawnSync(process.execPath, [entrypoint], { encoding: 'utf8',
+    env: { JUSTUP_RUN_JEV_QUALIFICATION: 'true', JUSTUP_RUNNER_CONFIG: '/private-canary' } });
+  assert.equal(run.status, 1);
+  assert.equal(run.stdout, '');
+  assert.match(run.stderr, /JEV qualification stopped before a complete report/u);
+  assert.doesNotMatch(run.stderr, /private-canary/u);
 });
 
 test('ternary requests omit identities/URLs and response order does not change candidate IDs', async (t) => {

@@ -2217,8 +2217,25 @@ process.stdout.write('actual_node_policy_configuration_matches\n');
             (base / 'current').symlink_to(release)
             manifest = {'buildIdentity': build, 'sourceCommit': 'c' * 40,
                         'files': dict.fromkeys(artifact.JEV_QUALIFICATION_FILES, cases)}
+            decisions = ('accepted', 'rejected', 'insufficient_evidence')
+            case_ids = ('held-positive-oncall', 'held-negative-oncall', 'held-unknown-oncall',
+                        'held-positive-conflict', 'held-negative-conflict', 'held-unknown-injection')
+            attempts = [{'round': number, 'elapsedMs': 100, 'inputTokens': 300, 'outputTokens': 24,
+                         'costNanodollars': 300 * 42, 'reservedNanodollars': 64_000 * 42,
+                         'outcomes': [{'caseId': case_id, 'expected': decision, 'observed': decision}
+                                      for case_id, decision in zip(group, decisions)]}
+                        for number in range(1, 4) for group in (case_ids[:3], case_ids[3:])]
             report = {'buildIdentity': build, 'sourceCommit': manifest['sourceCommit'],
-                      'hostPlanSha256': plan, 'fixtureSha256': cases, 'status': 'pass'}
+                      'hostPlanSha256': plan, 'fixtureSha256': cases, 'status': 'pass', 'schemaVersion': 1,
+                      'startedAt': '2026-11-18T03:00:00.000Z', 'finishedAt': '2026-11-18T03:00:01.000Z',
+                      'model': 'jev-1.14.0', 'classifierVersion': 'jev-1.14.0/justup-residual-v1/evidence-v1/threshold-0.9',
+                      'requiredCalls': 6, 'completedCalls': 6, 'expectedDecisions': 18, 'observedDecisions': 18,
+                      'exactDecisions': 18, 'acceptedPrecision': 1, 'ambiguousFalseAccepts': 0, 'inputTokens': 1800,
+                      'outputTokens': 144, 'knownCostNanodollars': 6 * 300 * 42,
+                      'confirmedReservedNanodollars': 6 * 64_000 * 42, 'p50Ms': 100, 'p95Ms': 100,
+                      'repeated': [{'caseId': case_id, 'observed': [decision] * 3, 'varies': False}
+                                   for case_id, decision in zip(case_ids, decisions * 2)],
+                      'attempts': attempts, 'interruption': None}
             verified = SimpleNamespace(read_host_plan=lambda _: plan, verify_directory=lambda _: manifest,
                                        JEV_QUALIFICATION_FILES=artifact.JEV_QUALIFICATION_FILES)
             states = {host.JEV_UNIT: 'not-found'}
@@ -2249,9 +2266,17 @@ process.stdout.write('actual_node_policy_configuration_matches\n');
                 launch.return_value = SimpleNamespace(returncode=1, stdout=json.dumps(report).encode())
                 with self.assertRaises(ValueError):
                     host.run_jev_qualification(cases, build, plan)
-                failed = {**report, 'status': 'insufficient_evidence'}
+                failed = {**report, 'status': 'insufficient_evidence', 'acceptedPrecision': None}
                 launch.return_value = SimpleNamespace(returncode=1, stdout=json.dumps(failed).encode())
                 self.assertEqual(host.run_jev_qualification(cases, build, plan), failed)
+                unsafe_top_level = {**report, 'providerResponse': 'private canary'}
+                unsafe_nested = deepcopy(report)
+                unsafe_nested['attempts'][0]['outcomes'][0]['evidence'] = 'private canary'
+                for unsafe in (unsafe_top_level, unsafe_nested):
+                    launch.return_value = SimpleNamespace(returncode=0, stdout=json.dumps(unsafe).encode())
+                    with self.assertRaises(ValueError) as failure:
+                        host.run_jev_qualification(cases, build, plan)
+                    self.assertNotIn('private canary', str(failure.exception))
 
     def test_jev_qualification_child_rejects_review_mismatch_and_partial_assets(self):
         manifest, _ = payload()
