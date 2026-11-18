@@ -114,7 +114,7 @@ test('browser input/scope-only website submissions reach one grounded decision w
     const f=fixture(t,{model:{resolveCompany(input){
       assert.deepEqual(input,{input:raw,scope:'European roles',domain:null,careerUrl:null});
       return resolveCompanyIdentity(input,{
-        fetchPage:async url=>{const text='<title>Cloud Collective</title><h1>Cloud Collective</h1>Official company website.';return {url,finalUrl:url,status:200,text,bytes:Buffer.byteLength(text),sha256:createHash('sha256').update(text).digest('hex')};},
+        fetchPage:async url=>{const text='<title>Cloud Collective</title><h1>Cloud Collective</h1>Official company website.';return {url,finalUrl:url,status:200,contentType:'text/html',text,bytes:Buffer.byteLength(text),sha256:createHash('sha256').update(text).digest('hex')};},
         executeStage:async({stage})=>{inferences++;assert.equal(stage,'grounded_decision');const result=candidate();result.data.candidate.name='Cloud Collective';result.data.candidate.evidenceUrls=['https://newcompany.com/'];return {data:result.data,usage:{inputTokens:100,cachedInputTokens:0,outputTokens:50,reasoningOutputTokens:0},toolCalls:0};}
       }).then(({data,evidenceVerified,evidenceProvenance})=>({data,evidenceVerified,evidenceProvenance}));
     }}});
@@ -132,7 +132,7 @@ test('company requests retain protected provenance across the exact www alias',a
     const hash=createHash('sha256').update(text).digest('hex');
     const f=fixture(t,{model:{resolveCompany(input){
       return resolveCompanyIdentity(input,{
-        fetchPage:async url=>{assert.equal(url,original);return {url,finalUrl:final,status:200,text,bytes:Buffer.byteLength(text),sha256:hash};},
+        fetchPage:async url=>{assert.equal(url,original);return {url,finalUrl:final,status:200,contentType:'text/html',text,bytes:Buffer.byteLength(text),sha256:hash};},
         executeStage:async()=>{
           const {data}=candidate();
           data.candidate={name:'New Company',domain:host,websiteUrl:final,evidenceUrls:[original,final]};
