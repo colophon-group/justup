@@ -522,6 +522,19 @@ class ImportSequenceTests(unittest.TestCase):
             with patch.object(FEED.sqlite3, 'connect', side_effect=sqlite3.OperationalError('Synthetic unavailable database.')):
                 self.assertFalse(FEED.latest_import_matches(SHA))
 
+    def test_reviewed_first_import_accepts_an_empty_epoch_zero_database(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(FEED, 'BASE', Path(root)):
+            state = Path(root) / 'state'
+            state.mkdir()
+            with closing(sqlite3.connect(state / 'preview.sqlite')) as database, database:
+                database.execute('CREATE TABLE bootstrap (id INTEGER)')
+                database.execute('DROP TABLE bootstrap')
+            self.assertIsNone(FEED.latest_import_selection(fail_closed=True))
+            with closing(sqlite3.connect(state / 'preview.sqlite')) as database, database:
+                database.execute('CREATE TABLE unexpected (id INTEGER)')
+            with self.assertRaisesRegex(FEED.FeedStageError, 'Could not verify'):
+                FEED.latest_import_selection(fail_closed=True)
+
     def test_partial_receipt_waits_for_durable_latest_and_replays_bound_candidate(self):
         with tempfile.TemporaryDirectory() as root:
             inbox = Path(root) / 'inbox'

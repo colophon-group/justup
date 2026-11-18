@@ -670,6 +670,9 @@ def latest_import_selection(*, fail_closed=False):
     database = None
     try:
         database = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+        if (fail_closed and database.execute('PRAGMA user_version').fetchone()[0] == 0
+                and database.execute("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").fetchone() is None):
+            return None
         row = database.execute('SELECT selection_json FROM justup_imports ORDER BY rowid DESC LIMIT 1').fetchone()
         if row is None:
             return None
