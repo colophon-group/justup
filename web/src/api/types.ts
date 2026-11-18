@@ -131,8 +131,6 @@ export interface Company {
   domain?: string;
   evidenceUrls?: string[];
   lastSuccessfulCheckAt?: string;
-  monitoringSince?: string;
-  hiringHistory?: { date: string; count: number }[];
 }
 // Public report projection. Historical analytics and private source identities stay out of hydration.
 export type CompanyRoleSample = { state: "unavailable" } | {
@@ -159,10 +157,25 @@ export interface CompanyHiringFootprint {
   unknownSampleSize: number;
   countries: { code: string; count: number }[];
 }
+export interface CompanyHiringHistory {
+  state: "available" | "partial" | "unavailable";
+  scopeCount: number;
+  points: {
+    start: string;
+    end: string;
+    state: "complete" | "partial" | "unknown";
+    newListings: number | null;
+    observedListings: number;
+    completeScopeCount: number;
+    scopeCount: number;
+  }[];
+}
 export interface CompanyReport {
   companyId: string;
   asOf: string;
-  // These five current-sample fields are projected atomically; source-only reports omit all five.
+  monitoringSince?: string | null;
+  hiringHistory?: CompanyHiringHistory;
+  // Current-sample fields are projected atomically; source-only reports can omit them.
   provenance?: {
     source: "jobseek_public";
     importVerifiedAt: string | null;

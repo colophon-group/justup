@@ -905,6 +905,18 @@ export const messages = {
     "Storico delle offerte",
     "Historial de ofertas"
   ],
+  "Incomplete coverage": [
+    "Unvollständige Abdeckung",
+    "Couverture incomplète",
+    "Copertura incompleta",
+    "Cobertura incompleta"
+  ],
+  "Newly observed listings on monitored career pages.": [
+    "Neu erfasste Stellenanzeigen auf überwachten Karriereseiten.",
+    "Nouvelles offres repérées sur les pages carrières suivies.",
+    "Nuovi annunci rilevati sulle pagine carriere monitorate.",
+    "Nuevas ofertas detectadas en las páginas de empleo que se supervisan."
+  ],
   "Historical hiring data is not available for this company.": [
     "Für dieses Unternehmen liegen keine historischen Stellendaten vor.",
     "Aucun historique des offres n’est disponible pour cette entreprise.",
