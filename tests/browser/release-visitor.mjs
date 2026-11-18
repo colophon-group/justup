@@ -24,8 +24,9 @@ export async function exerciseVisitorSearch(page, read, { query, sourceUrl, comp
   const resultsPath = `/api/v1/visitor/searches/${encodeURIComponent(search.id)}/results?revision=${search.revision}`;
   const response = await read(resultsPath);
   expect(response.status).toBe(200);
-  const results = decodeResults(response.json), asOf = clock();
-  expect(results.searchId === search.id && results.revision === search.revision
+  const results = decodeResults(response.json), asOf = Date.parse(response.json.asOf);
+  expect(Number.isFinite(asOf) && Math.abs(asOf - clock()) < 30_000
+    && results.searchId === search.id && results.revision === search.revision
     && results.items.some(job => job.sourceUrl === sourceUrl && job.company.id === companyId)
     && results.items.every(job => {
       const observed = Date.parse(job.firstObserved);
@@ -61,4 +62,21 @@ export async function verifyVisitorHandoff(page, read, previous, authentication)
   expect(workspace.status === 200 && workspace.json?.state?.activeSearchId === search.id
     && workspace.json?.state?.drafts?.[search.id] === draft).toBe(true);
   expect((await read(previous.resultsPath)).status).toBe(403);
+}
+
+export async function cleanupVisitorSearch(session, remove) {
+  const guest = await session();
+  if (guest?.user !== null || typeof guest.csrfToken !== 'string') {
+    throw new Error('Could not verify disposable visitor ownership.');
+  }
+  // Policy can hide a live visitor in session metadata while safe deletion is
+  // still available to this isolated browser's guest cookie.
+  const removed = await remove(guest.csrfToken);
+  if (removed.status !== 200 || removed.json?.deleted !== true) {
+    throw new Error('Could not verify disposable visitor deletion.');
+  }
+  const after = await session();
+  if (after?.user !== null || after.visitor !== null) {
+    throw new Error('Could not confirm that the disposable visitor is gone.');
+  }
 }

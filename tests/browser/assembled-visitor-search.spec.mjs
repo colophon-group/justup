@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { startVisitorRuntime } from '../assembled/visitor-runtime.mjs';
-import { exerciseVisitorSearch, verifyVisitorHandoff } from './release-visitor.mjs';
+import { cleanupVisitorSearch, exerciseVisitorSearch, verifyVisitorHandoff } from './release-visitor.mjs';
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 1100 } });
 let runtime;
 test.afterEach(async () => { await runtime?.close(); runtime = undefined; });
@@ -47,7 +47,7 @@ test('release visitor checks preserve a ready search and an unsent draft during 
   };
   const visitor = await exerciseVisitorSearch(page, read, {
     query: 'Engineer', sourceUrl: 'https://example.org/careers/assembled-engineer', companyId: 'assembled'
-  }, () => at);
+  }, () => at - 5_000);
   await page.locator('#header-sign-in').click();
   await page.locator('#auth-register').check();
   await page.locator('#auth-username').fill('release-visitor-fixture');
@@ -59,6 +59,32 @@ test('release visitor checks preserve a ready search and an unsent draft during 
   expect(response.status()).toBe(201);
   await verifyVisitorHandoff(page, read, visitor, await response.json());
   expect(runtime.modelCalls()).toBe(1);
+});
+test('release cleanup deletes the disposable guest when the public session hides the owner', async ({ page }) => {
+  const at = Date.now();
+  runtime = await startVisitorRuntime({ now: () => at, interpretIntent: () => interpretation() });
+  importCohorts(at);
+  await page.goto(runtime.origin + '/fr/');
+  await page.locator('#query').fill('Unsent disposable visitor text');
+  await expect.poll(() => runtime.count('justup_visitors')).toBe(1);
+  let before = true;
+  const session = async () => {
+    const response = await page.request.get(runtime.origin + '/api/v1/session', { headers: { 'X-Justup-Locale': 'fr' } });
+    const value = await response.json();
+    if (!before) return value;
+    before = false;
+    expect(value.visitor).not.toBeNull();
+    // Match the metadata emitted under policy withdrawal. The server visitor
+    // tests cover the real withdrawal and the policy-independent DELETE route.
+    return { ...value, visitor: null };
+  };
+  await cleanupVisitorSearch(session, async csrf => {
+    const response = await page.request.delete(runtime.origin + '/api/v1/visitor/session', {
+      headers: { Origin: runtime.origin, 'X-CSRF-Token': csrf, 'X-Justup-Locale': 'fr' }, data: {}
+    });
+    return { status: response.status(), json: await response.json() };
+  });
+  expect(runtime.count('justup_visitors')).toBe(0);
 });
 test('real invalid refinement preserves accepted criteria, rows and raw text through limited-account handoff and logout', async ({ page }) => {
   const at = Date.now();

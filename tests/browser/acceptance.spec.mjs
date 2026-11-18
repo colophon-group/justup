@@ -5,7 +5,7 @@ import { verifyPublicFootprint } from './release-footprint.mjs';
 import { accountStreamUrl, openReleaseStream, verifyReleaseStreamReconnect } from './release-live-results.mjs';
 import { exerciseReleaseReadingState, saveReleaseInterfaceLanguage, verifyReleaseReadingState } from './release-reading-preferences.mjs';
 import { verifyWireStrip } from './release-wire.mjs';
-import { exerciseVisitorSearch, verifyVisitorHandoff } from './release-visitor.mjs';
+import { cleanupVisitorSearch, exerciseVisitorSearch, verifyVisitorHandoff } from './release-visitor.mjs';
 
 for (const locale of GATE_LOCALES) {
   test(`${locale} fixed deployed candidate completes its disposable-account search and request journey`, async ({ browser }) => {
@@ -235,20 +235,11 @@ for (const locale of GATE_LOCALES) {
       if (visitorAttempted) {
         try {
           await identity();
-          const guest = await session();
-          if (guest.user !== null) throw new Error('Could not verify disposable visitor ownership.');
-          if (guest.visitor !== null) {
-            const removed = await mutation('/api/v1/visitor/session', undefined, guest.csrfToken);
-            if (removed.status !== 200 || removed.json?.deleted !== true || (await session()).visitor !== null) {
-              throw new Error('Could not verify disposable visitor deletion.');
-            }
-          } else if (visitorSearch) {
-            throw new Error('Could not confirm the previous visitor handoff or deletion.');
-          }
+          await cleanupVisitorSearch(session, csrf => mutation('/api/v1/visitor/session', {}, csrf));
         } catch { cleanupFailed = true; }
       }
       try { await context.close(); } catch { cleanupFailed = true; }
     }
-    if (failedStage || cleanupFailed) throw new Error(`Deployed acceptance failed at ${failedStage ?? 'cleanup'}${cleanupFailed ? '; disposable-account cleanup needs private operator verification' : ''}.`);
+    if (failedStage || cleanupFailed) throw new Error(`Deployed acceptance failed at ${failedStage ?? 'cleanup'}.${cleanupFailed ? ' Disposable browser data cleanup needs private operator verification.' : ''}`);
   });
 }

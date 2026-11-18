@@ -237,7 +237,8 @@ then registers and checks that the same search identity, criteria, revision and
 unsent text belong to the new limited account. The transferred search supplies
 the first signed-in results. The journey verifies that its old visitor results
 route rejects the authenticated browser and checks disposable visitor cleanup
-if registration fails.
+if registration fails, including when policy withdrawal hides the guest owner
+from session metadata.
 
 Every language journey creates only its own random username/password and keeps them in memory; cleanup runs for that isolated account even when the journey fails. Cleanup verifies the exact frontend/API/runner/import candidate and that session ownership matches that generated account before deleting it, and refuses foreign users or changed account ids. Withdrawal of policy approval blocks new processing but does not prevent attempting permitted deletion of the still-owned signed-in account. If withdrawn approval prevents the post-deletion login check, cleanup remains conservatively unconfirmed and requires operator verification; policy denial is not proof that credentials were removed. A transport failure can prevent cleanup; a failed cleanup requires private operator verification before rerunning. Automatic test retries are disabled. Live mode disables traces, screenshots, video, automatic error-context Markdown and persisted browser state; failures report a fixed stage label without request bodies, credentials or Playwright fill call logs. Record only sanitized pass/fail, candidate identities and the verified cleanup outcome in release evidence.
 
