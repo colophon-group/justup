@@ -218,6 +218,54 @@ class DataWriterFenceTests(unittest.TestCase):
             self.assertEqual(json.loads(output.getvalue())['result'], {'activated': False})
             switch.assert_called_once_with('b' * 64)
 
+    def test_recovery_takes_the_writer_fence_before_guard_and_candidate_selection(self):
+        spec = importlib.util.spec_from_file_location('feed_recovery', Path(__file__).with_name('preview-recovery.py'))
+        recovery = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(recovery)
+        for command, flags in [
+            ('restore', ['--snapshot', '/private/backup', '--destination', '/private/restored']),
+            ('migrate', ['--database', '/private/state.sqlite', '--backup-dir', '/private',
+                         '--build-identity', 'b' * 64]),
+        ]:
+            with self.subTest(command=command):
+                holding, busy = False, True
+
+                @contextmanager
+                def lease():
+                    nonlocal holding
+                    if busy:
+                        raise ValueError('Busy fixture.')
+                    holding = True
+                    try:
+                        yield
+                    finally:
+                        holding = False
+
+                def context(*args, **kwargs):
+                    self.assertTrue(holding)
+                    return {'schemaVersion': 2}, ['current-node', '--prepare-restored-db']
+
+                def recover(*args, **kwargs):
+                    self.assertTrue(holding)
+                    return {'activated': False}
+
+                operator = SimpleNamespace(data_writer_lock=lease, require_idle_preview=lambda: self.assertTrue(holding))
+                with patch.object(recovery, 'load_operator_module', return_value=operator), \
+                        patch.object(recovery, 'operational_context', side_effect=context) as inspect, \
+                        patch.object(recovery, 'restore' if command == 'restore' else 'migrate_live',
+                                     side_effect=recover) as action, \
+                        patch.object(recovery.sys, 'argv', ['preview-recovery.py', command, '--generation', '/private/generation', *flags]), \
+                        patch.object(recovery.sys, 'stdout', new_callable=io.StringIO), \
+                        patch.object(recovery.sys, 'stderr', new_callable=io.StringIO):
+                    self.assertEqual(recovery.main(), 1)
+                    inspect.assert_not_called()
+                    action.assert_not_called()
+                    busy = False
+                    self.assertEqual(recovery.main(), 0)
+                    self.assertEqual(inspect.call_count, 1 if command == 'restore' else 2)
+                    action.assert_called_once()
+                    self.assertFalse(holding)
+
 
 class PrepareTests(unittest.TestCase):
     def prepare(self, inbox, receipts):

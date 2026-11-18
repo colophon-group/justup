@@ -7,7 +7,7 @@ purges backups synchronously before its database transaction can commit.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager, closing
+from contextlib import ExitStack, contextmanager, closing
 import fcntl
 import hashlib
 import importlib.util
@@ -356,6 +356,13 @@ def restore(snapshot, barrier, destination, prepare_command, now=None, migrate_v
                 Path(str(destination) + suffix).unlink(missing_ok=True)
 
 
+def load_operator_module(name):
+    spec = importlib.util.spec_from_file_location(name.replace('-', '_'), Path(__file__).with_name(name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def operational_context(paths, build_identity=None, *, cleanup_logs=True, resource_only=False):
     base = Path('/srv/justup_preview')
     state = base / 'state'
@@ -364,12 +371,7 @@ def operational_context(paths, build_identity=None, *, cleanup_logs=True, resour
         path = Path(path)
         if path.is_symlink() or not (path in expected or (path.parent == state and path.name.startswith('restored-')) or (path.parent == state / 'backups' and BACKUP_NAME.fullmatch(path.name))):
             raise ValueError('Operational recovery paths must stay inside the dedicated preview state.')
-    def load(name):
-        spec = importlib.util.spec_from_file_location(name.replace('-', '_'), Path(__file__).with_name(name + '.py'))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    host = load('preview-host')
+    host = load_operator_module('preview-host')
     if resource_only:
         host.verify_caps()
         host.verify_storage()
@@ -380,7 +382,7 @@ def operational_context(paths, build_identity=None, *, cleanup_logs=True, resour
     release = (base / 'releases' / build_identity).resolve(strict=True) if build_identity else (base / 'current').resolve(strict=True)
     if release.parent != base / 'releases':
         raise ValueError('Current recovery executable is outside the retained release inventory.')
-    artifact = load('preview-artifact')
+    artifact = load_operator_module('preview-artifact')
     artifact.read_host_plan(base)
     manifest = artifact.verify_directory(release)
     return manifest, [str(release / 'runtime/bin/node'), str(release / manifest['entrypoint']), '--prepare-restored-db']
@@ -477,10 +479,14 @@ def main():
     clean = sub.add_parser('prune')
     clean.add_argument('--backup-dir', type=Path, required=True)
     args = parser.parse_args()
+    writer = ExitStack()
     try:
         if args.command == 'observe-backups':
             print(json.dumps(observe_backups(), sort_keys=True))
             return 0
+        if args.command in {'migrate', 'restore'}:
+            host = load_operator_module('preview-host')
+            writer.enter_context(host.data_writer_lock())
         paths = ([SCHEDULED_BASE / 'preview.sqlite', SCHEDULED_BASE / 'backups', SCHEDULED_BASE / 'private-generation']
                  if args.command == 'scheduled-backup' else
                  [getattr(args, key) for key in ('database', 'backup_dir', 'generation', 'snapshot', 'destination') if hasattr(args, key)])
@@ -496,23 +502,13 @@ def main():
             result = backup(*paths, manifest['sourceCommit'], manifest['buildIdentity'],
                             schema_version=manifest['schemaVersion'])
         elif args.command == 'migrate':
-            spec = importlib.util.spec_from_file_location('migration_host', Path(__file__).with_name('preview-host.py'))
-            host = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(host)
-            with host.data_writer_lock():
-                current, _ = operational_context(paths)
-                result = migrate_live(args.database, args.backup_dir, args.generation, manifest, [*prepare_command[:-1], '--migrate-db'], current, host=host)
+            current, _ = operational_context(paths)
+            result = migrate_live(args.database, args.backup_dir, args.generation, manifest, [*prepare_command[:-1], '--migrate-db'], current, host=host)
         elif args.command == 'restore':
-            if os.geteuid() != 0:
-                raise ValueError('Restoration is an explicit root operator step.')
-            spec = importlib.util.spec_from_file_location('restore_host', Path(__file__).with_name('preview-host.py'))
-            host = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(host)
-            with host.data_writer_lock():
-                host.require_idle_preview()
-                if manifest['schemaVersion'] != APPLICATION_SCHEMA:
-                    raise ValueError('Restore requires the current epoch-2 runtime.')
-                result = restore(args.snapshot, args.generation, args.destination, prepare_command, migrate_v1=args.migrate_v1)
+            host.require_idle_preview()
+            if manifest['schemaVersion'] != APPLICATION_SCHEMA:
+                raise ValueError('Restore requires the current epoch-2 runtime.')
+            result = restore(args.snapshot, args.generation, args.destination, prepare_command, migrate_v1=args.migrate_v1)
         elif args.command == 'check-restore':
             validate_restore(args.snapshot, args.generation)
             result = {'eligible': True, 'activated': False, 'sessionsStillRequireInvalidation': True}
@@ -526,6 +522,8 @@ def main():
     except (ValueError, OSError, sqlite3.Error, subprocess.SubprocessError, KeyError):
         print('Preview recovery failed closed; no database was activated.', file=sys.stderr)
         return 1
+    finally:
+        writer.close()
 
 
 if __name__ == '__main__':
