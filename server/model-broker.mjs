@@ -9,7 +9,7 @@ import { isAbsolute,join,resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import { CODEX_VERSION,codexArguments,codexEnvironment,executeCodex,validateModelData,modelCatalogueReady,MODEL_PROFILES } from './model-runner.mjs';
-import { validateCompanyUrl } from './companies.mjs';
+import { sameOfficialHost, validateCompanyUrl } from './companies.mjs';
 import { createHiringWireCodexSession } from './hiring-wire-codex.mjs';
 import { handleHiringWireCodexConnection,validWireConfiguration,validateWireOpen } from './hiring-wire-codex-broker.mjs';
 import { wireCatalogueReady,wireProfileReady,WIRE_NODE_VERSION } from './hiring-wire-codex-policy.mjs';
@@ -67,7 +67,8 @@ const identity=(value)=>value.normalize('NFKC').toLocaleLowerCase('en').replace(
 const containsIdentity=(text,name)=>` ${identity(text)} `.includes(` ${identity(name)} `);
 function pageData(page,url){
   if(!plain(page)||page.url!==url||page.status!==200||typeof page.text!=='string'||!page.text.trim()||!Number.isInteger(page.bytes)||page.bytes<1||page.bytes>131_072||Buffer.byteLength(page.text)>131_072||page.sha256!==createHash('sha256').update(page.text).digest('hex'))throw problem('invalid_output');
-  const finalUrl=validateCompanyUrl(page.finalUrl,{official:true});if(new URL(finalUrl).origin!==new URL(url).origin)throw problem('invalid_output');
+  const finalUrl=validateCompanyUrl(page.finalUrl,{official:true});
+  if(!sameOfficialHost(new URL(finalUrl).hostname,new URL(url).hostname))throw problem('invalid_output');
   return {...page,finalUrl};
 }
 function identityMarkers(html){
@@ -111,14 +112,14 @@ export async function resolveCompanyIdentity(task,{executeStage,fetchPage=fetchC
   if(input.domain!==null)root=officialDomain(input.domain);
   if(websiteHint){
     const host=new URL(websiteHint.url).hostname;
-    if(root&&host!==root&&!host.endsWith(`.${root}`))return finish(noIdentity('The supplied websites conflict. Which official company website should be used?'));
+    if(root&&!sameOfficialHost(host,root)&&!host.endsWith(`.${root}`))return finish(noIdentity('The supplied websites conflict. Which official company website should be used?'));
     root??=host;urls.push(websiteHint.url);
   }
   if(input.careerUrl!==null){
     let url;try{url=validateCompanyUrl(input.careerUrl,{official:true});}catch{
       if(!root)return finish(noIdentity('Please provide the official company website, rather than an applicant tracking page.'));
     }
-    if(url){const site=new URL(url);if(root&&site.hostname!==root&&!site.hostname.endsWith(`.${root}`))return finish(noIdentity('The domain and career URL refer to different websites. Which official company website should be used?'));root??=site.hostname;urls.push(url);}
+    if(url){const site=new URL(url);if(root&&!sameOfficialHost(site.hostname,root)&&!site.hostname.endsWith(`.${root}`))return finish(noIdentity('The domain and career URL refer to different websites. Which official company website should be used?'));root??=site.hostname;urls.push(url);}
   }
   if(!root){
     const discovery=await infer('web_discovery',`${DISCOVERY_INSTRUCTIONS}\nUntrusted task JSON:\n${JSON.stringify(input)}`,512);
@@ -127,7 +128,7 @@ export async function resolveCompanyIdentity(task,{executeStage,fetchPage=fetchC
       return finish(noIdentity(discovery.clarification,discovery.status));
     }
     if(discovery.clarification!==null||toolCalls<1||discovery.sourceUrls.length<1)throw problem('invalid_output');
-    try{root=officialDomain(discovery.domain);for(const source of discovery.sourceUrls){const host=new URL(validateCompanyUrl(source,{official:true})).hostname;if(host!==root&&!host.endsWith(`.${root}`))throw problem('invalid_output');}urls.push(...discovery.sourceUrls.map(source=>validateCompanyUrl(source,{official:true})));}catch{return finish(noIdentity('Please provide the official company website so its identity can be verified.','unresolved'));}
+    try{root=officialDomain(discovery.domain);for(const source of discovery.sourceUrls){const host=new URL(validateCompanyUrl(source,{official:true})).hostname;if(!sameOfficialHost(host,root)&&!host.endsWith(`.${root}`))throw problem('invalid_output');}urls.push(...discovery.sourceUrls.map(source=>validateCompanyUrl(source,{official:true})));}catch{return finish(noIdentity('Please provide the official company website so its identity can be verified.','unresolved'));}
   }
   urls.push(`https://${root}/`);urls=[...new Set(urls)].slice(0,2);
   const pages=[];
@@ -156,8 +157,10 @@ export async function resolveCompanyIdentity(task,{executeStage,fetchPage=fetchC
   const name=identity(candidate.name),requested=identity(input.input),visible=excerpts.map(page=>page.text).join(' '),markers=excerpts.map(page=>page.identityText).join(' ');
   const related=websiteHint!==null||name===requested||containsIdentity(name,requested)||containsIdentity(requested,name);
   if(name.length<2||!related||!containsIdentity(visible,candidate.name)||!containsIdentity(markers,candidate.name))throw problem('invalid_output');
-  const provenance=pages.filter(page=>candidate.evidenceUrls.includes(page.url)||candidate.evidenceUrls.includes(page.finalUrl)).map(page=>({url:candidate.evidenceUrls.includes(page.url)?page.url:page.finalUrl,finalUrl:page.finalUrl,status:200,bytes:page.bytes,sha256:page.sha256}));
-  if(!provenance.length||candidate.evidenceUrls.some(url=>!provenance.some(proof=>proof.url===url)))throw problem('invalid_output');
+  const provenance=candidate.evidenceUrls.map(url=>{
+    const page=pages.find(value=>url===value.url||url===value.finalUrl);
+    return {url,finalUrl:page.finalUrl,status:200,bytes:page.bytes,sha256:page.sha256};
+  });
   return finish(result,provenance);
 }
 
@@ -174,7 +177,7 @@ export async function fetchCompanyEvidence(url,{signal,resolveAddresses=addresse
     const found=await abortable(resolveAddresses(current.hostname),combined);
     if(!Array.isArray(found)||!found.length||found.length>32||found.some(ip=>!publicIpv4(ip)))throw problem('invalid_output');
     const response=await new Promise((resolveResponse,reject)=>{
-      const req=request(current,{method:'GET',agent:false,servername:current.hostname,rejectUnauthorized:true,signal:combined,
+      const req=request(current,{method:'GET',agent:false,family:4,servername:current.hostname,rejectUnauthorized:true,signal:combined,
         lookup:(_hostname,_options,callback)=>callback(null,found[0],4),headers:{'user-agent':'JustupEvidence/1','accept':'text/html,application/xhtml+xml,text/plain'}},res=>{
         const status=res.statusCode;
         if([301,302,303,307,308].includes(status)){res.resume();resolveResponse({status,location:res.headers.location});return;}
@@ -186,7 +189,12 @@ export async function fetchCompanyEvidence(url,{signal,resolveAddresses=addresse
       });
       req.once('error',()=>reject(problem(combined.aborted?'task_timeout':'provider_unavailable')));req.end();
     });
-    if(response.location){const next=new URL(response.location,current);validateCompanyUrl(next.href,{official:true});if(next.origin!==initial.origin||redirects===2)throw problem('invalid_output');current=next;continue;}
+    if(response.location){
+      const next=new URL(validateCompanyUrl(new URL(response.location,current).href,{official:true}));
+      if(!sameOfficialHost(next.hostname,initial.hostname)||redirects===2)throw problem('invalid_output');
+      current=next;
+      continue;
+    }
     if(typeof response.text!=='string'||!response.text.trim())throw problem('invalid_output');
     return {url:initial.href,finalUrl:current.href,status:200,bytes:response.bytes,text:response.text,sha256:createHash('sha256').update(response.text).digest('hex')};
   }

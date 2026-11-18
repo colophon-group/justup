@@ -82,6 +82,21 @@ test('name-only repeats with no observed native web start cannot pass',async()=>
   assert.equal(final.company.correct,18);assert.equal(final.company.manualReviewPending,0);
   assert.equal(final.company.passed,false);assert.equal(final.passed,false);
 });
+test('held-out qualification accepts only the exact verified www domain variant',async()=>{
+  const {manifest}=fixedQualificationManifest();
+  for(const [domain,correct] of [['www.cloudflare.com',true],['www.cloudflare.com.other.com',false]]){
+    const observer=createQualificationObserver(),base=fakeModel(manifest,observer);
+    const model={...base,async resolveCompany(input){
+      const result=await base.resolveCompany(input);
+      if(input.input==='Cloudflare')result.data.candidate.domain=domain;
+      return result;
+    }};
+    const report=await evaluateQualification({manifest,model,observer});
+    const cases=report.cases.filter(record=>record.id==='cloudflare');
+    assert.equal(cases.length,3);
+    assert.ok(cases.every(record=>record.correct===correct&&record.discoveryRequired&&record.webStarts>=1));
+  }
+});
 test('intent normalization gets one bounded service-style repair and aggregates both attempts',async()=>{
   const {manifest}=fixedQualificationManifest(),observer=createQualificationObserver(),base=fakeModel(manifest,observer);
   let first=true,repairObserved=false;
