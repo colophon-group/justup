@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync,writeFileSync,chmodSync,rmSync } from 'node:fs';
+import { mkdtempSync,writeFileSync,chmodSync,renameSync,symlinkSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApiServices,createApiReadiness,readRunnerObservation,readRunnerStatus } from './composition.mjs';
@@ -29,6 +29,15 @@ test('private observation retains verified stale heartbeat age while API readine
   assert.deepEqual(observed.capabilities, { search: false, companyRequests: false, aiMatching: false });
   assert.equal(readRunnerStatus(options).lastHeartbeat, null);
   assert.equal(readRunnerObservation({ ...options, expectedOwner: process.getuid() + 1 }), null);
+  f.write();
+  chmodSync(f.path, 0o660);
+  assert.equal(readRunnerObservation(options), null);
+  chmodSync(f.path, 0o640);
+  renameSync(f.path, f.path + '.fixture');
+  symlinkSync(f.path + '.fixture', f.path);
+  assert.equal(readRunnerObservation(options), null);
+  assert.equal(readRunnerStatus(options).ready, false);
+  rmSync(f.path);
   f.write({ buildIdentity: 'wrong-build' });
   assert.equal(readRunnerObservation(options), null);
 });

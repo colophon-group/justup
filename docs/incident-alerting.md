@@ -51,7 +51,7 @@ run one bounded sample in the existing slice and save the JSON privately.
 ```sh
 umask 077
 systemd-run --quiet --wait --pipe --collect --slice=justup-preview.slice \
-  --property=RuntimeMaxSec=60s --property=TimeoutStopSec=5s \
+  --property=RuntimeMaxSec=90s --property=TimeoutStopSec=5s \
   --property=ReadOnlyPaths=/srv/justup_preview/state \
   /usr/bin/python3 -I -B /srv/justup_preview/ops/preview-host.py observe \
   --build-identity "$JUSTUP_PREVIEW_BUILD_ID" \
