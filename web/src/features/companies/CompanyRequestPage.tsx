@@ -61,6 +61,7 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
   }
   const stage = request?.status === 'accepted' ? 'recorded' : request?.status === 'candidate' ? 'confirm' : 'find';
   const candidate = request?.candidate;
+  const publishedCompanyId = request?.companyId ?? request?.company?.id;
   const website = safeSourceUrl(candidate?.websiteUrl);
   const evidence = [...new Set(candidate?.evidenceUrls?.flatMap(value => { const url = safeSourceUrl(value); return url ? [url] : []; }) || [])];
   return <section id="request-page" className="page" hidden={!active}>
@@ -104,7 +105,7 @@ export function CompanyRequestPage({ client, session, active, onSignIn, accountE
           <h2>{t("No confirmed match.")}</h2><p>{request.reason || t('We couldn’t confidently identify this company. Try its website or full name.')}</p><button className="button outline" id="new-request" onClick={flow.reset}>{t("Try another lead")}</button>
         </> : request.status === 'accepted' ? <>
           <h2>{t("On the record.")}</h2><p>{request.message || t('Your company request is recorded. Career-page collection is not confirmed.')}</p>
-          {request.company?.id ? <a className="button dark" href={pageHref("company", locale, request.company.id)}>{t("View company ↗")}</a> : <a className="button outline" href={pageHref("companies", locale)}>{t("Company catalogue ↗")}</a>}
+          {publishedCompanyId ? <a className="button dark" href={pageHref("company", locale, publishedCompanyId)}>{t("View company ↗")}</a> : <a className="button outline" href={pageHref("companies", locale)}>{t("Company catalogue ↗")}</a>}
         </> : <><h2>{t("Request unavailable.")}</h2><p>{t("The service returned an unknown request state.")}</p><button className="button outline" onClick={flow.reset}>{t("Start again")}</button></>}
         <p id="request-status" role="status">{notice(flow.error) || (!request && flow.busy ? t('Following your lead…') : '')}</p>
         {flow.error && request?.status === 'pending' ? <button className="text-link" disabled={flow.busy} onClick={flow.reset}>{t("Try another lead")}</button> : null}

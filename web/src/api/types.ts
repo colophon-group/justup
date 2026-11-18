@@ -238,6 +238,7 @@ export interface CompanyRequest {
   clarification?: string | null;
   message?: string;
   reason?: string;
+  companyId?: string;
   company?: Company;
   taskId?: string | null;
 }

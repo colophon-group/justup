@@ -1,9 +1,10 @@
 // Retained browser/Worker -> real language catalogue, HTTP ownership/revision boundary and SQLite filtering.
 import { expect, test } from '@playwright/test';
 import { startVisitorRuntime } from '../assembled/visitor-runtime.mjs';
+import { exerciseReleaseReadingState, saveReleaseInterfaceLanguage, verifyReleaseReadingState } from './release-reading-preferences.mjs';
 test.use({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 1100 } });
 let runtime;
-test.beforeEach(async () => { runtime = await startVisitorRuntime(); });
+test.beforeEach(async () => { runtime = await startVisitorRuntime({ knownCompanyRequests: true }); });
 test.afterEach(async () => { await runtime?.close(); });
 function multilingual() {
   const at = Date.now(), jobs = ['en', 'fr', 'de-CH', null].map((locale, index) => ({
@@ -71,4 +72,37 @@ test('lost real option acknowledgement reads committed canonical revision withou
   await page.keyboard.press('Escape'); expect(runtime.modelCalls()).toBe(1);
   const patches = runtime.calls.filter(call => call.method === 'PATCH' && call.path.endsWith('/options'));
   expect(patches).toHaveLength(1); expect(runtime.db.prepare('SELECT revision FROM justup_searches WHERE id=?').get(id).revision).toBe(2);
+});
+
+test('the release reading-state check verifies real persisted choices after fresh sign-in', async ({ page }) => {
+  multilingual();
+  await page.goto(runtime.origin);
+  await login(page);
+  const read = async path => {
+    const response = await page.request.get(runtime.origin + path);
+    return { status: response.status(), json: await response.json() };
+  };
+  const accountId = (await read('/api/v1/session')).json.user.id;
+  await page.locator('#query').fill('Engineer');
+  await page.locator('#job-search button[type=submit]').click();
+  await expect(page.locator('[data-job="language-fr"]')).toBeVisible();
+  const [search] = (await read('/api/v1/searches')).json.items;
+  const reading = await exerciseReleaseReadingState(page, read, search, 'https://example.org/careers/1');
+  await page.goto(runtime.origin + '/#request');
+  await page.locator('#request-query').fill('Assembled Company');
+  await page.locator('#request-form button[type=submit]').click();
+  await page.locator('#accept-company').click();
+  await expect(page.locator('#request-content a[href="/companies/assembled"]')).toBeVisible();
+  await page.goto(runtime.origin);
+  await saveReleaseInterfaceLanguage(page, read, accountId);
+  await page.locator('#account-open').click();
+  await page.locator('#logout').click();
+  await expect(page.locator('#header-sign-in')).toBeVisible();
+  for (const path of ['/api/v1/preferences', '/api/v1/follows', '/api/v1/workspace']) {
+    expect((await read(path)).status).toBe(401);
+  }
+  await login(page);
+  await page.goto(runtime.origin);
+  await verifyReleaseReadingState(page, read, { accountId, companyId: 'assembled', search: reading.search, reading });
+  expect(runtime.modelCalls()).toBe(1);
 });

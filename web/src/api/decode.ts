@@ -622,6 +622,10 @@ export function decodeResults(value: unknown): ResultPage {
 export function decodeCompanyRequest(value: unknown): CompanyRequest {
   const o = record(value, "company request"),
     status = text(o.status, "request status");
+  const companyId = nullableText(o.companyId, "published company identity");
+  if (companyId !== null && (!companyId || companyId.length > 128 || /[\x00-\x1f\x7f/\\]/u.test(companyId))) {
+    fail("published company identity");
+  }
   if (
     ![
       "pending",
@@ -645,6 +649,7 @@ export function decodeCompanyRequest(value: unknown): CompanyRequest {
     ...optionalText(o, "reason"),
     ...optionalText(o, "message"),
     ...(o.taskId == null ? {} : { taskId: text(o.taskId, "request task") }),
+    ...(companyId === null ? {} : { companyId }),
     ...(o.company == null ? {} : { company: decodeCompany(o.company) }),
   };
 }

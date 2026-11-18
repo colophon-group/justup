@@ -1,8 +1,9 @@
-// Explicit real-service journey. No interception, fixtures, retained credentials or media.
+// Explicit real-service journey. Employer navigation stops at the reviewed destination.
 import { test, expect } from '@playwright/test';
 import { loadGateConfig, requireInvite, preflight, verifyCandidateBuilds, verifyPolicyState, verifyDisposableAccountAccess, GATE_LOCALES, disposableAccount, ownSession, cleanupCandidateAccount } from './release-gate.mjs';
 import { verifyPublicFootprint } from './release-footprint.mjs';
 import { accountStreamUrl, openReleaseStream, verifyReleaseStreamReconnect } from './release-live-results.mjs';
+import { exerciseReleaseReadingState, saveReleaseInterfaceLanguage, verifyReleaseReadingState } from './release-reading-preferences.mjs';
 
 for (const locale of GATE_LOCALES) {
   test(`${locale} fixed deployed candidate completes its disposable-account search and request journey`, async ({ browser }) => {
@@ -38,6 +39,22 @@ for (const locale of GATE_LOCALES) {
       verifyPolicyState(config, (await session()).policies, locale);
     };
     const responseFor = (method, path) => page.waitForResponse(response => response.request().method() === method && new URL(response.url()).pathname === path, { timeout: 15_000 });
+    const relogin = async () => {
+      await page.locator('#account-open').click();
+      await page.locator('#logout').click();
+      await expect(page.locator('#header-sign-in')).toBeVisible();
+      expect((await session()).user === null).toBe(true);
+      if (locale === 'en') {
+        const privateReads = await Promise.all(['/follows', '/workspace', '/preferences'].map(path => read(`/api/v1${path}`)));
+        expect(privateReads.every(response => response.status === 401)).toBe(true);
+      }
+      await page.locator('#header-sign-in').click();
+      await page.locator('#auth-username').fill(account.username);
+      await page.locator('#auth-password').fill(account.password);
+      await page.locator('#auth-submit').click();
+      await expect(page.locator('#sign-in-dialog')).not.toBeVisible();
+      expect(ownSession(await session(), account)).toBe(true);
+    };
     try {
       await preflight(config, read);
       if (locale === 'en') {
@@ -66,17 +83,10 @@ for (const locale of GATE_LOCALES) {
       verifyDisposableAccountAccess(config, registeredSession, billing);
       await expect(page.locator('#sign-in-dialog')).not.toBeVisible();
 
-      stage = 'logout and login';
-      await page.locator('#account-open').click();
-      await page.locator('#logout').click();
-      await expect(page.locator('#header-sign-in')).toBeVisible();
-      expect((await session()).user === null).toBe(true);
-      await page.locator('#header-sign-in').click();
-      await page.locator('#auth-username').fill(account.username);
-      await page.locator('#auth-password').fill(account.password);
-      await page.locator('#auth-submit').click();
-      await expect(page.locator('#sign-in-dialog')).not.toBeVisible();
-      expect(ownSession(await session(), account)).toBe(true);
+      if (locale !== 'en') {
+        stage = 'logout and login';
+        await relogin();
+      }
 
       stage = 'real interpreted search and source';
       await page.locator('#query').fill(config.scenario.query);
@@ -88,7 +98,7 @@ for (const locale of GATE_LOCALES) {
       await expect.poll(async () => page.locator('a.posting-link').evaluateAll((links, expected) => links.some(link => link.href === expected), config.scenario.sourceUrl), { timeout: 15_000 }).toBe(true);
       const firstSearches = (await read('/api/v1/searches')).json?.items;
       expect(Array.isArray(firstSearches) && firstSearches.length === 1 && firstSearches[0].status === 'ready' && firstSearches[0].query === config.scenario.query).toBe(true);
-      const accepted = firstSearches[0];
+      let accepted = firstSearches[0], reading;
       expect(await page.locator('[data-job]').evaluateAll((rows, expected) => rows.some(row => {
         const posting = row.querySelector('a.posting-link'), company = row.querySelector('a.job-company');
         const prefix = expected.locale === 'en' ? '' : `/${expected.locale}`;
@@ -98,6 +108,9 @@ for (const locale of GATE_LOCALES) {
         stage = 'deployed live results reconnect';
         const timings = await verifyReleaseStreamReconnect(page, config.origin, opening, accepted, config.scenario.sourceUrl);
         console.log(JSON.stringify({ liveResults: timings }));
+        stage = 'posting language and viewed position';
+        reading = await exerciseReleaseReadingState(page, read, accepted, config.scenario.sourceUrl);
+        accepted = reading.search;
       }
 
       stage = 'warned edit and explicit confirmation';
@@ -122,15 +135,28 @@ for (const locale of GATE_LOCALES) {
       const requested = await requesting;
       expect(requested.status() === 201).toBe(true);
       const candidate = (await requested.json()).request;
-      expect(candidate?.status === 'candidate' && candidate.taskId === null && candidate.candidate?.coverage?.state === 'imported_snapshot' && candidate.candidate?.name === config.scenario.companyName).toBe(true);
+      expect(candidate?.status === 'candidate' && candidate.taskId === null && candidate.candidate?.coverage?.state === 'imported_snapshot'
+        && candidate.candidate?.name === config.scenario.companyName && candidate.candidate.companyId === config.scenario.companyId).toBe(true);
       await page.locator('#accept-company').waitFor({ state: 'visible' });
       const accepting = responseFor('POST', `/api/v1/company-requests/${encodeURIComponent(candidate.id)}/accept`);
       await page.locator('#accept-company').click();
       const acceptedRequest = await accepting;
       const exact = acceptedRequest.request().postDataJSON();
       expect(exact.candidateId === candidate.candidate.id && exact.previewRevision === candidate.previewRevision).toBe(true);
-      expect(acceptedRequest.status() === 200 && (await acceptedRequest.json()).request?.status === 'accepted').toBe(true);
-      await expect(page.locator(`#request-content a[href="${prefix}/companies/${encodeURIComponent(candidate.candidate.id)}"]`)).toBeVisible();
+      const published = (await acceptedRequest.json()).request;
+      expect(acceptedRequest.status() === 200 && published?.status === 'accepted'
+        && published.companyId === config.scenario.companyId).toBe(true);
+      await expect(page.locator(`#request-content a[href="${prefix}/companies/${encodeURIComponent(published.companyId)}"]`)).toBeVisible();
+
+      if (reading) {
+        stage = 'reading preferences after sign-in';
+        await admission();
+        await page.goto('/');
+        await saveReleaseInterfaceLanguage(page, read, account.id);
+        await relogin();
+        await page.goto('/');
+        await verifyReleaseReadingState(page, read, { accountId: account.id, companyId: config.scenario.companyId, search: confirmed, reading });
+      }
 
       stage = 'wrong password preserves account';
       await page.locator('#account-open').click();
