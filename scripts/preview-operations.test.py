@@ -6,6 +6,7 @@ import base64
 from copy import deepcopy
 from contextlib import contextmanager, ExitStack, closing
 from datetime import datetime, timezone
+import errno
 import hashlib
 import importlib.util
 import io
@@ -344,6 +345,143 @@ class ArtifactContracts(unittest.TestCase):
             link.symlink_to(root)
             with self.assertRaisesRegex(ValueError, 'moving symlink'):
                 artifact.verify_directory(link)
+
+
+class LunaSandboxContracts(unittest.TestCase):
+    def setUp(self):
+        self.base = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.build = 'b' * 64
+        self.plan = 'a' * 64
+        self.release = self.base / 'releases' / self.build
+        self.release.mkdir(parents=True)
+        (self.base / 'current').symlink_to(self.release)
+        self.folder = self.base / 'queue/qualification'
+        self.folder.mkdir(parents=True)
+        self.results = self.folder / 'results'
+        self.proofs = self.folder / 'receipts'
+        uid, gid = os.getuid() or 1234, os.getgid() or 1234
+        self.folder.chmod(0o750)
+        os.chown(self.folder, os.getuid(), gid)
+        for path in (self.results, self.proofs):
+            path.mkdir()
+            path.chmod(0o700)
+        os.chown(self.results, uid, gid)
+        self.manifest = {'buildIdentity': self.build, 'sourceCommit': 'c' * 40,
+                         'files': {host.LUNA_MANIFEST: 'd' * 64}}
+        instant = host.datetime.now(host.timezone.utc).timestamp()
+        utc = lambda offset: host.datetime.fromtimestamp(instant + offset, host.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        self.grant = {'kind': 'luna_qualification_once', 'schemaVersion': 1, 'runId': 'e' * 32,
+                      'buildIdentity': self.build, 'sourceCommit': self.manifest['sourceCommit'],
+                      'hostPlanSha256': self.plan, 'manifestSha256': self.manifest['files'][host.LUNA_MANIFEST],
+                      'notBefore': utc(-30), 'expiresAt': utc(180)}
+        self.grant_path = self.folder / 'grant.json'
+        self.grant_path.write_text(json.dumps(self.grant))
+        os.chown(self.grant_path, os.getuid(), gid)
+        self.grant_path.chmod(0o640)
+        self.checksum = host.digest(self.grant_path)
+        self.enterContext(patch.object(host, 'BASE', self.base))
+        self.enterContext(patch.object(host, 'OPERATOR_UID', os.getuid()))
+        self.enterContext(patch.object(host.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=uid, pw_gid=gid)))
+        self.guard = self.enterContext(patch.object(host, 'require_operator'))
+        verified = SimpleNamespace(read_host_plan=lambda base: self.plan, verify_directory=lambda release: self.manifest)
+        self.enterContext(patch.object(host, 'artifact_module', return_value=verified))
+        self.active = {host.LUNA_UNIT: 'not-found', 'justup-preview-model.socket': 'active'}
+        self.enterContext(patch.object(host, 'call', side_effect=lambda *args, **kwargs: self.active.get(args[-1], 'inactive')))
+        self.launch = self.enterContext(patch.object(host.subprocess, 'run'))
+
+    def run_qualification(self, checksum=None):
+        return host.run_luna_qualification(checksum or self.checksum, self.build, self.plan)
+
+    def test_exact_sandbox_and_root_consumption_survive_a_failed_transient_start(self):
+        def fail(command, **kwargs):
+            self.assertTrue((self.proofs / (self.grant['runId'] + '.json')).is_file())
+            self.assertEqual(command[:6], ['/usr/bin/systemd-run', '--unit=' + host.LUNA_UNIT, '--wait',
+                                          '--collect', '--quiet', '--slice=justup-preview.slice'])
+            for setting in ('NoNewPrivileges=yes', 'PrivateNetwork=yes', 'RestrictAddressFamilies=AF_UNIX',
+                            'RuntimeMaxSec=2700s', 'ReadWritePaths=' + str(self.results),
+                            'StandardOutput=null', 'StandardError=null'):
+                self.assertIn('--property=' + setting, command)
+            denied = next(value.removeprefix('--property=InaccessiblePaths=')
+                          for value in command if value.startswith('--property=InaccessiblePaths='))
+            for path in ('state', 'model', 'config', 'queue/config', 'queue/budget', 'queue/work', 'queue/qualification/receipts'):
+                self.assertIn('-' + str(self.base / path), denied.split())
+            self.assertIn('JUSTUP_LUNA_GRANT_SHA256=' + self.checksum, command)
+            self.assertEqual(command[-4:], ['/usr/bin/python3', '-I', str(self.base / 'ops/preview-queue-run.py'), '--qualify-model'])
+            self.assertEqual(kwargs['env'], {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC'})
+            raise subprocess.CalledProcessError(1, command)
+
+        self.launch.side_effect = fail
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_qualification()
+        self.guard.assert_called_with(cleanup_logs=False)
+        with self.assertRaises(FileExistsError):
+            self.run_qualification()
+        self.launch.assert_called_once()
+
+    def test_invalid_grant_and_active_services_cannot_consume_or_start(self):
+        with self.assertRaisesRegex(ValueError, 'differs from the reviewed'):
+            self.run_qualification('7' * 64)
+        self.active['justup-preview-runner.service'] = 'active'
+        with self.assertRaisesRegex(ValueError, 'ordinary preview application'):
+            self.run_qualification()
+        self.active['justup-preview-runner.service'] = 'inactive'
+        self.active[host.LUNA_UNIT] = 'loaded'
+        with self.assertRaisesRegex(ValueError, 'already loaded'):
+            self.run_qualification()
+        self.assertFalse(list(self.proofs.iterdir()))
+        self.launch.assert_not_called()
+
+    def test_queue_role_attests_actual_cgroup_privileges_and_network_denial(self):
+        cgroup = '0::/justup.slice/justup-preview.slice/' + queue.LUNA_UNIT + '\n'
+        status = 'NoNewPrivs:\t1\nCapEff:\t0000000000000000\n'
+        self.assertTrue(queue.protected_qualification(cgroup, status))
+        self.assertFalse(queue.protected_qualification(cgroup.replace('justup-preview.slice', 'other.slice'), status))
+        self.assertFalse(queue.protected_qualification(cgroup, status.replace('NoNewPrivs:\t1', 'NoNewPrivs:\t0')))
+        self.assertFalse(queue.protected_qualification(cgroup, status.replace('0000\n', '0001\n')))
+        with patch.object(queue.os, 'access', return_value=True), self.assertRaisesRegex(ValueError, 'private runtime'):
+            queue.verify_qualification_access()
+        with patch.object(queue.os, 'access', return_value=False), \
+             patch.object(queue.socket, 'socket', side_effect=OSError(errno.EAFNOSUPPORT, 'fixture')):
+            queue.verify_qualification_access()
+        with patch.object(queue.os, 'access', return_value=False), patch.object(queue.socket, 'socket'):
+            with self.assertRaisesRegex(ValueError, 'Internet socket'):
+                queue.verify_qualification_access()
+
+    def test_qualification_environment_preserves_only_reviewed_runtime_identifiers(self):
+        manifest = {**self.manifest, 'files': {name: 'b' * 64 for name in queue.LUNA_FILES}}
+        with patch.object(queue.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='justup-preview-runner')), \
+             patch.object(queue, 'protected_qualification', return_value=True), \
+             patch.object(queue.Path, 'read_text', return_value='fixture'), \
+             patch.object(queue, 'verify_qualification_access') as access, \
+             patch.dict(os.environ, {'JUSTUP_LUNA_GRANT_SHA256': self.checksum, 'DOPPLER_TOKEN': 'synthetic-private'}):
+            env = queue.qualification_environment(manifest, self.plan)
+        access.assert_called_once_with()
+        self.assertEqual(set(env), {'PATH', 'LANG', 'TZ', 'HOME', 'JUSTUP_LUNA_GRANT_SHA256',
+                                    'JUSTUP_SOURCE_COMMIT', 'JUSTUP_BUILD_ID', 'JUSTUP_HOST_PLAN_SHA256'})
+
+    def test_normal_runner_and_qualification_share_a_lock_across_node_exec(self):
+        broker = self.base / 'broker'
+        broker.mkdir()
+        broker.chmod(0o750)
+        opened = os.open
+        descriptors = []
+
+        def track_open(*args, **kwargs):
+            fd = opened(*args, **kwargs)
+            descriptors.append(fd)
+            return fd
+
+        def verify_inherited_lock(*args):
+            self.assertTrue(os.get_inheritable(descriptors[0]))
+            with self.assertRaises(BlockingIOError):
+                queue.acquire_broker_lock()
+
+        with patch.object(queue, 'BASE', self.base), patch.object(queue.os, 'open', side_effect=track_open), \
+             patch.object(queue.os, 'fstat', return_value=SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=0)), \
+             patch.object(queue.os, 'execve', side_effect=verify_inherited_lock):
+            queue.execute_release(self.release, queue.LUNA_ENTRYPOINT, {})
+            lock = queue.acquire_broker_lock()
+        os.close(lock)
 
 
 class CoverageIntakeContracts(unittest.TestCase):

@@ -6,11 +6,15 @@ launcher validates their boundary; it never creates, resets or repairs a ledger.
 """
 from __future__ import annotations
 
+import errno
 import importlib.util
+import fcntl
 import json
 import os
 from pathlib import Path
 import pwd
+import re
+import socket
 import stat
 import sys
 
@@ -23,6 +27,9 @@ MODEL_KEYS = {'enabled', 'isolationVerified', 'cliVersion', 'socketPath', 'attes
               'taskProfiles', 'companyResearchVerified'}
 BUDGET_RESOURCE = 'https://github.com/colophon-group/justup/issues/49'
 BUDGET_IDENTITIES = {'canonical-v1': 'jev-evaluation-budget', 'legacy-v1': 'demo-jev-evaluation-budget'}
+LUNA_UNIT = 'justup-preview-luna-qualification.service'
+LUNA_ENTRYPOINT = 'app/server/evals/luna-qualification-cli.mjs'
+LUNA_FILES = {LUNA_ENTRYPOINT, 'app/server/evals/luna-qualification.mjs', 'app/server/evals/luna-qualification-v1.json'}
 
 
 def budget_identity(budget):
@@ -151,31 +158,92 @@ def artifact_module():
     return artifact
 
 
+def protected_qualification(cgroup, status):
+    relative = next((line[3:] for line in cgroup.splitlines() if line.startswith('0::')), '')
+    parts = Path(relative).parts
+    return (len(parts) >= 3 and parts[-2:] == ('justup-preview.slice', LUNA_UNIT)
+            and re.search(r'^NoNewPrivs:\s+1$', status, re.MULTILINE) is not None
+            and re.search(r'^CapEff:\s+0+$', status, re.MULTILINE) is not None)
+
+
+def verify_qualification_access():
+    for path in ('state', 'config', 'model', 'logs', 'queue/config', 'queue/budget', 'queue/work'):
+        if os.access(BASE / path, os.R_OK | os.X_OK):
+            raise ValueError('Luna qualification can reach a private runtime directory.')
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM):
+                pass
+        except OSError as error:
+            if error.errno not in (errno.EAFNOSUPPORT, errno.EACCES, errno.EPERM):
+                raise
+        else:
+            raise ValueError('Luna qualification can open an Internet socket.')
+
+
+def qualification_environment(manifest, host_plan):
+    if (pwd.getpwuid(os.getuid()).pw_name != 'justup-preview-runner'
+            or not protected_qualification(Path('/proc/self/cgroup').read_text(), Path('/proc/self/status').read_text())):
+        raise ValueError('Luna qualification requires its fixed hardened transient service.')
+    grant = os.environ.get('JUSTUP_LUNA_GRANT_SHA256', '')
+    if not re.fullmatch(r'[a-f0-9]{64}', grant) or not LUNA_FILES <= manifest['files'].keys():
+        raise ValueError('The qualified sandbox requires its exact approved grant and fixed case graph.')
+    verify_qualification_access()
+    return {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'HOME': '/nonexistent',
+            'JUSTUP_LUNA_GRANT_SHA256': grant,
+            'JUSTUP_SOURCE_COMMIT': manifest['sourceCommit'], 'JUSTUP_BUILD_ID': manifest['buildIdentity'],
+            'JUSTUP_HOST_PLAN_SHA256': host_plan}
+
+
+def acquire_broker_lock():
+    # Both queue roles keep this lock across exec. The root-owned socket parent
+    # has a stable inode, and neither role can replace it.
+    directory = BASE / 'broker'
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        meta = os.fstat(fd)
+        if meta.st_uid != 0 or stat.S_IMODE(meta.st_mode) != 0o750:
+            raise ValueError('The model broker directory must remain root controlled.')
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def execute_release(release, entrypoint, environment):
+    node = str(release / 'runtime/bin/node')
+    lock = acquire_broker_lock()
+    try:
+        os.set_inheritable(lock, True)
+        os.execve(node, [node, str(release / entrypoint)], environment)
+    finally:
+        os.close(lock)
+
+
 def main():
     try:
         qualification = sys.argv[1:] == ['--qualify-model']
         if sys.argv[1:] and not qualification:
             raise ValueError('Unsupported queue launcher operation.')
-        if qualification and pwd.getpwuid(os.getuid()).pw_name != 'justup-preview-runner':
-            raise ValueError('Qualification requires the dedicated queue UID.')
-        if os.getuid() == 0 or os.umask(0o007) & 0o070:
+        if os.getuid() == 0:
             raise ValueError('Queue requires a dedicated UID and group-readable state mask.')
+        prior_mask = os.umask(0o077 if qualification else 0o007)
+        if (prior_mask != 0o077 if qualification else bool(prior_mask & 0o070)):
+            raise ValueError('Queue role started with the wrong state mask.')
         release = (BASE / 'current').resolve(strict=True)
         if release.parent != BASE / 'releases':
             raise ValueError('Queue release is outside the immutable inventory.')
         artifact = artifact_module()
         manifest = artifact.verify_directory(release)
-        artifact.check_database_schema(BASE / 'state/preview.sqlite', manifest, allow_missing=True)
         host_plan = artifact.read_host_plan(BASE)
+        if qualification:
+            return execute_release(release, LUNA_ENTRYPOINT, qualification_environment(manifest, host_plan))
+        artifact.check_database_schema(BASE / 'state/preview.sqlite', manifest, allow_missing=True)
         required = {'runner', 'runner-adapter', 'composition', 'model-broker', 'model-runner',
                     'intent', 'companies', 'matching', 'jev', 'jev-budget'}
         if not {f'app/server/{name}.mjs' for name in required} <= manifest['files'].keys():
             raise ValueError('This release has no complete fixed queue composition.')
-        if qualification and not {
-                'app/server/evals/luna-qualification.mjs',
-                'app/server/evals/luna-qualification-cli.mjs',
-                'app/server/evals/luna-qualification-v1.json'} <= manifest['files'].keys():
-            raise ValueError('This release has no fixed Luna qualification entrypoint.')
         meta = CONFIG_PATH.lstat()
         if (CONFIG_PATH.resolve(strict=True) != CONFIG_PATH or not stat.S_ISREG(meta.st_mode)
                 or meta.st_uid != 0 or meta.st_gid != os.getgid() or stat.S_IMODE(meta.st_mode) != 0o640
@@ -188,10 +256,7 @@ def main():
                                                config['hiringWire'], manifest, host_plan)
         if config.get('jev', {}).get('enabled') is True:
             validate_ledger(expected_identity=budget_identity(config['jev']['cumulativeBudget']))
-        node = str(release / 'runtime/bin/node')
-        entrypoint = ('app/server/evals/luna-qualification-cli.mjs'
-                      if qualification else 'app/server/runner.mjs')
-        os.execve(node, [node, str(release / entrypoint)], child_environment(manifest, host_plan))
+        return execute_release(release, 'app/server/runner.mjs', child_environment(manifest, host_plan))
     except (ValueError, OSError, KeyError, json.JSONDecodeError):
         return 1
 

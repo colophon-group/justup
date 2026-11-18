@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { applyQualificationReview,createQualificationObserver,evaluateQualification,fixedQualificationManifest,validateQualificationManifest } from './luna-qualification.mjs';
-import { runQualificationCli,validateQualificationGrant } from './luna-qualification-cli.mjs';
+import { inQualificationSandbox,runQualificationCli,validateQualificationGrant } from './luna-qualification-cli.mjs';
 
 const usage={inputTokens:12,cachedInputTokens:0,outputTokens:8,reasoningOutputTokens:2};
 const sha=value=>createHash('sha256').update(value).digest('hex');
@@ -148,6 +148,11 @@ test('one-use grant binds exact identity, manifest and a five-minute start windo
   assert.throws(()=>validateQualificationGrant(grant,{...identity,now:Date.parse('2026-11-04T06:04:00Z')}),/unavailable/);
   assert.throws(()=>validateQualificationGrant({...grant,expiresAt:'2026-11-04T06:06:00Z'},{...identity,now:Date.parse('2026-11-04T06:01:00Z')}),/unavailable/);
 });
-test('live qualification remains blocked before host, credential or provider access',async()=>{
+test('qualification rejects a plain shell even with an apparent launch environment',async()=>{
+  const cgroup='0::/justup.slice/justup-preview.slice/justup-preview-luna-qualification.service\n';
+  const hardened='CapEff:\t0000000000000000\nNoNewPrivs:\t1\n';
+  assert.equal(inQualificationSandbox(cgroup,hardened),true);
+  assert.equal(inQualificationSandbox(cgroup.replace('luna-qualification','runner'),hardened),false);
+  assert.equal(inQualificationSandbox(cgroup,hardened.replace('NoNewPrivs:\t1','NoNewPrivs:\t0')),false);
   await assert.rejects(runQualificationCli(),/unavailable/);
 });

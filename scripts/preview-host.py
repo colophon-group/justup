@@ -26,7 +26,7 @@ import re
 import select
 import stat
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
@@ -40,7 +40,10 @@ UNITS = ('justup-preview.slice', 'srv-justup_preview.mount', 'justup-preview-api
 BACKUP_SERVICE = 'justup-preview-backup.service'
 BACKUP_TIMER = 'justup-preview-backup.timer'
 BACKUP_UNITS = (BACKUP_TIMER, BACKUP_SERVICE)
-STOP_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service',
+LUNA_UNIT = 'justup-preview-luna-qualification.service'
+LUNA_MANIFEST = 'app/server/evals/luna-qualification-v1.json'
+APPLICATION_UNITS = ('justup-preview-api.service', 'justup-preview-runner.service', 'justup-preview-tunnel.service')
+STOP_UNITS = (*APPLICATION_UNITS, LUNA_UNIT,
               'justup-preview-model.socket', 'justup-preview-model.service', 'justup-preview-feed.socket')
 ROOT_FLOOR = 8 * GIB
 DISK_LIMIT = 2 * GIB
@@ -255,7 +258,7 @@ def guard(stop_on_failure=False, *, cleanup_logs=True):
     try:
         result = {'kernel': verify_caps(), 'storage': verify_storage()}
         groups = [(('logs',), 128 * MIB),
-                  (('state/work', 'queue/work', 'model/invocations', 'model/credentials'), 512 * MIB)]
+                  (('state/work', 'queue/work', 'queue/qualification/results', 'model/invocations', 'model/credentials'), 512 * MIB)]
         for directories, maximum in groups:
             usage = sum(p.lstat().st_size for directory in directories for p in (BASE / directory).rglob('*')
                         if p.is_file() and not p.is_symlink())
@@ -973,6 +976,116 @@ def coverage_file(path, group):
         raise ValueError('Source coverage inventory contains an unsafe or unresolved entry.')
 
 
+def luna_grant(prefix, checksum, manifest, expected_plan, queue_gid):
+    path = prefix / 'grant.json'
+    meta = owned_path(path)
+    if meta.st_gid != queue_gid or stat.S_IMODE(meta.st_mode) != 0o640 or not 0 < meta.st_size <= 8192:
+        raise ValueError('Luna qualification requires the root-owned queue group grant.')
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != checksum:
+        raise ValueError('Luna qualification grant differs from the reviewed bytes.')
+    value = json.loads(raw)
+    identity = {'buildIdentity': manifest['buildIdentity'], 'sourceCommit': manifest['sourceCommit'],
+                'hostPlanSha256': expected_plan, 'manifestSha256': manifest['files'][LUNA_MANIFEST],
+                'kind': 'luna_qualification_once', 'schemaVersion': 1}
+    if (not isinstance(value, dict) or set(value) != set(identity) | {'runId', 'notBefore', 'expiresAt'}
+            or type(value['schemaVersion']) is not int or any(value[key] != item for key, item in identity.items())
+            or not isinstance(value['runId'], str) or not re.fullmatch(r'[0-9a-f]{32}', value['runId'])):
+        raise ValueError('Luna qualification grant does not bind this build, plan and case manifest.')
+    times = [value[name] for name in ('notBefore', 'expiresAt')]
+    if any(not isinstance(instant, str) or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z', instant)
+           for instant in times):
+        raise ValueError('Luna qualification grant requires UTC start and expiry timestamps.')
+    start, end = (datetime.fromisoformat(instant).timestamp() for instant in times)
+    if not start <= datetime.now(timezone.utc).timestamp() < end <= start + 300:
+        raise ValueError('Luna qualification requires a current grant of at most five minutes.')
+    return value['runId']
+
+
+def luna_command(checksum):
+    readonly = ('current', 'broker', '.preview-install.json', 'queue/qualification/grant.json')
+    masked = ('state', 'config', 'model', 'logs', 'queue/config', 'queue/budget', 'queue/work',
+              'queue/source-coverage-v1', 'queue/source-coverage-v2', 'queue/qualification/receipts')
+    restricted_paths = [f'-{BASE / path}' for path in masked]
+    restricted_paths += ['-/run/docker.sock', '-/var/run/docker.sock', '-/mnt/murmur', '-/root', '-/home']
+    return [
+        '/usr/bin/systemd-run', f'--unit={LUNA_UNIT}', '--wait', '--collect', '--quiet', f'--slice={SLICE}',
+        f'--uid={RUNNER_USER}', f'--gid={RUNNER_USER}',
+        '--service-type=exec', '--property=RuntimeMaxSec=2700s', '--property=TimeoutStopSec=15s',
+        '--property=KillMode=control-group', '--property=UMask=0077', '--property=NoNewPrivileges=yes',
+        '--property=CapabilityBoundingSet=', '--property=AmbientCapabilities=',
+        '--property=ProtectSystem=strict', '--property=ProtectHome=yes', '--property=PrivateDevices=yes',
+        '--property=PrivateNetwork=yes', '--property=RestrictAddressFamilies=AF_UNIX',
+        '--property=TemporaryFileSystem=/run:ro /tmp:ro /var/tmp:ro',
+        '--property=ProtectKernelTunables=yes', '--property=ProtectKernelModules=yes',
+        '--property=ProtectKernelLogs=yes', '--property=ProtectControlGroups=yes',
+        '--property=ProtectClock=yes', '--property=ProtectHostname=yes', '--property=RestrictSUIDSGID=yes',
+        '--property=RestrictRealtime=yes', '--property=LockPersonality=yes', '--property=SystemCallArchitectures=native',
+        '--property=LimitCORE=0', '--property=LimitNOFILE=256', '--property=LimitNPROC=64',
+        '--property=StandardInput=null', '--property=StandardOutput=null', '--property=StandardError=null',
+        f'--property=WorkingDirectory={BASE / "current/app"}',
+        f'--property=ReadWritePaths={BASE / "queue/qualification/results"}',
+        '--property=ReadOnlyPaths=' + ' '.join(str(BASE / path) for path in readonly),
+        '--property=InaccessiblePaths=' + ' '.join(restricted_paths),
+        '/usr/bin/env', '-i', 'LANG=C.UTF-8', 'TZ=UTC', f'JUSTUP_LUNA_GRANT_SHA256={checksum}',
+        '/usr/bin/python3', '-I', str(BASE / 'ops/preview-queue-run.py'), '--qualify-model',
+    ]
+
+
+def run_luna_qualification(checksum, build, expected_plan):
+    if any(not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value)
+           for value in (checksum, build, expected_plan)):
+        raise ValueError('Exact reviewed grant, build and host plan hashes are required.')
+    require_operator(cleanup_logs=False)
+    artifact = artifact_module()
+    release = BASE / 'releases' / build
+    if (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan:
+        raise ValueError('Luna qualification requires the exact active build and installed host plan.')
+    owned_path(release, directory=True)
+    manifest = artifact.verify_directory(release)
+    if manifest['buildIdentity'] != build or LUNA_MANIFEST not in manifest['files']:
+        raise ValueError('The active preview release lacks the fixed Luna case inventory.')
+    if call('systemctl', 'show', '--property=LoadState', '--value', LUNA_UNIT, capture=True) != 'not-found':
+        raise ValueError('The fixed transient qualification name is already loaded.')
+    for unit in APPLICATION_UNITS:
+        if call('systemctl', 'show', '--property=ActiveState', '--value', unit, capture=True) not in {'inactive', 'failed'}:
+            raise ValueError('Stop the ordinary preview application before qualification.')
+    if call('systemctl', 'show', '--property=ActiveState', '--value',
+            'justup-preview-model.socket', capture=True) != 'active':
+        raise ValueError('The reviewed broker socket must already be active.')
+
+    folder = BASE / 'queue/qualification'
+    queue_user = pwd.getpwnam(RUNNER_USER)
+    meta = owned_path(folder, directory=True)
+    if (queue_user.pw_uid == 0 or queue_user.pw_gid == 0 or meta.st_dev != BASE.stat().st_dev
+            or meta.st_gid != queue_user.pw_gid or stat.S_IMODE(meta.st_mode) != 0o750):
+        raise ValueError('Luna qualification requires protected queue-only storage on the preview mount.')
+    proofs, results = folder / 'receipts', folder / 'results'
+    proof_meta = owned_path(proofs, directory=True)
+    result_meta = results.lstat()
+    if (proof_meta.st_dev != meta.st_dev or stat.S_IMODE(proof_meta.st_mode) != 0o700
+            or not stat.S_ISDIR(result_meta.st_mode) or result_meta.st_dev != meta.st_dev
+            or result_meta.st_uid != queue_user.pw_uid or result_meta.st_gid != queue_user.pw_gid
+            or stat.S_IMODE(result_meta.st_mode) != 0o700):
+        raise ValueError('Luna qualification receipt and result storage must keep their dedicated owners and modes.')
+    run_id = luna_grant(folder, checksum, manifest, expected_plan, queue_user.pw_gid)
+    fd = os.open(proofs, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if sum(1 for _ in proofs.iterdir()) >= 32 or sum(1 for _ in results.iterdir()) >= 8:
+            raise ValueError('Review retained qualification evidence before making another run.')
+        if (BASE / 'current').resolve(strict=True) != release or artifact.read_host_plan(BASE) != expected_plan:
+            raise ValueError('The build or host plan changed before Luna qualification.')
+        receipt = {'runId': run_id, 'grantSha256': checksum, 'buildIdentity': build, 'hostPlanSha256': expected_plan}
+        write_update_file(proofs / (run_id + '.json'), (json.dumps(receipt, sort_keys=True) + '\n').encode(), 0o400)
+        os.fsync(fd)
+        subprocess.run(luna_command(checksum), check=True,
+                       env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC'})
+    finally:
+        os.close(fd)
+    return receipt
+
+
 def check_coverage_bytes(release, queue_uid, queue_gid, data, period_end, source_version):
     # Use the retained, hash-verified decoder and fact compiler with no inherited
     # provider environment or operator privileges.
@@ -1152,7 +1265,7 @@ def teardown(erase_data=False, expected_plan=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'install-coverage', 'teardown'])
+    parser.add_argument('command', choices=['plan', 'install-slice', 'install', 'upgrade-ops', 'upgrade-feed', 'upgrade-drill', 'upgrade-backup', 'prove', 'guard', 'resource-guard', 'stop', 'stage', 'switch', 'install-coverage', 'qualify-luna', 'teardown'])
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--reviewed-plan-sha')
     parser.add_argument('--host-machine-sha')
@@ -1211,6 +1324,8 @@ def main():
         elif args.command == 'install-coverage':
             result = install_coverage(sys.stdin.buffer, period=args.period, source_version=args.source_version,
                                       checksum=args.sha256, build=args.build_identity, expected_plan=args.reviewed_plan_sha)
+        elif args.command == 'qualify-luna':
+            result = run_luna_qualification(args.sha256, args.build_identity, args.reviewed_plan_sha)
         elif args.command == 'teardown':
             result = teardown(args.erase_data, args.reviewed_plan_sha)
         else:
