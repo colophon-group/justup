@@ -6,6 +6,32 @@ const englishPeriod = new Intl.DateTimeFormat('en', {
   month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC',
 });
 
+async function scrollWireOnTouch(page, wire, overflow) {
+  const box = await wire.boundingBox();
+  const start = Math.round(box.x + box.width * 0.84), end = Math.round(box.x + box.width * 0.16);
+  const y = Math.round(box.y + box.height / 2);
+  const currentScroll = () => wire.evaluate(node => node.scrollLeft);
+  const maxSwipes = Math.ceil(overflow / ((start - end) / 2)) + 2;
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    for (let swipe = 0; swipe < maxSwipes; swipe++) {
+      const before = await currentScroll();
+      if (overflow - before <= 1) break;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: start, y }] });
+      try {
+        // Stay within the touch viewport. Between moves, let Chromium process the native gesture.
+        for (const fraction of [0.2, 0.4, 0.6, 0.8, 1]) {
+          const x = Math.round(start + (end - start) * fraction);
+          await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        }
+      } finally { await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); }
+      await expect.poll(currentScroll).toBeGreaterThan(before);
+    }
+    expect(await currentScroll()).toBeGreaterThanOrEqual(overflow - 1);
+  } finally { await cdp.detach(); }
+}
+
 export async function verifyWireStrip(page, origin, edition, { reducedMotion }) {
   await page.emulateMedia({ reducedMotion: reducedMotion ? 'reduce' : 'no-preference' });
   const response = await page.goto(`${origin}/`);
@@ -37,17 +63,7 @@ export async function verifyWireStrip(page, origin, edition, { reducedMotion }) 
     await expect(wire).toHaveCSS('overflow-x', 'auto');
     await wire.scrollIntoViewIfNeeded();
     const overflow = await wire.evaluate(node => node.scrollWidth - node.clientWidth);
-    if (overflow > 1) {
-      const box = await wire.boundingBox();
-      const cdp = await page.context().newCDPSession(page);
-      try {
-        await cdp.send('Input.synthesizeScrollGesture', {
-          x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2),
-          xDistance: -overflow - 20, speed: 3000, gestureSourceType: 'touch',
-        });
-      } finally { await cdp.detach(); }
-      await expect.poll(() => wire.evaluate(node => node.scrollLeft)).toBeGreaterThan(0);
-    }
+    if (overflow > 1) await scrollWireOnTouch(page, wire, overflow);
     await expect(links.last().locator('.wire-change')).toBeInViewport({ ratio: 0.9 });
     return;
   }
