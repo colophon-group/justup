@@ -94,6 +94,28 @@ test('an omitted listing excluded by durable evidence cannot substantiate the de
   assert.equal(feed.coverage().state, undefined);
   assert.deepEqual(feed.list().items.map(job => job.id), ['match']);
 });
+test('a feed page retries when a new import commits between coverage and listings', t => {
+  const { s, feed, add } = setup(t);
+  const selection = {
+    source: 'jobseek_feed_v1', limitedCoverage: false, sourceScopeRowCount: 1,
+    feed: { complete: true, fullSnapshotAt: iso(AT), scope: { kind: 'all_eligible' } },
+  };
+  add([['match', 3]], AT, selection);
+  assert.equal(feed.coverage().state, undefined);
+  const prepare = s.db.prepare.bind(s.db);
+  let committed = false;
+  t.mock.method(s.db, 'prepare', sql => {
+    if (!committed && sql.startsWith('SELECT * FROM justup_jobs WHERE active=1')) {
+      committed = true;
+      add([], AT, { ...selection, limitedCoverage: true });
+    }
+    return prepare(sql);
+  });
+  assert.throws(() => feed.list(), { code: 'stale_cursor', status: 409 });
+  const page = feed.list();
+  assert.deepEqual(page.items, []);
+  assert.equal(page.coverage.state, 'limited_coverage');
+});
 test('change-only imports cannot extend the freshness of the last full source snapshot', (t) => {
   const { feed, add, advance } = setup(t);
   const selection = { source: 'jobseek_feed_v1', feed: { complete: true, fullSnapshotAt: iso(AT) } };

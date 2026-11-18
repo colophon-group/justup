@@ -48,6 +48,7 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   initializeCompanyProgress(db);
   const setup=createCompanyProgress({db,canonicalCompanyId:canonicalId,now});
   const latest = () => db.prepare('SELECT * FROM justup_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
+  const generation = () => latest()?.generation ?? null;
   const access = (viewer) => viewer?.account?.id && viewer.access?.fullAccess === true ? 'account' : 'guest';
   // The import receipt counts candidate rows. Durable closure or omission
   // evidence may keep some of those rows out of the committed selection.
@@ -83,7 +84,7 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
     try { parsed = JSON.parse(Buffer.from(data, 'base64url').toString('utf8')); } catch { throw problem('invalid_cursor'); }
     if (parsed.v !== 1 || typeof parsed.id !== 'string' || !Number.isFinite(parsed.first)
         || !Number.isSafeInteger(parsed.createdAt)) throw problem('invalid_cursor');
-    if (parsed.generation !== latest()?.generation || parsed.access !== access(viewer)
+    if (parsed.generation !== generation() || parsed.access !== access(viewer)
         || now() - parsed.createdAt >= cursorTtlMs || parsed.createdAt > now()) {
       throw problem('stale_cursor', 409, 'This feed changed. Reload it and try again.');
     }
@@ -91,15 +92,18 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   }
   function list({ viewer = null, cursor = null, limit = 12 } = {}) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw problem('invalid_limit');
+    const importGeneration = generation();
     const position = cursor == null ? null : decode(cursor, viewer);
     const at = now(), currentCoverage = coverageAt(at);
+    const jobs = currentCoverage.stale ? [] : eligibleAt(viewer, at);
+    if (generation() !== importGeneration) throw problem('stale_cursor', 409, 'This feed changed. Reload it and try again.');
     if (currentCoverage.stale) return { asOf: new Date(at).toISOString(), items: [],
       continuation: { cursor, state: 'paused', retryAfterMs: 5000 }, ai: { status: 'not_required' }, coverage: currentCoverage };
-    const jobs = eligibleAt(viewer, at).filter((j) => !position
+    const matches = jobs.filter((j) => !position
       || Date.parse(j.firstObserved) < position.first || (Date.parse(j.firstObserved) === position.first && j.id > position.id));
-    const page = jobs.slice(0, limit), last = page.at(-1), more = jobs.length > limit;
+    const page = matches.slice(0, limit), last = page.at(-1), more = matches.length > limit;
     return { asOf: new Date(at).toISOString(), items: page.map(publicJob), continuation: {
-      cursor: more ? encode({ v: 1, generation: latest().generation, access: access(viewer),
+      cursor: more ? encode({ v: 1, generation: importGeneration, access: access(viewer),
         createdAt: position?.createdAt ?? at, first: Date.parse(last.firstObserved), id: last.id }) : null,
       state: more ? 'open' : 'exhausted', retryAfterMs: null,
     }, ai: { status: 'not_required' }, coverage: currentCoverage };
@@ -189,5 +193,5 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
       coverage:{state:'requested'},history:null,evidence:candidate.evidenceUrls.map(url=>({source:'company_request',url}))};
     db.prepare('INSERT INTO justup_requested_companies VALUES(?,?,?)').run(id,candidate.domain,JSON.stringify(value));return id;
   }
-  return { list, companies, accountCompanies, company, publishCompany,companySetup:setup.snapshot,ensureCompanySetup:setup.ensure,canonicalCompanyId:canonicalId, requestedCompanies:()=>db.prepare('SELECT data_json FROM justup_requested_companies ORDER BY id').all().map(r=>JSON.parse(r.data_json)), coverage, eligibleJobs, restrictedLatestJobs:()=>eligibleAt(null,now(),true), publicJob, generation: () => latest()?.generation ?? null };
+  return { list, companies, accountCompanies, company, publishCompany,companySetup:setup.snapshot,ensureCompanySetup:setup.ensure,canonicalCompanyId:canonicalId, requestedCompanies:()=>db.prepare('SELECT data_json FROM justup_requested_companies ORDER BY id').all().map(r=>JSON.parse(r.data_json)), coverage, eligibleJobs, restrictedLatestJobs:()=>eligibleAt(null,now(),true), publicJob, generation };
 }
