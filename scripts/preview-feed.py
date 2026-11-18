@@ -768,7 +768,8 @@ def node_import_environment(release_manifest):
     spec = importlib.util.spec_from_file_location('preview_run', script)
     runner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runner)
-    config = runner.read_configuration(BASE / 'config/api.json')
+    api_uid = pwd.getpwnam('justup-preview-api').pw_uid
+    config = runner.read_configuration(BASE / 'config/api.json', owner_uid=api_uid)
     return runner.child_environment(config, release_manifest)
 
 
