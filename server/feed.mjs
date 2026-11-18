@@ -14,10 +14,7 @@ export function publicJob(job) {
     seniority: job.seniority, salary: job.salary,
   };
 }
-function verifiedImportTime(row) {
-  if (!row) return null;
-  let selection;
-  try { selection = JSON.parse(row.selection_json); } catch { return null; }
+function verifiedImportTime(row, selection) {
   if (selection?.source !== 'jobseek_feed_v1') return row.verified_at;
   if (selection.feed?.complete !== true) return null;
   const full = selection.feed.fullSnapshotAt;
@@ -27,10 +24,19 @@ function verifiedImportTime(row) {
   return parsed;
 }
 export function importedCoverage(row, at, ttl = DAY_MS) {
-  const verifiedAt = verifiedImportTime(row);
+  let selection, verifiedAt = null;
+  if (row) {
+    try { selection = JSON.parse(row.selection_json); } catch { /* Unreadable import metadata. */ }
+    if (selection !== undefined) verifiedAt = verifiedImportTime(row, selection);
+  }
   const stale = verifiedAt == null || verifiedAt > at || at - verifiedAt >= ttl;
-  return { kind: 'imported_snapshot', verifiedAt: verifiedAt == null ? null : new Date(verifiedAt).toISOString(),
-    stale, ...(stale ? { state: 'import_unavailable', description: 'Imported listings need verification.' } : {}) };
+  const coverage = { kind: 'imported_snapshot', verifiedAt: verifiedAt == null ? null : new Date(verifiedAt).toISOString(), stale };
+  if (stale) return { ...coverage, state: 'import_unavailable', description: 'Imported listings need verification.' };
+
+  const entireSourceScope = selection?.source === 'jobseek_feed_v1' && selection.limitedCoverage === false
+    && selection.feed.scope?.kind === 'all_eligible' && selection.sourceScopeRowCount === row.imported_count
+    && row.unknown_count === 0;
+  return entireSourceScope ? coverage : { ...coverage, state: 'limited_coverage' };
 }
 export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32), verificationTtlMs = DAY_MS, cursorTtlMs = 10 * 60_000 }) {
   if (!db || !Number.isSafeInteger(verificationTtlMs) || verificationTtlMs < 1 || verificationTtlMs > DAY_MS

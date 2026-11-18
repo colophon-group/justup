@@ -73,6 +73,7 @@ export function ResultFeed({
       (feed.continuation.state === "pending" ? 2000 : 450),
   });
   const buffered = feed.jobs.length > visible.length;
+  const limitedCoverage = feed.coverage?.state === "limited_coverage" && feed.coverage.stale === false;
   let status;
   if (feed.error)
     status = (
@@ -108,6 +109,7 @@ export function ResultFeed({
     if (feed.ai.status === "insufficient_evidence")
       status = t("Some positions lacked enough evidence to confirm a match.");
     else if (feed.jobs.length) status = t("You’re through the available matches.");
+    else if (limitedCoverage) status = t("No matches in the available listings.");
     else status = t("No matching positions found in the completed search.");
   } else
     status = (
@@ -171,6 +173,7 @@ export function ResultFeed({
         <div id="feed-tail" ref={tailRef}>
           <div id="feed-status" role="status" aria-live="polite">
             {status}
+            {limitedCoverage ? <span className="end-note">{t("Search coverage is limited.")}</span> : null}
             {feed.ai.pending ? (
               <span className="end-note">
                 {translateCount(locale, feed.ai.pending, {one: "{count} position still awaiting requirement checks.", other: "{count} positions still awaiting requirement checks."})}
