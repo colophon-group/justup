@@ -140,6 +140,7 @@ export function requireLiveArrivalAccount(config, env) {
 const same = (a, b, keys) => record(a) && keys.every(key => a[key] === b[key]);
 function freshCoverage(value, now) {
   return record(value) && value.kind === 'imported_snapshot' && value.stale === false
+    && value.postingOrigin === 'reviewed_direct_only'
     && typeof value.verifiedAt === 'string' && Number.isFinite(Date.parse(value.verifiedAt))
     && Date.parse(value.verifiedAt) <= now && now - Date.parse(value.verifiedAt) < 86_400_000;
 }
@@ -174,7 +175,7 @@ export function verifyBuilds(config, frontend, api, health, now = Date.now()) {
       && typeof runner.lastHeartbeat === 'string' && Number.isFinite(Date.parse(runner.lastHeartbeat))
       && Date.parse(runner.lastHeartbeat) <= now + 1000 && now - Date.parse(runner.lastHeartbeat) < 30_000, 'Runner identity or readiness changed.');
   }
-  requireThat(health?.ready === true && freshCoverage(health.coverage, now), 'A fresh, ready imported source is required.');
+  requireThat(health?.ready === true && freshCoverage(health.coverage, now), 'A fresh imported source with a complete direct-employer review is required.');
 }
 // Build safety and policy admission are separate: owned-account deletion remains
 // available when policy approval is withdrawn, but never against another candidate.

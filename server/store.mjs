@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { initializeCompanyIdentities,validateCompanyIdentities,recordCompanyIdentities } from './company-identities.mjs';
+import { validatePostingOriginReview } from './posting-origin.mjs';
 
 import { SCHEMA_VERSION, assertCurrentSchema } from './schema.mjs';
 export { SCHEMA_VERSION } from './schema.mjs';
@@ -92,7 +93,7 @@ function normalizedJob(raw, snapshotAt, verifiedAt) {
       bodyBytes: evidence.bodyBytes, truncated: evidence.truncated, aiEligible: Boolean(bodyText && [...bodyText].length >= 200 && bodyFetchedAt != null),
       bodyError: evidence.bodyError == null ? null : string(evidence.bodyError, 100) },
   };
-  return { job, first, bodyText, textHash };
+  return { job, first, bodyText, textHash, sourceUrl: raw.sourceUrl };
 }
 export function openStore(path = ':memory:', { sharedState = false } = {}) {
   const mode = sharedState ? 0o660 : 0o600;
@@ -107,6 +108,8 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
     }
   }
   const db = new DatabaseSync(path);
+  let acceptedOriginReview = false;
+  db.function('justup_has_posting_origin_review', () => Number(acceptedOriginReview));
   if (path !== ':memory:') chmodSync(path, mode);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA max_page_count = 262144;');
   if (path !== ':memory:') for (const file of [`${path}-wal`, `${path}-shm`]) if (existsSync(file)) chmodSync(file, mode);
@@ -134,6 +137,9 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
       id TEXT PRIMARY KEY REFERENCES job_source_identities(id) ON DELETE CASCADE,
       omitted_at INTEGER NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS justup_feed_selected_source_ids (
+      id TEXT PRIMARY KEY REFERENCES job_source_identities(id) ON DELETE CASCADE
+    ) STRICT;
     PRAGMA user_version = ${SCHEMA_VERSION};
   `));
   // Retain source lifecycle independently from bounded bodies/metadata, including
@@ -150,7 +156,7 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
   function generation() {
     return db.prepare('SELECT * FROM justup_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   }
-  function importSnapshot(snapshot) {
+  function importSnapshot(snapshot, { originReview, reviewSha256 } = {}) {
     if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.jobs) || snapshot.jobs.length > 1000
         || !Array.isArray(snapshot.observations ?? []) || (snapshot.observations ?? []).length > 1000
         || !Array.isArray(snapshot.unknownIds ?? []) || (snapshot.unknownIds ?? []).length > 1000) throw problem('invalid_import');
@@ -167,12 +173,32 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
       ids.add(id);
       return { id, active: o.active !== false, reserved: o.reserved === true, observedAt };
     });
-    const selection = boundedJson(snapshot.selection ?? {}, 8192);
     const privateFeed = snapshot.selection?.source === 'jobseek_feed_v1';
     if (privateFeed && snapshot.selection.feed?.complete !== true) throw problem('invalid_import');
+    if (Object.hasOwn(snapshot.selection ?? {}, 'postingOriginReview')) throw problem('invalid_import');
+    let origin;
+    if (originReview !== undefined) {
+      try { origin = validatePostingOriginReview(originReview, { selection: snapshot.selection, jobs,
+        unknownCount: snapshot.unknownIds?.length ?? 0, verifiedAt, at: Date.now(), reviewSha256 }); }
+      catch { throw problem('invalid_origin_review'); }
+    }
+    const selection = boundedJson(origin ? { ...snapshot.selection, postingOriginReview: origin.record } : snapshot.selection ?? {}, 8192);
+    const admittedJobs = origin ? jobs.filter(({ job }) => origin.direct.has(job.id)) : jobs;
     const generationId = randomUUID();
     return transaction(db, () => {
-      if ((generation()?.verified_at ?? -1) > verifiedAt) throw problem('stale_import', 409, 'A newer import is already present.');
+      const previous = generation();
+      if ((previous?.verified_at ?? -1) > verifiedAt) throw problem('stale_import', 409, 'A newer import is already present.');
+      const previousReview = previous && JSON.parse(previous.selection_json)?.postingOriginReview;
+      if (previousReview) {
+        if (!origin) throw problem('origin_review_required', 409, 'This feed requires a current posting origin review.');
+        if (origin.record.reviewedAt < previousReview.reviewedAt
+            || origin.record.reviewedAt === previousReview.reviewedAt && origin.record.reviewSha256 !== previousReview.reviewSha256) {
+          throw problem('stale_origin_review', 409, 'A newer posting origin review is already present.');
+        }
+        if (origin.record.reviewSha256 === previousReview.reviewSha256) {
+          return { generation: previous.generation, imported: admittedJobs.length, observed: observations.length, unknown: snapshot.unknownIds?.length ?? 0 };
+        }
+      }
       const existing = db.prepare('SELECT company_id,first_seen_at FROM job_source_identities WHERE id=?');
       const rememberIdentity = db.prepare(`INSERT INTO job_source_identities(id,company_id,first_seen_at,verified_at,active,reserved) VALUES(?,?,?,?,1,0)
         ON CONFLICT(id) DO UPDATE SET verified_at=excluded.verified_at,active=1,reserved=0`);
@@ -192,7 +218,9 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
         if (prior?.omitted_at != null && observedAt <= prior.omitted_at) continue;
         if (prior && (observedAt < prior.verified_at || observedAt === prior.verified_at && (!prior.active || prior.reserved))) continue;
         rememberIdentity.run(job.id,job.companyId,first,observedAt);
-        insert.run(job.id, job.companyId, first, observedAt, textHash, boundedJson(job, 16_384), bodyText);
+        if (!origin || origin.direct.has(job.id)) {
+          insert.run(job.id, job.companyId, first, observedAt, textHash, boundedJson(job, 16_384), bodyText);
+        }
       }
       recordCompanyIdentities(db,companyIdentities,verifiedAt);
       const close = db.prepare(`UPDATE justup_jobs SET active=?,reserved=?,verified_at=?,closed_observed_at=? WHERE id=?`);
@@ -211,17 +239,38 @@ export function openStore(path = ':memory:', { sharedState = false } = {}) {
         const selectedIds = JSON.stringify(jobs.map(({ job }) => job.id));
         const omitted = `active=1 AND reserved=0 AND verified_at<>0
           AND id NOT IN (SELECT value FROM json_each(?))`;
-        db.prepare(`INSERT INTO justup_feed_omissions (id,omitted_at) SELECT id,? FROM justup_jobs WHERE ${omitted}
+        // Track source membership even when a verdict keeps a listing out of
+        // the retained result rows. Later source omissions still fence it.
+        db.prepare(`INSERT INTO justup_feed_omissions (id,omitted_at)
+          SELECT id,? FROM (SELECT id FROM justup_feed_selected_source_ids UNION
+            SELECT id FROM justup_jobs WHERE active=1 AND reserved=0 AND verified_at<>0)
+          WHERE id NOT IN (SELECT value FROM json_each(?))
           ON CONFLICT(id) DO UPDATE SET omitted_at=max(omitted_at,excluded.omitted_at)`).run(verifiedAt, selectedIds);
         db.prepare(`UPDATE justup_jobs SET verified_at=0 WHERE ${omitted}`).run(selectedIds);
+        if (origin) {
+          db.exec('DELETE FROM justup_feed_selected_source_ids');
+          db.prepare('INSERT INTO justup_feed_selected_source_ids SELECT value FROM json_each(?)').run(selectedIds);
+          const excluded = JSON.stringify(jobs.filter(({ job }) => !origin.direct.has(job.id)).map(({ job }) => job.id));
+          db.prepare('UPDATE justup_jobs SET verified_at=0 WHERE active=1 AND reserved=0 AND id IN (SELECT value FROM json_each(?))').run(excluded);
+        }
       }
-      db.prepare('INSERT INTO justup_imports VALUES (?, ?, ?, ?, ?, ?)').run(generationId, snapshotAt, verifiedAt, selection, jobs.length, snapshot.unknownIds?.length ?? 0);
+      if (origin) {
+        // A compatible older binary lacks this connection-local function.
+        // Its import must roll back even if the reporter is otherwise readable.
+        db.exec(`CREATE TRIGGER IF NOT EXISTS justup_require_posting_origin_review
+          BEFORE INSERT ON justup_imports WHEN justup_has_posting_origin_review() <> 1
+          BEGIN SELECT RAISE(ABORT, 'Posting origin review is required'); END;`);
+      }
+      acceptedOriginReview = Boolean(origin);
+      try {
+        db.prepare('INSERT INTO justup_imports VALUES (?, ?, ?, ?, ?, ?)').run(generationId, snapshotAt, verifiedAt, selection, jobs.length, snapshot.unknownIds?.length ?? 0);
+      } finally { acceptedOriginReview = false; }
       // Old import metadata is not needed for cursor validity or public evidence.
       db.prepare('DELETE FROM justup_imports WHERE rowid NOT IN (SELECT rowid FROM justup_imports ORDER BY rowid DESC LIMIT 32)').run();
       db.prepare('DELETE FROM justup_jobs WHERE first_seen_at < ?').run(snapshotAt - 30 * DAY_MS);
       db.prepare(`DELETE FROM justup_jobs WHERE id NOT IN (SELECT id FROM justup_jobs
         ORDER BY (? AND active=1 AND reserved=0 AND verified_at>0) DESC,first_seen_at DESC,id ASC LIMIT 1000)`).run(privateFeed ? 1 : 0);
-      return { generation: generationId, imported: jobs.length, observed: observations.length, unknown: snapshot.unknownIds?.length ?? 0 };
+      return { generation: generationId, imported: admittedJobs.length, observed: observations.length, unknown: snapshot.unknownIds?.length ?? 0 };
     });
   }
   return { db, transaction: (fn) => transaction(db, fn), generation, importSnapshot, close: () => db.close() };

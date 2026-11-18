@@ -2,7 +2,7 @@
 // and build configuration; import createApplication to add reviewed feature services.
 import { createServer } from 'node:http';
 import { mkdirSync, chmodSync, readFileSync, statSync, lstatSync, readdirSync, openSync, closeSync, writeFileSync, fsyncSync, renameSync, unlinkSync, accessSync, fstatSync, realpathSync, constants } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { dirname, resolve, isAbsolute, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { openStore } from './store.mjs';
@@ -175,10 +175,33 @@ export async function prepareRestoredDatabase({ dbPath, authFactory, migrateV1 =
     return { schemaVersion: SCHEMA_VERSION, sessionsInvalidated: true, remainingSessions: 0, sessionsDeleted: result.sessionsDeleted };
   } finally { store.close(); }
 }
-export function readImportFile(path) {
-  if (statSync(path).size > 64 * 1024 * 1024) throw new Error('Job import exceeds the 64 MiB limit.');
-  try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path))); }
+function parseImportBytes(bytes) {
+  try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
   catch { throw new Error('Invalid job import file.'); }
+}
+function readImportBytes(path) {
+  const limit = 64 * 1024 * 1024;
+  if (statSync(path).size > limit) throw new Error('Job import exceeds the 64 MiB limit.');
+  const bytes = readFileSync(path);
+  if (bytes.length > limit) throw new Error('Job import exceeds the 64 MiB limit.');
+  return bytes;
+}
+export function readImportFile(path) { return parseImportBytes(readImportBytes(path)); }
+
+function readPostingOriginReview(path, bytes) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = fstatSync(fd), limit = 5 * 1024 * 1024;
+    if (!info.isFile() || info.nlink !== 1 || info.uid !== process.geteuid() || (info.mode & 0o777) !== 0o600
+        || info.size < 1 || info.size > limit) throw new Error('Use a private posting origin review file.');
+    const raw = readFileSync(fd);
+    if (raw.length !== info.size) throw new Error('Posting origin review changed during the read.');
+    const review = parseImportBytes(raw);
+    if (review?.snapshotSha256 !== createHash('sha256').update(bytes).digest('hex')) {
+      throw new Error('Posting origin review refers to a different import file.');
+    }
+    return { originReview: review, reviewSha256: createHash('sha256').update(raw).digest('hex') };
+  } finally { closeSync(fd); }
 }
 export function configFromEnv(env = process.env) {
   return validatePolicyConfig(validateTrustedIngressConfig({
@@ -212,9 +235,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     const restored = resolve(args[1]);
     if (restored === resolve(config.dbPath) || !lstatSync(restored).isFile() || lstatSync(restored).isSymbolicLink()) throw new Error('Use a separate restored application database file.');
     console.log(JSON.stringify(await prepareRestoredDatabase({ dbPath: restored, migrateV1: args[2] === '--migrate-v1' })));
-  } else if (args[0] === '--import' && args.length === 2) {
+  } else if (args[0] === '--import' && (args.length === 2 || args.length === 4 && args[2] === '--origin-review')) {
+    const bytes = readImportBytes(args[1]), snapshot = parseImportBytes(bytes);
+    const review = args.length === 4 ? readPostingOriginReview(args[3], bytes) : undefined;
     const store = openStore(config.dbPath, { sharedState: config.sharedState });
-    try { console.log(JSON.stringify(store.importSnapshot(readImportFile(args[1])))); }
+    try { console.log(JSON.stringify(store.importSnapshot(snapshot, review))); }
     finally { store.close(); }
   } else if (args.length === 0) {
     const application = await createConfiguredApplication({ config, logger: (event) => console.log(JSON.stringify(event)) });
@@ -222,5 +247,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid application port.');
     application.server.listen(port, '127.0.0.1');
     for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { application.close().then(() => process.exit(0)); });
-  } else throw new Error('Usage: node server/main.mjs [--import /private/snapshot.json | --prepare-restored-db /private/restored.sqlite]');
+  } else throw new Error('Usage: node server/main.mjs [--import /private/snapshot.json [--origin-review /private/review.json] | --prepare-restored-db /private/restored.sqlite]');
 }

@@ -116,11 +116,13 @@ def accepted_window(directory, baseline_sha, arrival_sha):
     return accepted[digests.index(baseline_sha):digests.index(arrival_sha) + 1]
 
 
-def candidate_posting(path, marker, observation, arrival):
+def candidate_posting(path, marker, observation, arrival, review_path=None):
     data = source._private_file(path, source.EXPORT_LIMIT)
     require(hashlib.sha256(data).hexdigest() == marker, "The retained normalized candidate differs from its acceptance marker.")
     output = source._feed_json(data)
-    require(isinstance(output, dict) and output.get("schemaVersion") == 1 and output.get("selection") == arrival[3]
+    selection = dict(arrival[3])
+    origin_summary = selection.pop("postingOriginReview", None)
+    require(isinstance(output, dict) and output.get("schemaVersion") == 1 and output.get("selection") == selection
             and milliseconds(source.utc(output.get("snapshotAt"))) == arrival[0]
             and milliseconds(source.utc(output.get("verifiedAt"))) == arrival[1]
             and isinstance(output.get("jobs"), list) and len(output["jobs"]) == arrival[2],
@@ -151,6 +153,26 @@ process.stdout.write(JSON.stringify(found.length === 1 ? found[0] : null));
     )
     target = json.loads(match.stdout)
     require(target is not None, "The arrived posting is absent or ambiguous in the accepted normalized candidate.")
+    if "postingOriginReview" in arrival[3]:
+        require(isinstance(origin_summary, dict) and review_path is not None
+                and origin_summary.get("policyVersion") == "direct-employer-v1"
+                and origin_summary.get("manifestSha256") == selection["feed"]["manifestSha256"]
+                and origin_summary.get("snapshotSha256") == marker,
+                "The reviewed import needs its exact retained posting origin review.")
+        raw = source._private_file(review_path, 5 * 1024 * 1024)
+        require(hashlib.sha256(raw).hexdigest() == origin_summary.get("reviewSha256"),
+                "The retained posting origin review differs from the recorded review.")
+        review = source._feed_json(raw)
+        records = review.get("postings") if isinstance(review, dict) else None
+        require(isinstance(records, list) and len(records) == len(output["jobs"])
+                and all(review.get(key) == origin_summary.get(key) for key in
+                        ("policyVersion", "manifestSha256", "snapshotSha256", "reviewedAt")),
+                "The reviewed import metadata and retained review differ.")
+        identifier, url, _, company, _ = target
+        records = [record for record in records if isinstance(record, dict) and record.get("id") == identifier]
+        require(len(records) == 1 and records[0].get("verdict") == "direct_employer"
+                and records[0].get("companyId") == company and records[0].get("sourceUrl") == url,
+                "The arrived posting lacks an exact direct-employer verdict.")
     return target
 
 
@@ -163,7 +185,7 @@ def batch_marker(receipts, batch_name, digest):
     return marker
 
 
-def verify(browser, producer, receipts, database, candidate):
+def verify(browser, producer, receipts, database, candidate, origin_review=None):
     observation = arrival_observation(browser)
     imports = import_records(database, observation["baselineGeneration"], observation["arrivalGeneration"])
     baseline_sha = imports[0][3]["feed"]["manifestSha256"]
@@ -174,7 +196,7 @@ def verify(browser, producer, receipts, database, candidate):
     require(final_marker["buildIdentity"] == observation["apiBuildIdentity"],
             "The arrived import belongs to another API build.")
     target_id, target_url, target_first, target_company, target_evidence_at = candidate_posting(
-        candidate, final_marker["candidateSha256"], observation, imports[-1])
+        candidate, final_marker["candidateSha256"], observation, imports[-1], origin_review)
     scope = imports[0][3]["feed"].get("scope")
     limit = imports[0][3]["feed"].get("limit")
     full_at = source.utc(imports[0][3]["feed"].get("fullSnapshotAt"))
@@ -246,6 +268,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for field in ("browser", "producer", "receipts", "database", "candidate"):
         parser.add_argument(f"--{field}", type=Path, required=True)
+    parser.add_argument("--origin-review", type=Path)
     args = parser.parse_args()
     try:
         print(json.dumps(verify(**vars(args)), sort_keys=True))

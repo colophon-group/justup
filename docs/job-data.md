@@ -27,6 +27,23 @@ The crawler-side exporter writes a versioned manifest and ordered data parts und
 
 The producer reports closures and reservations as explicit rows. A listing omitted from the complete preview selection loses current visibility. The source identity and last known lifecycle evidence remain. An omission never supplies a closure, and older evidence cannot restore visibility after omission, even after the retained body is removed. Current verified listings take precedence within the private feed's 1,000-row retention cap. Unchanged jobs keep their own previous observation time through change batches. The application pauses results 24 hours after the last full source snapshot. It can drain interrupted batches and acknowledge their exact bytes after this deadline, preserving the original source times and any explicit closures. A fresh full reconciliation restores coverage. Normalized description text is capped at 48 MiB per import. A wider product catalogue needs a reviewed capacity change and a verified import path.
 
+### Admit reviewed direct-employer listings
+
+The protected operator may use an explicit posting origin review with a complete normalized private-feed candidate. The Jobs API does not infer who posted a listing from the company name, intermediary host or presence in a crawler feed. Review the evidence that the original posting advertises the employer's own vacancy. An employer-authorized applicant tracking system can qualify when the employer's careers page establishes that relationship. Use `recruitment_agency` for an intermediary listing, `repost` for an aggregator or social copy, and `unknown` when publisher or vacancy ownership cannot be established. Review the current listing before using an earlier classification after a source change.
+
+The private review file is a JSON object with `schemaVersion:1`, `policyVersion:"direct-employer-v1"`, `manifestSha256`, `snapshotSha256`, `reviewedAt`, and `postings`. The digests refer to the exact Jobseek manifest and normalized candidate bytes. The manifest ties the review to the source scope and cursor. Use a UTC review timestamp at or after candidate verification in `YYYY-MM-DDTHH:mm:ss.sssZ` form. Every candidate listing has one entry with `id`, `companyId`, `sourceUrl`, `verdict` and `evidenceUrl`. Copy `sourceUrl` exactly from the candidate. For a known verdict, retain the authoritative HTTPS evidence URL. Use `null` for an unknown verdict. Keep the review, exact bytes and actual evidence in the protected release record. Do not put private job text, credentials or the review file in Git or logs.
+
+Pass the private, owner-only review under the same isolated application identity as the normal import.
+
+```sh
+node server/main.mjs --import /private/job-data/snapshot.json \
+  --origin-review /private/job-data/origin-review.json
+```
+
+The store applies the review and generation in one transaction. Only reviewed direct listings reach search, the hidden count and live result eligibility. Agency, repost and unknown classifications withdraw older eligibility while preserving source lifecycle. The last reviewed source membership is retained even for withheld listings, so a later source omission still fences older evidence. A newer review can correct a verdict. An older or conflicting equal-time review is rejected, and replaying the accepted review returns its existing generation. A database that has accepted a reviewed import requires a valid review on subsequent imports. Its import trigger also rejects writes from a compatible older binary that lacks review support. Existing unreviewed databases still accept compatible imports and cannot pass browser release preflight. A fresh complete review reports `postingOrigin:"reviewed_direct_only"`. Unknown verdicts and unnormalizable source records report `reviewed_with_unknowns`. Stale coverage supplies neither status. The public API supplies no evidence URLs or raw review counts.
+
+The operator command supports isolated preparation and import of exact reviewed candidates. The protected recurring receiver still needs an approved handoff of each review and durable acknowledgement, then qualification on the deployed source. This source path is not an activation approval.
+
 ## Import from the public source
 
 The existing public-source path remains available while its Jobseek-hosted bootstrap and asset endpoints operate. It is an explicit bounded export, not the recurrent private feed.

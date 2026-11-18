@@ -4,6 +4,7 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { DAY_MS, problem } from './store.mjs';
 import { initializeCompanyIdentities,canonicalCompanyId } from './company-identities.mjs';
 import {initializeCompanyProgress,createCompanyProgress} from './company-progress.mjs';
+import { ORIGIN_POLICY_VERSION } from './posting-origin.mjs';
 
 export function publicJob(job) {
   return {
@@ -32,6 +33,14 @@ export function importedCoverage(row, at, ttl = DAY_MS, countRetainedScope = () 
   const stale = verifiedAt == null || verifiedAt > at || at - verifiedAt >= ttl;
   const coverage = { kind: 'imported_snapshot', verifiedAt: verifiedAt == null ? null : new Date(verifiedAt).toISOString(), stale };
   if (stale) return { ...coverage, state: 'import_unavailable', description: 'Imported listings need verification.' };
+
+  const origin = selection?.postingOriginReview;
+  const reviewedAt = Date.parse(origin?.reviewedAt);
+  if (selection?.source === 'jobseek_feed_v1' && origin?.policyVersion === ORIGIN_POLICY_VERSION
+      && origin.manifestSha256 === selection.feed?.manifestSha256 && Number.isFinite(reviewedAt)
+      && row.verified_at <= reviewedAt && reviewedAt <= at && at - reviewedAt < ttl) {
+    coverage.postingOrigin = origin.unknown === false ? 'reviewed_direct_only' : 'reviewed_with_unknowns';
+  }
 
   const entireSourceScope = selection?.source === 'jobseek_feed_v1' && selection.limitedCoverage === false
     && selection.feed.scope?.kind === 'all_eligible' && selection.sourceScopeRowCount === row.imported_count
