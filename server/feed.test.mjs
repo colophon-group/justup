@@ -73,6 +73,27 @@ test('committed imports disclose limited scope without leaking source selectors 
   assert.deepEqual(feed.list().coverage, limited);
   assert.equal(feed.list().continuation.state, 'exhausted');
 });
+test('an omitted listing excluded by durable evidence cannot substantiate the declared count', t => {
+  const { s, feed, add, advance } = setup(t);
+  const selection = (at, count) => ({
+    source: 'jobseek_feed_v1', limitedCoverage: false, sourceScopeRowCount: count,
+    feed: { complete: true, fullSnapshotAt: iso(at), scope: { kind: 'all_eligible' } },
+  });
+  add([['match', 3]], AT, selection(AT, 1));
+  assert.equal(feed.coverage().state, undefined);
+  advance(60_000);
+  add([], AT + 60_000, selection(AT + 60_000, 0));
+  assert.equal(feed.coverage().state, undefined);
+  advance(60_000);
+  add([['match', 3, AT]], AT + 120_000, selection(AT + 120_000, 1));
+  assert.equal(s.generation().imported_count, 1);
+  assert.deepEqual(feed.list().items, []);
+  assert.equal(feed.coverage().state, 'limited_coverage');
+  advance(60_000);
+  add([['match', 3]], AT + 180_000, selection(AT + 180_000, 1));
+  assert.equal(feed.coverage().state, undefined);
+  assert.deepEqual(feed.list().items.map(job => job.id), ['match']);
+});
 test('change-only imports cannot extend the freshness of the last full source snapshot', (t) => {
   const { feed, add, advance } = setup(t);
   const selection = { source: 'jobseek_feed_v1', feed: { complete: true, fullSnapshotAt: iso(AT) } };

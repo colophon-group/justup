@@ -23,7 +23,7 @@ function verifiedImportTime(row, selection) {
   if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== full || parsed > row.verified_at) return null;
   return parsed;
 }
-export function importedCoverage(row, at, ttl = DAY_MS) {
+export function importedCoverage(row, at, ttl = DAY_MS, countRetainedScope = () => undefined) {
   let selection, verifiedAt = null;
   if (row) {
     try { selection = JSON.parse(row.selection_json); } catch { /* Unreadable import metadata. */ }
@@ -35,7 +35,7 @@ export function importedCoverage(row, at, ttl = DAY_MS) {
 
   const entireSourceScope = selection?.source === 'jobseek_feed_v1' && selection.limitedCoverage === false
     && selection.feed.scope?.kind === 'all_eligible' && selection.sourceScopeRowCount === row.imported_count
-    && row.unknown_count === 0;
+    && row.unknown_count === 0 && countRetainedScope(row) === row.imported_count;
   return entireSourceScope ? coverage : { ...coverage, state: 'limited_coverage' };
 }
 export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32), verificationTtlMs = DAY_MS, cursorTtlMs = 10 * 60_000 }) {
@@ -49,7 +49,14 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
   const setup=createCompanyProgress({db,canonicalCompanyId:canonicalId,now});
   const latest = () => db.prepare('SELECT * FROM justup_imports ORDER BY rowid DESC LIMIT 1').get() ?? null;
   const access = (viewer) => viewer?.account?.id && viewer.access?.fullAccess === true ? 'account' : 'guest';
-  const coverageAt = at => importedCoverage(latest(), at, verificationTtlMs);
+  // The import receipt counts candidate rows. Durable closure or omission
+  // evidence may keep some of those rows out of the committed selection.
+  const retainedScope = db.prepare(`SELECT (SELECT count(*) FROM justup_jobs
+    WHERE active=1 AND reserved=0 AND first_seen_at>=justup_imports.snapshot_at-?
+      AND first_seen_at<=justup_imports.snapshot_at AND verified_at>0 AND verified_at>? AND verified_at<=?) AS count
+    FROM justup_imports WHERE generation=? AND rowid=(SELECT max(rowid) FROM justup_imports)`);
+  const coverageAt = at => importedCoverage(latest(), at, verificationTtlMs,
+    row => retainedScope.get(14 * DAY_MS, at - verificationTtlMs, at, row.generation)?.count);
   const coverage = () => coverageAt(now());
   function eligibleAt(viewer, at, restrictedLatest=false) {
     if (coverageAt(at).stale) return [];
