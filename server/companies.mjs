@@ -44,7 +44,11 @@ function domain(value, optional = false) {
   if (isAts(host)) throw problem('invalid_input');
   return host;
 }
-const withinDomain = (host, root) => host === root || host.endsWith(`.${root}`);
+export function sameOfficialHost(left, right) {
+  const withoutWww = host => host.startsWith('www.') ? host.slice(4) : host;
+  return withoutWww(left) === withoutWww(right);
+}
+const withinDomain = (host, root) => sameOfficialHost(host, root) || host.endsWith(`.${root}`);
 function candidateData(value) {
   exactKeys(value, ['name', 'domain', 'websiteUrl', 'evidenceUrls']);
   const root = domain(value.domain), websiteUrl = validateCompanyUrl(value.websiteUrl, { official: true });
@@ -67,7 +71,14 @@ function resolutionData(wrapper) {
     const candidate={ id: randomUUID(), companyId:null, ...candidateData(value.candidate), coverage: { state: 'requested' } };
     const provenance=wrapper.evidenceProvenance??[];
     if(!Array.isArray(provenance)||provenance.length>2)throw problem('invalid_input');
-    for(const proof of provenance){exactKeys(proof,['url','finalUrl','status','bytes','sha256']);if(!candidate.evidenceUrls.includes(validateCompanyUrl(proof.url,{official:true}))||new URL(proof.url).origin!==new URL(validateCompanyUrl(proof.finalUrl,{official:true})).origin||proof.status!==200||!Number.isInteger(proof.bytes)||proof.bytes<1||proof.bytes>131072||typeof proof.sha256!=='string'||!/^[a-f0-9]{64}$/.test(proof.sha256))throw problem('invalid_input');}
+    for(const proof of provenance){
+      exactKeys(proof,['url','finalUrl','status','bytes','sha256']);
+      const initial = new URL(validateCompanyUrl(proof.url,{official:true}));
+      const final = new URL(validateCompanyUrl(proof.finalUrl,{official:true}));
+      if(!candidate.evidenceUrls.includes(initial.href)||!sameOfficialHost(initial.hostname,final.hostname)
+        ||proof.status!==200||!Number.isInteger(proof.bytes)||proof.bytes<1||proof.bytes>131072
+        ||typeof proof.sha256!=='string'||!/^[a-f0-9]{64}$/.test(proof.sha256))throw problem('invalid_input');
+    }
     return { status: 'candidate', candidate, clarification: null,provenance };
   }
   if (value.candidate !== null) throw problem('invalid_input');

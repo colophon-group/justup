@@ -125,6 +125,33 @@ test('browser input/scope-only website submissions reach one grounded decision w
   }
 });
 
+test('company requests retain protected provenance across the exact www alias',async t=>{
+  for(const [host,alias] of [['newcompany.com','www.newcompany.com'],['www.newcompany.com','newcompany.com']]){
+    const original=`https://${host}/`,final=`https://${alias}/about`;
+    const text='<title>New Company</title><h1>New Company</h1>Official company website.';
+    const hash=createHash('sha256').update(text).digest('hex');
+    const f=fixture(t,{model:{resolveCompany(input){
+      return resolveCompanyIdentity(input,{
+        fetchPage:async url=>{assert.equal(url,original);return {url,finalUrl:final,status:200,text,bytes:Buffer.byteLength(text),sha256:hash};},
+        executeStage:async()=>{
+          const {data}=candidate();
+          data.candidate={name:'New Company',domain:host,websiteUrl:final,evidenceUrls:[original]};
+          return {data,usage:{inputTokens:100,cachedInputTokens:0,outputTokens:50,reasoningOutputTokens:0},toolCalls:0};
+        }
+      }).then(({data,evidenceVerified,evidenceProvenance})=>({data,evidenceVerified,evidenceProvenance}));
+    }}});
+    const created=await f.create(body('alias',{domain:host})),task=f.claim(created.body.task.id);
+    const outcome=await f.service.runTask(task);
+    assert.equal(outcome.status,'succeeded');
+    const request=f.service.taskResult(f.tasks.get('owner-a',task.id),{accountId:'owner-a'}).request;
+    assert.equal(request.candidate.domain,host);
+    assert.equal(request.candidate.websiteUrl,final);
+    const saved=f.db.prepare('SELECT provenance_json FROM justup_company_evidence').get();
+    assert.deepEqual(JSON.parse(saved.provenance_json),[{url:original,finalUrl:final,status:200,bytes:Buffer.byteLength(text),sha256:hash}]);
+    assert.equal(Object.hasOwn(request,'provenance'),false);
+  }
+});
+
 test('ambiguous research returns a warning and clarification without a guessed candidate', async (t) => {
   const f = fixture(t, { model: { async resolveCompany() { return { data: { status: 'clarification', candidate: null,
     clarification: 'Which Acme company and country do you mean?' }, evidenceVerified: false }; } } });

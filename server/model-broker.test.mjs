@@ -93,9 +93,44 @@ test('HTTPS evidence pins the checked public address and retains TLS hostname ve
   let observed;const page=await fetchCompanyEvidence('https://acme.com/about',{resolveAddresses:async()=>['8.8.8.8'],request:fakeHttps([{body:'<h1>Acme</h1>'}],(url,options)=>{observed={url,options};})});
   assert.equal(page.status,200);assert.equal(page.bytes,13);assert.equal(page.sha256.length,64);assert.equal(observed.options.servername,'acme.com');assert.equal(observed.options.rejectUnauthorized,true);assert.equal(observed.options.agent,false);observed.options.lookup('acme.com',{},(error,ip,family)=>{assert.equal(error,null);assert.equal(ip,'8.8.8.8');assert.equal(family,4);});
 });
+test('an exact www alias revalidates DNS and TLS on every HTTPS hop',async()=>{
+  for(const [initial,alias] of [['acme.com','www.acme.com'],['www.acme.com','acme.com']]){
+    const resolutions=[],requests=[];
+    const result=await fetchCompanyEvidence(`https://${initial}/`,{
+      resolveAddresses:async host=>{resolutions.push(host);return [host===initial?'8.8.8.8':'1.1.1.1'];},
+      request:fakeHttps([
+        {status:301,headers:{location:`https://${alias}/company`}},
+        {status:302,headers:{location:'/about'}},
+        {body:'<title>Acme</title>'}
+      ],(url,options)=>{
+        assert.equal(options.servername,url.hostname);
+        assert.equal(options.rejectUnauthorized,true);
+        options.lookup(url.hostname,{},(error,ip,family)=>{
+          assert.equal(error,null);assert.equal(family,4);requests.push([url.hostname,ip]);
+        });
+      })
+    });
+    assert.deepEqual(resolutions,[initial,alias,alias]);
+    assert.deepEqual(requests,[[initial,'8.8.8.8'],[alias,'1.1.1.1'],[alias,'1.1.1.1']]);
+    assert.equal(result.url,`https://${initial}/`);
+    assert.equal(result.finalUrl,`https://${alias}/about`);
+  }
+});
 test('DNS rebinding/private results, redirects escaping origin, non-HTTPS and oversized evidence fail',async()=>{
   for(const addresses of [['127.0.0.1'],['8.8.8.8','10.0.0.1'],[]])await assert.rejects(()=>fetchCompanyEvidence('https://acme.com/',{resolveAddresses:async()=>addresses,request:()=>assert.fail('Must not connect.')}),{code:'invalid_output'});
   await assert.rejects(()=>fetchCompanyEvidence('https://acme.com/',{resolveAddresses:async()=>['8.8.8.8'],request:fakeHttps([{status:302,headers:{location:'https://other.com/'}}])}),{code:'invalid_output'});
+  for(const target of ['https://careers.acme.com/','https://www.acme.com.other.com/','https://www.www.acme.com/']){
+    const onlyRoot=async host=>{assert.equal(host,'acme.com');return ['8.8.8.8'];};
+    await assert.rejects(()=>fetchCompanyEvidence('https://acme.com/',{
+      resolveAddresses:onlyRoot,request:fakeHttps([{status:302,headers:{location:target}}])
+    }),{code:'invalid_output'});
+  }
+  const requests=[];
+  await assert.rejects(()=>fetchCompanyEvidence('https://acme.com/',{
+    resolveAddresses:async host=>host==='acme.com'?['8.8.8.8']:['1.1.1.1','10.0.0.1'],
+    request:fakeHttps([{status:301,headers:{location:'https://www.acme.com/'}}],url=>requests.push(url.hostname))
+  }),{code:'invalid_output'});
+  assert.deepEqual(requests,['acme.com']);
   await assert.rejects(()=>fetchCompanyEvidence('http://acme.com/'),{code:'invalid_input'});
   await assert.rejects(()=>fetchCompanyEvidence('https://acme.com/',{resolveAddresses:async()=>['8.8.8.8'],request:fakeHttps([{body:'x'.repeat(131073)}])}),{code:'output_limit'});
 });
