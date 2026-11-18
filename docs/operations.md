@@ -173,6 +173,63 @@ The Luna task profiles qualify independently. `search_intent` has no native tool
 
 Codex stays pinned to official 0.159.2 Linux ARM64 and Node to 24.22.2. The complete manifest retains the exact executables, sandbox helper, metadata and license; disabled code-mode, ripgrep and bundled zsh are omitted. Builds and dependency installation run off-host. Target Linux version/help, omitted-helper compatibility, supported configuration, actual UID/filesystem/network boundaries and trace cleanup must pass for the exact integrated artifact. The model UID gets only its fresh scoped subscription authentication; API/queue/operator auth is never copied. Each invocation gets an auth-only temporary home and empty task directory. Wire requires proved native exit before auth-refresh copyback, disposal and shared-slot release. Broker startup rejects any nonempty invocation root for Luna and Wire; it preserves private recovery bytes instead of automatically deleting them. The fixed aggregate limit is one model task, including editorial work. Weekly Sol reuses this bounded runner and private execution boundary without another persistent agent service.
 
+### Run a protected Luna qualification
+
+Use the reviewed installed `preview-host.py` and the matching active backend
+artifact. Complete the dedicated model identity, retention and tool checks and
+verify its exact-build, exact-host-plan attestation. Stop the ordinary preview
+API, runner, tunnel and broker process for this measurement. Leave the
+already-reviewed broker socket active so the first connection starts the
+broker against the current release. Before consuming a grant, the operator
+command requires the application to be stopped and the broker's protected
+invocation directory empty. It also checks that the fixed transient service
+name is available.
+
+Prepare `/srv/justup_preview/queue/qualification` as root with the queue group
+and mode `0750`. Its `receipts` directory is root-owned mode `0700`, and its
+`results` directory belongs to the dedicated queue UID and group, mode `0700`.
+Review the exact retained cohort and authorize one run. Place the approved
+`grant.json` in this directory as root, queue group, mode `0640` with one link.
+The grant contains exactly these fields.
+
+| Field | Required value |
+| --- | --- |
+| `schemaVersion`, `kind` | `1`, `luna_qualification_once` |
+| `runId` | Unique 32-character lowercase hexadecimal run identity |
+| `sourceCommit`, `buildIdentity` | Commit and backend build from the exact active manifest |
+| `hostPlanSha256` | Current installed operator plan digest |
+| `manifestSha256` | Manifest digest entry for `app/server/evals/luna-qualification-v1.json` |
+| `notBefore`, `expiresAt` | Canonical UTC bounds spanning at most five minutes for starting the run |
+
+Use the independently recorded SHA-256 of the grant's exact bytes. Run inside
+the existing preview slice as the root operator.
+
+```sh
+systemd-run --unit=justup-preview-qualify-luna-operator --wait --pipe --collect \
+  --slice=justup-preview.slice \
+  /usr/bin/python3 /srv/justup_preview/ops/preview-host.py qualify-luna \
+  --sha256 "$approved_grant_sha256" --build-identity "$active_backend_build" \
+  --reviewed-plan-sha "$installed_plan_sha256"
+```
+
+The operator tool records a durable, root-owned consumption receipt before
+launch. Interruption consumes this run ID. A new attempt requires its own
+reviewed grant. The fixed transient service caps execution at 45 minutes and
+uses private networking with only Unix sockets, a clean environment, and
+read-only release and broker paths. The queue launcher checks the kernel
+service identity and denial of private runtime paths and Internet sockets.
+The operator tool leaves all application services and activation settings
+untouched. The resource guard includes the transient service in its stop path.
+
+Read the protected `results/luna-qualification-<runId>.jsonl` for outcome and
+report identity. A partial result indicates interruption or failure. Until
+independent clarification review is available, ambiguous results leave the
+company verdict pending and the command can exit nonzero with a complete
+redacted report. Keep receipts and results in protected storage. At eight
+results or 32 receipts, archive the exact retained evidence during reviewed
+maintenance and keep consumed run IDs retired. Verify these runtime boundaries
+on the target host before using the report for any profile activation.
+
 The fixed API composes only published Wire reads from its database and clock. The queue composes the protected source reader, editorial dispatcher and independently qualified Sol transport. Optional `hiringWire` is absent, exactly `{enabled:false}`, or exactly `{enabled:true,attestationPath,providerCatalogueSha256,modelUid,socketPath}`. The private proof is `/srv/justup_preview/model/config/hiring-wire-reviewed.json`; its queue-readable sanitized copy is `/srv/justup_preview/broker/hiring-wire-reviewed.json`. The socket remains `/srv/justup_preview/broker/model.sock`, and `modelUid` must name the existing dedicated model UID. Enabled configuration requires the complete Wire graph, integration/source modules and pinned Sol catalogue in the exact artifact. Both launchers require an independent root-owned immutable bounded proof with protected root-owned ancestors, matching this build/host, actual observed provider catalogue, fixed tools/descriptor and reviewed isolation, retention, quality and shared-slot evidence. A Luna proof or an enabled flag cannot qualify Wire; see [the runtime contract](hiring-wire-runtime.md).
 
 Optional queue-only `sourceCoverage` is exactly `{directory,sourceVersion}`. Select the matching version and fixed preview location described in the [source coverage handoff](source-coverage.md#install-a-reviewed-weekly-artifact-on-preview). The directory is root-owned and separate from shared state and backups. The fixed reader validates all ancestors and selects the Monday UTC artifact. The API and model services cannot access the queue directory. With source input omitted or qualification unavailable, Wire stays unavailable and makes no native call. A reviewed producer and complete fourteen-day evidence remain necessary for each comparison.

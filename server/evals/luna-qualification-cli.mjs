@@ -1,16 +1,14 @@
-// Prepared one-use Luna qualification path. Live entry is blocked until a
-// reviewed fixed systemd unit installs the queue sandbox for this command.
+// One-use Luna qualification through the fixed capped operator sandbox.
 import { constants,closeSync,fsyncSync,fstatSync,lstatSync,openSync,readFileSync,realpathSync,writeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createBrokerExecutor } from '../model-broker.mjs';
 import { CODEX_VERSION,MODEL_CATALOGUE_SHA256,MODEL_PROFILES,createCodexModel } from '../model-runner.mjs';
-import { readRunnerConfig } from '../runner-adapter.mjs';
 import { createQualificationObserver,evaluateQualification,fixedQualificationManifest } from './luna-qualification.mjs';
 
-const BASE='/srv/justup_preview',GRANT=BASE+'/queue/config/luna-qualification.json',WORK=BASE+'/queue/work';
-const QUALIFICATION_SOURCE_ONLY=true;
+const BASE='/srv/justup_preview',ROOT=BASE+'/queue/qualification',GRANT=ROOT+'/grant.json',WORK=ROOT+'/results';
+const UNIT='justup-preview-luna-qualification.service';
 const SHA=/^[a-f0-9]{64}$/,OID=/^[a-f0-9]{40}$/,RUN=/^[a-f0-9]{32}$/;
 const plain=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype;
 const unavailable=()=>new Error('Luna qualification is unavailable.');
@@ -28,24 +26,30 @@ export function validateQualificationGrant(value,{sourceCommit,buildIdentity,hos
   return value;
 }
 
-function queueUid(){
+export function inQualificationSandbox(cgroup,status){
+  const parts=cgroup.split('\n').find(line=>line.startsWith('0::'))?.slice(3).split('/');
+  return parts?.at(-1)===UNIT&&parts.at(-2)==='justup-preview.slice'
+    &&/^NoNewPrivs:\s+1$/mu.test(status)&&/^CapEff:\s+0+$/mu.test(status);
+}
+function assertQualificationSandbox(){
   if(process.platform!=='linux'||typeof process.getuid!=='function'||typeof process.geteuid!=='function'||process.getuid()!==process.geteuid()||process.getuid()===0)throw unavailable();
   const lines=readFileSync('/etc/passwd','utf8').split('\n');
   const matches=lines.filter(line=>line.startsWith('justup-preview-runner:'));
   if(matches.length!==1||Number(matches[0].split(':')[2])!==process.getuid())throw unavailable();
-  return process.getuid();
+  if(!inQualificationSandbox(readFileSync('/proc/self/cgroup','utf8'),readFileSync('/proc/self/status','utf8')))throw unavailable();
 }
-function readProtectedGrant(){
+function readProtectedGrant(expected){
+  if(!SHA.test(expected??''))throw unavailable();
   if(realpathSync(GRANT)!==GRANT)throw unavailable();
-  const parent=lstatSync(BASE+'/queue/config');
-  if(!parent.isDirectory()||parent.isSymbolicLink()||parent.uid!==0||(parent.mode&0o002)!==0)throw unavailable();
-  const fd=openSync(GRANT,constants.O_RDONLY|constants.O_NOFOLLOW);
+  const parent=lstatSync(ROOT);
+  if(!parent.isDirectory()||parent.uid!==0||parent.gid!==process.getgid()||(parent.mode&0o777)!==0o750)throw unavailable();
+  const fd=openSync(GRANT,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try{
     const before=fstatSync(fd);
     if(!before.isFile()||before.uid!==0||before.gid!==process.getgid()||(before.mode&0o777)!==0o640||before.nlink!==1||before.size<1||before.size>8192)throw unavailable();
     const bytes=readFileSync(fd),after=fstatSync(fd);
-    if(['dev','ino','size','mtimeMs','ctimeMs'].some(key=>before[key]!==after[key]))throw unavailable();
-    return {value:JSON.parse(bytes),sha256:sha(bytes)};
+    if(['dev','ino','size','mtimeMs','ctimeMs'].some(key=>before[key]!==after[key])||sha(bytes)!==expected)throw unavailable();
+    return JSON.parse(bytes);
   }finally{closeSync(fd);}
 }
 function outputPath(runId){
@@ -60,36 +64,32 @@ function appendLine(fd,value){
   for(let offset=0;offset<bytes.length;){const written=writeSync(fd,bytes,offset,bytes.length-offset);if(written<1)throw unavailable();offset+=written;}
   fsyncSync(fd);
 }
-function qualificationModelConfig(base,identity){
-  const model=base.model;
-  if(!plain(model)||model.cliVersion!==CODEX_VERSION||model.socketPath!==BASE+'/broker/model.sock'||model.attestationPath!==BASE+'/broker/isolation-reviewed.json'
-    ||model.companyResearchVerified!==true)throw unavailable();
-  // Product configuration may remain disabled. Only this process turns on
-  // attested profiles after a separate root grant; it publishes no capability.
-  return {...model,enabled:true,isolationVerified:true,companyResearchVerified:true,...identity,
+function qualificationModelConfig(identity){
+  return {cliVersion:CODEX_VERSION,socketPath:BASE+'/broker/model.sock',attestationPath:BASE+'/broker/isolation-reviewed.json',
+    enabled:true,isolationVerified:true,companyResearchVerified:true,...identity,
     taskProfiles:Object.fromEntries(Object.entries(MODEL_PROFILES).map(([kind,profile])=>[kind,{enabled:true,toolPolicySha256:profile.toolPolicySha256,modelCatalogueSha256:MODEL_CATALOGUE_SHA256}]))};
 }
 export async function runQualificationCli(){
-  // A queue UID alone does not prove the systemd sandbox. Remove this source
-  // gate only with the fixed installed service and its host-plan review.
-  if(QUALIFICATION_SOURCE_ONLY)throw unavailable();
-  queueUid();
-  const config=readRunnerConfig(),identity={sourceCommit:config.sourceCommit,buildIdentity:config.buildIdentity,hostPlanSha256:config.hostPlanSha256};
+  assertQualificationSandbox();
+  const identity={sourceCommit:process.env.JUSTUP_SOURCE_COMMIT,buildIdentity:process.env.JUSTUP_BUILD_ID,
+    hostPlanSha256:process.env.JUSTUP_HOST_PLAN_SHA256};
   const {manifest,sha256:manifestSha256}=fixedQualificationManifest();
-  const protectedGrant=readProtectedGrant();
-  const grant=validateQualificationGrant(protectedGrant.value,{...identity,manifestSha256});
+  const grantSha256=process.env.JUSTUP_LUNA_GRANT_SHA256;
+  const grant=validateQualificationGrant(readProtectedGrant(grantSha256),{...identity,manifestSha256});
   const path=outputPath(grant.runId);
   // Exclusive creation is the non-retry marker. A crash leaves a partial
   // redacted record and the same grant cannot be exercised a second time.
   const fd=openSync(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
   try{
-    const header={version:1,kind:'luna_qualification_start',runId:grant.runId,...identity,manifestSha256,grantSha256:protectedGrant.sha256};
+    const header={version:1,kind:'luna_qualification_start',runId:grant.runId,...identity,manifestSha256,grantSha256};
     appendLine(fd,header);
     const observer=createQualificationObserver();
-    const executor=createBrokerExecutor({socketPath:config.model.socketPath,onReply:observer.onReply});
-    const model=createCodexModel({config:qualificationModelConfig(config,identity),execute:executor,onMetric:observer.onMetric});
+    const config=qualificationModelConfig(identity);
+    const executor=createBrokerExecutor({socketPath:config.socketPath,onReply:observer.onReply});
+    const model=createCodexModel({config,execute:executor,onMetric:observer.onMetric});
     const report=await evaluateQualification({manifest,model,observer,onCase(record){appendLine(fd,{kind:'case',...record});}});
-    appendLine(fd,{kind:'summary',passed:report.passed,intent:report.intent,company:report.company,totals:report.totals});
+    appendLine(fd,{kind:'summary',passed:report.passed,intent:report.intent,company:report.company,totals:report.totals,
+      reportSha256:sha(Buffer.from(JSON.stringify(report)))});
     return report.passed?0:2;
   }finally{closeSync(fd);}
 }
