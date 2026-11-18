@@ -642,21 +642,21 @@ class RetirementTests(unittest.TestCase):
 
 
 class ComposedImportTests(unittest.TestCase):
-    def test_actual_adapter_and_database_import_recover_partial_and_committed_batches(self):
+    def test_actual_adapter_and_database_import_recover_expired_partial_and_committed_batches(self):
         root = Path(__file__).resolve().parents[1]
         node = shutil.which('node')
         self.assertIsNotNone(node, 'The composed import contract requires the pinned Node runtime.')
         self.assertEqual(subprocess.check_output([node, '--version'], text=True).strip(), 'v24.22.2')
-        # The real CLIs use their wall clock. Freeze one synthetic source time
-        # safely behind it; all later page times stay in the same short window.
+        # The real CLIs use their wall clock. Replay an expired snapshot and
+        # partial page, then deliver a current change page and reconcile.
         now = datetime.now(timezone.utc).replace(microsecond=0)
         iso = lambda value: value.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-        snapshot_at = iso(now - timedelta(minutes=6))
-        partial_at = iso(now - timedelta(minutes=4))
+        snapshot_at = iso(now - timedelta(hours=27))
+        partial_at = iso(now - timedelta(hours=26))
         complete_at = iso(now - timedelta(minutes=2))
-        posting_times = {'firstSeenAt': iso(now - timedelta(days=2)),
-                         'lastSeenAt': iso(now - timedelta(minutes=8)),
-                         'updatedAt': iso(now - timedelta(minutes=8))}
+        posting_times = {'firstSeenAt': iso(now - timedelta(days=3)),
+                         'lastSeenAt': iso(now - timedelta(hours=28)),
+                         'updatedAt': iso(now - timedelta(hours=28))}
         third_id = '33333333-3333-4333-8333-333333333333'
         scope = {'kind': 'company_ids', 'requestedCount': 1,
                  'requestedSetSha256': hashlib.sha256(IMPORT_FIXTURES.COMPANY_A.encode()).hexdigest()}
@@ -711,6 +711,24 @@ class ComposedImportTests(unittest.TestCase):
                 with closing(sqlite3.connect(base / 'state/preview.sqlite')) as database:
                     return database.execute('SELECT count(*) FROM justup_imports').fetchone()[0]
 
+            def public_jobs():
+                read = """
+                    import { createApplication } from './server/main.mjs';
+                    const app = await createApplication({ config: { dbPath: process.argv[1],
+                      allowedOrigin: 'http://127.0.0.1:18787', allowInsecureLocalhost: true } });
+                    try {
+                      await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+                      const response = await fetch(`http://127.0.0.1:${app.server.address().port}/api/v1/jobs`);
+                      if (response.status !== 200) throw new Error('Unexpected jobs response.');
+                      console.log(JSON.stringify(await response.json()));
+                    } finally {
+                      app.server.closeAllConnections();
+                      await app.close();
+                    }
+                """
+                return json.loads(subprocess.check_output([node, '--input-type=module', '--eval', read,
+                    str(base / 'state/preview.sqlite')], cwd=app, timeout=10))
+
             with patch.object(FEED, 'BASE', base), patch.object(FEED, 'RECEIPTS', receipts), \
                     patch.object(FEED.pwd, 'getpwnam', return_value=owner), \
                     patch.object(FEED, 'checked_file', side_effect=lambda path, _owner: original_checked(path, owner.pw_uid)), \
@@ -725,11 +743,12 @@ class ComposedImportTests(unittest.TestCase):
                 self.assertEqual(imports(), 1)
                 self.assertEqual(FEED.root_receipt('a' * 32, initial[3]), {'schemaVersion': 1, 'manifestSha256': initial[3]})
                 self.assertTrue(FEED.latest_import_matches(initial[3]))
+                self.assertEqual(public_jobs()['continuation']['state'], 'paused')
                 partial = stage([
                     IMPORT_FIXTURES.feed_posting(**{**posting_times, 'active': False,
-                        'updatedAt': iso(now - timedelta(minutes=5))}),
+                        'updatedAt': iso(now - timedelta(hours=26, minutes=30))}),
                     IMPORT_FIXTURES.feed_posting(third_id, **{**posting_times,
-                        'updatedAt': iso(now - timedelta(minutes=5)), 'body': None, 'bodyStatus': 'missing'})],
+                        'updatedAt': iso(now - timedelta(hours=26, minutes=30)), 'body': None, 'bodyStatus': 'missing'})],
                     batch_id='b' * 32, kind='changes', from_cursor=initial[2]['toCursor'],
                     cutoff=partial_at, complete=False, source_count=3)
                 with patch.object(FEED, 'promote_candidate', side_effect=OSError('Synthetic staging interruption.')), self.assertRaises(OSError):
@@ -782,6 +801,20 @@ class ComposedImportTests(unittest.TestCase):
                 latest = json.loads((inbox / 'latest.json').read_text())
                 self.assertEqual(latest['selection']['feed']['manifestSha256'], complete[3])
                 self.assertTrue(latest['selection']['limitedCoverage'])
+                paused = public_jobs()
+                self.assertTrue(paused['coverage']['stale'])
+                self.assertEqual(paused['continuation']['state'], 'paused')
+                self.assertEqual(paused['items'], [])
+
+                reconciled = stage([IMPORT_FIXTURES.feed_posting(IMPORT_FIXTURES.JOB_B, **posting_times)],
+                                   batch_id='d' * 32, cutoff=iso(now - timedelta(minutes=1)))
+                self.assertEqual(consume(reconciled)['status'], 'imported')
+                self.assertEqual(imports(), 3)
+                live = public_jobs()
+                self.assertFalse(live['coverage']['stale'])
+                self.assertEqual([item['id'] for item in live['items']], [IMPORT_FIXTURES.JOB_B])
+                self.assertEqual(live['items'][0]['firstObserved'], IMPORT_FIXTURES.IMPORT.iso(
+                    IMPORT_FIXTURES.IMPORT.utc(posting_times['firstSeenAt'])))
 
 
 if __name__ == '__main__':

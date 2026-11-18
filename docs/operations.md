@@ -378,13 +378,19 @@ Pass the JSON from `preview-feed.py receipt --batch-id <id> --manifest-sha256 <s
 
 The host stage cap is deliberately lower than the producer's global 512 MiB batch ceiling. Qualify the selected company cohort against that cap, current SQLite capacity and the release's 24-hour verification lifetime. An oversized batch fails without silently claiming coverage or allocating a larger disk. Any additional infrastructure spend follows the explicit resource approval path.
 
+After an interruption that outlasts the freshness window, replay and acknowledge
+the producer's exact pending batch, then finish any cursor-linked change pages.
+Reconcile with a fresh full snapshot as soon as the producer can issue one.
+Historical imports keep their source dates. The job API stays paused until the
+new full snapshot is durable and reports the current import generation.
+
 ## Schedule and observation contract
 
 The shared queue leases tasks durably; schedules enqueue fixed task kinds and never launch arbitrary scripts or a second permanent model worker. A schedule must be disabled until its exact candidate, owner, cadence, timeout, concurrency, replay key and failure alert are reviewed. Retrying an interval reuses its import generation or edition period. Interactive search/company work takes priority over weekly editorial work within the one model slot. Stop new work before recovery; retain pending tasks, usage ledgers and immutable edition evidence.
 
 | Operation | Current interface and required release evidence |
 | --- | --- |
-| Job refresh | `scripts/import-jobs.py --snapshot <fixed UTC> --typesense-host <approved origin> --previous <last snapshot> --output <new private path>` followed by `server/main.mjs --import <completed snapshot>`. Both steps use the approved read-only transfer and resource boundary. Prove repeated updates, known-ID closures, stale-source behavior and replay before enabling the cadence. |
+| Job refresh | Use the [private job-feed handoff](#private-job-feed-handoff). Observe completed cursor-linked changes and a full reconciliation before the 24-hour freshness deadline. Prove repeated updates, known-ID closures, a missed refresh and exact replay before enabling the cadence. |
 | Source history | The producer under `source-coverage-history` must supply authoritative scope/revision and complete/interrupted intervals. Latest success or a current snapshot cannot prove two continuous weeks. Missing history suppresses comparative publication. |
 | Hiring Wire | The shared runner waits for the protected Monday UTC artifact, then idempotently enqueues the period and binds the five-tool Sol dispatcher. The 15-minute file check uses no task attempt. Source history, independent qualification and exact deployed evidence must pass before enabling its configuration. Facts, selections and execution identity persist with the edition. Cleanup uncertainty durably halts the queue for reviewed recovery. |
 | Backups | `preview-recovery.py backup` uses the active immutable manifest identity and live deletion generation. Review cadence/recovery objective and confirm backup age, capacity and restore before unattended operation. The ledger is excluded. |
@@ -477,6 +483,13 @@ For local aggregate product and execution evidence, use the [product evidence gu
 A guard failure stops only the explicitly named preview API, runner, tunnel, model socket and model service units. Investigate the actual kernel limits, root reserve and preview quota. Do not clear unrelated caches, resize the quota, restart the renderer or increase the allocation as an automatic recovery action. Viktor Shcherbakov owns incident coordination and policy review; use business@colophon-group.org for the operator contact. Actual policy approval and implemented retention/provider behavior remain release gates.
 
 For code rollback within epoch 2, retain the verified previous compatible build and a usable deletion-safe backup. Stop preview writers, select the exact retained build with `switch --build-identity`, then repeat readiness/identity/data/browser checks before reopening routing. The switch checks the actual database epoch after stopping services and preserves existing links on a mismatch. There is no epoch-2 to epoch-1 downgrade: a retained epoch-1 backup is only a forward-recovery input migrated to epoch 2 before auth-owned session invalidation. Keep current protected launch/recovery tooling installed when selecting retained application bytes. Never restore an old snapshot merely to make old code start, overwrite the live deletion barrier, reset cumulative JEV spend or reactivate old sessions. A failed switch leaves the API stopped for inspection.
+
+When rolling back to a build that predates private-feed omission cutoffs, pause
+imports and keep any pending batch intact. The older reader honors listing
+verification already withdrawn by the current writer. The older importer cannot
+withdraw verification for a newly omitted listing. Resume import only after a
+compatible writer returns, then replay the pending batch and reconcile if
+coverage expired. Serve only the last accepted data within its freshness limit.
 
 For teardown, use `--reviewed-plan-sha` with the exact installed marker identity. Remove the frontend candidate route with its owner, remove Justup's scoped runtime/model/tunnel access (do not revoke the shared Jobseek JEV key), preserve/reconcile its cumulative ledger until matching is stopped and access is removed, then run `preview-host.py teardown` in the slice. It disables the preview guard timer, stops only the named preview units and uses a normal unmount. It retains the mode-0600 image by default for an explicit recovery/retention decision. `teardown --erase-data` removes only the owned image, empty mountpoint, dedicated preview UIDs/groups and preview mount/service/socket/timer files after marker/backing validation. It refuses a busy unmount, mismatched/unsafe root-owned marker, nonprivate or aliased image, incorrect backing/mount/filesystem/options or unexpected mountpoint content. Only teardown's internal cleanup validation permits lost physical reservation so an owned sparse image can be normally unmounted and removed; proof, guard, install, stage and switch retain the strict allocation check. There is no general bypass flag. It never uses forced/lazy unmount or wildcard cleanup. The small slice file is retained so the teardown process stays bounded; after it exits, the operator may stop/remove that specifically reviewed slice and reload systemd. Confirm released disk space and unchanged protected-renderer health.
 

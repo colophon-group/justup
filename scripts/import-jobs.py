@@ -838,8 +838,8 @@ def import_feed_bundle(manifest_path, *, previous=None, max_jobs=500, now=None):
     manifest, rows, manifest_sha256 = read_feed_bundle(manifest_path)
     cutoff = utc(manifest["cutoffAt"])
     observed = now() if callable(now) else now if now is not None else datetime.now(timezone.utc)
-    if cutoff > observed or observed - cutoff >= timedelta(hours=24):
-        raise ImportFailure("Feed cutoff must be within the 24-hour verification window.")
+    if cutoff > observed:
+        raise ImportFailure("Feed cutoff must not be in the future.")
     prior = previous.get("candidate") if isinstance(previous, dict) and previous.get("stageVersion") == 1 else previous
     if prior is not None and (not isinstance(prior, dict) or prior.get("schemaVersion") != 1
                               or not isinstance(prior.get("jobs"), list) or len(prior["jobs"]) > MAX_JOBS
@@ -856,12 +856,17 @@ def import_feed_bundle(manifest_path, *, previous=None, max_jobs=500, now=None):
                 or any(item.get("bodyText") is not None and not isinstance(item["bodyText"], str) for item in prior["jobs"])):
             raise ImportFailure("Feed changes do not follow the previous import cursor, scope and limit.")
         full_at = utc(prior_feed.get("fullSnapshotAt"))
-        if observed - full_at >= timedelta(hours=24):
-            raise ImportFailure("A full source snapshot is needed before refreshing listings.")
+        if full_at > _feed_cursor(manifest["fromCursor"])[0]:
+            raise ImportFailure("Previous full snapshot is newer than the starting cursor.")
     else:
         full_at = cutoff
         if prior_feed and manifest["scope"] != prior_feed.get("scope"):
             raise ImportFailure("Feed scope changed; use a separately reviewed reconciliation.")
+        if prior_feed and cutoff < _feed_cursor(prior_feed.get("cursor"))[0]:
+            raise ImportFailure("Full snapshot is older than the previous cursor.")
+    # An expired pending batch must still be acknowledged before the producer
+    # can issue a reconciliation. Keep source times unchanged: the app applies
+    # its freshness limit to full_at, regardless of this import's arrival time.
     since = _feed_cursor(manifest["fromCursor"]) if manifest["fromCursor"] else None
     last = since
     descriptions, row_count, seen_ids = [], 0, set()

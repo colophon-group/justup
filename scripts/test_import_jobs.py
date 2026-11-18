@@ -172,7 +172,7 @@ class PublicImportTests(unittest.TestCase):
             self.assertEqual(job["evidence"]["bodyError"], "body_hash_mismatch")
             self.assertFalse(job["evidence"]["aiEligible"])
 
-    def test_feed_rejects_stale_cutoff_and_unverified_body_digest(self):
+    def test_feed_replays_expired_snapshot_without_refreshing_cutoff_or_unverified_body(self):
         with tempfile.TemporaryDirectory() as root:
             row = feed_posting()
             row["body"]["sha256"] = "0" * 64
@@ -182,8 +182,26 @@ class PublicImportTests(unittest.TestCase):
             self.assertEqual(replay["verifiedAt"], result["verifiedAt"])
             self.assertIsNone(result["jobs"][0]["bodyText"])
             self.assertEqual(result["jobs"][0]["evidence"]["bodyError"], "body_hash_mismatch")
-            with self.assertRaisesRegex(IMPORT.ImportFailure, "24-hour"):
-                IMPORT.import_feed_bundle(path, max_jobs=1, now=NOW + timedelta(hours=24))
+            self.assertEqual(IMPORT.import_feed_bundle(path, max_jobs=1, now=NOW + timedelta(days=2)), result)
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "future"):
+                IMPORT.import_feed_bundle(path, max_jobs=1, now=NOW - timedelta(seconds=1))
+
+    def test_expired_changes_can_complete_but_cannot_reset_the_full_snapshot_or_reverse_the_cursor(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / "feed"
+            recovery_at = NOW + timedelta(days=2)
+            initial_path, initial_manifest = write_feed_bundle(directory, [feed_posting()])
+            initial = IMPORT.import_feed_bundle(initial_path, now=recovery_at)
+            changes_path, _ = write_feed_bundle(directory, [], batch_id="b" * 32, kind="changes",
+                from_cursor=initial_manifest["toCursor"], cutoff="2026-10-31T16:05:00Z")
+            recovered = IMPORT.import_feed_bundle(changes_path, previous=initial, now=recovery_at)
+            self.assertEqual(recovered["selection"]["feed"]["fullSnapshotAt"], initial["selection"]["feed"]["fullSnapshotAt"])
+            self.assertEqual(recovered["jobs"], initial["jobs"])
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "older than the previous cursor"):
+                IMPORT.import_feed_bundle(initial_path, previous=recovered, now=recovery_at)
+            initial["selection"]["feed"]["fullSnapshotAt"] = "2026-10-31T16:01:00.000Z"
+            with self.assertRaisesRegex(IMPORT.ImportFailure, "newer than the starting cursor"):
+                IMPORT.import_feed_bundle(changes_path, previous=initial, now=recovery_at)
 
     def test_feed_changes_preserve_unmentioned_jobs_and_explicit_closure(self):
         with tempfile.TemporaryDirectory() as root:

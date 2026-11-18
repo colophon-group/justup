@@ -30,7 +30,8 @@ export function createFeed({ db, now = Date.now, cursorSecret = randomBytes(32),
     let selection;
     try { selection = JSON.parse(row.selection_json); } catch { return null; }
     if (selection?.source !== 'jobseek_feed_v1') return row.verified_at;
-    const full = selection.feed?.fullSnapshotAt;
+    if (selection.feed?.complete !== true) return null;
+    const full = selection.feed.fullSnapshotAt;
     if (typeof full !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(full)) return null;
     const parsed = Date.parse(full);
     if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== full || parsed > row.verified_at) return null;
