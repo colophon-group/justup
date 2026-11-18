@@ -132,6 +132,31 @@ test('hiring footprint is bound to the same public sample and rejects contradict
   assert.throws(() => decodeCompanyReport({ ...raw, freshness: { listings: 'unavailable' },
     hiringRoles: { state: 'unavailable' }, reportedSalaries: { state: 'unavailable' } }, 'company'));
 });
+test('listing mixes validate experience bounds, workplace overlap and the same public sample', () => {
+  const experienceMix = { state: 'available', sampleSize: 5, labelledSampleSize: 3, unknownSampleSize: 2,
+    items: [{ min: 2, max: 3, count: 2 }, { min: null, max: 2.5, count: 1 }] };
+  const workplaceMix = { state: 'available', sampleSize: 5, labelledSampleSize: 2, unknownSampleSize: 3,
+    items: [{ mode: 'hybrid', count: 1 }, { mode: 'remote', count: 2 }] };
+  const raw = { ...currentReport(), experienceMix, workplaceMix };
+  const decoded = decodeCompanyReport(raw, 'company');
+  assert.deepEqual(decoded.experienceMix, experienceMix);
+  assert.deepEqual(decoded.workplaceMix, workplaceMix);
+  assert.deepEqual(decodeCompanyReport(decoded, 'company'), decoded);
+  for (const override of [
+    { workplaceMix: undefined }, { workplaceMix: { ...workplaceMix, state: 'unavailable' } },
+    { workplaceMix: { ...workplaceMix, sampleSize: 4 } },
+    { workplaceMix: { ...workplaceMix, items: [] } },
+    { workplaceMix: { ...workplaceMix, items: [{ mode: 'inferred', count: 2 }] } },
+    { workplaceMix: { ...workplaceMix, items: [{ mode: 'remote', count: 3 }] } },
+    { workplaceMix: { ...workplaceMix, items: [workplaceMix.items[1], workplaceMix.items[1]] } },
+    { experienceMix: { ...experienceMix, items: [{ min: 5, max: 2, count: 3 }] } },
+    { experienceMix: { ...experienceMix, items: [{ min: null, max: 99, count: 3 }] } },
+    { experienceMix: { ...experienceMix, items: [{ min: null, max: null, count: 3 }] } },
+    { experienceMix: { ...experienceMix, items: [{ min: 1, max: 2, count: 2 }] } },
+  ]) assert.throws(() => decodeCompanyReport({ ...raw, ...override }, 'company'));
+  assert.throws(() => decodeCompanyReport({ ...report(), experienceMix, workplaceMix }, 'company'));
+});
+
 test('current report keeps exact role/sample denominators and separate currency-period bounds without private history', () => {
   const raw = currentReport(), value = decodeCompanyReport(raw, 'company');
   assert.deepEqual(value.hiringRoles, raw.hiringRoles);

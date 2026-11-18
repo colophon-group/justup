@@ -13,8 +13,10 @@ function importSamples() {
     locales: ['en'], locations: [], employmentTypes: [], seniority: null, salary: null, occupation: null, bodyText: null,
     evidence: { source: 'jobseek_public', metadataFetchedAt: iso(at), bodyFetchedAt: null, bodyUrl: null, bodySha256: null, textSha256: null, bodyBytes: 0, normalizationVersion: 1, truncated: false }, ...changes });
   runtime.app.store.importSnapshot({ schemaVersion: 1, snapshotAt: iso(at), verifiedAt: iso(at), observations: [], unknownIds: [], jobs: [
-    job('assembled-engineer', 3, { occupation: { id: 'developer', name: 'Software developers' }, salary: { min: 90000, max: 120000, currency: 'USD', period: 'year' } }),
-    job('sample-usd-year', 4, { occupation: { id: 'developer', name: 'Software developers' }, salary: { min: 110000, max: 150000, currency: 'USD', period: 'year' } }),
+    job('assembled-engineer', 3, { experience: { min: 2.5, max: 4 }, locations: [{ name: 'Office A', workplace: 'hybrid' }, { name: 'Office B', workplace: 'remote' }],
+      occupation: { id: 'developer', name: 'Software developers' }, salary: { min: 90000, max: 120000, currency: 'USD', period: 'year' } }),
+    job('sample-usd-year', 4, { experience: { min: 5, max: 99 }, locations: [{ name: 'Office A', workplace: 'remote' }],
+      occupation: { id: 'developer', name: 'Software developers' }, salary: { min: 110000, max: 150000, currency: 'USD', period: 'year' } }),
     job('sample-usd-month', 5, { occupation: { id: 'archivist', name: 'Archivists & curators' }, salary: { min: 7000, max: null, currency: 'USD', period: 'month' } }),
     job('sample-eur-hour', 6, { salary: { min: null, max: 45, currency: 'EUR', period: 'hour' } }),
     job('sample-incomplete', 7, { salary: { min: 30000, max: 40000, currency: null, period: 'year' } }),
@@ -25,11 +27,21 @@ function importSamples() {
 async function expectSamples(page) {
   await expect(page.locator('.sample-heading')).toContainText('Sample size: 6');
   await expect(page.locator('#company-roles-title')).toHaveText('Hiring roles.');
-  await expect(page.locator('.sample-roles li')).toHaveCount(2);
-  await expect(page.locator('.sample-roles li').first()).toContainText('Software developers');
-  await expect(page.locator('.sample-roles li').last()).toContainText('Archivists & curators');
-  await expect(page.locator('.sample-coverage').first()).toHaveText('3 labelled · 3 unlabelled');
-  await expect(page.locator('.sample-coverage').last()).toHaveText('5 reported · 1 not reported');
+  const roles = page.getByRole('region', { name: 'Hiring roles.' });
+  await expect(roles.getByRole('listitem')).toHaveCount(2);
+  await expect(roles.getByRole('listitem').first()).toContainText('Software developers');
+  await expect(roles.getByRole('listitem').last()).toContainText('Archivists & curators');
+  await expect(roles.locator('.sample-coverage')).toHaveText('3 labelled · 3 unlabelled');
+  await expect(page.getByRole('region', { name: 'Reported salaries.' }).locator('.sample-coverage')).toHaveText('5 reported · 1 not reported');
+  const experience = page.getByRole('region', { name: 'Experience in years.' });
+  await expect(experience.locator('.sample-coverage')).toHaveText('2 labelled · 4 unlabelled');
+  await expect(experience.locator('.sample-role-label span')).toHaveText(['2.5–4', 'From 5']);
+  await expect(experience.locator('.sample-role-label b')).toHaveText(['1', '1']);
+  const workplace = page.getByRole('region', { name: 'Workplace mix.' });
+  await expect(workplace.locator('.sample-coverage')).toHaveText('2 labelled · 4 unlabelled');
+  await expect(workplace.locator('.sample-role-label span')).toHaveText(['Hybrid', 'Remote']);
+  await expect(workplace.locator('.sample-role-label b')).toHaveText(['1', '2']);
+  await expect(workplace).toContainText('A listing can report more than one workplace mode.');
   await expect(page.locator('.sample-excluded')).toHaveText('Incomplete values excluded: 1');
   await expect(page.locator('.sample-salaries li')).toHaveCount(3);
   await expect(page.locator('[data-currency="USD"][data-period="year"]')).toContainText('USD 90,000–150,000 / year');

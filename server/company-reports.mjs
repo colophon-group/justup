@@ -12,6 +12,8 @@ const METHODOLOGY = Object.freeze({
   monitoring: 'Earliest tracked-since evidence among the scopes in this historical snapshot; this does not establish uninterrupted company-wide monitoring.',
   roles: 'Source occupation labels among currently eligible public sample listings; unlabelled listings remain unknown.',
   salaries: 'Reported numeric salary bounds among currently eligible public sample listings, grouped by currency and period without conversion or annualization. Crossed aggregate bounds remain unknown. These are listing values, not employee pay.',
+  experience: 'Reported experience bounds in years among currently eligible public sample listings. Missing or inconsistent bounds remain unknown.',
+  workplace: 'Reported workplace labels among currently eligible public sample listings. Count a mode once per listing, and allow multiple modes per listing.',
   footprint: 'Direct country locations among currently eligible public sample listings, identified by GeoNames country ID. A country is counted once per listing. Listings without a mapped country remain unknown.',
 });
 
@@ -73,6 +75,36 @@ function salaries(jobs) {
   return { sampleSize: jobs.length, reportedSampleSize, groupedSampleSize,
     incompleteSampleSize: reportedSampleSize - groupedSampleSize, unknownSampleSize: jobs.length - reportedSampleSize,
     groups: [...found.values()].sort((a, b) => a.currency.localeCompare(b.currency) || a.period.localeCompare(b.period)) };
+}
+
+function listingLabels(jobs, stale) {
+  if (stale) return { experienceMix: { state: 'unavailable' }, workplaceMix: { state: 'unavailable' } };
+  const experienceGroups = new Map(), workplaceCounts = new Map();
+  let experienceLabelled = 0, workplaceLabelled = 0;
+  for (const job of jobs) {
+    const { min = null, max = null, openEnded = false } = job.experience ?? {};
+    if ((min !== null || max !== null) && (min === null || min <= 99) && (max === null || max < 99)
+        && (min === null || max === null || min <= max) && (!openEnded || min !== null && max === null)) {
+      experienceLabelled++;
+      const key = JSON.stringify([min, max]);
+      const group = experienceGroups.get(key);
+      if (group) group.count++;
+      else experienceGroups.set(key, { min, max, count: 1 });
+    }
+    const modes = new Set(job.locations.map(location => location.workplace)
+      .filter(mode => mode === 'onsite' || mode === 'remote' || mode === 'hybrid'));
+    if (!modes.size) continue;
+    workplaceLabelled++;
+    for (const mode of modes) workplaceCounts.set(mode, (workplaceCounts.get(mode) ?? 0) + 1);
+  }
+  return {
+    experienceMix: { state: 'available', sampleSize: jobs.length, labelledSampleSize: experienceLabelled,
+      unknownSampleSize: jobs.length - experienceLabelled, items: [...experienceGroups.values()].sort((a, b) =>
+        b.count - a.count || (a.min ?? -1) - (b.min ?? -1) || (a.max ?? -1) - (b.max ?? -1)) },
+    workplaceMix: { state: 'available', sampleSize: jobs.length, labelledSampleSize: workplaceLabelled,
+      unknownSampleSize: jobs.length - workplaceLabelled, items: [...workplaceCounts.keys()].sort()
+        .map(mode => ({ mode, count: workplaceCounts.get(mode) })) },
+  };
 }
 
 function point(snapshot, scopes, start, end) {
@@ -154,6 +186,7 @@ export function createCompanyReports({ db, feed, now = Date.now } = {}) {
       monitoringSince: recorded.monitoringSince, sourceChecks: recorded.sourceChecks, hiringHistory: recorded.hiringHistory,
       hiringRoles: { state: coverage.stale ? 'unavailable' : 'available', ...roles(jobs) },
       reportedSalaries: { state: coverage.stale ? 'unavailable' : 'available', ...salaries(jobs) },
+      ...listingLabels(jobs, coverage.stale),
       hiringFootprint: footprint(jobs), methodology: METHODOLOGY };
   }
   function publicRoute(ctx) {
