@@ -736,10 +736,18 @@ def latest_import_matches(digest, *, approval=None):
 
 def promote_candidate(candidate, latest, *, expected_digest=None):
     owner = pwd.getpwnam('justup-preview-api')
-    temporary = None
+    # All promotions hold the import lock. One recoverable private name keeps
+    # interrupted copies bounded and under operator control until publication.
+    temporary = RECEIPTS / '.feed-latest.pending'
+    if temporary.exists() or temporary.is_symlink():
+        meta = temporary.lstat()
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid not in {0, owner.pw_uid}
+                or meta.st_nlink != 1 or stat.S_IMODE(meta.st_mode) != 0o600):
+            raise FeedStageError('Interrupted feed promotion needs operator review.')
+        temporary.unlink()
+    fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     try:
-        with tempfile.NamedTemporaryFile(dir=latest.parent, prefix='.latest-', delete=False) as output:
-            temporary = Path(output.name)
+        with os.fdopen(fd, 'wb') as output:
             os.fchmod(output.fileno(), 0o600)
             with open_candidate(candidate) as (source, size):
                 digest = copy_candidate(source, size, output)
@@ -751,8 +759,7 @@ def promote_candidate(candidate, latest, *, expected_digest=None):
         os.replace(temporary, latest)
         fsync_dir(latest.parent)
     finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
 
 
 def node_import_environment(release_manifest):

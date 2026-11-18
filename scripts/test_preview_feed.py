@@ -504,6 +504,26 @@ class ImportSequenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(FEED.FeedStageError, 'changed during the read'):
                     FEED.candidate_digest(candidate)
 
+    def test_promotion_keeps_the_verified_name_in_operator_storage_until_rename(self):
+        with tempfile.TemporaryDirectory() as root:
+            inbox, receipts = Path(root) / 'inbox', Path(root) / 'receipts'
+            inbox.mkdir(mode=0o700)
+            receipts.mkdir(mode=0o700)
+            candidate, latest = inbox / 'candidate.json', inbox / 'latest.json'
+            FEED.write_private(candidate, b'candidate bytes')
+            FEED.write_private(receipts / '.feed-latest.pending', b'interrupted copy')
+            publish = os.replace
+
+            def verify_stage(source, destination):
+                self.assertEqual(source.parent, receipts)
+                self.assertEqual(destination, latest)
+                publish(source, destination)
+
+            with local_operator(inbox, receipts), patch.object(FEED.os, 'replace', side_effect=verify_stage):
+                FEED.promote_candidate(candidate, latest, expected_digest=hashlib.sha256(b'candidate bytes').hexdigest())
+            self.assertEqual(latest.read_bytes(), b'candidate bytes')
+            self.assertEqual(list(receipts.iterdir()), [])
+
     def test_child_stdout_is_capped_while_running(self):
         with tempfile.TemporaryDirectory() as root:
             with self.assertRaises(FEED.FeedStageError):
