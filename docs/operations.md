@@ -384,6 +384,29 @@ Reconcile with a fresh full snapshot as soon as the producer can issue one.
 Historical imports keep their source dates. The job API stays paused until the
 new full snapshot is durable and reports the current import generation.
 
+### Verify private feed arrival evidence
+
+Retain these inputs for one [deployed scheduled arrival](frontend-delivery.md#observe-a-scheduled-feed-arrival-in-preview) under the existing protected evidence and retention rules:
+
+- The browser's single `{"liveArrival":{...}}` JSON record.
+- The Jobseek producer's accepted `state.json` and its original batch manifests and parts from the baseline through the arrival. Retain the interval before acknowledged-batch pruning.
+- The receiver's `batch-<id>.json` acknowledgement receipts for the interval and its `batch-<id>-candidate.json` markers for every batch after the baseline.
+- An existing standalone, deletion-safe SQLite backup whose retained import metadata contains both observed generations. Use the approved online backup procedure. A filesystem copy of a live database or a snapshot with WAL sidecars is unsafe.
+- The receiver's accepted normalized `latest.json` bytes for the arrival generation. Retain them before another batch replaces the file. These bytes may contain server-side listing text.
+
+Run in the protected location where these inputs are already approved to coexist. Keep copies private and owned by the verifier's operator identity. Use the reviewed Justup checkout and pinned Node runtime.
+
+```sh
+python3 scripts/verify-feed-arrival.py \
+  --browser /private/evidence/browser.json \
+  --producer /private/evidence/jobseek \
+  --receipts /private/evidence/justup-receipts \
+  --database /private/evidence/preview-backup.sqlite \
+  --candidate /private/evidence/accepted-arrival.json
+```
+
+The verifier reads only import metadata from the backup and checks the accepted manifest chain, every part digest, the receiver's build markers and the arrived posting's normalized public identity. It distinguishes a partial source page from the complete database generation that made the posting visible. An earlier complete batch that could already have supplied the same posting makes the observation ambiguous. Use another observed window in that case. The output contains digests, candidate and generation identities and counts. It contains no raw job or account data and confers no authority to deploy, run a transfer, create a backup or retire a batch. Keep the separate evidence for sustained cadence, closures, stale coverage and recovery with the full release report.
+
 ## Schedule and observation contract
 
 The shared queue leases tasks durably; schedules enqueue fixed task kinds and never launch arbitrary scripts or a second permanent model worker. A schedule must be disabled until its exact candidate, owner, cadence, timeout, concurrency, replay key and failure alert are reviewed. Retrying an interval reuses its import generation or edition period. Interactive search/company work takes priority over weekly editorial work within the one model slot. Stop new work before recovery; retain pending tasks, usage ledgers and immutable edition evidence.

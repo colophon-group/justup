@@ -104,7 +104,7 @@ def classify(path: str) -> str:
         return "deployment"
     if path in {"scripts/ci.py", "scripts/test-server.mjs", "scripts/test-deployment.mjs", "scripts/test-python.py", "scripts/test-web.mjs", ".gitignore", ".github/CODEOWNERS"} or path.startswith(".github/workflows/"):
         return "tooling"
-    if path == "scripts/import-jobs.py" or (path.startswith("scripts/test_") and path.endswith(".py")):
+    if path in {"scripts/import-jobs.py", "scripts/verify-feed-arrival.py"} or (path.startswith("scripts/test_") and path.endswith(".py")):
         return "python"
     if path in {"package.json", "package-lock.json", "npm-shrinkwrap.json", "vite.config.ts", "tsconfig.json"}:
         return "tooling"
