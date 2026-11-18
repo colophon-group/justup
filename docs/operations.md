@@ -384,6 +384,24 @@ Reconcile with a fresh full snapshot as soon as the producer can issue one.
 Historical imports keep their source dates. The job API stays paused until the
 new full snapshot is durable and reports the current import generation.
 
+### Consume the next approved feed batch
+
+Once the exact receiver, source audit and operator plan have passed target-host qualification, the protected root controller can run one fixed intake command per approved batch. It keeps the relay and the source audit separate. Stage the exact producer manifest as above. Publish the approval atomically as a root-owned mode-`0600` regular file at `/srv/justup_preview/config/feed-receipts/next-import.json`:
+
+```json
+{"schemaVersion":1,"batchId":"<producer batch id>","manifestSha256":"<independently reviewed producer digest>","buildIdentity":"<approved active backend build>","planSha256":"<approved installed host plan>","maxJobs":500}
+```
+
+Use the existing reviewed selection limit. Replace the file between calls and retain the exact approved bytes while reconciling an interrupted interval. Keep the same approval until the source has acknowledged its receipt. The producer cannot publish this file through the SSH relay.
+
+```sh
+python3 -I -B /srv/justup_preview/ops/preview-feed.py import-approved
+```
+
+An absent approval reports `waiting_for_approval`. The command verifies the installed plan, current immutable backend and staged digest before processing. Its nested `receipt` is the exact durable acknowledgement to pass to the producer. `staged_for_catchup` confirms a durable partial page. `imported` confirms a complete batch. `already_accepted` replays the prior receipt from the same build after an interrupted reply. Waiting, historical acknowledgement or an error supplies no current freshness evidence. Verify the current import generation and source coverage separately.
+
+The manual import, approved import, retirement, protected stop, switch, operator upgrades, schema migration, restore preparation and teardown share an exclusive root lock in `/run`. An importer child holds the same read-only descriptor until it exits, including if the launching process is interrupted. A conflicting call exits without changing the active release or acknowledging a batch. Before adopting these operator scripts, stop any previously scheduled feed calls and let any older import or retirement finish. Stop the controller before planned maintenance or live database replacement. This entry point installs no timer and grants no additional SSH permission. Qualification must still prove the timed producer, transfer, consumer and acknowledgement sequence on the approved host.
+
 ### Verify private feed arrival evidence
 
 Retain these inputs for one [deployed scheduled arrival](frontend-delivery.md#observe-a-scheduled-feed-arrival-in-preview) under the existing protected evidence and retention rules:

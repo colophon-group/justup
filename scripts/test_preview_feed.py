@@ -49,10 +49,10 @@ def source_files(directory, *, complete=False, body=b'{"schemaVersion":1,"rows":
 @contextmanager
 def local_operator(inbox, receipts):
     """Exercise the real filesystem flow without changing the test user's UID."""
-    uid = os.geteuid()
-    account = SimpleNamespace(pw_uid=uid)
+    uid, gid = os.geteuid(), os.getegid()
+    account = SimpleNamespace(pw_uid=uid, pw_gid=gid)
     host = SimpleNamespace(verify_caps=lambda: None, verify_storage=lambda: None)
-    checked, private, fstat = FEED.checked_file, FEED.private_inbox, os.fstat
+    checked, private, fstat, fchown = FEED.checked_file, FEED.private_inbox, os.fstat, os.fchown
     sealed = {receipts.stat().st_ino}
 
     def owned_inbox(path, owner=None):
@@ -69,6 +69,8 @@ def local_operator(inbox, receipts):
         return info
 
     def seal(fd, owner, group):
+        if (owner, group) == (uid, gid):
+            return fchown(fd, owner, group)
         assert (owner, group) == (0, -1)
         sealed.add(fstat(fd).st_ino)
 
@@ -81,6 +83,188 @@ def local_operator(inbox, receipts):
             patch.object(FEED.os, 'fstat', side_effect=owned_stat), \
             patch.object(FEED.os, 'fchown', side_effect=seal):
         yield
+
+
+class ApprovedIntakeTests(unittest.TestCase):
+    def setUp(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.inbox, self.receipts = root / 'inbox', root / 'receipts'
+        self.inbox.mkdir(mode=0o700)
+        self.receipts.mkdir(mode=0o700)
+        self.enterContext(local_operator(self.inbox, self.receipts))
+        self.release = (root / 'selected-release', {'buildIdentity': 'b' * 64})
+        self.active = self.enterContext(patch.object(FEED, 'active_release', return_value=self.release))
+        self.batch = (root / 'staged', root / 'staged/manifest.json', {'complete': True}, SHA)
+        self.authorize = self.enterContext(patch.object(FEED, 'authorized_batch', return_value=self.batch))
+        self.consume = self.enterContext(patch.object(FEED, 'consume_batch'))
+        self.request = {'schemaVersion': 1, 'batchId': BATCH_ID, 'manifestSha256': SHA,
+                        'buildIdentity': 'b' * 64, 'planSha256': 'c' * 64, 'maxJobs': 300}
+        self.path = self.receipts / 'next-import.json'
+
+    def approve(self, value=None):
+        self.path.write_text(json.dumps(self.request if value is None else value))
+        self.path.chmod(0o600)
+
+    def test_staged_bytes_alone_cannot_start_the_operator_job(self):
+        self.assertEqual(FEED.process_approved_batch(writer_fd=9), {'status': 'waiting_for_approval'})
+        self.active.assert_not_called()
+        self.authorize.assert_not_called()
+        self.consume.assert_not_called()
+
+    def test_checks_exact_approval_and_replays_the_durable_acknowledgement(self):
+        self.approve()
+        def commit(*args, **kwargs):
+            FEED.write_private(FEED.candidate_marker_path(BATCH_ID), json.dumps({
+                'schemaVersion': 1, 'manifestSha256': SHA, 'candidateSha256': 'e' * 64,
+                'buildIdentity': self.request['buildIdentity'],
+            }).encode())
+            FEED.store_receipt(BATCH_ID, SHA)
+            return {'status': 'imported', 'manifestSha256': SHA,
+                    'releaseBuildIdentity': self.request['buildIdentity']}
+        self.consume.side_effect = commit
+        first = FEED.process_approved_batch(writer_fd=9)
+        second = FEED.process_approved_batch(writer_fd=10)
+        self.assertEqual((first['status'], second['status']), ('imported', 'already_accepted'))
+        self.assertEqual(first['receipt'], second['receipt'])
+        self.assertEqual(first['receipt'], FEED.show_receipt(BATCH_ID, SHA))
+        self.active.assert_called_with(self.request['planSha256'])
+        self.authorize.assert_called_once_with(BATCH_ID, SHA)
+        self.consume.assert_called_once_with(*self.batch, *self.release, self.inbox, 300, writer_fd=9)
+        self.assertEqual(json.loads(self.path.read_text()), self.request)
+
+    def test_refuses_a_changed_build_or_plan_before_touching_staged_bytes(self):
+        self.approve({**self.request, 'buildIdentity': 'f' * 64})
+        with self.assertRaisesRegex(FEED.FeedStageError, 'different active build'):
+            FEED.process_approved_batch(writer_fd=9)
+        self.approve()
+        self.active.side_effect = FEED.FeedStageError('different installed host plan')
+        with self.assertRaisesRegex(FEED.FeedStageError, 'different installed host plan'):
+            FEED.process_approved_batch(writer_fd=9)
+        self.authorize.assert_not_called()
+        self.consume.assert_not_called()
+
+    def test_an_old_build_receipt_cannot_acknowledge_the_new_approval(self):
+        self.approve()
+        FEED.write_private(FEED.candidate_marker_path(BATCH_ID), json.dumps({
+            'schemaVersion': 1, 'manifestSha256': SHA, 'candidateSha256': 'e' * 64,
+            'buildIdentity': 'f' * 64,
+        }).encode())
+        FEED.store_receipt(BATCH_ID, SHA)
+        with self.assertRaisesRegex(FEED.FeedStageError, 'accepted batch belongs to a different build'):
+            FEED.process_approved_batch(writer_fd=9)
+        self.consume.assert_not_called()
+
+    def test_a_success_status_alone_is_not_a_source_acknowledgement(self):
+        self.approve()
+        self.consume.return_value = {'status': 'imported', 'manifestSha256': SHA}
+        with self.assertRaisesRegex(FEED.FeedStageError, 'no durable acknowledgement'):
+            FEED.process_approved_batch(writer_fd=9)
+
+    def test_invalid_permissions_fields_and_special_files_fail_closed(self):
+        for value in ({**self.request, 'maxJobs': True}, {**self.request, 'path': '/not-used'},
+                      {**self.request, 'manifestSha256': 'wrong'}):
+            self.approve(value)
+            with self.assertRaises(FEED.FeedStageError):
+                FEED.process_approved_batch(writer_fd=9)
+        self.approve()
+        self.path.chmod(0o644)
+        with self.assertRaisesRegex(FEED.FeedStageError, 'private root-owned'):
+            FEED.process_approved_batch(writer_fd=9)
+        self.path.unlink()
+        os.mkfifo(self.path, 0o600)
+        with self.assertRaisesRegex(FEED.FeedStageError, 'private root-owned'):
+            FEED.process_approved_batch(writer_fd=9)
+        self.active.assert_not_called()
+
+    def test_approved_cli_propagates_the_shared_writer_descriptor(self):
+        host = SimpleNamespace(data_writer_lock=lambda: self.writer_context())
+        with patch.object(FEED, 'host_module', return_value=host), \
+                patch.object(FEED, 'process_approved_batch', return_value={'status': 'waiting_for_approval'}) as process, \
+                patch.object(FEED.sys, 'stdout', new_callable=io.StringIO) as output:
+            self.assertEqual(FEED.main(['import-approved']), 0)
+        process.assert_called_once_with(writer_fd=9)
+        self.assertEqual(json.loads(output.getvalue())['status'], 'waiting_for_approval')
+
+    @contextmanager
+    def writer_context(self):
+        yield 9
+
+
+class DataWriterFenceTests(unittest.TestCase):
+    def test_inherited_import_writer_blocks_a_real_switch_entry_point_until_exit(self):
+        host = FEED.host_module()
+        root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        real_fstat = os.fstat
+        def root_stat(fd):
+            fields = list(real_fstat(fd))
+            fields[4] = 0
+            return os.stat_result(fields)
+        cmd = [os.sys.executable, '-c', 'import sys; sys.stdin.read(1)']
+        with patch.object(host, 'DATA_WRITER_LOCK', root / 'writer.lock'), \
+                patch.object(host.os, 'geteuid', return_value=0), patch.object(host.os, 'fstat', side_effect=root_stat), \
+                patch.object(host, 'switch', return_value={'activated': False}) as switch, \
+                patch.object(host.sys, 'argv', ['preview-host.py', 'switch', '--build-identity', 'b' * 64]), \
+                patch.object(host.sys, 'stdout', new_callable=io.StringIO) as output, \
+                patch.object(host.sys, 'stderr', new_callable=io.StringIO) as error:
+            with host.data_writer_lock() as fd:
+                child = subprocess.Popen(cmd, stdin=subprocess.PIPE, pass_fds=(fd,))
+            try:
+                self.assertEqual(host.main(), 1)
+                self.assertEqual(json.loads(error.getvalue())['error'], 'PreviewDataWriterBusy')
+                switch.assert_not_called()
+            finally:
+                child.communicate(input=b'0', timeout=5)
+            self.assertEqual(host.main(), 0)
+            self.assertEqual(json.loads(output.getvalue())['result'], {'activated': False})
+            switch.assert_called_once_with('b' * 64)
+
+    def test_recovery_takes_the_writer_fence_before_guard_and_candidate_selection(self):
+        spec = importlib.util.spec_from_file_location('feed_recovery', Path(__file__).with_name('preview-recovery.py'))
+        recovery = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(recovery)
+        for command, flags in [
+            ('restore', ['--snapshot', '/private/backup', '--destination', '/private/restored']),
+            ('migrate', ['--database', '/private/state.sqlite', '--backup-dir', '/private',
+                         '--build-identity', 'b' * 64]),
+        ]:
+            with self.subTest(command=command):
+                holding, busy = False, True
+
+                @contextmanager
+                def lease():
+                    nonlocal holding
+                    if busy:
+                        raise ValueError('Busy fixture.')
+                    holding = True
+                    try:
+                        yield
+                    finally:
+                        holding = False
+
+                def context(*args, **kwargs):
+                    self.assertTrue(holding)
+                    return {'schemaVersion': 2}, ['current-node', '--prepare-restored-db']
+
+                def recover(*args, **kwargs):
+                    self.assertTrue(holding)
+                    return {'activated': False}
+
+                operator = SimpleNamespace(data_writer_lock=lease, require_idle_preview=lambda: self.assertTrue(holding))
+                with patch.object(recovery, 'load_operator_module', return_value=operator), \
+                        patch.object(recovery, 'operational_context', side_effect=context) as inspect, \
+                        patch.object(recovery, 'restore' if command == 'restore' else 'migrate_live',
+                                     side_effect=recover) as action, \
+                        patch.object(recovery.sys, 'argv', ['preview-recovery.py', command, '--generation', '/private/generation', *flags]), \
+                        patch.object(recovery.sys, 'stdout', new_callable=io.StringIO), \
+                        patch.object(recovery.sys, 'stderr', new_callable=io.StringIO):
+                    self.assertEqual(recovery.main(), 1)
+                    inspect.assert_not_called()
+                    action.assert_not_called()
+                    busy = False
+                    self.assertEqual(recovery.main(), 0)
+                    self.assertEqual(inspect.call_count, 1 if command == 'restore' else 2)
+                    action.assert_called_once()
+                    self.assertFalse(holding)
 
 
 class PrepareTests(unittest.TestCase):
@@ -683,13 +867,13 @@ class ComposedImportTests(unittest.TestCase):
             original_checked, original_run = FEED.checked_file, FEED.run_as_api
             events = []
 
-            def run(argv, environment, cwd, timeout):
+            def run(argv, environment, cwd, timeout, **kwargs):
                 events.append('adapter' if '--feed-manifest' in argv else 'node')
                 if argv[0] == '/usr/bin/python3':
                     # Use the test runner's supported Python off-host; macOS's
                     # system Python predates the production Linux baseline.
                     argv = [os.sys.executable, *argv[1:]]
-                return original_run(argv, environment, cwd, min(timeout, 10), demote=lambda: None)
+                return original_run(argv, environment, cwd, min(timeout, 10), demote=lambda: None, **kwargs)
 
             def stage(rows, **options):
                 source, _ = IMPORT_FIXTURES.write_feed_bundle(base / 'source', rows, scope=scope, **options)
@@ -808,7 +992,21 @@ class ComposedImportTests(unittest.TestCase):
 
                 reconciled = stage([IMPORT_FIXTURES.feed_posting(IMPORT_FIXTURES.JOB_B, **posting_times)],
                                    batch_id='d' * 32, cutoff=iso(now - timedelta(minutes=1)))
-                self.assertEqual(consume(reconciled)['status'], 'imported')
+                read_batch = FEED.batch_files
+                with local_operator(inbox, receipts), \
+                        patch.object(FEED, 'batch_files', side_effect=lambda batch_id: read_batch(batch_id, inbox)), \
+                        patch.object(FEED, 'active_release', return_value=(release, release_manifest)) as approved_release, \
+                        (base / 'fixture-writer').open('wb') as lease:
+                    FEED.write_private(receipts / 'next-import.json', json.dumps({
+                        'schemaVersion': 1, 'batchId': 'd' * 32, 'manifestSha256': reconciled[3],
+                        'buildIdentity': build, 'planSha256': 'f' * 64, 'maxJobs': 10,
+                    }).encode())
+                    applied = FEED.process_approved_batch(writer_fd=lease.fileno())
+                    replayed = FEED.process_approved_batch(writer_fd=lease.fileno())
+                    self.assertEqual((applied['status'], replayed['status']), ('imported', 'already_accepted'))
+                    self.assertEqual(applied['receipt'], {'schemaVersion': 1, 'manifestSha256': reconciled[3]})
+                    self.assertEqual(applied['receipt'], replayed['receipt'])
+                    approved_release.assert_called_with('f' * 64)
                 self.assertEqual(imports(), 3)
                 live = public_jobs()
                 self.assertFalse(live['coverage']['stale'])
