@@ -95,6 +95,19 @@ function decodeSnapshot(envelope, periodEnd, sourceVersion) {
   return snapshot;
 }
 
+export function decodeSourceCoverageArtifact(bytes, { periodEnd, sourceVersion }) {
+  periodDate(periodEnd);
+  if (!SOURCE_COVERAGE_VERSIONS.includes(sourceVersion)) throw failure('invalid_input');
+  if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > SOURCE_COVERAGE_LIMITS.artifactBytes) {
+    throw failure();
+  }
+  try {
+    return decodeSnapshot(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), periodEnd, sourceVersion);
+  } catch {
+    throw failure();
+  }
+}
+
 function createReader({ directory, sourceVersion = SOURCE_COVERAGE_VERSION } = {}, filesystem) {
   if (typeof directory !== 'string' || !isAbsolute(directory) || resolve(directory) !== directory
       || !SOURCE_COVERAGE_VERSIONS.includes(sourceVersion)) {
@@ -135,9 +148,7 @@ function createReader({ directory, sourceVersion = SOURCE_COVERAGE_VERSION } = {
             if (total > SOURCE_COVERAGE_LIMITS.artifactBytes) throw failure();
             chunks.push(chunk.subarray(0, bytesRead));
           }
-          const bytes = Buffer.concat(chunks, total);
-          const envelope = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-          return decodeSnapshot(envelope, periodEnd, sourceVersion);
+          return decodeSourceCoverageArtifact(Buffer.concat(chunks, total), { periodEnd, sourceVersion });
         } finally {
           await handle.close();
         }

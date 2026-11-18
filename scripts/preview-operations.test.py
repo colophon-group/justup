@@ -346,6 +346,133 @@ class ArtifactContracts(unittest.TestCase):
                 artifact.verify_directory(link)
 
 
+class CoverageIntakeContracts(unittest.TestCase):
+    def setUp(self):
+        self.base = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.queue = self.base / 'queue'
+        self.queue.mkdir(mode=0o750)
+        self.queue.chmod(0o750)
+        self.build = 'b' * 64
+        self.plan = 'a' * 64
+        self.release = self.base / 'releases' / self.build
+        self.release.mkdir(parents=True)
+        self.current = self.base / 'current'
+        self.current.symlink_to(self.release)
+        self.period = '2026-11-16'
+        self.source_version = 'jobseek-coverage-v2'
+        self.destination = self.queue / 'source-coverage-v2'
+        self.bytes = b'exact private wrapper fixture\n'
+        self.enterContext(patch.object(host, 'BASE', self.base))
+        self.enterContext(patch.object(host, 'OPERATOR_UID', os.getuid()))
+        self.guard = self.enterContext(patch.object(host, 'require_operator'))
+        identity = SimpleNamespace(pw_uid=1234, pw_gid=os.getgid() or 1234)
+        if os.getgid() == 0:
+            os.chown(self.queue, os.getuid(), identity.pw_gid)
+        self.enterContext(patch.object(host.pwd, 'getpwnam', return_value=identity))
+        verified = SimpleNamespace(
+            read_host_plan=lambda base: self.plan,
+            verify_directory=lambda release: {'buildIdentity': self.build, 'files': {host.COVERAGE_CHECKER: 'c' * 64}},
+        )
+        self.enterContext(patch.object(host, 'artifact_module', return_value=verified))
+        receipt = {'periodEnd': self.period + 'T00:00:00.000Z', 'snapshotSha256': 'd' * 64,
+                   'comparableCompanies': 1, 'suppressedScopes': 2}
+        self.checker = self.enterContext(patch.object(
+            host.subprocess, 'run', return_value=SimpleNamespace(stdout=json.dumps(receipt).encode())))
+
+    def install(self, **overrides):
+        args = {'period': self.period, 'source_version': self.source_version, 'checksum': artifact.sha(self.bytes),
+                'build': self.build, 'expected_plan': self.plan, **overrides}
+        return host.install_coverage(io.BytesIO(self.bytes), **args)
+
+    def test_only_approved_bytes_under_the_fixed_period_path_are_exposed(self):
+        receipt = self.install()
+        self.assertFalse(receipt['replayed'])
+        self.assertEqual(receipt['artifactSha256'], artifact.sha(self.bytes))
+        self.assertEqual(receipt['hostPlanSha256'], self.plan)
+        self.assertEqual(receipt['buildIdentity'], self.build)
+        self.guard.assert_called_with(cleanup_logs=False)
+        command = self.checker.call_args
+        self.assertEqual(command.args[0], [str(self.release / 'runtime/bin/node'), '--permission',
+                         '--allow-fs-read=' + str(self.release / 'app'), str(self.release / host.COVERAGE_CHECKER),
+                         '--artifact', '--source-version', self.source_version, '--period', receipt['periodEnd']])
+        self.assertEqual(command.kwargs['user'], 1234)
+        self.assertEqual(command.kwargs['extra_groups'], [])
+        self.assertEqual(command.kwargs['env'], {'LANG': 'C.UTF-8', 'TZ': 'UTC'})
+        self.assertEqual(command.kwargs['input'], self.bytes)
+        target = self.destination / (self.period + '.json')
+        self.assertEqual(target.read_bytes(), self.bytes)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o640)
+        self.assertEqual(stat.S_IMODE(self.destination.stat().st_mode), 0o750)
+        original_inode = target.stat().st_ino
+        self.assertTrue(self.install()['replayed'])
+        self.assertEqual(target.stat().st_ino, original_inode)
+        self.bytes = b'different but also validated by the stubbed checker'
+        with self.assertRaisesRegex(ValueError, 'immutable artifact'):
+            self.install()
+        self.assertEqual(artifact.file_sha(target), receipt['artifactSha256'])
+
+    def test_rejects_different_build_plan_digest_and_invalid_checker_before_creating_storage(self):
+        for wrong in ({'build': '1' * 64}, {'expected_plan': '2' * 64}, {'checksum': '3' * 64},
+                      {'period': '2026-11-17'}, {'source_version': 'fallback'}):
+            with self.subTest(**wrong), self.assertRaises(ValueError):
+                self.install(**wrong)
+            self.assertFalse(self.destination.exists())
+        self.checker.assert_not_called()
+        self.checker.return_value = SimpleNamespace(stdout=b'{"periodEnd":"wrong","raw":"private"}')
+        with self.assertRaisesRegex(ValueError, 'invalid receipt'):
+            self.install()
+        self.assertFalse(self.destination.exists())
+
+    def test_changed_current_link_aborts_after_validating_the_bytes(self):
+        reply = self.checker.return_value
+
+        def switch(*args, **kwargs):
+            self.current.unlink()
+            self.current.symlink_to(self.release.parent)
+            return reply
+
+        self.checker.side_effect = switch
+        with self.assertRaisesRegex(ValueError, 'changed during source verification'):
+            self.install()
+        self.assertFalse(self.destination.exists())
+
+    def test_keeps_an_immutable_period_that_appears_after_the_inventory_check(self):
+        target = self.destination / (self.period + '.json')
+        link = os.link
+
+        def publish_other_file(source, destination, **kwargs):
+            self.assertEqual(destination, target)
+            target.write_bytes(b'another retained artifact')
+            os.chown(target, os.getuid(), self.queue.stat().st_gid)
+            target.chmod(0o640)
+            return link(source, destination, **kwargs)
+
+        with patch.object(host.os, 'link', side_effect=publish_other_file):
+            with self.assertRaises(FileExistsError):
+                self.install()
+        self.assertEqual(target.read_bytes(), b'another retained artifact')
+        self.assertEqual(list(self.destination.iterdir()), [target])
+
+    def test_refuses_aliases_and_never_evacuates_an_existing_period_to_make_room(self):
+        self.install()
+        target = self.destination / (self.period + '.json')
+        for one in ('2026-11-09', '2026-11-02', '2026-10-26'):
+            same = self.destination / (one + '.json')
+            same.write_bytes(self.bytes)
+            os.chown(same, os.getuid(), target.stat().st_gid)
+            same.chmod(0o640)
+        self.assertTrue(self.install()['replayed'])
+        target.unlink()
+        target.symlink_to(self.destination / '2026-11-09.json')
+        with self.assertRaisesRegex(ValueError, 'unsafe or unresolved'):
+            self.install()
+        target.unlink()
+        with patch.object(host, 'COVERAGE_PERIODS_PER_VERSION', 3):
+            with self.assertRaisesRegex(ValueError, 'period or headroom limit'):
+                self.install()
+        self.assertEqual(len(list(self.destination.iterdir())), 3)
+
+
 class OperatorUpgradeContracts(unittest.TestCase):
     @contextmanager
     def installation(self, *, add_feed=False, add_drill=False, add_backup=False):
