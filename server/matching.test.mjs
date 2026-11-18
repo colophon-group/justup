@@ -211,6 +211,21 @@ test('delivery rechecks eligible/primary membership and evidence before serializ
   assert.deepEqual(end.items.map((j) => j.id), [makeJob(1).id]);
 });
 
+test('visible uncertainty stays bound to unchanged evidence during a feed update', async (t) => {
+  const s = setup(t, { count: 1, decisions: () => 'insufficient_evidence' });
+  const first = s.page();
+  await s.run();
+  const [original] = s.jobs();
+  const updated = { ...original, bodyText: 'Updated posting evidence. '.repeat(8) };
+  let reads = 0;
+  s.feed.eligibleJobs = () => ++reads === 1 ? [original] : [updated];
+
+  const result = s.service.page({ ownerId: owner, searchId: 'search-1', revision: 1, configuration,
+    jobs: [original], viewer, cursor: first.continuation.cursor });
+  assert.deepEqual(result.items, []);
+  assert.deepEqual(result.ai, { status: 'complete' });
+});
+
 test('exact decisions deduplicate repeated searches but invalidate changed condition/evidence/version', async (t) => {
   const s = setup(t, { count: 3 }); s.page(); await s.run(); assert.equal(s.calls(), 1);
   const other = s.page({ searchId: 'search-2' }); assert.equal(other.items.length, 3); assert.equal(s.calls(), 1);

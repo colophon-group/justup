@@ -217,16 +217,19 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
       if(!coverage.stale&&(!snapshot||createdScan))schedule(scan,viewer.interfaceLocale);
       return coverage.stale?{status:'unavailable',count:null}:!unresolved?{status:'exact',count:accepted}:accepted?{status:'lower_bound',count:accepted}:rows(scan.id).every(r=>r.decision==null)?{status:available()?'pending':'unavailable',count:null}:{status:'lower_bound',count:0};
     }
-    const current = new Map((hidden?(viewer.access?.fullAccess===true?[]:feed.restrictedLatestJobs?.()??[]):feed.eligibleJobs({ viewer })).map((j) => [j.id, j]));
+    const current = new Map(feed.eligibleJobs({ viewer }).map((j) => [j.id, j]));
     const supplied = new Map(jobs.map((j) => [j.id, j]));
+    const matchingJob = (row) => {
+      const job = current.get(row.job_id), primary = supplied.get(row.job_id);
+      return job && primary && fingerprint(job) === row.evidence_hash && fingerprint(primary) === row.evidence_hash ? job : null;
+    };
     const items = []; let next = position;
     for (const row of rows(scan.id)) {
       if (row.position < position) continue;
       if (row.decision == null) break;
-      const j = current.get(row.job_id), primary = supplied.get(row.job_id);
       next = row.position + 1;
-      if (row.decision === 'accepted' && j && primary && fingerprint(j) === row.evidence_hash
-          && fingerprint(primary) === row.evidence_hash) items.push(feed.publicJob(j));
+      const job = row.decision === 'accepted' ? matchingJob(row) : null;
+      if (job) items.push(feed.publicJob(job));
       if (items.length >= limit) break;
     }
     if(!snapshot)db.prepare('UPDATE justup_match_scans SET delivered=max(delivered,?),updated_at=? WHERE id=?').run(next, now(), scan.id);
@@ -240,7 +243,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
       state = 'exhausted';
       // Report the limitation of this visible, primary-filtered scan. The
       // separate hidden cohort must not affect it or reveal missing evidence.
-      status = all.some(row => row.decision === 'insufficient_evidence' && current.has(row.job_id))
+      status = all.some(row => row.decision === 'insufficient_evidence' && matchingJob(row))
         ? 'insufficient_evidence' : 'complete';
     }
     else if (!pending || remaining[0].decision != null) { state = 'open'; status = 'matching'; }
@@ -249,10 +252,7 @@ export function createMatchingService({ db, feed, tasks, config = {}, now = Date
     else { state = 'pending'; status = 'matching'; retryAfterMs = 1000; }
     return { searchId, revision, asOf: new Date(now()).toISOString(), items,
       continuation: { cursor: snapshot||state === 'exhausted' ? null : cursorFor(scan.id, next), state, retryAfterMs }, ai: { status }, coverage,
-      ...(snapshot?{reconciliation:{complete:!coverage.stale,retainedItemIds:all.filter(r=>{
-        const j=current.get(r.job_id),primary=supplied.get(r.job_id);
-        return r.decision==='accepted'&&j&&primary&&fingerprint(j)===r.evidence_hash&&fingerprint(primary)===r.evidence_hash;
-      }).map(r=>r.job_id)}}:{}) };
+      ...(snapshot?{reconciliation:{complete:!coverage.stale,retainedItemIds:all.filter(row=>row.decision==='accepted'&&matchingJob(row)).map(row=>row.job_id)}}:{}) };
   }
   function taskLive(task) {
     const actual = tasks.get(task.ownerId, task.id);
